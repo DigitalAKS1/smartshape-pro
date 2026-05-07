@@ -1,0 +1,136 @@
+{
+  "theme": "dark",
+  "archetype": "Archetype 2 (Performance Pro) & Archetype 4 (Swiss High-Contrast) Hybrid",
+  "persona_notes": "The app operates in the field sales and industrial inventory space. It requires a Command Center aesthetic—dense, tactical, and highly legible outdoors. We are discarding muddy gradients and overly soft shadows. Instead, we use sharp 1px borders, high-contrast text, and a rigid, reliable layout system.",
+  "colors": {
+    "background": {
+      "app": "#0a0a12",
+      "sidebar": "#1a1a2e",
+      "surface": "#1a1a2e",
+      "surface_hover": "#252542",
+      "overlay": "rgba(10, 10, 18, 0.8)"
+    },
+    "brand": {
+      "primary": "#1a1a2e",
+      "accent": "#e94560",
+      "accent_hover": "#f05c75",
+      "accent_muted": "rgba(233, 69, 96, 0.15)"
+    },
+    "text": {
+      "primary": "#ffffff",
+      "secondary": "#a0a0b0",
+      "tertiary": "#6b6b80",
+      "inverse": "#ffffff"
+    },
+    "border": {
+      "default": "#2d2d44",
+      "focus": "#e94560",
+      "light": "rgba(255, 255, 255, 0.05)"
+    },
+    "status": {
+      "success": "#10b981",
+      "warning": "#f59e0b",
+      "danger": "#ef4444",
+      "info": "#3b82f6"
+    }
+  },
+  "typography": {
+    "font_family": {
+      "heading": "Inter, sans-serif",
+      "body": "Inter, sans-serif",
+      "mono": "JetBrains Mono, monospace"
+    },
+    "strategy": "The user mandated Inter. To avoid visual monotony, we will use extreme weight contrasts: font-black for numbers/stats, font-light for large headings, and JetBrains Mono for all data tables, analytics labels, and IDs to reinforce the 'industrial/technical' aesthetic.",
+    "sizes": {
+      "h1": "text-4xl sm:text-5xl tracking-tighter font-semibold",
+      "h2": "text-2xl sm:text-3xl tracking-tight font-medium",
+      "h3": "text-xl sm:text-2xl tracking-tight font-medium",
+      "h4": "text-lg font-medium",
+      "body_large": "text-base leading-relaxed",
+      "body_base": "text-sm leading-relaxed",
+      "label": "text-xs tracking-[0.1em] uppercase font-medium",
+      "data_stat": "text-4xl sm:text-5xl font-mono font-bold tracking-tight text-white"
+    }
+  },
+  "layout_systems": {
+    "admin_portal": {
+      "type": "sidebar",
+      "sidebar_width": "w-64",
+      "structure": "Fixed dark navy sidebar (#1a1a2e) with an app background of deep void (#0a0a12). Top header should have a crystal glassmorphism effect (backdrop-blur-xl bg-[#0a0a12]/80 border-b border-[#2d2d44]).",
+      "dashboard_grid": "Dense Control Room Grid (grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4 or gap-6). Cards must stretch to fill heights. No jagged bottoms."
+    },
+    "sales_mobile_portal": {
+      "type": "bottom-nav",
+      "structure": "Mobile-first view. Hide sidebar. Bottom navigation fixed to the bottom with 4-5 core actions (Home, Visits, Quotations, Expenses).",
+      "ergonomics": "Large tap targets (min h-14). The primary action (e.g., GPS Check-in) should be an oversized floating action button (FAB) or a massive button in the center of the screen using the accent color (#e94560).",
+      "nav_styling": "Bottom nav should use high-end glassmorphism (backdrop-blur-xl bg-[#1a1a2e]/90 border-t border-white/10) to save screen real estate."
+    },
+    "public_catalogue": {
+      "type": "marketing-bento",
+      "structure": "Hero section with background image, dark overlay (bg-[#0a0a12]/70). Followed by a Bento grid layout for shapes/dies catalogue. Generous padding (py-24, py-32).",
+      "alignment": "Left-aligned typography for authoritative, editorial feel. Never center-everything."
+    }
+  },
+  "components": {
+    "cards": {
+      "style": "Flat, 1px solid border (#2d2d44), no drop shadows by default. Background #1a1a2e. Hover state lifts slightly (-translate-y-1) and sharpens border to #e94560/50.",
+      "padding": "p-6"
+    },
+    "buttons": {
+      "primary": "bg-[#e94560] text-white hover:bg-[#f05c75] font-medium transition-all",
+      "secondary": "bg-transparent border border-[#2d2d44] text-white hover:bg-[#252542] transition-all",
+      "ghost": "bg-transparent text-[#cbd5e1] hover:text-white hover:bg-[#252542] transition-all",
+      "radius": "rounded-md"
+    },
+    "inputs_and_forms": {
+      "style": "Shadcn input structure. Background #0a0a12 (darker than surface), border #2d2d44. Focus ring MUST be ring-[#e94560] ring-offset-0.",
+      "labels": "Use the 'label' typography style (uppercase, tracking-wide, text-xs, text-[#a0a0b0])."
+    },
+    "charts": {
+      "library": "recharts",
+      "palette": ["#e94560", "#3b82f6", "#10b981", "#8b5cf6"],
+      "styling": "Dark backgrounds, invisible grid lines (or very faint #2d2d44), custom tooltips with flat backgrounds and 1px border."
+    },
+    "tables": {
+      "style": "Shadcn table. Header row uses text-xs uppercase text-[#a0a0b0]. Rows have border-b border-[#2d2d44]. Hover state on rows bg-[#252542]."
+    }
+  },
+  "motion_and_interactions": {
+    "transitions": "Fast and precise. transition-all duration-200 ease-in-out.",
+    "hover_states": "All interactive elements must explicitly change state. Text must brighten (text-[#a0a0b0] to text-white), borders must illuminate.",
+    "page_load": "Staggered fade-in for dashboard cards and list items. (translate-y-4 opacity-0 to translate-y-0 opacity-100)."
+  },
+  "media": {
+    "images": {
+      "public_hero_bg": {
+        "url": "https://static.prod-images.emergentagent.com/jobs/8eeed595-d825-4d34-8588-306a715a87cc/images/a0e044b8ca3cd7c4094fac96e7de8af710d36d7fbe777a21f89795e5dfbfde13.png",
+        "description": "Abstract 3D composition of industrial metallic shapes floating in a dark navy blue environment with coral red lighting. Use as the Hero Background in the Public Catalogue Page with a bg-[#0a0a12]/70 overlay.",
+        "alt": "SmartShape Pro Industrial Shapes"
+      },
+      "feature_banner": {
+        "url": "https://static.prod-images.emergentagent.com/jobs/8eeed595-d825-4d34-8588-306a715a87cc/images/4bb4e91ab00bb4ad3bf6395c44d80eb66ffeb1adaa0339e9d364e6e3d02ae741.png",
+        "description": "Close up of precision engineered metal parts illuminated by a warm neon coral red light. Use for empty states, login page split-screen backgrounds, or Admin package master banners.",
+        "alt": "Precision engineered shapes"
+      },
+      "warehouse_stock_1": {
+        "url": "https://images.unsplash.com/photo-1763950865631-4ca11bebe017?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2Mzl8MHwxfHNlYXJjaHwxfHxpbmR1c3RyaWFsJTIwbWFudWZhY3R1cmluZyUyMG1ldGFsJTIwc2hhcGVzfGVufDB8fHx8MTc3NjE4NzMxN3ww&ixlib=rb-4.1.0&q=85",
+        "description": "Various metal pipes and tubes stacked together. Use as a thumbnail placeholder for Package Master or Inventory Stock items."
+      }
+    }
+  },
+  "accessibility_and_testing": {
+    "contrast": "Ensure text over the #1a1a2e background meets a 4.5:1 ratio. Muted text must not go below #a0a0b0.",
+    "testing_ids": "Every button, input, tab, and navigation link MUST include a data-testid attribute (e.g., data-testid='admin-sidebar-inventory-link')."
+  },
+  "instructions_to_main_agent": [
+    "FORCE DARK MODE: The entire app is natively dark theme. Set the html/body to have class 'dark' and background '#0a0a12' and text-white. Do not build a light mode.",
+    "Do not use generic gray borders. Use #2d2d44 for all borders to keep the navy tint.",
+    "Implement lucide-react for all icons. Use stroke-width=1.5 for a sharper, technical look.",
+    "Install and configure shadcn/ui components (cards, inputs, tables, dialogs, dropdowns, forms). Remove rounded-xl/rounded-2xl from shadcn defaults and replace with rounded-md for a sharper industrial look.",
+    "Admin Portal: Create a fixed sidebar layout. Sidebar background: #1a1a2e. Main content area background: #0a0a12.",
+    "Mobile Portal: Hide the sidebar on mobile. Build a fixed bottom navigation bar (h-16) for Sales Executives containing Home, Visits, Quotes, and Profile.",
+    "Use JetBrains Mono (or standard monospace if unavailable) for all numbers, IDs, and metrics to emphasize the data-heavy Command Center aesthetic.",
+    "For the Public Catalogue, build a marketing-style page using the `public_hero_bg` image for the hero section, applying a heavy dark overlay to ensure text legibility. Then build a bento grid for the shape selection.",
+    "Always apply `data-testid` to interactive elements."
+  ]
+}

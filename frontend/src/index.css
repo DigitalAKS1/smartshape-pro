@@ -1,0 +1,108 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;900&family=JetBrains+Mono:wght@400;500;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Theme CSS Variables */
+:root, [data-theme="dark"] {
+  --bg-primary: #0a0a12;
+  --bg-card: #1a1a2e;
+  --bg-hover: #252542;
+  --bg-input: #0a0a12;
+  --border-color: #2d2d44;
+  --text-primary: #ffffff;
+  --text-secondary: #a0a0b0;
+  --text-muted: #6b6b80;
+  --accent: #e94560;
+  --accent-hover: #f05c75;
+}
+
+[data-theme="light"] {
+  --bg-primary: #f5f5f8;
+  --bg-card: #ffffff;
+  --bg-hover: #f0f0f5;
+  --bg-input: #f5f5f8;
+  --border-color: #e2e2ea;
+  --text-primary: #1a1a2e;
+  --text-secondary: #555566;
+  --text-muted: #888899;
+  --accent: #e94560;
+  --accent-hover: #d63050;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: 'Inter', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  transition: background 0.3s, color 0.3s;
+}
+
+@layer base {
+  :root {
+    --background: 240 10% 3.9%;
+    --foreground: 0 0% 98%;
+    --card: 240 10% 3.9%;
+    --card-foreground: 0 0% 98%;
+    --popover: 240 10% 3.9%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 0 0% 98%;
+    --primary-foreground: 240 5.9% 10%;
+    --secondary: 240 3.7% 15.9%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 240 3.7% 15.9%;
+    --muted-foreground: 240 5% 64.9%;
+    --accent: 351 83% 61%;
+    --accent-foreground: 0 0% 98%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 5% 17%;
+    --input: 240 5% 17%;
+    --ring: 351 83% 61%;
+    --radius: 0.375rem;
+  }
+}
+
+[data-theme="light"] {
+  --background: 0 0% 96%;
+  --foreground: 240 10% 10%;
+  --card: 0 0% 100%;
+  --card-foreground: 240 10% 10%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 240 10% 10%;
+  --primary: 240 5.9% 10%;
+  --primary-foreground: 0 0% 98%;
+  --secondary: 240 5% 92%;
+  --secondary-foreground: 240 5.9% 10%;
+  --muted: 240 5% 92%;
+  --muted-foreground: 240 5% 40%;
+  --border: 240 5% 88%;
+  --input: 240 5% 88%;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+.mono {
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* Theme-aware utility classes */
+.t-bg { background: var(--bg-primary); }
+.t-card { background: var(--bg-card); }
+.t-hover:hover { background: var(--bg-hover); }
+.t-input { background: var(--bg-input); }
+.t-border { border-color: var(--border-color); }
+.t-text { color: var(--text-primary); }
+.t-text-sec { color: var(--text-secondary); }
+.t-text-muted { color: var(--text-muted); }
