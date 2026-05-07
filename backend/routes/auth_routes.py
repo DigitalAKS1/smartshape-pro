@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Request, Response
+﻿from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, EmailStr
 from typing import Optional
 from datetime import datetime, timezone, timedelta
@@ -6,6 +6,10 @@ import uuid
 import jwt
 import requests
 import os
+
+# In production (HTTPS) use samesite=none + secure=True for cross-domain cookies
+_PROD = os.environ.get("FRONTEND_URL", "").startswith("https")
+_COOKIE_KWARGS = dict(httponly=True, secure=_PROD, samesite="none" if _PROD else "lax", path="/")
 
 from database import db
 from auth_utils import (
@@ -62,8 +66,8 @@ async def register(input: RegisterInput, response: Response):
     access_token = create_access_token(user_id, email)
     refresh_token = create_refresh_token(user_id)
 
-    response.set_cookie(key="access_token", value=access_token, httponly=True, secure=False, samesite="lax", max_age=86400, path="/")
-    response.set_cookie(key="refresh_token", value=refresh_token, httponly=True, secure=False, samesite="lax", max_age=2592000, path="/")
+    response.set_cookie(key="access_token", value=access_token, max_age=86400, **_COOKIE_KWARGS)
+    response.set_cookie(key="refresh_token", value=refresh_token, max_age=2592000, **_COOKIE_KWARGS)
 
     user = await db.users.find_one({"email": email}, {"_id": 0, "password_hash": 0})
     return user
@@ -106,8 +110,8 @@ async def login(input: LoginInput, response: Response, request: Request):
     access_token = create_access_token(user_id, email)
     refresh_token = create_refresh_token(user_id)
 
-    response.set_cookie(key="access_token", value=access_token, httponly=True, secure=False, samesite="lax", max_age=86400, path="/")
-    response.set_cookie(key="refresh_token", value=refresh_token, httponly=True, secure=False, samesite="lax", max_age=2592000, path="/")
+    response.set_cookie(key="access_token", value=access_token, max_age=86400, **_COOKIE_KWARGS)
+    response.set_cookie(key="refresh_token", value=refresh_token, max_age=2592000, **_COOKIE_KWARGS)
 
     user_data = await db.users.find_one({"email": email}, {"_id": 0, "password_hash": 0})
     return user_data
@@ -144,8 +148,8 @@ async def refresh_tokens(request: Request, response: Response):
         access_token = create_access_token(user["user_id"], user["email"])
         new_refresh_token = create_refresh_token(user["user_id"])
 
-        response.set_cookie(key="access_token", value=access_token, httponly=True, secure=False, samesite="lax", max_age=86400, path="/")
-        response.set_cookie(key="refresh_token", value=new_refresh_token, httponly=True, secure=False, samesite="lax", max_age=2592000, path="/")
+        response.set_cookie(key="access_token", value=access_token, max_age=86400, **_COOKIE_KWARGS)
+        response.set_cookie(key="refresh_token", value=new_refresh_token, max_age=2592000, **_COOKIE_KWARGS)
 
         return user
     except jwt.ExpiredSignatureError:
@@ -201,8 +205,8 @@ async def google_session(request: Request, response: Response):
 
     access_token = create_access_token(user_id, email)
     refresh_token = create_refresh_token(user_id)
-    response.set_cookie(key="access_token", value=access_token, httponly=True, secure=False, samesite="lax", max_age=86400, path="/")
-    response.set_cookie(key="refresh_token", value=refresh_token, httponly=True, secure=False, samesite="lax", max_age=2592000, path="/")
+    response.set_cookie(key="access_token", value=access_token, max_age=86400, **_COOKIE_KWARGS)
+    response.set_cookie(key="refresh_token", value=refresh_token, max_age=2592000, **_COOKIE_KWARGS)
 
     user_data = await db.users.find_one({"email": email}, {"_id": 0, "password_hash": 0})
     return user_data
@@ -231,7 +235,7 @@ async def school_login(request: Request, response: Response):
         "type": "access",
     }
     access_token = jwt.encode(token_payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
-    response.set_cookie(key="access_token", value=access_token, httponly=True, secure=False, samesite="lax", max_age=86400, path="/")
+    response.set_cookie(key="access_token", value=access_token, max_age=86400, **_COOKIE_KWARGS)
     school_data = await db.schools.find_one({"school_id": school_id}, {"_id": 0, "password_hash": 0})
     school_data["role"] = "school"
     return school_data
