@@ -9,7 +9,9 @@ import os
 import logging
 
 # MongoDB connection
-mongo_url = os.environ['MONGO_URL']
+mongo_url = os.getenv("MONGO_URL") or os.getenv("MONGODB_URL")
+if not mongo_url:
+    raise RuntimeError("Neither MONGO_URL nor MONGODB_URL environment variable is set")
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
