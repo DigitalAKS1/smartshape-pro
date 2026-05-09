@@ -32,10 +32,18 @@ from routes.school_routes import router as school_router
 # ── App instance ───────────────────────────────────────────────────────────────
 app = FastAPI(title="SmartShape Pro API", version="1.0.0")
 
+ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+    "https://smartshaperpro.netlify.app",
+]
+extra = os.environ.get("FRONTEND_URL", "")
+if extra and extra not in ALLOWED_ORIGINS:
+    ALLOWED_ORIGINS.append(extra)
+
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=[os.environ.get('FRONTEND_URL', 'http://localhost:3000')],
+    allow_origins=ALLOWED_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -327,40 +335,13 @@ async def startup():
         await db.settings.insert_one({
             "type": "company",
             "company_name": "SmartShapes",
-            "logo_url": "https://customer-assets.emergentagent.com/job_field-sales-app-16/artifacts/bwpjcb1m_logo.png",
+            "logo_url": "",
             "address": "",
             "phone": "",
             "email": "info@smartshape.in",
             "gst_number": "",
         })
 
-    # Seed demo department accounts
-    demo_accounts = [
-        {"email": "sales@smartshape.in", "name": "Sales Team", "role": "sales_person", "modules": ["sales_portal", "field_sales", "quotations", "leads"]},
-        {"email": "store@smartshape.in", "name": "Store Manager", "role": "sales_person", "modules": ["inventory", "stock_management", "purchase_alerts", "physical_count", "store"]},
-        {"email": "accounts@smartshape.in", "name": "Accounts Team", "role": "sales_person", "modules": ["accounts", "payroll", "quotations"]},
-        {"email": "hr@smartshape.in", "name": "HR Team", "role": "sales_person", "modules": ["hr", "payroll", "field_sales"]},
-    ]
-    for acct in demo_accounts:
-        existing_acct = await db.users.find_one({"email": acct["email"]})
-        if not existing_acct:
-            uid = f"user_{uuid.uuid4().hex[:12]}"
-            await db.users.insert_one({
-                "user_id": uid, "email": acct["email"],
-                "password_hash": hash_password("demo@123"),
-                "name": acct["name"], "role": acct["role"],
-                "phone": "", "assigned_modules": acct["modules"],
-                "is_active": True, "created_at": datetime.now(timezone.utc).isoformat()
-            })
-            await db.salespersons.update_one({"email": acct["email"]}, {"$set": {
-                "sales_person_id": f"sp_{uuid.uuid4().hex[:12]}", "name": acct["name"],
-                "email": acct["email"], "phone": "", "user_id": uid, "is_active": True
-            }}, upsert=True)
-            logging.info(f"Demo account created: {acct['email']}")
-        else:
-            # Ensure password is correct
-            if not existing_acct.get("password_hash") or not verify_password("demo@123", existing_acct.get("password_hash", "")):
-                await db.users.update_one({"email": acct["email"]}, {"$set": {"password_hash": hash_password("demo@123"), "assigned_modules": acct["modules"], "is_active": True}})
 
     # Write test credentials
     try:

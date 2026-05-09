@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: smartshape-backend
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: MONGODB_URL
+        sync: false          # set manually in Render dashboard
+      - key: JWT_SECRET
+        sync: false          # set manually in Render dashboard
+      - key: FRONTEND_URL
+        sync: false          # e.g. https://yourapp.netlify.app
+      - key: ENVIRONMENT
+        value: production
+    healthCheckPath: /api/health
+    autoDeploy: true
