@@ -85,18 +85,26 @@ class FieldVisitCreate(BaseModel):
 
 
 class TravelExpenseCreate(BaseModel):
+    expense_type: str = "travel"          # travel | food | other
     date: str
-    from_location: str
+    category: Optional[str] = None        # cab/auto/bus/train/two_wheeler/four_wheeler | breakfast/lunch/dinner/tea_snacks
+    # Travel fields
+    from_location: Optional[str] = None
     from_lat: Optional[float] = None
     from_lng: Optional[float] = None
-    to_location: str
+    to_location: Optional[str] = None
     to_lat: Optional[float] = None
     to_lng: Optional[float] = None
-    distance_km: float
-    transport_mode: str
+    distance_km: Optional[float] = None
+    transport_mode: Optional[str] = None
     from_visit_id: Optional[str] = None
     to_visit_id: Optional[str] = None
+    # Common
+    amount: Optional[float] = None        # manual amount for non-km-based
+    description: Optional[str] = None     # for "other" type
     notes: Optional[str] = None
+    receipt_base64: Optional[str] = None
+    receipt_filename: Optional[str] = None
 
 
 # ==================== ATTENDANCE ====================
@@ -414,37 +422,43 @@ async def update_visit(visit_id: str, updates: dict, request: Request):
 async def create_expense(expense_input: TravelExpenseCreate, request: Request):
     user = await get_current_user(request)
 
-    rates = {
-        "two_wheeler": 5,
-        "four_wheeler": 10,
-        "public_transport": 3,
-        "other": 4,
-    }
-    rate = rates.get(expense_input.transport_mode, 4)
-    amount = expense_input.distance_km * rate
+    km_rates = {"two_wheeler": 5, "four_wheeler": 10}
+    category = expense_input.category or expense_input.transport_mode or ""
+
+    if expense_input.expense_type == "travel" and category in km_rates and expense_input.distance_km:
+        rate_per_km = km_rates[category]
+        amount = expense_input.distance_km * rate_per_km
+    else:
+        rate_per_km = None
+        amount = expense_input.amount or 0
 
     expense_id = f"exp_{uuid.uuid4().hex[:12]}"
     month_year = expense_input.date[:7]
 
     expense_doc = {
         "expense_id": expense_id,
+        "expense_type": expense_input.expense_type,
         "sales_person_email": user["email"],
         "sales_person_name": user["name"],
         "date": expense_input.date,
         "month_year": month_year,
+        "category": category,
         "from_location": expense_input.from_location,
         "from_lat": expense_input.from_lat,
         "from_lng": expense_input.from_lng,
         "to_location": expense_input.to_location,
         "to_lat": expense_input.to_lat,
         "to_lng": expense_input.to_lng,
-        "distance_km": expense_input.distance_km,
-        "transport_mode": expense_input.transport_mode,
-        "rate_per_km": rate,
+        "distance_km": expense_input.distance_km or 0,
+        "transport_mode": expense_input.transport_mode or category,
+        "rate_per_km": rate_per_km,
         "amount": amount,
+        "description": expense_input.description,
         "from_visit_id": expense_input.from_visit_id,
         "to_visit_id": expense_input.to_visit_id,
         "notes": expense_input.notes,
+        "receipt_base64": expense_input.receipt_base64,
+        "receipt_filename": expense_input.receipt_filename,
         "status": "pending",
     }
     await db.travel_expenses.insert_one(expense_doc)

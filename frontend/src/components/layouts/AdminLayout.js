@@ -6,7 +6,8 @@ import {
   LayoutDashboard, FileText, Package, AlertTriangle, Settings, BarChart3,
   Warehouse, ClipboardList, DollarSign, Users, LogOut, Menu, X,
   Smartphone, Layers, IndianRupee, UserCog, Store, MapPin, Target,
-  Sun, Moon, CalendarDays, Calendar, ShoppingCart, Upload, Activity
+  Sun, Moon, CalendarDays, Calendar, ShoppingCart, Upload, Activity,
+  Home, MoreHorizontal
 } from 'lucide-react';
 import { Button } from '../ui/button';
 
@@ -64,6 +65,12 @@ const SIDEBAR_SECTIONS = [
   { label: 'Administration', modules: ['user_management', 'settings'] },
 ];
 
+// Modules each team always gets regardless of assigned_modules
+const TEAM_MODULES = {
+  accounts: ['dashboard', 'quotations', 'accounts', 'payroll', 'analytics'],
+  store:    ['dashboard', 'quotations', 'inventory', 'stock_management', 'purchase_alerts', 'physical_count', 'store', 'package_master'],
+};
+
 export default function AdminLayout({ children }) {
   const { user, logout } = useAuth();
   const { theme, toggleTheme, isDark } = useTheme();
@@ -71,8 +78,16 @@ export default function AdminLayout({ children }) {
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
-  const userModules = user?.assigned_modules || [];
-  const isAdmin = user?.role === 'admin';
+  const team = user?.role === 'admin' ? 'admin'
+    : user?.role === 'accounts' ? 'accounts'
+    : user?.role === 'store' ? 'store'
+    : 'sales';
+  const isAdmin = team === 'admin';
+
+  // Effective modules = assigned_modules + team-based defaults
+  const assignedModules = user?.assigned_modules || [];
+  const teamDefaults = TEAM_MODULES[team] || [];
+  const userModules = [...new Set([...assignedModules, ...teamDefaults])];
 
   const sidebarGroups = [];
   SIDEBAR_SECTIONS.forEach((section) => {
@@ -178,10 +193,40 @@ export default function AdminLayout({ children }) {
           </div>
         </div>
 
-        <main className="p-4 sm:p-6 lg:p-8">{children}</main>
+        <main className="p-4 sm:p-6 lg:p-8 pb-20 lg:pb-8">{children}</main>
       </div>
 
       {sidebarOpen && <div className="fixed inset-0 bg-black/50 z-40 lg:hidden" onClick={() => setSidebarOpen(false)} />}
+
+      {/* Mobile Bottom Navigation */}
+      {(() => {
+        const bottomItems = [
+          { path: '/today', icon: Home, label: 'Home', module: 'dashboard' },
+          { path: '/leads', icon: Target, label: 'CRM', module: 'leads' },
+          { path: '/field-sales', icon: MapPin, label: 'Field', module: 'field_sales' },
+          { path: '/sales', icon: Smartphone, label: 'Sales', module: 'sales_portal' },
+        ].filter(item => isAdmin || userModules.includes(item.module));
+        return (
+          <nav className={`lg:hidden fixed bottom-0 inset-x-0 z-50 ${sidebarBg} border-t ${borderClr} flex items-stretch`} style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
+            {bottomItems.map(item => {
+              const Icon = item.icon;
+              const isActive = location.pathname === item.path;
+              return (
+                <Link key={item.path} to={item.path} onClick={() => setSidebarOpen(false)}
+                  className={`flex-1 flex flex-col items-center justify-center py-2 gap-0.5 transition-colors ${isActive ? 'text-[#e94560]' : textMuted}`}>
+                  <Icon className="h-5 w-5" strokeWidth={isActive ? 2 : 1.5} />
+                  <span className={`text-[10px] font-medium ${isActive ? 'text-[#e94560]' : ''}`}>{item.label}</span>
+                </Link>
+              );
+            })}
+            <button onClick={() => setSidebarOpen(s => !s)}
+              className={`flex-1 flex flex-col items-center justify-center py-2 gap-0.5 transition-colors ${sidebarOpen ? 'text-[#e94560]' : textMuted}`}>
+              <MoreHorizontal className="h-5 w-5" strokeWidth={sidebarOpen ? 2 : 1.5} />
+              <span className="text-[10px] font-medium">More</span>
+            </button>
+          </nav>
+        );
+      })()}
     </div>
   );
 }

@@ -21,6 +21,8 @@ const STAGES = [
   { id: 'quoted', label: 'Quoted', color: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30' },
   { id: 'negotiation', label: 'Negotiation', color: 'bg-orange-500/20 text-orange-400 border-orange-500/30' },
   { id: 'won', label: 'Won', color: 'bg-green-500/20 text-green-400 border-green-500/30' },
+  { id: 'retention', label: 'Retention', color: 'bg-teal-500/20 text-teal-400 border-teal-500/30' },
+  { id: 'resell', label: 'Resell', color: 'bg-indigo-500/20 text-indigo-400 border-indigo-500/30' },
   { id: 'lost', label: 'Lost', color: 'bg-red-500/20 text-red-400 border-red-500/30' },
 ];
 const NOTE_TYPES = [
@@ -75,6 +77,8 @@ export default function LeadsCRM() {
   const [convertDialogOpen, setConvertDialogOpen] = useState(false);
   const [convertContact, setConvertContact] = useState(null);
   const [convertForm, setConvertForm] = useState({ school_id: '', lead_type: 'warm', priority: 'medium', interested_product: '', assigned_to: '' });
+  const [convertAddNewSchool, setConvertAddNewSchool] = useState(false);
+  const [convertNewSchool, setConvertNewSchool] = useState({ school_name: '', school_type: 'CBSE', city: '', phone: '', school_strength: 0 });
   const [contactImportOpen, setContactImportOpen] = useState(false);
   const contactFileRef = useRef(null);
   // Sorting
@@ -249,6 +253,18 @@ export default function LeadsCRM() {
     if (!iso) return 999;
     return Math.floor((new Date() - new Date(iso)) / (1000 * 60 * 60 * 24));
   };
+  const touchAgeCls = (iso) => {
+    const d = daysSince(iso);
+    if (d <= 3) return 'text-green-400';
+    if (d <= 7) return 'text-yellow-400';
+    if (d <= 14) return 'text-orange-400';
+    return 'text-red-400';
+  };
+  const calcSchoolCompletion = (sch) => {
+    const fields = ['school_name', 'school_type', 'phone', 'email', 'city', 'state', 'primary_contact_name', 'designation', 'school_strength', 'website'];
+    const filled = fields.filter(f => sch[f] && String(sch[f]).trim() !== '' && sch[f] !== 0).length;
+    return Math.round((filled / fields.length) * 100);
+  };
 
   const addFollowup = async () => {
     if (!fuForm.followup_date) return;
@@ -301,12 +317,19 @@ export default function LeadsCRM() {
   const openConvert = (c) => {
     setConvertContact(c);
     setConvertForm({ school_id: '', lead_type: 'warm', priority: 'medium', interested_product: '', assigned_to: user?.email || '' });
+    setConvertAddNewSchool(false);
+    setConvertNewSchool({ school_name: '', school_type: 'CBSE', city: '', phone: '', school_strength: 0 });
     setConvertDialogOpen(true);
   };
   const handleConvert = async () => {
     try {
       const sp = spList.find(s => s.email === convertForm.assigned_to);
-      await contactsApi.convertToLead(convertContact.contact_id, { ...convertForm, assigned_name: sp?.name || user?.name || '' });
+      const payload = { ...convertForm, assigned_name: sp?.name || user?.name || '' };
+      if (convertAddNewSchool && convertNewSchool.school_name) {
+        payload.new_school = convertNewSchool;
+        payload.school_id = '';
+      }
+      await contactsApi.convertToLead(convertContact.contact_id, payload);
       toast.success(`${convertContact.name} converted to lead!`);
       setConvertDialogOpen(false); fetchData();
     } catch (err) { toast.error(err.response?.data?.detail || 'Failed to convert'); }
@@ -462,10 +485,10 @@ export default function LeadsCRM() {
         </div>
 
         {/* Tabs */}
-        <div className={`flex gap-1 ${card} border rounded-md p-1`}>
-          {['contacts', 'pipeline', 'list', 'tasks', 'schools'].map(tab => (
-            <button key={tab} onClick={() => setActiveTab(tab)} className={`flex-1 px-3 py-2 rounded text-xs sm:text-sm font-medium transition-all capitalize ${activeTab === tab ? 'bg-[#e94560] text-white' : `${textSec} ${hoverBg}`}`} data-testid={`tab-${tab}`}>
-              {tab === 'contacts' ? `Contacts (${contactsList.filter(c => !c.converted_to_lead).length})` : tab === 'pipeline' ? `Pipeline` : tab === 'list' ? `Leads (${filtered.length})` : tab === 'tasks' ? `Tasks (${tasksList.length})` : `Schools (${schoolsList.length})`}
+        <div className={`flex gap-1 ${card} border rounded-md p-1 overflow-x-auto`}>
+          {['contacts', 'pipeline', 'list', 'tasks', 'schools', 'reports'].map(tab => (
+            <button key={tab} onClick={() => setActiveTab(tab)} className={`flex-shrink-0 px-3 py-2 rounded text-xs sm:text-sm font-medium transition-all capitalize ${activeTab === tab ? 'bg-[#e94560] text-white' : `${textSec} ${hoverBg}`}`} data-testid={`tab-${tab}`}>
+              {tab === 'contacts' ? `Contacts (${contactsList.filter(c => !c.converted_to_lead).length})` : tab === 'pipeline' ? `Pipeline` : tab === 'list' ? `Leads (${filtered.length})` : tab === 'tasks' ? `Tasks (${tasksList.length})` : tab === 'schools' ? `Schools (${schoolsList.length})` : `Reports`}
             </button>
           ))}
         </div>
@@ -514,6 +537,7 @@ export default function LeadsCRM() {
                         <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden sm:table-cell cursor-pointer select-none`} onClick={() => toggleSort('email')}>Email{sortIndicator('email')}</th>
                         <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden md:table-cell cursor-pointer select-none`} onClick={() => toggleSort('company')}>Company{sortIndicator('company')}</th>
                         <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden lg:table-cell cursor-pointer select-none`} onClick={() => toggleSort('source')}>Source{sortIndicator('source')}</th>
+                        <th className={`text-center text-xs uppercase py-3 px-3 ${textMuted} hidden xl:table-cell cursor-pointer select-none`} onClick={() => toggleSort('last_activity_date')}>Last Touch{sortIndicator('last_activity_date')}</th>
                         <th className={`text-center text-xs uppercase py-3 px-3 ${textMuted}`}>Status</th>
                         <th className={`text-right text-xs uppercase py-3 px-3 ${textMuted}`}>Actions</th>
                       </tr></thead>
@@ -532,6 +556,13 @@ export default function LeadsCRM() {
                             </td>
                             <td className={`py-2.5 px-3 hidden md:table-cell text-sm ${textSec}`}>{contact.company || <span className={textMuted}>—</span>}</td>
                             <td className={`py-2.5 px-3 hidden lg:table-cell text-xs ${textMuted}`}>{contact.source || '—'}</td>
+                            <td className="py-2.5 px-3 hidden xl:table-cell text-center">
+                              {contact.last_activity_date ? (
+                                <span className={`text-[11px] font-medium ${touchAgeCls(contact.last_activity_date)}`}>
+                                  {daysSince(contact.last_activity_date) === 0 ? 'Today' : `${daysSince(contact.last_activity_date)}d ago`}
+                                </span>
+                              ) : <span className={`text-[11px] ${textMuted}`}>—</span>}
+                            </td>
                             <td className="py-2.5 px-3 text-center">
                               {contact.converted_to_lead ? (
                                 <span className="text-[10px] px-2 py-0.5 rounded bg-green-500/20 text-green-400 font-medium">Converted</span>
@@ -540,16 +571,12 @@ export default function LeadsCRM() {
                               )}
                             </td>
                             <td className="py-2.5 px-3 text-right whitespace-nowrap">
-                              {!contact.converted_to_lead ? (
-                                <>
-                                  <Button size="sm" variant="ghost" onClick={() => openWaForContact(contact)} className="text-green-500 h-7 px-1.5" title="Send WhatsApp" data-testid={`wa-contact-${contact.contact_id}`}><MessageSquare className="h-3.5 w-3.5" /></Button>
-                                  <Button size="sm" variant="ghost" onClick={() => openConvert(contact)} className="text-[#e94560] h-7 px-1.5" title="Convert to Lead" data-testid={`convert-contact-${contact.contact_id}`}><ArrowRightCircle className="h-3.5 w-3.5" /></Button>
-                                  <Button size="sm" variant="ghost" onClick={() => openEditContact(contact)} className={`${textSec} h-7 px-1.5`} data-testid={`edit-contact-${contact.contact_id}`}><Edit2 className="h-3 w-3" /></Button>
-                                  <Button size="sm" variant="ghost" onClick={() => deleteContact(contact.contact_id)} className="text-red-400 h-7 px-1.5" data-testid={`delete-contact-${contact.contact_id}`}><Trash2 className="h-3 w-3" /></Button>
-                                </>
-                              ) : (
-                                <span className={`text-[10px] font-mono ${textMuted}`}>{contact.lead_id?.slice(0, 12)}</span>
+                              <Button size="sm" variant="ghost" onClick={() => openWaForContact(contact)} className="text-green-500 h-7 px-1.5" title="Send WhatsApp" data-testid={`wa-contact-${contact.contact_id}`}><MessageSquare className="h-3.5 w-3.5" /></Button>
+                              {!contact.converted_to_lead && (
+                                <Button size="sm" variant="ghost" onClick={() => openConvert(contact)} className="text-[#e94560] h-7 px-1.5" title="Convert to Lead" data-testid={`convert-contact-${contact.contact_id}`}><ArrowRightCircle className="h-3.5 w-3.5" /></Button>
                               )}
+                              <Button size="sm" variant="ghost" onClick={() => openEditContact(contact)} className={`${textSec} h-7 px-1.5`} data-testid={`edit-contact-${contact.contact_id}`}><Edit2 className="h-3 w-3" /></Button>
+                              <Button size="sm" variant="ghost" onClick={() => deleteContact(contact.contact_id)} className="text-red-400 h-7 px-1.5" data-testid={`delete-contact-${contact.contact_id}`}><Trash2 className="h-3 w-3" /></Button>
                             </td>
                           </tr>
                         ))}
@@ -753,6 +780,7 @@ export default function LeadsCRM() {
                   <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden md:table-cell cursor-pointer select-none`} onClick={() => toggleSort('city')}>City{sortIndicator('city')}</th>
                   <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden md:table-cell`}>Contact</th>
                   <th className={`text-center text-xs uppercase py-3 px-3 ${textMuted} hidden lg:table-cell cursor-pointer select-none`} onClick={() => toggleSort('school_strength')}>Strength{sortIndicator('school_strength')}</th>
+                  <th className={`text-center text-xs uppercase py-3 px-3 ${textMuted} hidden lg:table-cell`}>Profile</th>
                   <th className={`text-center text-xs uppercase py-3 px-3 ${textMuted}`}>Leads</th>
                   <th className={`text-right text-xs uppercase py-3 px-3 ${textMuted}`}>Actions</th>
                 </tr></thead>
@@ -772,6 +800,13 @@ export default function LeadsCRM() {
                           <p className={`text-xs ${textMuted}`}>{sch.designation}</p>
                         </td>
                         <td className={`py-2.5 px-3 hidden lg:table-cell text-center font-mono ${textPri}`}>{sch.school_strength || '-'}</td>
+                        <td className="py-2.5 px-3 hidden lg:table-cell text-center">
+                          {(() => {
+                            const pct = calcSchoolCompletion(sch);
+                            const cls = pct >= 90 ? 'bg-green-500/20 text-green-400' : pct >= 60 ? 'bg-yellow-500/20 text-yellow-400' : pct >= 30 ? 'bg-orange-500/20 text-orange-400' : 'bg-red-500/20 text-red-400';
+                            return <span className={`text-[11px] px-2 py-0.5 rounded font-bold ${cls}`}>{pct}%</span>;
+                          })()}
+                        </td>
                         <td className="py-2.5 px-3 text-center"><span className="bg-[#e94560]/20 text-[#e94560] px-2 py-0.5 rounded text-xs font-bold">{schLeads.length}</span></td>
                         <td className="py-2.5 px-3 text-right" onClick={e => e.stopPropagation()}>
                           <Button size="sm" variant="ghost" onClick={() => openEditSchool(sch)} className={`${textSec} h-7`} data-testid={`edit-school-${sch.school_id}`}><Edit2 className="h-3 w-3" /></Button>
@@ -780,9 +815,209 @@ export default function LeadsCRM() {
                       </tr>
                     );
                   })}
-                  {schFiltered.length === 0 && <tr><td colSpan="7" className={`py-12 text-center ${textMuted}`}>No schools match your search</td></tr>}
+                  {schFiltered.length === 0 && <tr><td colSpan="8" className={`py-12 text-center ${textMuted}`}>No schools match your search</td></tr>}
                 </tbody>
               </table>
+            </div>
+          </div>
+          );
+        })()}
+
+        {/* REPORTS TAB */}
+        {activeTab === 'reports' && (() => {
+          const totalContacts = contactsList.length;
+          const convertedContacts = contactsList.filter(c => c.converted_to_lead).length;
+          const activeContacts = totalContacts - convertedContacts;
+          const totalLeads = leadsList.length;
+          const demoLeads = leadsList.filter(l => l.stage === 'demo').length;
+          const quotedLeads = leadsList.filter(l => l.stage === 'quoted').length;
+          const wonLeads = leadsList.filter(l => l.stage === 'won').length;
+          const retentionLeads = leadsList.filter(l => l.stage === 'retention').length;
+          const resellLeads = leadsList.filter(l => l.stage === 'resell').length;
+
+          // Aging buckets for contacts (days since last_activity_date)
+          const agingBuckets = [
+            { label: 'Fresh (≤3d)', cls: 'bg-green-500/20 text-green-400 border-green-500/30', count: contactsList.filter(c => !c.converted_to_lead && daysSince(c.last_activity_date) <= 3).length },
+            { label: 'Active (4-7d)', cls: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30', count: contactsList.filter(c => !c.converted_to_lead && daysSince(c.last_activity_date) > 3 && daysSince(c.last_activity_date) <= 7).length },
+            { label: 'Cooling (8-14d)', cls: 'bg-orange-500/20 text-orange-400 border-orange-500/30', count: contactsList.filter(c => !c.converted_to_lead && daysSince(c.last_activity_date) > 7 && daysSince(c.last_activity_date) <= 14).length },
+            { label: 'Cold (15d+)', cls: 'bg-red-500/20 text-red-400 border-red-500/30', count: contactsList.filter(c => !c.converted_to_lead && daysSince(c.last_activity_date) > 14).length },
+          ];
+          // Lead aging buckets
+          const leadAgingBuckets = [
+            { label: '≤3d', cls: 'bg-green-500/20 text-green-400', count: leadsList.filter(l => daysSince(l.last_activity_date) <= 3).length },
+            { label: '4-7d', cls: 'bg-yellow-500/20 text-yellow-400', count: leadsList.filter(l => daysSince(l.last_activity_date) > 3 && daysSince(l.last_activity_date) <= 7).length },
+            { label: '8-14d', cls: 'bg-orange-500/20 text-orange-400', count: leadsList.filter(l => daysSince(l.last_activity_date) > 7 && daysSince(l.last_activity_date) <= 14).length },
+            { label: '15d+', cls: 'bg-red-500/20 text-red-400', count: leadsList.filter(l => daysSince(l.last_activity_date) > 14).length },
+          ];
+          // Team leaderboard
+          const teamMap = {};
+          spList.forEach(sp => { teamMap[sp.email] = { name: sp.name, leads: 0, won: 0, contacts: 0 }; });
+          leadsList.forEach(l => { if (teamMap[l.assigned_to]) { teamMap[l.assigned_to].leads++; if (l.stage === 'won') teamMap[l.assigned_to].won++; } });
+          contactsList.forEach(c => { if (teamMap[c.created_by]) teamMap[c.created_by].contacts++; });
+          const teamBoard = Object.values(teamMap).sort((a, b) => b.leads - a.leads);
+          // School completion distribution
+          const schCompletion = { incomplete: 0, low: 0, good: 0, complete: 0 };
+          schoolsList.forEach(sch => {
+            const p = calcSchoolCompletion(sch);
+            if (p < 30) schCompletion.incomplete++;
+            else if (p < 60) schCompletion.low++;
+            else if (p < 90) schCompletion.good++;
+            else schCompletion.complete++;
+          });
+          // Leads per school
+          const leadsPerSchool = schoolsList.map(sch => ({
+            name: sch.school_name, city: sch.city,
+            count: leadsList.filter(l => l.school_id === sch.school_id).length,
+            pct: calcSchoolCompletion(sch),
+          })).filter(s => s.count > 0).sort((a, b) => b.count - a.count).slice(0, 10);
+
+          return (
+          <div className="space-y-5" data-testid="reports-tab">
+            {/* Funnel */}
+            <div className={`${card} border rounded-md p-4`}>
+              <h3 className={`${textPri} font-semibold text-sm mb-3`}>Contact → Lead Funnel</h3>
+              <div className="flex flex-wrap gap-2 items-end">
+                {[
+                  { label: 'Total Contacts', val: totalContacts, cls: 'bg-blue-500/20 text-blue-400 border-blue-500/30' },
+                  { label: 'Converted', val: convertedContacts, cls: 'bg-cyan-500/20 text-cyan-400 border-cyan-500/30', pct: totalContacts ? Math.round(convertedContacts / totalContacts * 100) : 0 },
+                  { label: 'Demo', val: demoLeads, cls: 'bg-purple-500/20 text-purple-400 border-purple-500/30', pct: totalLeads ? Math.round(demoLeads / totalLeads * 100) : 0 },
+                  { label: 'Quoted', val: quotedLeads, cls: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30', pct: totalLeads ? Math.round(quotedLeads / totalLeads * 100) : 0 },
+                  { label: 'Won', val: wonLeads, cls: 'bg-green-500/20 text-green-400 border-green-500/30', pct: totalLeads ? Math.round(wonLeads / totalLeads * 100) : 0 },
+                  { label: 'Retention', val: retentionLeads, cls: 'bg-teal-500/20 text-teal-400 border-teal-500/30', pct: wonLeads ? Math.round(retentionLeads / Math.max(wonLeads, 1) * 100) : 0 },
+                  { label: 'Resell', val: resellLeads, cls: 'bg-indigo-500/20 text-indigo-400 border-indigo-500/30', pct: retentionLeads ? Math.round(resellLeads / Math.max(retentionLeads, 1) * 100) : 0 },
+                ].map((f, i) => (
+                  <div key={f.label} className={`flex-1 min-w-[90px] border rounded-md p-3 text-center ${f.cls}`}>
+                    <p className="text-2xl font-bold">{f.val}</p>
+                    <p className="text-[11px] font-medium">{f.label}</p>
+                    {f.pct !== undefined && <p className="text-[10px] opacity-70">{f.pct}% conv.</p>}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Aging buckets (contacts + leads) */}
+            <div className="grid sm:grid-cols-2 gap-4">
+              <div className={`${card} border rounded-md p-4`}>
+                <h3 className={`${textPri} font-semibold text-sm mb-3`}>Contact Follow-up Aging</h3>
+                <div className="space-y-2">
+                  {agingBuckets.map(b => (
+                    <div key={b.label} className="flex items-center justify-between">
+                      <span className={`text-xs px-2 py-0.5 rounded border ${b.cls}`}>{b.label}</span>
+                      <div className="flex-1 mx-3 bg-[var(--bg-primary)] rounded-full h-2 overflow-hidden">
+                        <div className={`h-2 rounded-full ${b.cls.split(' ')[0]}`} style={{ width: `${activeContacts ? Math.round(b.count / activeContacts * 100) : 0}%` }} />
+                      </div>
+                      <span className={`text-xs font-bold ${textPri} w-6 text-right`}>{b.count}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className={`${card} border rounded-md p-4`}>
+                <h3 className={`${textPri} font-semibold text-sm mb-3`}>Lead Follow-up Aging</h3>
+                <div className="space-y-2">
+                  {leadAgingBuckets.map(b => (
+                    <div key={b.label} className="flex items-center justify-between">
+                      <span className={`text-xs px-2 py-0.5 rounded ${b.cls} w-14 text-center`}>{b.label}</span>
+                      <div className="flex-1 mx-3 bg-[var(--bg-primary)] rounded-full h-2 overflow-hidden">
+                        <div className={`h-2 rounded-full ${b.cls.split(' ')[0]}`} style={{ width: `${totalLeads ? Math.round(b.count / totalLeads * 100) : 0}%` }} />
+                      </div>
+                      <span className={`text-xs font-bold ${textPri} w-6 text-right`}>{b.count}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Stage distribution */}
+            <div className={`${card} border rounded-md p-4`}>
+              <h3 className={`${textPri} font-semibold text-sm mb-3`}>Lead Stage Distribution</h3>
+              <div className="flex flex-wrap gap-2">
+                {STAGES.map(s => {
+                  const cnt = leadsList.filter(l => l.stage === s.id).length;
+                  return (
+                    <div key={s.id} className={`flex items-center gap-2 px-3 py-2 rounded border ${s.color} flex-1 min-w-[90px] justify-between`}>
+                      <span className="text-xs font-medium">{s.label}</span>
+                      <span className="text-lg font-bold">{cnt}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Team leaderboard */}
+            {teamBoard.length > 0 && (
+              <div className={`${card} border rounded-md p-4`}>
+                <h3 className={`${textPri} font-semibold text-sm mb-3`}>Team Leaderboard</h3>
+                <div className={`rounded-md overflow-hidden border border-[var(--border-color)]`}>
+                  <table className="w-full text-sm">
+                    <thead><tr className="bg-[var(--bg-primary)]">
+                      <th className={`text-left py-2 px-3 text-xs uppercase ${textMuted}`}>Sales Person</th>
+                      <th className={`text-center py-2 px-3 text-xs uppercase ${textMuted}`}>Contacts</th>
+                      <th className={`text-center py-2 px-3 text-xs uppercase ${textMuted}`}>Leads</th>
+                      <th className={`text-center py-2 px-3 text-xs uppercase ${textMuted}`}>Won</th>
+                      <th className={`text-center py-2 px-3 text-xs uppercase ${textMuted}`}>Win Rate</th>
+                    </tr></thead>
+                    <tbody>
+                      {teamBoard.map((m, i) => (
+                        <tr key={m.name} className={`border-t border-[var(--border-color)] ${i === 0 ? 'bg-[#e94560]/5' : ''}`}>
+                          <td className={`py-2 px-3 font-medium ${textPri}`}>
+                            <div className="flex items-center gap-1.5">
+                              {i === 0 && <span className="text-yellow-400 text-xs">★</span>}
+                              {m.name}
+                            </div>
+                          </td>
+                          <td className={`py-2 px-3 text-center ${textSec}`}>{m.contacts}</td>
+                          <td className={`py-2 px-3 text-center font-mono text-[#e94560] font-bold`}>{m.leads}</td>
+                          <td className={`py-2 px-3 text-center text-green-400 font-bold`}>{m.won}</td>
+                          <td className={`py-2 px-3 text-center text-xs ${textSec}`}>{m.leads ? `${Math.round(m.won / m.leads * 100)}%` : '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* School profile completion */}
+            <div className="grid sm:grid-cols-2 gap-4">
+              <div className={`${card} border rounded-md p-4`}>
+                <h3 className={`${textPri} font-semibold text-sm mb-3`}>School Profile Completion</h3>
+                <div className="space-y-2">
+                  {[
+                    { label: 'Incomplete (<30%)', val: schCompletion.incomplete, cls: 'bg-red-500/20 text-red-400 border-red-500/30' },
+                    { label: 'Low (30-59%)', val: schCompletion.low, cls: 'bg-orange-500/20 text-orange-400 border-orange-500/30' },
+                    { label: 'Good (60-89%)', val: schCompletion.good, cls: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30' },
+                    { label: 'Complete (90%+)', val: schCompletion.complete, cls: 'bg-green-500/20 text-green-400 border-green-500/30' },
+                  ].map(b => (
+                    <div key={b.label} className="flex items-center justify-between">
+                      <span className={`text-xs px-2 py-0.5 rounded border ${b.cls} min-w-[130px]`}>{b.label}</span>
+                      <div className="flex-1 mx-3 bg-[var(--bg-primary)] rounded-full h-2 overflow-hidden">
+                        <div className={`h-2 rounded-full ${b.cls.split(' ')[0]}`} style={{ width: `${schoolsList.length ? Math.round(b.val / schoolsList.length * 100) : 0}%` }} />
+                      </div>
+                      <span className={`text-xs font-bold ${textPri} w-6 text-right`}>{b.val}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              {/* Top schools by leads */}
+              {leadsPerSchool.length > 0 && (
+                <div className={`${card} border rounded-md p-4`}>
+                  <h3 className={`${textPri} font-semibold text-sm mb-3`}>Top Schools by Engagement</h3>
+                  <div className="space-y-1.5">
+                    {leadsPerSchool.slice(0, 8).map(s => (
+                      <div key={s.name} className="flex items-center justify-between">
+                        <div className="flex-1 min-w-0">
+                          <p className={`text-xs ${textPri} truncate`}>{s.name}</p>
+                          <p className={`text-[10px] ${textMuted}`}>{s.city}</p>
+                        </div>
+                        <div className="flex items-center gap-2 ml-2">
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded ${s.pct >= 90 ? 'bg-green-500/20 text-green-400' : s.pct >= 60 ? 'bg-yellow-500/20 text-yellow-400' : 'bg-orange-500/20 text-orange-400'}`}>{s.pct}%</span>
+                          <span className="text-xs font-bold text-[#e94560]">{s.count}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
           );
@@ -1186,11 +1421,33 @@ export default function LeadsCRM() {
                   <p className={`text-sm ${textMuted}`}>{convertContact.phone}{convertContact.email ? ` • ${convertContact.email}` : ''}</p>
                   {convertContact.company && <p className={`text-xs ${textMuted} mt-1`}>{convertContact.company}{convertContact.designation ? ` • ${convertContact.designation}` : ''}</p>}
                 </div>
-                <div><Label className={`${textSec} text-xs`}>Link to School</Label>
-                  <select value={convertForm.school_id} onChange={e => setConvertForm({...convertForm, school_id: e.target.value})} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`} data-testid="convert-school-select">
-                    <option value="">-- No school (create later) --</option>
-                    {schoolsList.map(s => <option key={s.school_id} value={s.school_id}>{s.school_name} ({s.city || s.school_type})</option>)}
-                  </select>
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <Label className={`${textSec} text-xs`}>Link to School</Label>
+                    <button onClick={() => { setConvertAddNewSchool(!convertAddNewSchool); setConvertForm({...convertForm, school_id: ''}); }} className="text-xs text-[#e94560] hover:underline">
+                      {convertAddNewSchool ? '← Select Existing' : '+ Create New School'}
+                    </button>
+                  </div>
+                  {convertAddNewSchool ? (
+                    <div className={`bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-md p-3 space-y-2`}>
+                      <Input value={convertNewSchool.school_name} onChange={e => setConvertNewSchool({...convertNewSchool, school_name: e.target.value})} placeholder="School name *" className={`${inputCls} text-sm`} data-testid="convert-new-school-name" />
+                      <div className="grid grid-cols-2 gap-2">
+                        <select value={convertNewSchool.school_type} onChange={e => setConvertNewSchool({...convertNewSchool, school_type: e.target.value})} className={`h-9 px-2 rounded text-sm ${inputCls}`}>
+                          {SCHOOL_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                        </select>
+                        <Input value={convertNewSchool.city} onChange={e => setConvertNewSchool({...convertNewSchool, city: e.target.value})} placeholder="City" className={`${inputCls} text-sm`} />
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <Input value={convertNewSchool.phone} onChange={e => setConvertNewSchool({...convertNewSchool, phone: e.target.value})} placeholder="Phone" className={`${inputCls} text-sm`} />
+                        <Input type="number" value={convertNewSchool.school_strength} onChange={e => setConvertNewSchool({...convertNewSchool, school_strength: parseInt(e.target.value) || 0})} placeholder="Strength" className={`${inputCls} text-sm`} />
+                      </div>
+                    </div>
+                  ) : (
+                    <select value={convertForm.school_id} onChange={e => setConvertForm({...convertForm, school_id: e.target.value})} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`} data-testid="convert-school-select">
+                      <option value="">-- No school (create later) --</option>
+                      {schoolsList.map(s => <option key={s.school_id} value={s.school_id}>{s.school_name} ({s.city || s.school_type})</option>)}
+                    </select>
+                  )}
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div><Label className={`${textSec} text-xs`}>Lead Type</Label>

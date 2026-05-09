@@ -9,9 +9,12 @@ import os
 import logging
 
 # MongoDB connection
-mongo_url = os.environ['MONGO_URL']
+mongo_url = os.environ.get('MONGO_URL') or os.environ.get('MONGODB_URL')
+if not mongo_url:
+    raise RuntimeError("MONGO_URL environment variable is not set")
+db_name = os.environ.get('DB_NAME', 'smartshape_prod')
 client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+db = client[db_name]
 
 
 async def connect_db():

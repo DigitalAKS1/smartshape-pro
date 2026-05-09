@@ -31,14 +31,18 @@ frontend/build/
 dist/
 dist
 
-# Environment files (comprehensive coverage — NEVER commit secrets)
+# Environment files — NEVER commit secrets
 .env
-.env.*
-!.env.example
+.env.local
+.env.development
 backend/.env
 backend/.env.*
+!backend/.env.example
 frontend/.env
-frontend/.env.*
+frontend/.env.local
+
+# .env.production is NOT committed — set vars in Netlify/Render dashboards
+frontend/.env.production
 
 *token.json*
 *credentials.json*

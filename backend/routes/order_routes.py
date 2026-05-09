@@ -7,6 +7,7 @@ import io
 
 from database import db
 from auth_utils import get_current_user
+from rbac import get_team, require_teams
 
 router = APIRouter()
 
@@ -30,7 +31,14 @@ async def log_activity(user_email: str, action: str, entity_type: str, entity_id
 @router.get("/orders")
 async def get_orders(request: Request):
     user = await get_current_user(request)
-    orders = await db.orders.find({}, {"_id": 0}).sort("created_at", -1).to_list(10000)
+    team = get_team(user)
+    if team == "sales":
+        # Sales see only orders they created (from their quotations)
+        query = {"created_by": user["email"]}
+    else:
+        # admin, accounts, store — see all orders
+        query = {}
+    orders = await db.orders.find(query, {"_id": 0}).sort("created_at", -1).to_list(10000)
     return orders
 
 
@@ -341,8 +349,16 @@ async def create_dispatch(request: Request):
 
 @router.get("/dispatches")
 async def get_dispatches(request: Request):
-    await get_current_user(request)
-    dispatches = await db.dispatches.find({}, {"_id": 0}).sort("created_at", -1).to_list(5000)
+    user = await get_current_user(request)
+    team = get_team(user)
+    if team == "sales":
+        # Sales see dispatches for their own orders only
+        own_orders = await db.orders.find({"created_by": user["email"]}, {"_id": 0, "order_id": 1}).to_list(10000)
+        order_ids = [o["order_id"] for o in own_orders]
+        query = {"order_id": {"$in": order_ids}} if order_ids else {"order_id": "__none__"}
+    else:
+        query = {}
+    dispatches = await db.dispatches.find(query, {"_id": 0}).sort("created_at", -1).to_list(5000)
     return dispatches
 
 
@@ -473,9 +489,16 @@ async def dispatch_slip_pdf(dispatch_id: str, request: Request):
 
 @router.get("/holds")
 async def get_holds(request: Request):
-    await get_current_user(request)
+    user = await get_current_user(request)
+    team = get_team(user)
     holds = []
-    items = await db.order_items.find({"status": "on_hold"}, {"_id": 0}).to_list(10000)
+    if team == "sales":
+        own_orders = await db.orders.find({"created_by": user["email"]}, {"_id": 0, "order_id": 1}).to_list(10000)
+        order_ids = [o["order_id"] for o in own_orders]
+        item_query = {"status": "on_hold", "order_id": {"$in": order_ids}} if order_ids else {"status": "on_hold", "order_id": "__none__"}
+    else:
+        item_query = {"status": "on_hold"}
+    items = await db.order_items.find(item_query, {"_id": 0}).to_list(10000)
     for item in items:
         order = await db.orders.find_one({"order_id": item["order_id"]}, {"_id": 0})
         die = await db.dies.find_one({"die_id": item["die_id"]}, {"_id": 0})

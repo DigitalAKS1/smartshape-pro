@@ -7,6 +7,7 @@ import io
 
 from database import db
 from auth_utils import get_current_user
+from rbac import get_team
 
 router = APIRouter()
 
@@ -224,15 +225,19 @@ async def delete_contact_role(role_id: str, request: Request):
 @router.get("/schools")
 async def get_schools(request: Request):
     user = await get_current_user(request)
-    if user.get("role") != "admin" and "leads" not in user.get("assigned_modules", []):
+    team = get_team(user)
+    if team == "admin":
+        query = {}
+    elif team in ("accounts", "store"):
+        # These teams don't work with the CRM; return empty
+        return []
+    else:  # sales
         own_leads = await db.leads.find({"assigned_to": user["email"]}, {"_id": 0, "school_id": 1}).to_list(10000)
         linked_school_ids = [l.get("school_id") for l in own_leads if l.get("school_id")]
         query = {"$or": [
             {"created_by": user["email"]},
             {"school_id": {"$in": linked_school_ids}} if linked_school_ids else {"school_id": "__none__"},
         ]}
-    else:
-        query = {}
     schools = await db.schools.find(query, {"_id": 0}).sort("school_name", 1).to_list(10000)
     return schools
 
@@ -315,9 +320,13 @@ async def set_school_password(school_id: str, request: Request):
 @router.get("/contacts")
 async def get_contacts(request: Request):
     user = await get_current_user(request)
-    query = {}
-    if user.get("role") != "admin" and "leads" not in user.get("assigned_modules", []):
-        query["created_by"] = user["email"]
+    team = get_team(user)
+    if team == "admin":
+        query = {}
+    elif team in ("accounts", "store"):
+        return []
+    else:  # sales
+        query = {"created_by": user["email"]}
     contacts = await db.contacts.find(query, {"_id": 0}).sort("created_at", -1).to_list(10000)
     return contacts
 
@@ -384,12 +393,39 @@ async def convert_contact_to_lead(contact_id: str, request: Request):
         raise HTTPException(status_code=400, detail="Contact already converted to a lead")
 
     body = await request.json()
-    lead_id = f"lead_{uuid.uuid4().hex[:12]}"
     now_iso = datetime.now(timezone.utc).isoformat()
+
+    # Inline school creation
+    school_id = body.get("school_id", "")
+    company_name = contact.get("company", "")
+    new_school_data = body.get("new_school")
+    if new_school_data and new_school_data.get("school_name"):
+        school_id = f"sch_{uuid.uuid4().hex[:8]}"
+        company_name = new_school_data.get("school_name", "")
+        await db.schools.insert_one({
+            "school_id": school_id,
+            "school_name": company_name,
+            "school_type": new_school_data.get("school_type", "CBSE"),
+            "phone": new_school_data.get("phone", ""),
+            "email": new_school_data.get("email", ""),
+            "city": new_school_data.get("city", ""),
+            "state": new_school_data.get("state", ""),
+            "school_strength": new_school_data.get("school_strength", 0),
+            "primary_contact_name": contact["name"],
+            "designation": contact.get("designation", ""),
+            "created_at": now_iso,
+            "last_activity_date": now_iso,
+        })
+    elif school_id:
+        sch = await db.schools.find_one({"school_id": school_id}, {"_id": 0})
+        if sch:
+            company_name = sch.get("school_name", company_name)
+
+    lead_id = f"lead_{uuid.uuid4().hex[:12]}"
     lead_doc = {
         "lead_id": lead_id,
-        "school_id": body.get("school_id", ""),
-        "company_name": contact.get("company", ""),
+        "school_id": school_id,
+        "company_name": company_name,
         "contact_name": contact["name"],
         "designation": contact.get("designation", ""),
         "contact_role_id": contact.get("contact_role_id", ""),
@@ -418,8 +454,8 @@ async def convert_contact_to_lead(contact_id: str, request: Request):
         "status": "converted",
         "last_activity_date": now_iso,
     }})
-    if body.get("school_id"):
-        await touch_last_activity("school", body["school_id"])
+    if school_id:
+        await touch_last_activity("school", school_id)
     return await db.leads.find_one({"lead_id": lead_id}, {"_id": 0})
 
 
@@ -477,9 +513,13 @@ async def import_contacts_csv(file: UploadFile = File(...), request: Request = N
 @router.get("/leads")
 async def get_leads(request: Request):
     user = await get_current_user(request)
-    query = {}
-    if user.get("role") != "admin" and "leads" not in user.get("assigned_modules", []):
-        query["assigned_to"] = user["email"]
+    team = get_team(user)
+    if team == "admin":
+        query = {}
+    elif team in ("accounts", "store"):
+        return []
+    else:  # sales — only assigned leads
+        query = {"assigned_to": user["email"]}
     leads = await db.leads.find(query, {"_id": 0}).sort("created_at", -1).to_list(10000)
     school_cache = {}
     now = datetime.now(timezone.utc)
@@ -892,10 +932,13 @@ async def add_call_note(lead_id: str, request: Request):
 @router.get("/followups")
 async def get_followups(request: Request, lead_id: Optional[str] = None):
     user = await get_current_user(request)
+    team = get_team(user)
     query = {}
     if lead_id:
         query["lead_id"] = lead_id
-    elif user.get("role") != "admin":
+    elif team == "admin":
+        pass  # no filter — see all
+    else:
         query["assigned_to"] = user["email"]
     followups = await db.followups.find(query, {"_id": 0}).sort("followup_date", -1).to_list(5000)
     return followups
@@ -942,9 +985,11 @@ async def update_followup(followup_id: str, request: Request):
 @router.get("/tasks")
 async def get_tasks(request: Request):
     user = await get_current_user(request)
-    query = {}
-    if user.get("role") != "admin":
-        query["$or"] = [{"assigned_to": user["email"]}, {"created_by": user["email"]}]
+    team = get_team(user)
+    if team == "admin":
+        query = {}
+    else:
+        query = {"$or": [{"assigned_to": user["email"]}, {"created_by": user["email"]}]}
     tasks = await db.tasks.find(query, {"_id": 0}).sort("due_date", 1).to_list(5000)
     return tasks
 

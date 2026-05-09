@@ -5,31 +5,68 @@ import uuid
 
 from database import db
 from auth_utils import get_current_user
+from rbac import get_team
 
 router = APIRouter()
 
 # ==================== LEAVE MANAGEMENT ====================
 
 DEFAULT_DESIGNATIONS = [
-    {"designation_id": "desg_super_admin", "name": "Super Admin", "code": "super_admin", "role_level": "admin", "default_modules": ["dashboard", "quotations", "inventory", "stock_management", "purchase_alerts", "package_master", "physical_count", "analytics", "payroll", "accounts", "hr", "leave_management", "store", "settings", "user_management", "field_sales", "leads", "sales_portal"], "description": "Full access to all system modules", "is_system": True, "is_active": True},
-    {"designation_id": "desg_admin", "name": "Admin", "code": "admin", "role_level": "admin", "default_modules": ["dashboard", "quotations", "inventory", "stock_management", "package_master", "analytics", "accounts", "hr", "leave_management", "store", "settings", "user_management", "leads", "sales_portal"], "description": "Administrative access without sensitive configs", "is_system": True, "is_active": True},
-    {"designation_id": "desg_sales_head", "name": "Sales Head", "code": "sales_head", "role_level": "admin", "default_modules": ["dashboard", "quotations", "leads", "field_sales", "analytics", "sales_portal", "leave_management"], "description": "Manages sales team, views analytics, creates quotations", "is_system": True, "is_active": True},
-    {"designation_id": "desg_sales_exec", "name": "Sales Executive", "code": "sales_executive", "role_level": "sales_person", "default_modules": ["quotations", "leads", "field_sales", "sales_portal", "leave_management"], "description": "Field sales, lead management, quotation creation", "is_system": True, "is_active": True},
-    {"designation_id": "desg_hr_manager", "name": "HR Manager", "code": "hr_manager", "role_level": "admin", "default_modules": ["dashboard", "hr", "payroll", "leave_management", "field_sales", "user_management", "analytics"], "description": "HR operations, payroll, attendance, leave approvals", "is_system": True, "is_active": True},
-    {"designation_id": "desg_store_mgr", "name": "Store Manager", "code": "store_manager", "role_level": "admin", "default_modules": ["dashboard", "inventory", "stock_management", "purchase_alerts", "physical_count", "store", "package_master"], "description": "Inventory control, stock management, store operations", "is_system": True, "is_active": True},
-    {"designation_id": "desg_accounts", "name": "Accounts Manager", "code": "accounts_manager", "role_level": "admin", "default_modules": ["dashboard", "accounts", "quotations", "payroll", "analytics", "leave_management"], "description": "Financial operations, quotation approval, payroll processing", "is_system": True, "is_active": True},
-    {"designation_id": "desg_field_exec", "name": "Field Executive", "code": "field_executive", "role_level": "sales_person", "default_modules": ["field_sales", "sales_portal", "leave_management"], "description": "Field visits, attendance, basic sales portal access", "is_system": True, "is_active": True},
-    {"designation_id": "desg_dispatch", "name": "Dispatch Manager", "code": "dispatch_manager", "role_level": "admin", "default_modules": ["dashboard", "inventory", "stock_management", "store", "leave_management"], "description": "Manages dispatches, stock deductions, delivery tracking", "is_system": True, "is_active": True},
+    # role_level maps directly to the user.role field stored in the DB.
+    # admin     → sees all data
+    # accounts  → sees all financial data (quotations, orders, payments, payroll)
+    # store     → sees all operational data (orders, dispatches, inventory)
+    # sales_person → sees only own data
+    {"designation_id": "desg_super_admin", "name": "Super Admin", "code": "super_admin", "role_level": "admin",
+     "default_modules": ["dashboard", "quotations", "inventory", "stock_management", "purchase_alerts", "package_master", "physical_count", "analytics", "payroll", "accounts", "hr", "leave_management", "store", "settings", "user_management", "field_sales", "leads", "sales_portal"],
+     "description": "Full access to all system modules", "is_system": True, "is_active": True},
+
+    {"designation_id": "desg_admin", "name": "Admin", "code": "admin", "role_level": "admin",
+     "default_modules": ["dashboard", "quotations", "inventory", "stock_management", "package_master", "analytics", "accounts", "hr", "leave_management", "store", "settings", "user_management", "leads", "sales_portal"],
+     "description": "Administrative access without sensitive configs", "is_system": True, "is_active": True},
+
+    {"designation_id": "desg_sales_head", "name": "Sales Head", "code": "sales_head", "role_level": "admin",
+     "default_modules": ["dashboard", "quotations", "leads", "field_sales", "analytics", "sales_portal", "leave_management"],
+     "description": "Manages sales team, views all analytics and all leads", "is_system": True, "is_active": True},
+
+    {"designation_id": "desg_sales_exec", "name": "Sales Executive", "code": "sales_executive", "role_level": "sales_person",
+     "default_modules": ["quotations", "leads", "field_sales", "sales_portal", "leave_management"],
+     "description": "Sees only own leads, own quotations, own orders", "is_system": True, "is_active": True},
+
+    {"designation_id": "desg_field_exec", "name": "Field Executive", "code": "field_executive", "role_level": "sales_person",
+     "default_modules": ["field_sales", "sales_portal", "leave_management"],
+     "description": "Field visits, attendance, basic sales portal — own data only", "is_system": True, "is_active": True},
+
+    # ── Accounts team ── role_level = "accounts"
+    {"designation_id": "desg_accounts", "name": "Accounts Manager", "code": "accounts_manager", "role_level": "accounts",
+     "default_modules": ["dashboard", "accounts", "quotations", "payroll", "analytics", "leave_management"],
+     "description": "Sees ALL quotations, orders, payments, payroll. No CRM access.", "is_system": True, "is_active": True},
+
+    # ── Store / Dispatch team ── role_level = "store"
+    {"designation_id": "desg_store_mgr", "name": "Store Manager", "code": "store_manager", "role_level": "store",
+     "default_modules": ["dashboard", "quotations", "inventory", "stock_management", "purchase_alerts", "physical_count", "store", "package_master", "leave_management"],
+     "description": "Manages inventory, sees all orders & dispatches. No CRM access.", "is_system": True, "is_active": True},
+
+    {"designation_id": "desg_dispatch", "name": "Dispatch Manager", "code": "dispatch_manager", "role_level": "store",
+     "default_modules": ["dashboard", "quotations", "inventory", "stock_management", "store", "leave_management"],
+     "description": "Manages dispatches, sees all orders. No CRM access.", "is_system": True, "is_active": True},
+
+    # ── HR team ── role_level = "admin" (HR oversees all staff records)
+    {"designation_id": "desg_hr_manager", "name": "HR Manager", "code": "hr_manager", "role_level": "admin",
+     "default_modules": ["dashboard", "hr", "payroll", "leave_management", "field_sales", "user_management", "analytics"],
+     "description": "HR operations, payroll, attendance, leave approvals", "is_system": True, "is_active": True},
 ]
 
 
 @router.get("/leaves")
 async def get_leaves(request: Request):
     user = await get_current_user(request)
-    query = {}
-    can_view_all = user.get("role") == "admin" or "hr" in user.get("assigned_modules", [])
-    if not can_view_all:
-        query["user_email"] = user["email"]
+    team = get_team(user)
+    # Admin sees all; everyone else sees only their own leaves
+    if team == "admin":
+        query = {}
+    else:
+        query = {"user_email": user["email"]}
     leaves = await db.leaves.find(query, {"_id": 0}).sort("created_at", -1).to_list(5000)
     return leaves
 
@@ -71,8 +108,7 @@ async def apply_leave(request: Request):
 @router.put("/leaves/{leave_id}/approve")
 async def approve_leave(leave_id: str, request: Request):
     user = await get_current_user(request)
-    can_approve = user.get("role") == "admin" or "hr" in user.get("assigned_modules", [])
-    if not can_approve:
+    if get_team(user) != "admin":
         raise HTTPException(status_code=403, detail="Only Admin/HR can approve leaves")
     body = await request.json()
     status = body.get("status", "approved")
@@ -144,8 +180,8 @@ async def get_reimbursements(request: Request, month_year: Optional[str] = None)
 @router.put("/payroll/reimbursements/{reimbursement_id}/approve")
 async def approve_reimbursement(reimbursement_id: str, request: Request):
     user = await get_current_user(request)
-    if user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
+    if get_team(user) not in ("admin", "accounts"):
+        raise HTTPException(status_code=403, detail="Admin or Accounts access required")
 
     await db.payroll_reimbursements.update_one(
         {"reimbursement_id": reimbursement_id},
@@ -161,8 +197,8 @@ async def approve_reimbursement(reimbursement_id: str, request: Request):
 @router.put("/payroll/reimbursements/{reimbursement_id}/reject")
 async def reject_reimbursement(reimbursement_id: str, notes: str, request: Request):
     user = await get_current_user(request)
-    if user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
+    if get_team(user) not in ("admin", "accounts"):
+        raise HTTPException(status_code=403, detail="Admin or Accounts access required")
 
     await db.payroll_reimbursements.update_one(
         {"reimbursement_id": reimbursement_id},
@@ -181,12 +217,15 @@ async def reject_reimbursement(reimbursement_id: str, notes: str, request: Reque
 @router.get("/designations")
 async def get_designations(request: Request):
     await get_current_user(request)
+    # Always upsert system designations so role_level changes are applied immediately
+    for d in DEFAULT_DESIGNATIONS:
+        d_copy = {**d, "created_at": datetime.now(timezone.utc).isoformat()}
+        await db.designations.update_one(
+            {"designation_id": d["designation_id"]},
+            {"$set": d_copy},
+            upsert=True,
+        )
     designations = await db.designations.find({}, {"_id": 0}).sort("name", 1).to_list(100)
-    if not designations:
-        for d in DEFAULT_DESIGNATIONS:
-            d["created_at"] = datetime.now(timezone.utc).isoformat()
-            await db.designations.insert_one(d)
-        designations = await db.designations.find({}, {"_id": 0}).sort("name", 1).to_list(100)
     return designations
 
 

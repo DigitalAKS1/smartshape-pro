@@ -9,6 +9,7 @@ import asyncio
 
 from database import db
 from auth_utils import get_current_user, hash_password
+from rbac import get_team, require_admin, require_teams
 
 router = APIRouter()
 
@@ -87,6 +88,8 @@ async def admin_create_user(request: Request):
     password = body.get("password", "")
     name = body.get("name", "")
     role = body.get("role", "sales_person")
+    if role not in ("admin", "accounts", "store", "sales_person"):
+        role = "sales_person"
     phone = body.get("phone", "")
     assigned_modules = body.get("assigned_modules", [])
 
@@ -139,9 +142,14 @@ async def admin_update_user(user_id: str, request: Request):
 
     body = await request.json()
     allowed_fields = {}
-    for key in ("name", "role", "phone", "assigned_modules", "is_active"):
+    for key in ("name", "role", "phone", "assigned_modules", "is_active", "module_permissions"):
         if key in body:
             allowed_fields[key] = body[key]
+
+    # Sync assigned_modules from module_permissions if provided
+    if "module_permissions" in allowed_fields and "assigned_modules" not in allowed_fields:
+        perms = allowed_fields["module_permissions"]
+        allowed_fields["assigned_modules"] = [m for m, p in perms.items() if p.get("level", "none") != "none"]
 
     if "password" in body and body["password"]:
         allowed_fields["password_hash"] = hash_password(body["password"])
@@ -333,9 +341,7 @@ async def admin_funnel(request: Request):
 @router.get("/admin/attendance")
 async def get_all_attendance(request: Request):
     user = await get_current_user(request)
-    allowed = user.get("role") == "admin" or any(m in user.get("assigned_modules", []) for m in ("hr", "field_sales"))
-    if not allowed:
-        raise HTTPException(status_code=403, detail="Access denied")
+    require_teams(user, "admin")
     records = await db.attendance.find({}, {"_id": 0}).sort("date", -1).limit(200).to_list(200)
     return records
 
@@ -343,9 +349,7 @@ async def get_all_attendance(request: Request):
 @router.get("/admin/visits")
 async def get_all_visits(request: Request):
     user = await get_current_user(request)
-    allowed = user.get("role") == "admin" or "field_sales" in user.get("assigned_modules", [])
-    if not allowed:
-        raise HTTPException(status_code=403, detail="Access denied")
+    require_teams(user, "admin")
     visits = await db.field_visits.find({}, {"_id": 0}).sort("visit_date", -1).limit(200).to_list(200)
     return visits
 
@@ -353,19 +357,22 @@ async def get_all_visits(request: Request):
 @router.get("/admin/expenses")
 async def get_all_expenses(request: Request):
     user = await get_current_user(request)
-    allowed = user.get("role") == "admin" or any(m in user.get("assigned_modules", []) for m in ("field_sales", "accounts"))
-    if not allowed:
+    # Admin sees all; accounts team sees all for payroll; others see own only
+    team = get_team(user)
+    if team == "admin":
+        query = {}
+    elif team == "accounts":
+        query = {}
+    else:
         raise HTTPException(status_code=403, detail="Access denied")
-    expenses = await db.travel_expenses.find({}, {"_id": 0}).sort("date", -1).limit(200).to_list(200)
+    expenses = await db.travel_expenses.find(query, {"_id": 0}).sort("date", -1).limit(200).to_list(200)
     return expenses
 
 
 @router.get("/admin/field-sales/summary")
 async def get_field_sales_summary(request: Request):
     user = await get_current_user(request)
-    allowed = user.get("role") == "admin" or "field_sales" in user.get("assigned_modules", [])
-    if not allowed:
-        raise HTTPException(status_code=403, detail="Access denied")
+    require_teams(user, "admin")
 
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     current_month = datetime.now(timezone.utc).strftime("%Y-%m")
@@ -400,8 +407,9 @@ async def today_actions(request: Request):
 
     lead_query = {}
     visit_query = {}
+    team = get_team(user)
     role = user.get("role", "")
-    if role not in ("admin", "manager"):
+    if team != "admin":
         lead_query["assigned_to"] = user["email"]
         visit_query["assigned_to"] = user["email"]
 
@@ -577,15 +585,41 @@ async def today_mark_done(request: Request):
 # ==================== ACTIVITY LOGS ====================
 
 @router.get("/activity-logs")
-async def get_activity_logs(request: Request, entity_type: Optional[str] = None, limit: int = 100):
+async def get_activity_logs(
+    request: Request,
+    entity_type: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+    search: Optional[str] = None,
+    user_email: Optional[str] = None,
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+):
     user = await get_current_user(request)
     if user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Admin only")
     query = {}
     if entity_type:
         query["entity_type"] = entity_type
-    logs = await db.activity_logs.find(query, {"_id": 0}).sort("timestamp", -1).to_list(limit)
-    return logs
+    if user_email:
+        query["user_email"] = {"$regex": user_email, "$options": "i"}
+    if search:
+        query["$or"] = [
+            {"action": {"$regex": search, "$options": "i"}},
+            {"user_email": {"$regex": search, "$options": "i"}},
+            {"details": {"$regex": search, "$options": "i"}},
+            {"entity_id": {"$regex": search, "$options": "i"}},
+        ]
+    if from_date or to_date:
+        ts_filter = {}
+        if from_date:
+            ts_filter["$gte"] = from_date
+        if to_date:
+            ts_filter["$lte"] = to_date + "T23:59:59"
+        query["timestamp"] = ts_filter
+    total = await db.activity_logs.count_documents(query)
+    logs = await db.activity_logs.find(query, {"_id": 0}).sort("timestamp", -1).skip(offset).to_list(limit)
+    return {"logs": logs, "total": total, "offset": offset, "limit": limit}
 
 
 # ==================== NOTIFICATIONS ====================

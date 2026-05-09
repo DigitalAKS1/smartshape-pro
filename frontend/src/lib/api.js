@@ -344,7 +344,7 @@ export const importSystem = {
 
 // Activity Logs
 export const activityLogs = {
-  getAll: (entityType, limit) => API.get('/activity-logs', { params: { entity_type: entityType, limit } }),
+  getAll: (params = {}) => API.get('/activity-logs', { params }),
 };
 
 // School password (admin)

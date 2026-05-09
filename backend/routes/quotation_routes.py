@@ -9,6 +9,7 @@ import logging
 
 from database import db
 from auth_utils import get_current_user
+from rbac import get_team, require_teams
 
 router = APIRouter()
 
@@ -61,11 +62,14 @@ async def generate_quote_number() -> str:
 @router.get("/quotations")
 async def get_quotations(request: Request, sales_person_id: Optional[str] = None):
     user = await get_current_user(request)
+    team = get_team(user)
     query = {}
     if sales_person_id:
         query["sales_person_id"] = sales_person_id
-    elif user.get("role") != "admin" and "quotations" not in user.get("assigned_modules", []):
+    elif team == "sales":
+        # Sales only see their own quotations
         query["sales_person_email"] = user["email"]
+    # admin, accounts, store: see all quotations
 
     quotations = await db.quotations.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
     return quotations
@@ -74,11 +78,10 @@ async def get_quotations(request: Request, sales_person_id: Optional[str] = None
 @router.post("/quotations")
 async def create_quotation(request: Request):
     user = await get_current_user(request)
-    can_create = user.get("role") == "admin" or any(
-        m in user.get("assigned_modules", []) for m in ("quotations", "sales_portal")
-    )
-    if not can_create:
-        raise HTTPException(status_code=403, detail="No permission to create quotations")
+    team = get_team(user)
+    # store team cannot create quotations; admin, accounts, sales can
+    if team == "store":
+        raise HTTPException(status_code=403, detail="Store team cannot create quotations")
 
     body = await request.json()
 
@@ -213,9 +216,9 @@ async def update_quotation_status(quotation_id: str, status: str, request: Reque
 @router.delete("/quotations/{quotation_id}")
 async def delete_quotation(quotation_id: str, request: Request):
     user = await get_current_user(request)
-    can_delete = user.get("role") == "admin" or "accounts" in user.get("assigned_modules", [])
-    if not can_delete:
-        raise HTTPException(status_code=403, detail="Only Accounts team can delete quotations")
+    team = get_team(user)
+    if team not in ("admin", "accounts"):
+        raise HTTPException(status_code=403, detail="Only Admin/Accounts team can delete quotations")
     result = await db.quotations.delete_one({"quotation_id": quotation_id})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Quotation not found")

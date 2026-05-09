@@ -38,6 +38,9 @@ self.addEventListener('fetch', (event) => {
   const req = event.request;
   const url = new URL(req.url);
 
+  // Only intercept same-origin requests — never proxy cross-origin API calls
+  if (url.origin !== self.location.origin) return;
+
   // Only intercept GET — mutations are handled by the app's offline queue
   if (req.method !== 'GET') return;
 

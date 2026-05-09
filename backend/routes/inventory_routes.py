@@ -10,6 +10,7 @@ import os
 
 from database import db
 from auth_utils import get_current_user
+from rbac import get_team, require_teams
 
 router = APIRouter()
 
@@ -72,7 +73,8 @@ async def get_dies(request: Request, include_archived: bool = False):
 
 @router.post("/dies")
 async def create_die(die_input: DieCreate, request: Request):
-    await get_current_user(request)
+    user = await get_current_user(request)
+    require_teams(user, "admin", "store")
     die_id = f"die_{uuid.uuid4().hex[:12]}"
     die_doc = {
         "die_id": die_id,
@@ -88,7 +90,8 @@ async def create_die(die_input: DieCreate, request: Request):
 
 @router.put("/dies/{die_id}")
 async def update_die(die_id: str, updates: dict, request: Request):
-    await get_current_user(request)
+    user = await get_current_user(request)
+    require_teams(user, "admin", "store")
     await db.dies.update_one({"die_id": die_id}, {"$set": updates})
     return await db.dies.find_one({"die_id": die_id}, {"_id": 0})
 
@@ -96,6 +99,7 @@ async def update_die(die_id: str, updates: dict, request: Request):
 @router.put("/dies/{die_id}/archive")
 async def archive_die(die_id: str, request: Request):
     user = await get_current_user(request)
+    require_teams(user, "admin", "store")
     die = await db.dies.find_one({"die_id": die_id}, {"_id": 0})
     if not die:
         raise HTTPException(status_code=404, detail="Die not found")
@@ -108,8 +112,7 @@ async def archive_die(die_id: str, request: Request):
 @router.delete("/dies/{die_id}")
 async def delete_die(die_id: str, request: Request):
     user = await get_current_user(request)
-    if user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Only admin can delete inventory items")
+    require_teams(user, "admin")  # only admin can hard-delete
     die = await db.dies.find_one({"die_id": die_id})
     if not die:
         raise HTTPException(status_code=404, detail="Die not found")
@@ -271,6 +274,7 @@ async def delete_package(package_id: str, request: Request):
 @router.post("/stock/movement")
 async def create_stock_movement(movement_input: StockMovementCreate, request: Request):
     user = await get_current_user(request)
+    require_teams(user, "admin", "store")
 
     die = await db.dies.find_one({"die_id": movement_input.die_id}, {"_id": 0})
     if not die:
@@ -309,6 +313,7 @@ async def create_stock_movement(movement_input: StockMovementCreate, request: Re
 @router.get("/stock/movements")
 async def get_stock_movements(request: Request):
     user = await get_current_user(request)
+    require_teams(user, "admin", "store")
     movements = await db.stock_movements.find({}, {"_id": 0}).sort("movement_date", -1).limit(100).to_list(100)
     return movements
 
