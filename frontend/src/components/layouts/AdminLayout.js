@@ -43,6 +43,7 @@ const MODULE_ROUTE_MAP = {
   leads: [
     { path: '/leads', icon: Target, label: 'Leads & CRM' },
     { path: '/crm-masters', icon: Layers, label: 'CRM Masters' },
+    { path: '/dispatch-tracking', icon: Package, label: 'Dispatch Tracking' },
   ],
   sales_portal: { path: '/sales', icon: Smartphone, label: 'Sales Portal' },
   user_management: [

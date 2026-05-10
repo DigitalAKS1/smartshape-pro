@@ -1,30 +1,57 @@
 import React, { useState, useEffect } from 'react';
 import SalesLayout from '../../components/layouts/SalesLayout';
-import { attendance as attendanceApi, visits as visitsApi } from '../../lib/api';
+import { attendance as attendanceApi, visits as visitsApi, leads as leadsApi, tasks as tasksApi } from '../../lib/api';
 import { useAuth } from '../../contexts/AuthContext';
-import { Calendar, MapPin, FileText, Receipt, LogIn, MapPinned, LayoutDashboard, Zap } from 'lucide-react';
+import { Calendar, MapPin, FileText, Receipt, LogIn, MapPinned, LayoutDashboard, Zap, Target, CheckCircle, Clock, TrendingUp } from 'lucide-react';
 import { Button } from '../../components/ui/button';
-import { formatDate, getStatusColor } from '../../lib/utils';
+import { getStatusColor } from '../../lib/utils';
 import { Link } from 'react-router-dom';
-import { toast } from 'sonner';
 
 export default function SalesHome() {
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
   const [todayAttendance, setTodayAttendance] = useState(null);
   const [todayVisits, setTodayVisits] = useState([]);
+  const [kpis, setKpis] = useState({ assigned: 0, demos: 0, won: 0, pendingFollowups: 0, weekVisitsTotal: 0, weekVisitsDone: 0 });
+  const [todayTasks, setTodayTasks] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [attRes, visitsRes] = await Promise.all([
-          attendanceApi.getToday(),
-          visitsApi.getAll()
-        ]);
-        setTodayAttendance(attRes.data);
         const today = new Date().toISOString().split('T')[0];
-        setTodayVisits(visitsRes.data.filter(v => v.visit_date === today));
+        const monthStart = today.slice(0, 7) + '-01';
+
+        const weekAgo = new Date();
+        weekAgo.setDate(weekAgo.getDate() - 6);
+        const weekAgoStr = weekAgo.toISOString().split('T')[0];
+
+        const [attRes, visitsRes, leadsRes, tasksRes] = await Promise.all([
+          attendanceApi.getToday(),
+          visitsApi.getAll(),
+          leadsApi.getAll(),
+          tasksApi.getAll(),
+        ]);
+
+        setTodayAttendance(attRes.data);
+
+        const allVisits = visitsRes.data || [];
+        setTodayVisits(allVisits.filter(v => v.visit_date === today));
+
+        const allLeads = leadsRes.data || [];
+        const assigned = allLeads.length;
+        const demos = allLeads.filter(l => l.stage === 'demo' || (l.pipeline_history || []).some(h => h.to_stage === 'demo' && h.at >= monthStart)).length;
+        const won = allLeads.filter(l => l.stage === 'won' && (l.updated_at || '').slice(0, 10) >= monthStart).length;
+
+        const allTasks = tasksRes.data || [];
+        const pendingFollowups = allTasks.filter(t => t.status === 'pending' && t.due_date <= today).length;
+        const todayPending = allTasks.filter(t => t.status === 'pending' && t.due_date === today);
+        setTodayTasks(todayPending);
+
+        const weekVisits = allVisits.filter(v => v.visit_date >= weekAgoStr && v.visit_date <= today);
+        const weekVisitsDone = weekVisits.filter(v => v.status === 'completed').length;
+
+        setKpis({ assigned, demos, won, pendingFollowups, weekVisitsTotal: weekVisits.length, weekVisitsDone });
       } catch (error) {
         console.error('Error fetching data:', error);
       } finally {
@@ -41,13 +68,15 @@ export default function SalesHome() {
     return 'Good evening';
   };
 
+  const visitPct = kpis.weekVisitsTotal > 0 ? Math.round((kpis.weekVisitsDone / kpis.weekVisitsTotal) * 100) : 0;
+
   return (
     <SalesLayout title="SmartShape Field">
       <div className="space-y-6">
         {/* Greeting */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-bold text-[var(--text-primary)]" data-testid="sales-home-greeting">{getGreeting()}!</h1>
+            <h1 className="text-3xl font-bold text-[var(--text-primary)]" data-testid="sales-home-greeting">{getGreeting()}, {user?.name?.split(' ')[0]}!</h1>
             <p className="text-[var(--text-secondary)] mt-1">Ready to make great sales today?</p>
           </div>
           {isAdmin && (
@@ -59,6 +88,40 @@ export default function SalesHome() {
           )}
         </div>
 
+        {/* KPI Cards */}
+        {!loading && (
+          <div className="grid grid-cols-2 gap-3">
+            <div className="bg-[var(--bg-card)] border border-[var(--border-color)] rounded-md p-4">
+              <div className="flex items-center gap-2 mb-1">
+                <Target className="h-4 w-4 text-blue-400" />
+                <span className="text-xs text-[var(--text-secondary)]">Leads Assigned</span>
+              </div>
+              <p className="text-2xl font-bold text-[var(--text-primary)]">{kpis.assigned}</p>
+            </div>
+            <div className="bg-[var(--bg-card)] border border-[var(--border-color)] rounded-md p-4">
+              <div className="flex items-center gap-2 mb-1">
+                <TrendingUp className="h-4 w-4 text-purple-400" />
+                <span className="text-xs text-[var(--text-secondary)]">Won This Month</span>
+              </div>
+              <p className="text-2xl font-bold text-green-400">{kpis.won}</p>
+            </div>
+            <div className={`bg-[var(--bg-card)] border rounded-md p-4 ${kpis.pendingFollowups > 0 ? 'border-[#e94560]/50' : 'border-[var(--border-color)]'}`}>
+              <div className="flex items-center gap-2 mb-1">
+                <Clock className={`h-4 w-4 ${kpis.pendingFollowups > 0 ? 'text-[#e94560]' : 'text-[var(--text-muted)]'}`} />
+                <span className="text-xs text-[var(--text-secondary)]">Overdue Follow-ups</span>
+              </div>
+              <p className={`text-2xl font-bold ${kpis.pendingFollowups > 0 ? 'text-[#e94560]' : 'text-[var(--text-primary)]'}`}>{kpis.pendingFollowups}</p>
+            </div>
+            <div className="bg-[var(--bg-card)] border border-[var(--border-color)] rounded-md p-4">
+              <div className="flex items-center gap-2 mb-1">
+                <CheckCircle className="h-4 w-4 text-green-400" />
+                <span className="text-xs text-[var(--text-secondary)]">Visits This Week</span>
+              </div>
+              <p className="text-2xl font-bold text-[var(--text-primary)]">{kpis.weekVisitsDone}<span className="text-sm font-normal text-[var(--text-muted)]">/{kpis.weekVisitsTotal} ({visitPct}%)</span></p>
+            </div>
+          </div>
+        )}
+
         {/* Today's Actions highlight card */}
         <Link to="/today" className="block" data-testid="todays-actions-link">
           <div className="bg-gradient-to-r from-[#e94560]/15 to-[#f05c75]/5 border border-[#e94560]/30 rounded-md p-5 hover:from-[#e94560]/20 hover:to-[#f05c75]/10 transition-all">
@@ -69,9 +132,14 @@ export default function SalesHome() {
                 </div>
                 <div>
                   <p className="text-base font-semibold text-[var(--text-primary)]">Today's Actions</p>
-                  <p className="text-xs text-[var(--text-secondary)]">Your daily tasks, follow-ups & priorities</p>
+                  <p className="text-xs text-[var(--text-secondary)]">
+                    {todayTasks.length > 0 ? `${todayTasks.length} task${todayTasks.length > 1 ? 's' : ''} due today` : 'Your daily tasks, follow-ups & priorities'}
+                  </p>
                 </div>
               </div>
+              {todayTasks.length > 0 && (
+                <span className="text-xs font-bold text-white bg-[#e94560] rounded-full px-2 py-0.5">{todayTasks.length}</span>
+              )}
               <span className="text-xs font-medium text-[#e94560]">View →</span>
             </div>
           </div>

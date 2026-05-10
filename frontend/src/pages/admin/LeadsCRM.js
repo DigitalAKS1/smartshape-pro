@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import AdminLayout from '../../components/layouts/AdminLayout';
-import { schools as schoolsApi, leads as leadsApi, followups as fuApi, tasks as tasksApi, salesPersons, contacts as contactsApi, exportData, groups as groupsApi, sources as sourcesApi, contactRoles as contactRolesApi } from '../../lib/api';
+import { schools as schoolsApi, leads as leadsApi, followups as fuApi, tasks as tasksApi, salesPersons, contacts as contactsApi, exportData, groups as groupsApi, sources as sourcesApi, contactRoles as contactRolesApi, tags as tagsApi } from '../../lib/api';
 import { useAuth } from '../../contexts/AuthContext';
 import { useTheme } from '../../contexts/ThemeContext';
 import { formatDate } from '../../lib/utils';
@@ -48,6 +48,10 @@ export default function LeadsCRM() {
   const [groupsList, setGroupsList] = useState([]);
   const [sourcesList, setSourcesList] = useState([]);
   const [rolesList, setRolesList] = useState([]);
+  const [tagsList, setTagsList] = useState([]);
+  const [filterTag, setFilterTag] = useState('');
+  // new tag inline-create input in lead form
+  const [newTagInput, setNewTagInput] = useState('');
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('pipeline');
   const [searchTerm, setSearchTerm] = useState('');
@@ -60,13 +64,15 @@ export default function LeadsCRM() {
   const [leadFollowups, setLeadFollowups] = useState([]);
   const [noteForm, setNoteForm] = useState({ type: 'call', content: '', outcome: '' });
   const [fuForm, setFuForm] = useState({ followup_date: '', followup_time: '', followup_type: 'call', notes: '' });
+  const [physicalDispatches, setPhysicalDispatches] = useState([]);
+  const [pdForm, setPdForm] = useState({ material_type: 'brochure', description: '', courier_name: '', tracking_number: '', sent_date: '' });
   const [taskDialogOpen, setTaskDialogOpen] = useState(false);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const fileRef = useRef(null);
   // Forms
   const [editLead, setEditLead] = useState(null);
   const [addNewSchool, setAddNewSchool] = useState(false);
-  const [leadForm, setLeadForm] = useState({ school_id: '', contact_name: '', designation: '', contact_role_id: '', contact_phone: '', contact_email: '', source: '', source_id: '', lead_type: 'warm', interested_product: '', priority: 'medium', next_followup_date: '', likely_closure_date: '', assignment_type: 'manual', assigned_to: '', notes: '' });
+  const [leadForm, setLeadForm] = useState({ school_id: '', contact_name: '', designation: '', contact_role_id: '', contact_phone: '', contact_email: '', source: '', source_id: '', lead_type: 'warm', interested_product: '', priority: 'medium', next_followup_date: '', likely_closure_date: '', assignment_type: 'manual', assigned_to: '', notes: '', tags: [], referred_by_contact_id: '', referral_reward_status: 'none' });
   const [newSchool, setNewSchool] = useState({ school_name: '', school_type: 'CBSE', phone: '', email: '', city: '', state: '', pincode: '', school_strength: 0 });
   const [schoolForm, setSchoolForm] = useState({});
   const [taskForm, setTaskForm] = useState({ title: '', type: 'follow_up', lead_id: '', lead_name: '', assigned_to: '', due_date: '', due_time: '', priority: 'medium' });
@@ -101,11 +107,12 @@ export default function LeadsCRM() {
 
   const fetchData = async () => {
     try {
-      const [lr, sr, tr, spr, cr, gr, srcR, rlR] = await Promise.all([
+      const [lr, sr, tr, spr, cr, gr, srcR, rlR, tgR] = await Promise.all([
         leadsApi.getAll(), schoolsApi.getAll(), tasksApi.getAll(), salesPersons.getAll(), contactsApi.getAll(),
         groupsApi.getAll().catch(() => ({ data: [] })),
         sourcesApi.getAll().catch(() => ({ data: [] })),
         contactRolesApi.getAll().catch(() => ({ data: [] })),
+        tagsApi.getAll().catch(() => ({ data: [] })),
       ]);
       setLeadsList(lr.data);
       setSchoolsList(sr.data);
@@ -115,6 +122,7 @@ export default function LeadsCRM() {
       setGroupsList(gr.data || []);
       setSourcesList(srcR.data || []);
       setRolesList(rlR.data || []);
+      setTagsList(tgR.data || []);
     } catch { toast.error('Failed to load'); }
     finally { setLoading(false); }
   };
@@ -130,16 +138,47 @@ export default function LeadsCRM() {
   const dlgCls = isDark ? 'bg-[var(--bg-card)] border-[var(--border-color)] text-[var(--text-primary)]' : 'bg-white border-[var(--border-color)] text-[var(--text-primary)]';
 
   // Handlers
-  const openCreateLead = () => { setEditLead(null); setAddNewSchool(false); setLeadForm({ school_id: '', contact_name: '', designation: '', contact_role_id: '', contact_phone: '', contact_email: '', source: '', source_id: '', lead_type: 'warm', interested_product: '', priority: 'medium', next_followup_date: '', likely_closure_date: '', assignment_type: 'manual', assigned_to: '', notes: '' }); setNewSchool({ school_name: '', school_type: 'CBSE', phone: '', email: '', city: '', state: '', pincode: '', school_strength: 0 }); setLeadDialogOpen(true); };
+  const openCreateLead = () => { setEditLead(null); setAddNewSchool(false); setLeadForm({ school_id: '', contact_name: '', designation: '', contact_role_id: '', contact_phone: '', contact_email: '', source: '', source_id: '', lead_type: 'warm', interested_product: '', priority: 'medium', next_followup_date: '', likely_closure_date: '', assignment_type: 'manual', assigned_to: '', notes: '', tags: [], referred_by_contact_id: '', referral_reward_status: 'none' }); setNewTagInput(''); setNewSchool({ school_name: '', school_type: 'CBSE', phone: '', email: '', city: '', state: '', pincode: '', school_strength: 0 }); setLeadDialogOpen(true); };
   const openEditLead = (lead) => { setEditLead(lead); setLeadForm({ ...lead }); setLeadDialogOpen(true); };
 
   const openDetail = async (lead) => {
     setDetailLead(lead);
+    setPhysicalDispatches([]);
+    setPdForm({ material_type: 'brochure', description: '', courier_name: '', tracking_number: '', sent_date: new Date().toISOString().slice(0, 10) });
     try {
-      const [nr, fr] = await Promise.all([leadsApi.getNotes(lead.lead_id), fuApi.getAll(lead.lead_id)]);
+      const [nr, fr, pdRes] = await Promise.all([
+        leadsApi.getNotes(lead.lead_id),
+        fuApi.getAll(lead.lead_id),
+        fetch(`${process.env.REACT_APP_BACKEND_URL}/api/physical-dispatches?lead_id=${lead.lead_id}`, { credentials: 'include' }).then(r => r.json()).catch(() => []),
+      ]);
       setNotes(nr.data);
       setLeadFollowups(fr.data);
+      setPhysicalDispatches(Array.isArray(pdRes) ? pdRes : []);
     } catch { setNotes([]); setLeadFollowups([]); }
+  };
+
+  const addPhysicalDispatch = async () => {
+    if (!detailLead) return;
+    try {
+      const res = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/physical-dispatches`, {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...pdForm, lead_id: detailLead.lead_id, lead_name: detailLead.company_name || detailLead.contact_name }),
+      });
+      const created = await res.json();
+      setPhysicalDispatches(prev => [created, ...prev]);
+      setPdForm({ material_type: 'brochure', description: '', courier_name: '', tracking_number: '', sent_date: new Date().toISOString().slice(0, 10) });
+      toast.success('Dispatch logged');
+    } catch { toast.error('Failed to log dispatch'); }
+  };
+
+  const markDispatchReceived = async (dispatch_id) => {
+    await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/physical-dispatches/${dispatch_id}`, {
+      method: 'PUT', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ received_confirmed: true }),
+    });
+    setPhysicalDispatches(prev => prev.map(d => d.dispatch_id === dispatch_id ? { ...d, received_confirmed: true } : d));
   };
 
   const saveLead = async () => {
@@ -300,8 +339,8 @@ export default function LeadsCRM() {
   const updateTaskStatus = async (taskId, status) => { await tasksApi.update(taskId, { status }); fetchData(); };
 
   // Contact handlers
-  const openCreateContact = () => { setEditContact(null); setContactForm({ name: '', phone: '', email: '', company: '', designation: '', contact_role_id: '', source: '', source_id: '', notes: '' }); setContactDialogOpen(true); };
-  const openEditContact = (c) => { setEditContact(c); setContactForm({ name: c.name, phone: c.phone, email: c.email || '', company: c.company || '', designation: c.designation || '', contact_role_id: c.contact_role_id || '', source: c.source || '', source_id: c.source_id || '', notes: c.notes || '' }); setContactDialogOpen(true); };
+  const openCreateContact = () => { setEditContact(null); setContactForm({ name: '', phone: '', email: '', company: '', designation: '', contact_role_id: '', source: '', source_id: '', notes: '', birthday: '' }); setContactDialogOpen(true); };
+  const openEditContact = (c) => { setEditContact(c); setContactForm({ name: c.name, phone: c.phone, email: c.email || '', company: c.company || '', designation: c.designation || '', contact_role_id: c.contact_role_id || '', source: c.source || '', source_id: c.source_id || '', notes: c.notes || '', birthday: c.birthday || '' }); setContactDialogOpen(true); };
   const saveContact = async () => {
     if (!contactForm.name || !contactForm.phone) { toast.error('Name and phone required'); return; }
     try {
@@ -397,6 +436,7 @@ export default function LeadsCRM() {
       if (['hot', 'warm', 'cold'].includes(filterType) && l.lead_type !== filterType) return false;
       if (SCHOOL_TYPES.includes(filterType) && l.school_type !== filterType) return false;
     }
+    if (filterTag && !(l.tags || []).includes(filterTag)) return false;
     return true;
   });
 
@@ -481,6 +521,10 @@ export default function LeadsCRM() {
             <option value="warm">Warm</option>
             <option value="cold">Cold</option>
             {SCHOOL_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+          </select>
+          <select value={filterTag} onChange={e => setFilterTag(e.target.value)} className={`h-10 px-3 rounded-md text-sm ${inputCls}`} data-testid="filter-tag-select">
+            <option value="">All Tags</option>
+            {tagsList.map(t => <option key={t.tag_id} value={t.tag_id}>{t.name}</option>)}
           </select>
         </div>
 
@@ -634,6 +678,16 @@ export default function LeadsCRM() {
                         </div>
                         {lead.visit_required && <div className="mt-1.5"><span className="text-[10px] px-1.5 py-0.5 rounded font-medium bg-orange-500/20 text-orange-400 border border-orange-500/30 inline-flex items-center gap-1" data-testid={`visit-required-${lead.lead_id}`}><AlertTriangle className="h-2.5 w-2.5" /> Visit Required</span></div>}
                         {lead.next_followup_date && <p className={`text-[10px] ${textMuted} mt-1 flex items-center gap-1`}><Clock className="h-3 w-3" /> {lead.next_followup_date}</p>}
+                        {(lead.tags || []).length > 0 && (
+                          <div className="flex flex-wrap gap-1 mt-1.5">
+                            {(lead.tags || []).slice(0, 3).map(tid => {
+                              const tag = tagsList.find(t => t.tag_id === tid);
+                              if (!tag) return null;
+                              return <span key={tid} className="text-[9px] px-1.5 py-0.5 rounded-full font-medium text-white" style={{ backgroundColor: tag.color }}>{tag.name}</span>;
+                            })}
+                            {(lead.tags || []).length > 3 && <span className={`text-[9px] ${textMuted}`}>+{(lead.tags || []).length - 3}</span>}
+                          </div>
+                        )}
                       </div>
                     ))}
                     {stageLeads.length === 0 && <p className={`text-xs ${textMuted} text-center py-6`}>Empty</p>}
@@ -673,6 +727,16 @@ export default function LeadsCRM() {
                     <p className="text-[10px] text-red-400 mt-1 flex items-center gap-1"><UserCog className="h-2.5 w-2.5" /> Reassigned {lead.reassignment_count}×</p>
                   )}
                   <AgeBadge daysSinceActivity={days} followupDate={lead.next_followup_date} />
+                  {(lead.tags || []).length > 0 && (
+                    <div className="flex flex-wrap gap-1 mt-1.5">
+                      {(lead.tags || []).slice(0, 3).map(tid => {
+                        const tag = tagsList.find(t => t.tag_id === tid);
+                        if (!tag) return null;
+                        return <span key={tid} className="text-[9px] px-1.5 py-0.5 rounded-full font-medium text-white" style={{ backgroundColor: tag.color }}>{tag.name}</span>;
+                      })}
+                      {(lead.tags || []).length > 3 && <span className={`text-[9px] ${textMuted}`}>+{(lead.tags || []).length - 3}</span>}
+                    </div>
+                  )}
                   <div className="flex gap-1 mt-2 pt-2 border-t border-[var(--border-color)]">
                     <button type="button" onClick={(e) => { e.stopPropagation(); setReassignLead(lead); setReassignBulkIds(null); setReassignOpen(true); }} className="text-[10px] text-[#e94560] hover:underline" data-testid={`reassign-${lead.lead_id}`}>Reassign</button>
                     <span className={textMuted}>•</span>
@@ -1134,6 +1198,43 @@ export default function LeadsCRM() {
                     </div>
                   </div>
                 )}
+                {/* Physical Dispatches */}
+                <div className={`${'bg-[var(--bg-primary)] border-[var(--border-color)]'} border rounded-md p-3`}>
+                  <p className={`text-xs font-medium ${textSec} mb-2`}>Physical Material Sent ({physicalDispatches.length})</p>
+                  <div className="flex flex-wrap gap-2 mb-2">
+                    <select value={pdForm.material_type} onChange={e => setPdForm({...pdForm, material_type: e.target.value})} className={`h-8 px-2 rounded text-xs ${inputCls}`}>
+                      <option value="brochure">Brochure</option>
+                      <option value="sample">Sample</option>
+                      <option value="die">Die</option>
+                      <option value="catalogue">Catalogue</option>
+                      <option value="gift">Gift</option>
+                    </select>
+                    <Input value={pdForm.description} onChange={e => setPdForm({...pdForm, description: e.target.value})} placeholder="Description" className={`${inputCls} text-xs h-8 flex-1 min-w-24`} />
+                    <Input value={pdForm.courier_name} onChange={e => setPdForm({...pdForm, courier_name: e.target.value})} placeholder="Courier" className={`${inputCls} text-xs h-8 w-24`} />
+                    <Input value={pdForm.tracking_number} onChange={e => setPdForm({...pdForm, tracking_number: e.target.value})} placeholder="Tracking #" className={`${inputCls} text-xs h-8 w-28`} />
+                    <Input type="date" value={pdForm.sent_date} onChange={e => setPdForm({...pdForm, sent_date: e.target.value})} className={`${inputCls} text-xs h-8 w-32`} />
+                    <Button onClick={addPhysicalDispatch} size="sm" className="bg-[#e94560] hover:bg-[#f05c75] h-8 text-xs">Log</Button>
+                  </div>
+                  {physicalDispatches.length > 0 && (
+                    <div className="space-y-1">
+                      {physicalDispatches.map(d => (
+                        <div key={d.dispatch_id} className={`flex items-center justify-between text-xs ${card} border rounded p-2`}>
+                          <div>
+                            <span className={`font-medium ${textPri} capitalize`}>{d.material_type}</span>
+                            {d.description && <span className={`ml-1 ${textMuted}`}>— {d.description}</span>}
+                            <span className={`ml-2 ${textMuted}`}>{d.sent_date}</span>
+                            {d.courier_name && <span className={`ml-1 ${textMuted}`}>via {d.courier_name}</span>}
+                            {d.tracking_number && <span className={`ml-1 text-blue-400`}>#{d.tracking_number}</span>}
+                          </div>
+                          {d.received_confirmed
+                            ? <span className="text-green-400 text-xs">Received</span>
+                            : <Button size="sm" variant="ghost" onClick={() => markDispatchReceived(d.dispatch_id)} className={`text-xs h-6 ${textMuted}`}>Mark Received</Button>
+                          }
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
                 {/* Timeline */}
                 <div data-testid="notes-timeline">
                   <p className={`text-xs font-medium ${textSec} mb-2`}>Activity ({notes.length})</p>
@@ -1286,6 +1387,53 @@ export default function LeadsCRM() {
                 <div><Label className={`${textSec} text-xs`}>Likely Closure Date</Label><Input type="date" value={leadForm.likely_closure_date || ''} onChange={e => setLeadForm({...leadForm, likely_closure_date: e.target.value})} className={inputCls} data-testid="lead-likely-closure-input" /></div>
               </div>
               <div><Label className={`${textSec} text-xs`}>Notes</Label><Input value={leadForm.notes} onChange={e => setLeadForm({...leadForm, notes: e.target.value})} className={inputCls} /></div>
+              <div className="grid grid-cols-2 gap-3">
+                <div><Label className={`${textSec} text-xs`}>Referred By (Contact)</Label>
+                  <select value={leadForm.referred_by_contact_id || ''} onChange={e => setLeadForm({...leadForm, referred_by_contact_id: e.target.value})} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`}>
+                    <option value="">None</option>
+                    {contactsList.map(c => <option key={c.contact_id} value={c.contact_id}>{c.name}{c.company ? ` (${c.company})` : ''}</option>)}
+                  </select>
+                </div>
+                <div><Label className={`${textSec} text-xs`}>Referral Reward</Label>
+                  <select value={leadForm.referral_reward_status || 'none'} onChange={e => setLeadForm({...leadForm, referral_reward_status: e.target.value})} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`}>
+                    <option value="none">None</option>
+                    <option value="pending">Pending</option>
+                    <option value="given">Given</option>
+                  </select>
+                </div>
+              </div>
+              {/* Tag Multi-select */}
+              <div>
+                <Label className={`${textSec} text-xs`}>Tags</Label>
+                <div className="flex flex-wrap gap-1.5 mt-1 mb-1">
+                  {tagsList.map(t => {
+                    const sel = (leadForm.tags || []).includes(t.tag_id);
+                    return (
+                      <button key={t.tag_id} type="button"
+                        onClick={() => setLeadForm({...leadForm, tags: sel ? (leadForm.tags||[]).filter(id => id !== t.tag_id) : [...(leadForm.tags||[]), t.tag_id]})}
+                        className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border transition-all ${sel ? 'text-white border-transparent' : `${textMuted} border-[var(--border-color)]`}`}
+                        style={sel ? { backgroundColor: t.color } : {}}>
+                        <span className="w-2 h-2 rounded-full" style={{ backgroundColor: t.color }} />
+                        {t.name}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="flex gap-1 mt-1">
+                  <input value={newTagInput} onChange={e => setNewTagInput(e.target.value)}
+                    onKeyDown={async e => {
+                      if (e.key === 'Enter' && newTagInput.trim()) {
+                        e.preventDefault();
+                        const res = await tagsApi.create({ name: newTagInput.trim(), color: '#6366f1' });
+                        const newTag = res.data;
+                        setTagsList(prev => [...prev, newTag]);
+                        setLeadForm(prev => ({...prev, tags: [...(prev.tags||[]), newTag.tag_id]}));
+                        setNewTagInput('');
+                      }
+                    }}
+                    placeholder="Type new tag + Enter" className={`${inputCls} h-7 text-xs px-2 rounded flex-1 border`} />
+                </div>
+              </div>
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setLeadDialogOpen(false)} className={'border-[var(--border-color)] text-[var(--text-secondary)]'}>Cancel</Button>
@@ -1402,6 +1550,7 @@ export default function LeadsCRM() {
                 </select>
               </div>
               <div><Label className={`${textSec} text-xs`}>Notes</Label><Input value={contactForm.notes} onChange={e => setContactForm({...contactForm, notes: e.target.value})} className={inputCls} placeholder="Any additional info..." /></div>
+              <div><Label className={`${textSec} text-xs`}>Birthday (YYYY-MM-DD)</Label><Input type="date" value={contactForm.birthday} onChange={e => setContactForm({...contactForm, birthday: e.target.value})} className={inputCls} /></div>
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setContactDialogOpen(false)} className={'border-[var(--border-color)] text-[var(--text-secondary)]'}>Cancel</Button>

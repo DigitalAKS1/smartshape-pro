@@ -15,7 +15,7 @@ import { MessageSquare, Send, ExternalLink, Save } from 'lucide-react';
  *  - context: { lead_id?, contact_id?, school_id?, order_id?, phone?, contact_name?, school_name? }
  *  - title?: string
  */
-export default function WhatsAppSendDialog({ open, onOpenChange, module = 'general', context = {}, title = 'Send WhatsApp' }) {
+export default function WhatsAppSendDialog({ open, onOpenChange, module = 'general', context = {}, title = 'Send WhatsApp', initialBody = '' }) {
   const [templates, setTemplates] = useState([]);
   const [selTplId, setSelTplId] = useState('');
   const [body, setBody] = useState('');
@@ -28,7 +28,7 @@ export default function WhatsAppSendDialog({ open, onOpenChange, module = 'gener
   useEffect(() => {
     if (!open) return;
     setSelTplId('');
-    setBody('');
+    setBody(initialBody || '');
     setPhone(context.phone || '');
     setShowSaveAs(false);
     setNewName('');
@@ -45,7 +45,7 @@ export default function WhatsAppSendDialog({ open, onOpenChange, module = 'gener
         }
       } catch { setTemplates([]); }
     })();
-  }, [open, module]); // eslint-disable-line
+  }, [open, module, initialBody]); // eslint-disable-line
 
   const renderTemplate = async (templateId) => {
     setSelTplId(templateId);

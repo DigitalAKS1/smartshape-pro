@@ -1,17 +1,18 @@
 import React, { useState, useEffect } from 'react';
 import AdminLayout from '../../components/layouts/AdminLayout';
-import { groups as groupsApi, sources as sourcesApi, contactRoles as contactRolesApi } from '../../lib/api';
+import { groups as groupsApi, sources as sourcesApi, contactRoles as contactRolesApi, tags as tagsApi, whatsappTemplates, broadcastApi } from '../../lib/api';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../../components/ui/dialog';
 import { toast } from 'sonner';
-import { Plus, Edit2, Trash2, Building2, Tag, UserCheck } from 'lucide-react';
+import { Plus, Edit2, Trash2, Building2, Tag, UserCheck, Send } from 'lucide-react';
 
 const TABS = [
   { id: 'groups', label: 'Group Master', icon: Building2, desc: 'Trusts / parent organisations that own multiple schools' },
   { id: 'sources', label: 'Source Master', icon: Tag, desc: 'Where leads / contacts come from (Call, Exhibition, Ads, ...)' },
   { id: 'roles', label: 'Contact Roles', icon: UserCheck, desc: 'Role / designation taxonomy for school contacts (Principal, Trustee, Director, ...)' },
+  { id: 'tags', label: 'Tag Master', icon: Tag, desc: 'Color-coded tags to segment leads and run targeted WhatsApp / email campaigns' },
 ];
 
 export default function CRMMasters() {
@@ -20,6 +21,8 @@ export default function CRMMasters() {
   const [groupsList, setGroupsList] = useState([]);
   const [sourcesList, setSourcesList] = useState([]);
   const [rolesList, setRolesList] = useState([]);
+  const [tagsList, setTagsList] = useState([]);
+  const [templatesList, setTemplatesList] = useState([]);
 
   // Dialogs
   const [groupOpen, setGroupOpen] = useState(false);
@@ -34,6 +37,15 @@ export default function CRMMasters() {
   const [editRole, setEditRole] = useState(null);
   const [roleForm, setRoleForm] = useState({ name: '' });
 
+  const [tagOpen, setTagOpen] = useState(false);
+  const [editTag, setEditTag] = useState(null);
+  const [tagForm, setTagForm] = useState({ name: '', color: '#6366f1' });
+
+  // Campaign state
+  const [campaignTag, setCampaignTag] = useState('');
+  const [campaignTemplate, setCampaignTemplate] = useState('');
+  const [campaignSending, setCampaignSending] = useState(false);
+
   const card = 'bg-[var(--bg-card)] border-[var(--border-color)]';
   const inputCls = 'bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]';
   const textPri = 'text-[var(--text-primary)]';
@@ -43,14 +55,18 @@ export default function CRMMasters() {
 
   const fetchAll = async () => {
     try {
-      const [g, s, r] = await Promise.all([
+      const [g, s, r, t, tmpl] = await Promise.all([
         groupsApi.getAll(),
         sourcesApi.getAll(),
         contactRolesApi.getAll(),
+        tagsApi.getAll(),
+        whatsappTemplates.getAll().catch(() => ({ data: [] })),
       ]);
       setGroupsList(g.data || []);
       setSourcesList(s.data || []);
       setRolesList(r.data || []);
+      setTagsList(t.data || []);
+      setTemplatesList(tmpl.data || []);
     } catch { toast.error('Failed to load masters'); }
     finally { setLoading(false); }
   };
@@ -108,6 +124,36 @@ export default function CRMMasters() {
     if (!window.confirm(`Delete role "${r.name}"?`)) return;
     try { await contactRolesApi.delete(r.role_id); toast.success('Deleted'); fetchAll(); }
     catch { toast.error('Delete failed'); }
+  };
+
+  // ---- Tag handlers ----
+  const openNewTag = () => { setEditTag(null); setTagForm({ name: '', color: '#6366f1' }); setTagOpen(true); };
+  const openEditTag = (t) => { setEditTag(t); setTagForm({ name: t.name || '', color: t.color || '#6366f1' }); setTagOpen(true); };
+  const saveTag = async () => {
+    if (!tagForm.name) { toast.error('Tag name required'); return; }
+    try {
+      if (editTag) await tagsApi.update(editTag.tag_id, tagForm);
+      else await tagsApi.create(tagForm);
+      toast.success(editTag ? 'Tag updated' : 'Tag created');
+      setTagOpen(false); fetchAll();
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Failed'); }
+  };
+  const deleteTag = async (t) => {
+    if (!window.confirm(`Delete tag "${t.name}"? Leads with this tag will lose it.`)) return;
+    try { await tagsApi.delete(t.tag_id); toast.success('Deleted'); fetchAll(); }
+    catch { toast.error('Delete failed'); }
+  };
+
+  const sendCampaign = async () => {
+    if (!campaignTag) { toast.error('Select a tag'); return; }
+    if (!campaignTemplate) { toast.error('Select a WhatsApp template'); return; }
+    setCampaignSending(true);
+    try {
+      const res = await broadcastApi.byTag({ tag_id: campaignTag, template_id: campaignTemplate });
+      toast.success(`Campaign sent: ${res.data.sent} delivered, ${res.data.failed} failed, ${res.data.skipped} skipped (no phone)`);
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Campaign failed');
+    } finally { setCampaignSending(false); }
   };
 
   if (loading) return <AdminLayout><div className="flex items-center justify-center h-96"><div className="inline-block animate-spin rounded-full h-12 w-12 border-4 border-[#e94560] border-t-transparent" /></div></AdminLayout>;
@@ -221,6 +267,91 @@ export default function CRMMasters() {
             </div>
           </div>
         )}
+
+        {/* TAGS */}
+        {activeTab === 'tags' && (
+          <div className="space-y-4">
+            <div className={`${card} border rounded-md p-5`}>
+              <div className="flex items-center justify-between mb-4">
+                <h2 className={`text-lg font-medium ${textPri}`}>Tags ({tagsList.length})</h2>
+                <Button onClick={openNewTag} size="sm" className="bg-[#e94560] hover:bg-[#f05c75] text-white" data-testid="add-tag-btn">
+                  <Plus className="mr-1 h-3 w-3" /> Add Tag
+                </Button>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+                {tagsList.map(t => (
+                  <div key={t.tag_id} className={`flex items-center justify-between ${card} border rounded-md p-2.5`} data-testid={`tag-row-${t.tag_id}`}>
+                    <div className="flex items-center gap-2">
+                      <span className="w-3.5 h-3.5 rounded-full flex-shrink-0" style={{ backgroundColor: t.color }} />
+                      <span className={`${textPri} text-sm`}>{t.name}</span>
+                    </div>
+                    <div className="flex">
+                      <Button size="sm" variant="ghost" onClick={() => openEditTag(t)} className={`${textSec} h-7 px-1.5`}><Edit2 className="h-3 w-3" /></Button>
+                      <Button size="sm" variant="ghost" onClick={() => deleteTag(t)} className="text-red-400 h-7 px-1.5"><Trash2 className="h-3 w-3" /></Button>
+                    </div>
+                  </div>
+                ))}
+                {tagsList.length === 0 && <p className={`text-xs ${textMuted} col-span-full text-center py-6`}>No tags yet — create one to start segmenting leads</p>}
+              </div>
+            </div>
+
+            {/* Campaign Section */}
+            <div className={`${card} border rounded-md p-5`}>
+              <h2 className={`text-lg font-medium ${textPri} mb-1`}>WhatsApp Campaign by Tag</h2>
+              <p className={`text-xs ${textMuted} mb-4`}>Select a tag and a template to send a WhatsApp message to all leads with that tag.</p>
+              <div className="flex flex-wrap gap-3 items-end">
+                <div>
+                  <Label className={`${textSec} text-xs`}>Tag</Label>
+                  <select value={campaignTag} onChange={e => setCampaignTag(e.target.value)} className={`mt-1 h-9 px-3 rounded text-sm ${inputCls} block w-48`}>
+                    <option value="">Select tag...</option>
+                    {tagsList.map(t => <option key={t.tag_id} value={t.tag_id}>{t.name}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <Label className={`${textSec} text-xs`}>WhatsApp Template</Label>
+                  <select value={campaignTemplate} onChange={e => setCampaignTemplate(e.target.value)} className={`mt-1 h-9 px-3 rounded text-sm ${inputCls} block w-56`}>
+                    <option value="">Select template...</option>
+                    {templatesList.map(t => <option key={t.template_id} value={t.template_id}>{t.name}</option>)}
+                  </select>
+                </div>
+                <Button onClick={sendCampaign} disabled={campaignSending} className="bg-green-600 hover:bg-green-700 text-white h-9">
+                  <Send className="mr-1.5 h-3.5 w-3.5" />
+                  {campaignSending ? 'Sending...' : 'Send Campaign'}
+                </Button>
+              </div>
+              {campaignTag && (
+                <p className={`text-xs ${textMuted} mt-3`}>
+                  Will send to all leads tagged <strong className={textPri}>{tagsList.find(t => t.tag_id === campaignTag)?.name}</strong> that have a phone number.
+                </p>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* TAG DIALOG */}
+        <Dialog open={tagOpen} onOpenChange={setTagOpen}>
+          <DialogContent className={`${dlgCls} max-w-sm`}>
+            <DialogHeader><DialogTitle className={textPri}>{editTag ? 'Edit Tag' : 'Add Tag'}</DialogTitle></DialogHeader>
+            <div className="space-y-3 py-2">
+              <div><Label className={`${textSec} text-xs`}>Tag Name *</Label><Input value={tagForm.name} onChange={e => setTagForm({...tagForm, name: e.target.value})} className={inputCls} placeholder="e.g. Hot Prospect" /></div>
+              <div>
+                <Label className={`${textSec} text-xs`}>Color</Label>
+                <div className="flex items-center gap-3 mt-1">
+                  <input type="color" value={tagForm.color} onChange={e => setTagForm({...tagForm, color: e.target.value})} className="w-10 h-10 rounded cursor-pointer border border-[var(--border-color)]" />
+                  <div className="flex gap-1.5 flex-wrap">
+                    {['#e94560','#10b981','#6366f1','#f59e0b','#3b82f6','#ec4899','#14b8a6','#ef4444'].map(c => (
+                      <button key={c} onClick={() => setTagForm({...tagForm, color: c})} className={`w-6 h-6 rounded-full border-2 ${tagForm.color === c ? 'border-white scale-110' : 'border-transparent'}`} style={{ backgroundColor: c }} />
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setTagOpen(false)} className="border-[var(--border-color)] text-[var(--text-secondary)]">Cancel</Button>
+              <Button onClick={saveTag} className="bg-[#e94560] hover:bg-[#f05c75] text-white">{editTag ? 'Update' : 'Create'}</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         {/* GROUP DIALOG */}
         <Dialog open={groupOpen} onOpenChange={setGroupOpen}>

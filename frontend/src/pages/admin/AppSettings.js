@@ -1,16 +1,17 @@
 import React, { useState, useEffect, useRef } from 'react';
 import AdminLayout from '../../components/layouts/AdminLayout';
-import { settingsApi, whatsappApi, emailApi, whatsappTemplates } from '../../lib/api';
+import { settingsApi, whatsappApi, emailApi, whatsappTemplates, whatsappScheduled } from '../../lib/api';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
 import { toast } from 'sonner';
-import { Building2, Mail, MessageSquare, Save, Send, Eye, EyeOff, Upload, Image, X, Plus, Trash2, Edit2 } from 'lucide-react';
+import { Building2, Mail, MessageSquare, Save, Send, Eye, EyeOff, Upload, Image, X, Plus, Trash2, Edit2, Clock } from 'lucide-react';
 
 const TABS = [
   { id: 'company', label: 'Company Master', icon: Building2 },
   { id: 'email', label: 'Gmail', icon: Mail },
   { id: 'whatsapp', label: 'WhatsApp', icon: MessageSquare },
+  { id: 'scheduled', label: 'Scheduled WA', icon: Clock },
 ];
 
 export default function AppSettings() {
@@ -37,6 +38,11 @@ export default function AppSettings() {
   const [waTemplates, setWaTemplates] = useState([]);
   const [tplForm, setTplForm] = useState({ template_id: '', name: '', module: 'general', category: 'custom', body: '', is_active: true });
   const [tplEditing, setTplEditing] = useState(false);
+  // Scheduled WhatsApp
+  const [scheduledMsgs, setScheduledMsgs] = useState([]);
+  const [schedFilter, setSchedFilter] = useState('');
+  const [schedFormOpen, setSchedFormOpen] = useState(false);
+  const [schedForm, setSchedForm] = useState({ phone: '', contact_name: '', message: '', scheduled_at: '' });
 
   const loadTemplates = async () => {
     try { const r = await whatsappTemplates.getAll(); setWaTemplates(r.data || []); } catch { setWaTemplates([]); }
@@ -59,6 +65,31 @@ export default function AppSettings() {
     if (!window.confirm('Delete this template?')) return;
     try { await whatsappTemplates.delete(id); toast.success('Deleted'); loadTemplates(); }
     catch { toast.error('Delete failed (admin only)'); }
+  };
+
+  const loadScheduled = async () => {
+    try {
+      const params = schedFilter ? { status: schedFilter } : {};
+      const r = await whatsappScheduled.getAll(params);
+      setScheduledMsgs(r.data || []);
+    } catch { setScheduledMsgs([]); }
+  };
+  useEffect(() => { if (activeTab === 'scheduled') loadScheduled(); }, [activeTab, schedFilter]); // eslint-disable-line
+
+  const saveSchedMsg = async () => {
+    if (!schedForm.phone || !schedForm.message || !schedForm.scheduled_at) { toast.error('Phone, message, and scheduled time are required'); return; }
+    try {
+      await whatsappScheduled.create(schedForm);
+      toast.success('Message scheduled');
+      setSchedFormOpen(false);
+      setSchedForm({ phone: '', contact_name: '', message: '', scheduled_at: '' });
+      loadScheduled();
+    } catch (err) { toast.error(err.response?.data?.detail || 'Failed to schedule'); }
+  };
+  const cancelSchedMsg = async (id) => {
+    if (!window.confirm('Cancel this scheduled message?')) return;
+    try { await whatsappScheduled.cancel(id); toast.success('Cancelled'); loadScheduled(); }
+    catch { toast.error('Cancel failed'); }
   };
 
   const card = 'bg-[var(--bg-card)] border-[var(--border-color)]';
@@ -377,6 +408,85 @@ export default function AppSettings() {
                     </div>
                   ))
                 )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* SCHEDULED WA TAB */}
+        {activeTab === 'scheduled' && (
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-center gap-2 justify-between">
+              <div className="flex gap-2">
+                {['', 'pending', 'sent', 'failed', 'cancelled'].map(s => (
+                  <button key={s} onClick={() => setSchedFilter(s)}
+                    className={`px-3 py-1.5 rounded-md text-xs font-medium border transition-all ${schedFilter === s ? 'bg-[#e94560] text-white border-transparent' : `border-[var(--border-color)] ${textSec} hover:bg-[var(--bg-hover)]`}`}>
+                    {s ? s.charAt(0).toUpperCase() + s.slice(1) : 'All'}
+                  </button>
+                ))}
+              </div>
+              <Button size="sm" onClick={() => { setSchedForm({ phone: '', contact_name: '', message: '', scheduled_at: '' }); setSchedFormOpen(true); }} className="bg-[#e94560] hover:bg-[#f05c75] text-white">
+                <Plus className="mr-1 h-3 w-3" /> Schedule Message
+              </Button>
+            </div>
+
+            {schedFormOpen && (
+              <div className={`${card} border rounded-md p-4 space-y-3`}>
+                <h3 className={`text-sm font-medium ${textPri}`}>New Scheduled Message</h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div><Label className={`${textSec} text-xs`}>Phone (with country code) *</Label><Input value={schedForm.phone} onChange={e => setSchedForm({...schedForm, phone: e.target.value})} placeholder="919876543210" className={inputCls} /></div>
+                  <div><Label className={`${textSec} text-xs`}>Contact Name</Label><Input value={schedForm.contact_name} onChange={e => setSchedForm({...schedForm, contact_name: e.target.value})} placeholder="Optional" className={inputCls} /></div>
+                  <div className="sm:col-span-2"><Label className={`${textSec} text-xs`}>Message *</Label><textarea rows={3} value={schedForm.message} onChange={e => setSchedForm({...schedForm, message: e.target.value})} placeholder="WhatsApp message text..." className={`w-full px-3 py-2 rounded-md text-sm ${inputCls}`} /></div>
+                  <div><Label className={`${textSec} text-xs`}>Schedule At *</Label><Input type="datetime-local" value={schedForm.scheduled_at} onChange={e => setSchedForm({...schedForm, scheduled_at: e.target.value})} className={inputCls} /></div>
+                </div>
+                <div className="flex gap-2">
+                  <Button size="sm" onClick={saveSchedMsg} className="bg-[#e94560] hover:bg-[#f05c75] text-white">Schedule</Button>
+                  <Button size="sm" variant="ghost" onClick={() => setSchedFormOpen(false)} className={textSec}>Cancel</Button>
+                </div>
+              </div>
+            )}
+
+            <div className={`${card} border rounded-md overflow-hidden`}>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead><tr className="bg-[var(--bg-primary)]">
+                    <th className={`text-left text-xs uppercase py-3 px-4 ${textMuted}`}>Scheduled At</th>
+                    <th className={`text-left text-xs uppercase py-3 px-4 ${textMuted}`}>Contact</th>
+                    <th className={`text-left text-xs uppercase py-3 px-4 ${textMuted} hidden sm:table-cell`}>Phone</th>
+                    <th className={`text-left text-xs uppercase py-3 px-4 ${textMuted} hidden md:table-cell`}>Message</th>
+                    <th className={`text-center text-xs uppercase py-3 px-4 ${textMuted}`}>Status</th>
+                    <th className={`text-right text-xs uppercase py-3 px-4 ${textMuted}`}>Actions</th>
+                  </tr></thead>
+                  <tbody>
+                    {scheduledMsgs.length === 0 ? (
+                      <tr><td colSpan="6" className={`py-10 text-center ${textMuted}`}>No scheduled messages</td></tr>
+                    ) : scheduledMsgs.map(m => (
+                      <tr key={m.schedule_id} className="border-t border-[var(--border-color)] hover:bg-[var(--bg-hover)]">
+                        <td className={`py-2.5 px-4 text-xs ${textSec} whitespace-nowrap`}>{m.scheduled_at ? new Date(m.scheduled_at).toLocaleString() : '—'}</td>
+                        <td className={`py-2.5 px-4 text-sm ${textPri}`}>{m.contact_name || '—'}</td>
+                        <td className={`py-2.5 px-4 text-xs ${textSec} hidden sm:table-cell`}>{m.phone}</td>
+                        <td className={`py-2.5 px-4 hidden md:table-cell`}>
+                          <p className={`text-xs ${textMuted} line-clamp-2 max-w-[280px]`}>{m.message}</p>
+                        </td>
+                        <td className="py-2.5 px-4 text-center">
+                          <span className={`text-[11px] px-2 py-0.5 rounded font-medium ${
+                            m.status === 'sent' ? 'bg-green-500/20 text-green-400' :
+                            m.status === 'failed' ? 'bg-red-500/20 text-red-400' :
+                            m.status === 'cancelled' ? 'bg-gray-500/20 text-gray-400' :
+                            'bg-yellow-500/20 text-yellow-400'
+                          }`}>{m.status}</span>
+                        </td>
+                        <td className="py-2.5 px-4 text-right">
+                          {m.status === 'pending' && (
+                            <Button size="sm" variant="ghost" onClick={() => cancelSchedMsg(m.schedule_id)} className="text-red-400 h-7 px-2" title="Cancel">
+                              <X className="h-3.5 w-3.5" />
+                            </Button>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             </div>
           </div>

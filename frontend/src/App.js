@@ -42,6 +42,7 @@ import OrdersManagement from './pages/admin/OrdersManagement';
 import AppSettings from './pages/admin/AppSettings';
 import ImportCenter from './pages/admin/ImportCenter';
 import ActivityLogsPage from './pages/admin/ActivityLogs';
+import DispatchTracking from './pages/admin/DispatchTracking';
 
 // Sales pages
 import SalesHome from './pages/sales/SalesHome';
@@ -152,6 +153,7 @@ function AppRouter() {
       <Route path="/app-settings" element={<ProtectedRoute><AppSettings /></ProtectedRoute>} />
       <Route path="/import-center" element={<ProtectedRoute><ImportCenter /></ProtectedRoute>} />
       <Route path="/activity-logs" element={<ProtectedRoute><ActivityLogsPage /></ProtectedRoute>} />
+      <Route path="/dispatch-tracking" element={<ProtectedRoute><DispatchTracking /></ProtectedRoute>} />
       
       {/* Protected Routes - Sales */}
       <Route path="/sales" element={<ProtectedRoute><SalesHome /></ProtectedRoute>} />

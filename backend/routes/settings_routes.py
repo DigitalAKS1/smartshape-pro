@@ -10,6 +10,7 @@ from email.mime.multipart import MIMEMultipart
 
 from database import db
 from auth_utils import get_current_user
+from rbac import get_team
 
 router = APIRouter()
 
@@ -494,6 +495,173 @@ async def list_wa_logs(request: Request, lead_id: Optional[str] = None, contact_
     if school_id: q["school_id"] = school_id
     logs = await db.whatsapp_logs.find(q, {"_id": 0}).sort("sent_at", -1).to_list(limit)
     return logs
+
+
+# ==================== WHATSAPP SCHEDULER ====================
+
+@router.post("/whatsapp/schedule")
+async def create_scheduled_wa(request: Request):
+    user = await get_current_user(request)
+    body = await request.json()
+    phone = body.get("phone", "").strip()
+    message = body.get("message", "").strip()
+    scheduled_at = body.get("scheduled_at", "")
+    if not phone or not message or not scheduled_at:
+        raise HTTPException(status_code=400, detail="phone, message, and scheduled_at are required")
+    schedule_id = f"wsch_{uuid.uuid4().hex[:8]}"
+    now_iso = datetime.now(timezone.utc).isoformat()
+    doc = {
+        "schedule_id": schedule_id,
+        "phone": phone,
+        "lead_id": body.get("lead_id"),
+        "contact_name": body.get("contact_name", ""),
+        "message": message,
+        "template_id": body.get("template_id"),
+        "scheduled_at": scheduled_at,
+        "status": "pending",
+        "sent_at": None,
+        "created_by": user["email"],
+        "created_at": now_iso,
+    }
+    await db.whatsapp_scheduled.insert_one(doc)
+    return await db.whatsapp_scheduled.find_one({"schedule_id": schedule_id}, {"_id": 0})
+
+
+@router.get("/whatsapp/schedule")
+async def list_scheduled_wa(request: Request, status: Optional[str] = None):
+    user = await get_current_user(request)
+    q = {}
+    if status:
+        q["status"] = status
+    if get_team(user) != "admin":
+        q["created_by"] = user["email"]
+    items = await db.whatsapp_scheduled.find(q, {"_id": 0}).sort("scheduled_at", 1).to_list(500)
+    return items
+
+
+@router.delete("/whatsapp/schedule/{schedule_id}")
+async def cancel_scheduled_wa(schedule_id: str, request: Request):
+    await get_current_user(request)
+    item = await db.whatsapp_scheduled.find_one({"schedule_id": schedule_id}, {"_id": 0})
+    if not item:
+        raise HTTPException(status_code=404, detail="Scheduled message not found")
+    if item.get("status") != "pending":
+        raise HTTPException(status_code=400, detail="Can only cancel pending messages")
+    await db.whatsapp_scheduled.update_one(
+        {"schedule_id": schedule_id},
+        {"$set": {"status": "cancelled"}}
+    )
+    return {"message": "Cancelled"}
+
+
+# ==================== WHATSAPP BROADCAST BY TAG ====================
+
+@router.post("/whatsapp/broadcast-by-tag")
+async def whatsapp_broadcast_by_tag(request: Request):
+    user = await get_current_user(request)
+    if get_team(user) != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    body = await request.json()
+    tag_id = body.get("tag_id", "")
+    template_id = body.get("template_id")
+    if not tag_id:
+        raise HTTPException(status_code=400, detail="tag_id is required")
+
+    wa_settings = await db.settings.find_one({"type": "whatsapp"}, {"_id": 0})
+    if not wa_settings or not wa_settings.get("username"):
+        raise HTTPException(status_code=400, detail="WhatsApp not configured")
+
+    # Get template body if provided
+    template_body = body.get("message", "")
+    if template_id and not template_body:
+        tmpl = await db.whatsapp_templates.find_one({"template_id": template_id}, {"_id": 0})
+        if tmpl:
+            template_body = tmpl.get("body", "")
+
+    if not template_body:
+        raise HTTPException(status_code=400, detail="message or template_id with body is required")
+
+    leads = await db.leads.find({"tags": tag_id}, {"_id": 0}).to_list(5000)
+    sent, failed, skipped = 0, 0, 0
+    import httpx
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    for lead in leads:
+        phone = lead.get("contact_phone", "").strip()
+        if not phone:
+            skipped += 1
+            continue
+        msg = template_body.replace("{contact_name}", lead.get("contact_name", "")).replace("{school_name}", lead.get("company_name", ""))
+        status = "failed"
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.post(
+                    "https://app.messageautosender.com/message/new",
+                    data={"username": wa_settings["username"], "password": wa_settings["password"],
+                          "receiverMobileNo": phone, "message": msg},
+                )
+            status = "sent" if 200 <= resp.status_code < 300 else "failed"
+            if status == "sent":
+                sent += 1
+            else:
+                failed += 1
+        except Exception:
+            failed += 1
+        await db.whatsapp_logs.insert_one({
+            "log_id": f"wal_{uuid.uuid4().hex[:10]}",
+            "template_id": template_id,
+            "phone": phone,
+            "body": msg,
+            "lead_id": lead.get("lead_id"),
+            "send_mode": "broadcast_tag",
+            "status": status,
+            "sent_by": user["email"],
+            "sent_at": now_iso,
+        })
+    return {"sent": sent, "failed": failed, "skipped": skipped, "total": len(leads)}
+
+
+# ==================== EMAIL BROADCAST BY TAG ====================
+
+@router.post("/email/broadcast-by-tag")
+async def email_broadcast_by_tag(request: Request):
+    user = await get_current_user(request)
+    if get_team(user) != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    body = await request.json()
+    tag_id = body.get("tag_id", "")
+    subject = body.get("subject", "")
+    html_body = body.get("body", "")
+    if not tag_id or not subject or not html_body:
+        raise HTTPException(status_code=400, detail="tag_id, subject, and body are required")
+
+    email_settings = await db.settings.find_one({"type": "email"}, {"_id": 0})
+    if not email_settings or not email_settings.get("sender_email"):
+        raise HTTPException(status_code=400, detail="Email not configured")
+
+    leads = await db.leads.find({"tags": tag_id}, {"_id": 0}).to_list(5000)
+    sent, failed, skipped = 0, 0, 0
+    sender_email = email_settings["sender_email"]
+
+    for lead in leads:
+        to_email = lead.get("contact_email", "").strip()
+        if not to_email:
+            skipped += 1
+            continue
+        personalized_body = html_body.replace("{contact_name}", lead.get("contact_name", "")).replace("{school_name}", lead.get("company_name", ""))
+        try:
+            msg = MIMEMultipart()
+            msg["From"] = f"{email_settings.get('sender_name', 'SmartShape Pro')} <{sender_email}>"
+            msg["To"] = to_email
+            msg["Subject"] = subject
+            msg.attach(MIMEText(personalized_body, "html"))
+            with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+                server.login(sender_email, email_settings["gmail_app_password"])
+                server.sendmail(sender_email, [to_email], msg.as_string())
+            sent += 1
+        except Exception:
+            failed += 1
+    return {"sent": sent, "failed": failed, "skipped": skipped, "total": len(leads)}
 
 
 # ==================== EMAIL SEND ====================

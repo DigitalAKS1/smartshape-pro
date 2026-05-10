@@ -220,6 +220,77 @@ async def delete_contact_role(role_id: str, request: Request):
     return {"message": "Role deleted"}
 
 
+# ==================== TAG MASTER ====================
+
+@router.get("/tags")
+async def get_tags(request: Request):
+    await get_current_user(request)
+    return await db.tags.find({}, {"_id": 0}).sort("name", 1).to_list(500)
+
+
+@router.post("/tags")
+async def create_tag(request: Request):
+    user = await get_current_user(request)
+    body = await request.json()
+    if not body.get("name"):
+        raise HTTPException(status_code=400, detail="Tag name is required")
+    tag_id = f"tag_{uuid.uuid4().hex[:8]}"
+    now_iso = datetime.now(timezone.utc).isoformat()
+    doc = {
+        "tag_id": tag_id,
+        "name": body["name"].strip(),
+        "color": body.get("color", "#6366f1"),
+        "created_by": user["email"],
+        "created_at": now_iso,
+    }
+    await db.tags.insert_one(doc)
+    return await db.tags.find_one({"tag_id": tag_id}, {"_id": 0})
+
+
+@router.put("/tags/{tag_id}")
+async def update_tag(tag_id: str, request: Request):
+    await get_current_user(request)
+    body = await request.json()
+    allowed = {k: body[k] for k in ("name", "color") if k in body}
+    await db.tags.update_one({"tag_id": tag_id}, {"$set": allowed})
+    return await db.tags.find_one({"tag_id": tag_id}, {"_id": 0})
+
+
+@router.delete("/tags/{tag_id}")
+async def delete_tag(tag_id: str, request: Request):
+    await get_current_user(request)
+    await db.tags.delete_one({"tag_id": tag_id})
+    return {"message": "Tag deleted"}
+
+
+async def _resolve_tags(tag_names_or_ids: list, creator_email: str) -> list:
+    """Resolve a list of tag_ids or tag name strings → list of tag_ids. Creates tags inline if name not found."""
+    resolved = []
+    for item in (tag_names_or_ids or []):
+        if not item:
+            continue
+        if str(item).startswith("tag_"):
+            existing = await db.tags.find_one({"tag_id": item}, {"_id": 0})
+            if existing:
+                resolved.append(item)
+                continue
+        # Treat as name string — find or create
+        existing = await db.tags.find_one({"name": str(item).strip()}, {"_id": 0})
+        if existing:
+            resolved.append(existing["tag_id"])
+        else:
+            new_id = f"tag_{uuid.uuid4().hex[:8]}"
+            await db.tags.insert_one({
+                "tag_id": new_id,
+                "name": str(item).strip(),
+                "color": "#6366f1",
+                "created_by": creator_email,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            })
+            resolved.append(new_id)
+    return resolved
+
+
 # ==================== SCHOOL MASTER ====================
 
 @router.get("/schools")
@@ -268,6 +339,7 @@ async def create_school(request: Request):
         "annual_budget_range": body.get("annual_budget_range", ""),
         "existing_vendor": body.get("existing_vendor", ""),
         "social_profiles": body.get("social_profiles", {}),
+        "anniversary": body.get("anniversary", ""),
         "last_activity_date": datetime.now(timezone.utc).isoformat(),
         "created_by": user["email"],
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -284,7 +356,7 @@ async def update_school(school_id: str, request: Request):
     for k in ("school_name", "school_type", "board", "group_id", "website", "email", "phone",
               "city", "state", "pincode", "address", "primary_contact_name", "designation",
               "alternate_contact", "school_strength", "number_of_branches",
-              "annual_budget_range", "existing_vendor", "social_profiles"):
+              "annual_budget_range", "existing_vendor", "social_profiles", "anniversary"):
         if k in body:
             allowed[k] = body[k]
     allowed["last_activity_date"] = datetime.now(timezone.utc).isoformat()
@@ -350,6 +422,7 @@ async def create_contact(request: Request):
         "source": body.get("source", ""),
         "source_id": body.get("source_id", ""),
         "notes": body.get("notes", ""),
+        "birthday": body.get("birthday", ""),
         "status": "active",
         "converted_to_lead": False,
         "lead_id": None,
@@ -366,7 +439,7 @@ async def update_contact(contact_id: str, request: Request):
     await get_current_user(request)
     body = await request.json()
     allowed = {}
-    for k in ("name", "phone", "email", "company", "designation", "contact_role_id", "source", "source_id", "notes", "status"):
+    for k in ("name", "phone", "email", "company", "designation", "contact_role_id", "source", "source_id", "notes", "status", "birthday"):
         if k in body:
             allowed[k] = body[k]
     allowed["last_activity_date"] = datetime.now(timezone.utc).isoformat()
@@ -598,6 +671,9 @@ async def create_lead(request: Request):
         }],
         "last_visit_date": None,
         "notes": body.get("notes", ""),
+        "referred_by_contact_id": body.get("referred_by_contact_id", ""),
+        "referral_reward_status": body.get("referral_reward_status", "none"),
+        "tags": await _resolve_tags(body.get("tags", []), user["email"]),
         "last_activity_date": now_iso,
         "created_by": user["email"],
         "created_at": now_iso,
@@ -621,9 +697,12 @@ async def update_lead(lead_id: str, request: Request):
               "contact_phone", "contact_email", "source", "source_id",
               "lead_type", "interested_product", "stage", "priority",
               "next_followup_date", "assigned_to", "assigned_name", "notes",
-              "assignment_type", "likely_closure_date"):
+              "assignment_type", "likely_closure_date",
+              "referred_by_contact_id", "referral_reward_status"):
         if k in body:
             allowed[k] = body[k]
+    if "tags" in body:
+        allowed["tags"] = await _resolve_tags(body["tags"], user["email"])
     now_iso = datetime.now(timezone.utc).isoformat()
     allowed["updated_at"] = now_iso
     allowed["last_activity_date"] = now_iso
@@ -652,6 +731,40 @@ async def update_lead(lead_id: str, request: Request):
     if lead and lead.get("school_id"):
         await touch_last_activity("school", lead["school_id"])
     return lead
+
+
+@router.get("/leads/referral-leaderboard")
+async def referral_leaderboard(request: Request):
+    """Returns top referrers: contacts who have referred the most leads."""
+    await get_current_user(request)
+    pipeline = [
+        {"$match": {"referred_by_contact_id": {"$exists": True, "$ne": ""}}},
+        {"$group": {
+            "_id": "$referred_by_contact_id",
+            "total_referred": {"$sum": 1},
+            "won": {"$sum": {"$cond": [{"$eq": ["$stage", "won"]}, 1, 0]}},
+            "pending": {"$sum": {"$cond": [{"$nin": ["$stage", ["won", "lost"]]}, 1, 0]}},
+        }},
+        {"$sort": {"total_referred": -1}},
+        {"$limit": 20},
+    ]
+    rows = await db.leads.aggregate(pipeline).to_list(20)
+    contact_ids = [r["_id"] for r in rows]
+    contacts = await db.contacts.find({"contact_id": {"$in": contact_ids}}, {"_id": 0, "contact_id": 1, "name": 1, "company": 1, "phone": 1}).to_list(20)
+    contact_map = {c["contact_id"]: c for c in contacts}
+    result = []
+    for r in rows:
+        c = contact_map.get(r["_id"], {})
+        result.append({
+            "contact_id": r["_id"],
+            "contact_name": c.get("name", "Unknown"),
+            "company": c.get("company", ""),
+            "phone": c.get("phone", ""),
+            "total_referred": r["total_referred"],
+            "won": r["won"],
+            "pending": r["pending"],
+        })
+    return result
 
 
 @router.post("/leads/reassign")
@@ -978,6 +1091,114 @@ async def update_followup(followup_id: str, request: Request):
     allowed = {k: body[k] for k in ("followup_date", "followup_time", "followup_type", "notes", "outcome", "status") if k in body}
     await db.followups.update_one({"followup_id": followup_id}, {"$set": allowed})
     return await db.followups.find_one({"followup_id": followup_id}, {"_id": 0})
+
+
+# ==================== PHYSICAL DISPATCHES ====================
+
+@router.get("/physical-dispatches")
+async def get_physical_dispatches(request: Request, lead_id: Optional[str] = None):
+    user = await get_current_user(request)
+    query = {}
+    if lead_id:
+        query["lead_id"] = lead_id
+    elif get_team(user) != "admin":
+        query["created_by"] = user["email"]
+    dispatches = await db.physical_dispatches.find(query, {"_id": 0}).sort("sent_date", -1).to_list(2000)
+    return dispatches
+
+
+@router.post("/physical-dispatches")
+async def create_physical_dispatch(request: Request):
+    user = await get_current_user(request)
+    body = await request.json()
+    if not body.get("lead_id"):
+        raise HTTPException(status_code=400, detail="lead_id is required")
+    dispatch_id = f"pd_{uuid.uuid4().hex[:12]}"
+    now_iso = datetime.now(timezone.utc).isoformat()
+    doc = {
+        "dispatch_id": dispatch_id,
+        "lead_id": body.get("lead_id", ""),
+        "lead_name": body.get("lead_name", ""),
+        "material_type": body.get("material_type", "brochure"),
+        "description": body.get("description", ""),
+        "courier_name": body.get("courier_name", ""),
+        "tracking_number": body.get("tracking_number", ""),
+        "sent_date": body.get("sent_date", now_iso[:10]),
+        "received_confirmed": False,
+        "created_by": user["email"],
+        "created_at": now_iso,
+    }
+    await db.physical_dispatches.insert_one(doc)
+    await touch_last_activity("lead", body["lead_id"])
+
+    # Auto-WhatsApp: fire-and-forget tracking notification to the lead contact
+    try:
+        lead_doc = await db.leads.find_one({"lead_id": body["lead_id"]}, {"_id": 0})
+        if lead_doc and lead_doc.get("contact_phone"):
+            courier_key = doc.get("courier_name", "").lower().strip()
+            tn = doc.get("tracking_number", "")
+            _COURIER_URLS = {
+                "delhivery": f"https://www.delhivery.com/track/package/{tn}",
+                "blue dart": f"https://bluedart.com/track-consignment?trackFor=0&HAWB={tn}",
+                "bluedart": f"https://bluedart.com/track-consignment?trackFor=0&HAWB={tn}",
+                "dtdc": f"https://tracking.dtdc.com/ctbs-tracking/customerInterface.tr?submitName=showCustInter&cType=Consignment&cnNo={tn}",
+            }
+            tracking_url = _COURIER_URLS.get(courier_key, "")
+            track_part = f"\nTrack here: {tracking_url}" if tracking_url else ""
+            contact_name = lead_doc.get("contact_name", "Sir/Madam")
+            courier_name = doc.get("courier_name", "courier")
+            message = (
+                f"Dear {contact_name}, your {doc.get('material_type', 'material')} from SmartShape "
+                f"has been dispatched!\nCourier: {courier_name}"
+                f"{(' | Tracking: ' + tn) if tn else ''}"
+                f"{track_part}"
+            )
+            wa_settings = await db.settings.find_one({"type": "whatsapp"}, {"_id": 0})
+            if wa_settings and wa_settings.get("username"):
+                import httpx as _httpx
+                async with _httpx.AsyncClient(timeout=15) as client:
+                    await client.post(
+                        "https://app.messageautosender.com/message/new",
+                        data={
+                            "username": wa_settings["username"],
+                            "password": wa_settings["password"],
+                            "receiverMobileNo": lead_doc["contact_phone"],
+                            "message": message,
+                        },
+                    )
+                await db.whatsapp_logs.insert_one({
+                    "log_id": f"wal_{uuid.uuid4().hex[:10]}",
+                    "template_id": None,
+                    "phone": lead_doc["contact_phone"],
+                    "body": message,
+                    "lead_id": body["lead_id"],
+                    "send_mode": "auto_dispatch",
+                    "status": "sent",
+                    "sent_by": "system",
+                    "sent_at": datetime.now(timezone.utc).isoformat(),
+                })
+    except Exception:
+        pass  # Dispatch is already saved — WA failure is non-blocking
+
+    return await db.physical_dispatches.find_one({"dispatch_id": dispatch_id}, {"_id": 0})
+
+
+@router.put("/physical-dispatches/{dispatch_id}")
+async def update_physical_dispatch(dispatch_id: str, request: Request):
+    await get_current_user(request)
+    body = await request.json()
+    allowed = {k: body[k] for k in ("courier_name", "tracking_number", "sent_date", "received_confirmed", "description", "material_type") if k in body}
+    await db.physical_dispatches.update_one({"dispatch_id": dispatch_id}, {"$set": allowed})
+    return await db.physical_dispatches.find_one({"dispatch_id": dispatch_id}, {"_id": 0})
+
+
+@router.delete("/physical-dispatches/{dispatch_id}")
+async def delete_physical_dispatch(dispatch_id: str, request: Request):
+    await get_current_user(request)
+    result = await db.physical_dispatches.delete_one({"dispatch_id": dispatch_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Dispatch not found")
+    return {"message": "Deleted"}
 
 
 # ==================== TASKS ====================

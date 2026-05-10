@@ -1021,10 +1021,95 @@ async def run_auto_reminders():
                     upsert=True,
                 )
 
+            # ── Birthday & Anniversary reminders ──────────────────────────────
+            today_mmdd = datetime.now(timezone.utc).strftime("%m-%d")
+
+            birthday_contacts = await db.contacts.find(
+                {"birthday": {"$regex": f"-{today_mmdd}$"}},
+                {"_id": 0, "contact_id": 1, "name": 1, "company": 1, "phone": 1, "birthday": 1},
+            ).to_list(200)
+            for c in birthday_contacts:
+                await db.notifications.update_one(
+                    {"contact_id": c["contact_id"], "type": "birthday_today", "date": today},
+                    {"$set": {
+                        "contact_id": c["contact_id"],
+                        "type": "birthday_today",
+                        "date": today,
+                        "title": f"Birthday Today: {c['name']}",
+                        "message": f"{c['name']} ({c.get('company', '')}) has a birthday today! Phone: {c.get('phone', 'N/A')}",
+                        "is_read": False,
+                        "created_at": datetime.now(timezone.utc).isoformat(),
+                    }},
+                    upsert=True,
+                )
+
+            anniversary_schools = await db.schools.find(
+                {"anniversary": {"$regex": f"-{today_mmdd}$"}},
+                {"_id": 0, "school_id": 1, "school_name": 1, "anniversary": 1, "primary_contact_name": 1, "phone": 1},
+            ).to_list(200)
+            for s in anniversary_schools:
+                await db.notifications.update_one(
+                    {"school_id": s["school_id"], "type": "anniversary_today", "date": today},
+                    {"$set": {
+                        "school_id": s["school_id"],
+                        "type": "anniversary_today",
+                        "date": today,
+                        "title": f"Anniversary: {s['school_name']}",
+                        "message": f"{s['school_name']} celebrates their anniversary today! Contact: {s.get('primary_contact_name', '')} {s.get('phone', '')}",
+                        "is_read": False,
+                        "created_at": datetime.now(timezone.utc).isoformat(),
+                    }},
+                    upsert=True,
+                )
+
+            # ── Scheduled WhatsApp messages ──────────────────────────────
+            now_iso_full = datetime.now(timezone.utc).isoformat()
+            due_scheduled = await db.whatsapp_scheduled.find(
+                {"status": "pending", "scheduled_at": {"$lte": now_iso_full}},
+                {"_id": 0}
+            ).to_list(100)
+
+            wa_cfg = await db.settings.find_one({"type": "whatsapp"}, {"_id": 0})
+            for sched in due_scheduled:
+                phone = sched.get("phone", "")
+                message = sched.get("message", "")
+                new_status = "failed"
+                if phone and message and wa_cfg and wa_cfg.get("username"):
+                    try:
+                        import httpx as _httpx
+                        async with _httpx.AsyncClient(timeout=15) as client:
+                            resp = await client.post(
+                                "https://app.messageautosender.com/message/new",
+                                data={"username": wa_cfg["username"], "password": wa_cfg["password"],
+                                      "receiverMobileNo": phone, "message": message},
+                            )
+                        new_status = "sent" if 200 <= resp.status_code < 300 else "failed"
+                    except Exception:
+                        new_status = "failed"
+                await db.whatsapp_scheduled.update_one(
+                    {"schedule_id": sched["schedule_id"]},
+                    {"$set": {"status": new_status, "sent_at": now_iso_full}}
+                )
+                await db.whatsapp_logs.insert_one({
+                    "log_id": f"wal_{uuid.uuid4().hex[:10]}",
+                    "template_id": sched.get("template_id"),
+                    "phone": phone,
+                    "body": message,
+                    "lead_id": sched.get("lead_id"),
+                    "send_mode": "scheduled",
+                    "status": new_status,
+                    "sent_by": sched.get("created_by", "system"),
+                    "sent_at": now_iso_full,
+                })
+
             import logging
-            logging.info(f"Auto-reminder: {len(overdue_tasks)} overdue, {len(stale_leads)} stale, {len(pending_quots)} pending quots")
+            logging.info(
+                f"Auto-reminder: {len(overdue_tasks)} overdue, {len(stale_leads)} stale, "
+                f"{len(pending_quots)} pending quots, {len(birthday_contacts)} birthdays, "
+                f"{len(anniversary_schools)} anniversaries, {len(due_scheduled)} scheduled WA fired"
+            )
         except Exception as e:
             import logging
             logging.error(f"Auto-reminder error: {e}")
 
-        await asyncio.sleep(3600)
+        await asyncio.sleep(60)

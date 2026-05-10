@@ -181,6 +181,14 @@ export const contactRoles = {
   delete: (id) => API.delete(`/contact-roles/${id}`),
 };
 
+// Tags
+export const tags = {
+  getAll: () => API.get('/tags'),
+  create: (data) => API.post('/tags', data),
+  update: (id, data) => API.put(`/tags/${id}`, data),
+  delete: (id) => API.delete(`/tags/${id}`),
+};
+
 // Leads / CRM
 export const leads = {
   getAll: () => API.get('/leads'),
@@ -461,6 +469,26 @@ export const whatsappSend = {
   render: (data) => API.post('/whatsapp/render-template', data),
   sendVia: (data) => API.post('/whatsapp/send-via-template', data),
   logs: (params) => API.get('/whatsapp/logs', { params }),
+};
+
+// WhatsApp Scheduler
+export const whatsappScheduled = {
+  getAll: (params = {}) => API.get('/whatsapp/schedule', { params }),
+  create: (data) => API.post('/whatsapp/schedule', data),
+  cancel: (id) => API.delete(`/whatsapp/schedule/${id}`),
+};
+
+// Physical Dispatches (admin-level all-dispatches view)
+export const physicalDispatches = {
+  getAll: (params = {}) => API.get('/physical-dispatches', { params }),
+  update: (id, data) => API.put(`/physical-dispatches/${id}`, data),
+  delete: (id) => API.delete(`/physical-dispatches/${id}`),
+};
+
+// Broadcast Campaigns
+export const broadcastApi = {
+  byTag: (data) => API.post('/whatsapp/broadcast-by-tag', data),
+  emailByTag: (data) => API.post('/email/broadcast-by-tag', data),
 };
 
 export default API;
