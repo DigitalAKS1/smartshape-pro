@@ -134,14 +134,6 @@ async def ws_today_actions(websocket: WebSocket):
 
 @app.on_event("startup")
 async def startup():
-    try:
-        from routes.inventory_routes import init_storage
-        init_storage()
-        logging.info("Storage initialized")
-    except Exception as e:
-        logging.error(f"Storage init failed: {e}")
-
-    # Create indexes
     await db.users.create_index("email", unique=True)
     await db.dies.create_index("code", unique=True)
     await db.login_attempts.create_index("identifier")
