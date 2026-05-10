@@ -1,0 +1,31 @@
+version: "3.9"
+
+# Production compose — uses MongoDB Atlas (no local Mongo container)
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: smartshape-backend
+    env_file: ./backend/.env
+    environment:
+      - PORT=8000
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    volumes:
+      - backend_uploads:/app/uploads
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        REACT_APP_BACKEND_URL: ${REACT_APP_BACKEND_URL}
+    container_name: smartshape-frontend
+    ports:
+      - "3000:80"
+    restart: unless-stopped
+
+volumes:
+  backend_uploads:

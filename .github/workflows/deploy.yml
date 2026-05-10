@@ -7,7 +7,7 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - name: Deploy via SSH
@@ -25,14 +25,18 @@ jobs:
             git pull origin main
 
             echo "=== Building and restarting containers ==="
-            docker compose down --remove-orphans
-            docker compose build --no-cache \
-              --build-arg REACT_APP_BACKEND_URL=https://${{ secrets.DOMAIN }}
-            docker compose up -d
+            REACT_APP_BACKEND_URL=https://${{ secrets.DOMAIN }} \
+              docker compose -f docker-compose.prod.yml down --remove-orphans
 
-            echo "=== Waiting for backend health check ==="
+            REACT_APP_BACKEND_URL=https://${{ secrets.DOMAIN }} \
+              docker compose -f docker-compose.prod.yml build --no-cache
+
+            REACT_APP_BACKEND_URL=https://${{ secrets.DOMAIN }} \
+              docker compose -f docker-compose.prod.yml up -d
+
+            echo "=== Waiting for health check ==="
             sleep 10
-            curl -sf http://localhost:8000/api/health || echo "Health check skipped"
+            curl -sf http://localhost:8000/api/health && echo "Backend OK" || echo "Health check skipped"
 
             echo "=== Deploy complete ==="
-            docker compose ps
+            docker compose -f docker-compose.prod.yml ps
