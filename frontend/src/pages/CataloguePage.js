@@ -45,6 +45,8 @@ export default function CataloguePage() {
   );
 
   const { quotation, package: pkg, dies } = data;
+  const stdLimit = pkg?.std_die_qty || 0;
+  const largeLimit = pkg?.large_die_qty || 0;
 
   // Group dies by category
   const grouped = {};
@@ -64,7 +66,7 @@ export default function CataloguePage() {
         <div className="max-w-6xl mx-auto text-center">
           <h1 className="text-4xl sm:text-5xl font-bold text-white mb-3" data-testid="catalogue-title">SmartShape Dies Catalogue</h1>
           <p className="text-xl text-[#e94560] font-medium">{quotation.school_name}</p>
-          <p className="text-[#a0a0b0] mt-2">{pkg.display_name}</p>
+          {pkg && <p className="text-[#a0a0b0] mt-2">{pkg.display_name}</p>}
         </div>
       </div>
 
@@ -72,8 +74,9 @@ export default function CataloguePage() {
       <div className="sticky top-0 z-30 bg-[#1a1a2e]/95 backdrop-blur border-b border-[#2d2d44]">
         <div className="max-w-6xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-2">
           <div className="flex gap-4 text-sm">
-            <span className="text-[#a0a0b0]">Standard: <strong className={`${stdSelected >= (pkg.std_die_qty || 0) ? 'text-green-400' : 'text-white'}`}>{stdSelected}/{pkg.std_die_qty || 0}</strong></span>
-            <span className="text-[#a0a0b0]">Large: <strong className={`${largeSelected >= (pkg.large_die_qty || 0) ? 'text-green-400' : 'text-white'}`}>{largeSelected}/{pkg.large_die_qty || 0}</strong></span>
+            {stdLimit > 0 && <span className="text-[#a0a0b0]">Standard: <strong className={`${stdSelected >= stdLimit ? 'text-green-400' : 'text-white'}`}>{stdSelected}/{stdLimit}</strong></span>}
+            {largeLimit > 0 && <span className="text-[#a0a0b0]">Large: <strong className={`${largeSelected >= largeLimit ? 'text-green-400' : 'text-white'}`}>{largeSelected}/{largeLimit}</strong></span>}
+            {!pkg && <span className="text-[#a0a0b0]">Selected: <strong className="text-white">{selectedDies.length}</strong></span>}
           </div>
           <Button onClick={handleSubmit} disabled={selectedDies.length === 0} className="bg-[#e94560] hover:bg-[#f05c75] text-white" data-testid="catalogue-submit-button">
             Submit Selection ({selectedDies.length})

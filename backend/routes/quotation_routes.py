@@ -436,7 +436,10 @@ async def get_catalogue(token: str):
             }},
         )
 
-    package = await db.packages.find_one({"package_id": quot["package_id"]}, {"_id": 0})
+    package_id = quot.get("package_id")
+    package = None
+    if package_id:
+        package = await db.packages.find_one({"package_id": package_id}, {"_id": 0})
     dies = await db.dies.find({"is_active": True}, {"_id": 0}).to_list(1000)
 
     return {"quotation": quot, "package": package, "dies": dies}

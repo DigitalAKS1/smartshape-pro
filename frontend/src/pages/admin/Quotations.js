@@ -2,15 +2,16 @@ import React, { useState, useEffect } from 'react';
 import AdminLayout from '../../components/layouts/AdminLayout';
 import API, { quotations as quotApi, salesPersons, exportData } from '../../lib/api';
 import { formatCurrency, formatDate, getStatusColor } from '../../lib/utils';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
-import { FileText, Search, Send, ArrowRight, Mail, Download, Edit2, Trash2, GitBranch } from 'lucide-react';
+import { FileText, Search, Send, ArrowRight, Mail, Download, Edit2, Trash2, GitBranch, Link2, ShoppingCart, ExternalLink } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth } from '../../contexts/AuthContext';
 
 export default function Quotations() {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const canDelete = user?.role === 'admin' || (user?.assigned_modules || []).includes('accounts');
   const [quotations, setQuotations] = useState([]);
   const [filteredQuotations, setFilteredQuotations] = useState([]);
@@ -126,6 +127,23 @@ export default function Quotations() {
   const selectAll = () => {
     const unsent = filteredQuotations.filter(q => q.catalogue_status === 'not_sent').map(q => q.quotation_id);
     setSelectedQuotations(unsent);
+  };
+
+  const handleCopyLink = (token) => {
+    const url = `${window.location.origin}/catalogue/${token}`;
+    navigator.clipboard.writeText(url).then(() => toast.success('Catalogue link copied!')).catch(() => toast.info(url));
+  };
+
+  const handleCreateOrder = async (quotationId) => {
+    try {
+      await API.post('/orders', { quotation_id: quotationId });
+      toast.success('Order created!');
+      navigate('/orders');
+    } catch (err) {
+      const msg = err.response?.data?.detail || '';
+      if (msg.includes('already exists')) { toast.info('Order already exists'); navigate('/orders'); }
+      else toast.error(msg || 'Failed to create order');
+    }
   };
 
   return (
@@ -251,7 +269,19 @@ export default function Quotations() {
                           <span className={`inline-block px-3 py-1 rounded-full text-xs font-medium border ${getStatusColor(quot.quotation_status)}`}>{quot.quotation_status}</span>
                         </td>
                         <td className="px-4 py-4">
-                          <span className={`inline-block px-3 py-1 rounded-full text-xs font-medium border ${getStatusColor(quot.catalogue_status)}`}>{quot.catalogue_status.replace('_', ' ')}</span>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium border ${getStatusColor(quot.catalogue_status)}`}>{quot.catalogue_status.replace('_', ' ')}</span>
+                            {quot.catalogue_token && (quot.catalogue_status === 'sent' || quot.catalogue_status === 'opened') && (
+                              <button onClick={() => handleCopyLink(quot.catalogue_token)} title="Copy catalogue link" className="text-blue-400 hover:text-blue-300 flex items-center gap-1 text-xs">
+                                <Link2 className="h-3.5 w-3.5" />
+                              </button>
+                            )}
+                            {quot.catalogue_status === 'submitted' && (
+                              <Button size="sm" onClick={() => handleCreateOrder(quot.quotation_id)} className="bg-green-600 hover:bg-green-700 text-white h-7 px-2 text-[11px]">
+                                <ShoppingCart className="mr-1 h-3 w-3" /> Create Order
+                              </Button>
+                            )}
+                          </div>
                         </td>
                         <td className="px-4 py-4">
                           <div className="flex items-center gap-1">
@@ -312,6 +342,16 @@ export default function Quotations() {
                       {quot.catalogue_status === 'not_sent' && (
                         <Button size="sm" onClick={() => handleSendCatalogue(quot.quotation_id)} className="bg-[#3b82f6] hover:bg-[#2563eb] text-white text-xs">
                           <Send className="mr-1 h-3 w-3" /> Send
+                        </Button>
+                      )}
+                      {quot.catalogue_token && (quot.catalogue_status === 'sent' || quot.catalogue_status === 'opened') && (
+                        <Button size="sm" variant="outline" onClick={() => handleCopyLink(quot.catalogue_token)} className="border-blue-500/40 text-blue-400 text-xs">
+                          <Link2 className="mr-1 h-3 w-3" /> Copy Link
+                        </Button>
+                      )}
+                      {quot.catalogue_status === 'submitted' && (
+                        <Button size="sm" onClick={() => handleCreateOrder(quot.quotation_id)} className="bg-green-600 hover:bg-green-700 text-white text-xs">
+                          <ShoppingCart className="mr-1 h-3 w-3" /> Create Order
                         </Button>
                       )}
                     </div>
