@@ -1,4 +1,4 @@
-name: Deploy to Hostinger VPS
+name: Deploy to VPS
 
 on:
   push:
@@ -24,19 +24,24 @@ jobs:
             echo "=== Pulling latest code ==="
             git pull origin main
 
-            echo "=== Building and restarting containers ==="
-            REACT_APP_BACKEND_URL=https://${{ secrets.DOMAIN }} \
-              docker compose -f docker-compose.prod.yml down --remove-orphans
+            echo "=== Stopping old containers ==="
+            docker compose -f docker-compose.prod.yml down --remove-orphans || true
 
-            REACT_APP_BACKEND_URL=https://${{ secrets.DOMAIN }} \
+            echo "=== Building frontend with correct backend URL ==="
+            REACT_APP_BACKEND_URL=http://${{ secrets.VPS_HOST }} \
               docker compose -f docker-compose.prod.yml build --no-cache
 
-            REACT_APP_BACKEND_URL=https://${{ secrets.DOMAIN }} \
+            echo "=== Starting containers ==="
+            REACT_APP_BACKEND_URL=http://${{ secrets.VPS_HOST }} \
               docker compose -f docker-compose.prod.yml up -d
 
-            echo "=== Waiting for health check ==="
-            sleep 10
-            curl -sf http://localhost:8000/api/health && echo "Backend OK" || echo "Health check skipped"
+            echo "=== Waiting for startup ==="
+            sleep 15
+
+            echo "=== Health check ==="
+            curl -sf http://localhost:8000/api/health && echo " Backend OK" || echo " Backend still starting"
+
+            echo "=== Running containers ==="
+            docker compose -f docker-compose.prod.yml ps
 
             echo "=== Deploy complete ==="
-            docker compose -f docker-compose.prod.yml ps
