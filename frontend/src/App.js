@@ -46,6 +46,7 @@ import DispatchTracking from './pages/admin/DispatchTracking';
 
 // Sales pages
 import SalesHome from './pages/sales/SalesHome';
+import SalesLeads from './pages/sales/SalesLeads';
 import SalesAttendance from './pages/sales/SalesAttendance';
 import SalesVisits from './pages/sales/SalesVisits';
 import SalesQuotations from './pages/sales/SalesQuotations';
@@ -157,6 +158,7 @@ function AppRouter() {
       
       {/* Protected Routes - Sales */}
       <Route path="/sales" element={<ProtectedRoute><SalesHome /></ProtectedRoute>} />
+      <Route path="/sales/leads" element={<ProtectedRoute><SalesLeads /></ProtectedRoute>} />
       <Route path="/sales/attendance" element={<ProtectedRoute><SalesAttendance /></ProtectedRoute>} />
       <Route path="/sales/visits" element={<ProtectedRoute><SalesVisits /></ProtectedRoute>} />
       <Route path="/sales/quotations" element={<ProtectedRoute><SalesQuotations /></ProtectedRoute>} />

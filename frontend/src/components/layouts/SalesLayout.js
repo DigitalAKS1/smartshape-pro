@@ -2,7 +2,7 @@ import React from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { useTheme } from '../../contexts/ThemeContext';
-import { Home, Calendar, MapPin, FileText, Receipt, LogOut, ArrowLeft, Sun, Moon, User } from 'lucide-react';
+import { Home, Users, MapPin, FileText, Calendar, LogOut, ArrowLeft, Sun, Moon, User } from 'lucide-react';
 import { Button } from '../ui/button';
 
 export default function SalesLayout({ children, title, showBack }) {
@@ -14,10 +14,10 @@ export default function SalesLayout({ children, title, showBack }) {
 
   const navItems = [
     { path: '/sales', icon: Home, label: 'Home' },
-    { path: '/sales/attendance', icon: Calendar, label: 'Attendance' },
+    { path: '/sales/leads', icon: Users, label: 'Leads' },
     { path: '/sales/visits', icon: MapPin, label: 'Visits' },
     { path: '/sales/quotations', icon: FileText, label: 'Quotes' },
-    { path: '/sales/expenses', icon: Receipt, label: 'Expenses' },
+    { path: '/leave-management', icon: Calendar, label: 'Leave' },
   ];
 
   const handleLogout = async () => {

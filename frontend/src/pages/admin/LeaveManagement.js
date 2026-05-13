@@ -21,7 +21,6 @@ export default function LeaveManagement() {
   const { user } = useAuth();
   const { isDark } = useTheme();
   const [leavesList, setLeavesList] = useState([]);
-  const [balance, setBalance] = useState(null);
   const [loading, setLoading] = useState(true);
   const [applyOpen, setApplyOpen] = useState(false);
   const [form, setForm] = useState({ leave_type: 'casual', from_date: '', to_date: '', half_day: false, reason: '' });
@@ -41,9 +40,8 @@ export default function LeaveManagement() {
 
   const fetchData = async () => {
     try {
-      const [lr, br] = await Promise.all([leavesApi.getAll(), leavesApi.getBalance()]);
+      const lr = await leavesApi.getAll();
       setLeavesList(lr.data);
-      setBalance(br.data);
     } catch { toast.error('Failed to load'); }
     finally { setLoading(false); }
   };
@@ -112,36 +110,6 @@ export default function LeaveManagement() {
             <Plus className="mr-2 h-4 w-4" /> Apply for Leave
           </Button>
         </div>
-
-        {/* Balance Cards with Progress Bars */}
-        {balance && (
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4" data-testid="leave-balance">
-            {LEAVE_TYPES.map(lt => {
-              const total = balance.total?.[lt.id] ?? 0;
-              const used = balance.used?.[lt.id] ?? 0;
-              const remaining = balance.balance?.[lt.id] ?? 0;
-              const pct = total > 0 ? (used / total * 100) : 0;
-              return (
-                <div key={lt.id} className={`${card} border rounded-lg p-5`}>
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="flex items-center gap-2">
-                      <span className={`w-8 h-8 rounded-md flex items-center justify-center text-xs font-bold ${lt.color}`}>{lt.short}</span>
-                      <span className={`text-sm font-medium ${textPri}`}>{lt.label}</span>
-                    </div>
-                    <span className={`text-2xl font-mono font-bold ${textPri}`}>{remaining}</span>
-                  </div>
-                  <div className={`h-2 rounded-full ${isDark ? 'bg-[var(--bg-hover)]' : 'bg-[#e8e8f0]'} overflow-hidden`}>
-                    <div className={`h-full rounded-full ${lt.bar} transition-all`} style={{ width: `${pct}%` }} />
-                  </div>
-                  <div className="flex justify-between mt-2">
-                    <span className={`text-xs ${textMuted}`}>Used: {used}</span>
-                    <span className={`text-xs ${textMuted}`}>Total: {total}</span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
 
         {/* Pending Approvals Banner (for HR/Admin) */}
         {canApprove && pendingApprovals.length > 0 && (
@@ -254,17 +222,14 @@ export default function LeaveManagement() {
               <div>
                 <Label className={`${textSec} text-xs mb-2 block`}>Leave Type</Label>
                 <div className="grid grid-cols-3 gap-2">
-                  {LEAVE_TYPES.map(lt => {
-                    const remaining = balance?.balance?.[lt.id] ?? 0;
-                    return (
-                      <button key={lt.id} type="button" onClick={() => setForm({...form, leave_type: lt.id})}
-                        className={`p-3 rounded-lg border text-center transition-all ${form.leave_type === lt.id ? `${lt.color} ring-1` : `${'border-[var(--border-color)]'} ${hoverBg}`}`}
-                        data-testid={`leave-type-${lt.id}`}>
-                        <span className={`text-sm font-medium ${form.leave_type === lt.id ? '' : textSec}`}>{lt.short}</span>
-                        <p className={`text-[10px] ${textMuted} mt-0.5`}>{remaining} left</p>
-                      </button>
-                    );
-                  })}
+                  {LEAVE_TYPES.map(lt => (
+                    <button key={lt.id} type="button" onClick={() => setForm({...form, leave_type: lt.id})}
+                      className={`p-3 rounded-lg border text-center transition-all ${form.leave_type === lt.id ? `${lt.color} ring-1` : `${'border-[var(--border-color)]'} ${hoverBg}`}`}
+                      data-testid={`leave-type-${lt.id}`}>
+                      <span className={`text-sm font-medium ${form.leave_type === lt.id ? '' : textSec}`}>{lt.short}</span>
+                      <p className={`text-[10px] ${textMuted} mt-0.5`}>{lt.label}</p>
+                    </button>
+                  ))}
                 </div>
               </div>
 
@@ -296,15 +261,6 @@ export default function LeaveManagement() {
                 <Input value={form.reason} onChange={e => setForm({...form, reason: e.target.value})} className={inputCls} placeholder="Why do you need leave?" data-testid="leave-reason" />
               </div>
 
-              {/* Balance warning */}
-              {formDays > 0 && balance && (
-                <div className={`text-xs ${(balance.balance?.[form.leave_type] ?? 0) < formDays ? 'text-red-400' : 'text-green-400'}`}>
-                  {(balance.balance?.[form.leave_type] ?? 0) < formDays
-                    ? `Insufficient balance! You have ${balance.balance?.[form.leave_type] ?? 0} ${form.leave_type} leaves remaining.`
-                    : `You have ${balance.balance?.[form.leave_type] ?? 0} ${form.leave_type} leaves remaining after this will be ${(balance.balance?.[form.leave_type] ?? 0) - formDays}.`
-                  }
-                </div>
-              )}
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setApplyOpen(false)} className={'border-[var(--border-color)] text-[var(--text-secondary)]'}>Cancel</Button>

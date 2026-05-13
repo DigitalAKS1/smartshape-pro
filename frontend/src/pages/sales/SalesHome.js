@@ -277,12 +277,29 @@ export default function SalesHome() {
             {/* Quick Actions */}
             <section>
               <h2 className={`text-xs font-semibold ${tPri} uppercase tracking-wider mb-2.5`}>Quick Actions</h2>
+
+              {/* Create Quotation — featured CTA */}
+              <Link to="/create-quotation" className="block mb-2.5">
+                <div className="bg-[#e94560]/10 border border-[#e94560]/30 rounded-xl p-3.5 flex items-center justify-between active:opacity-75 transition-opacity">
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-lg bg-[#e94560]/20 flex items-center justify-center flex-shrink-0">
+                      <FileText className="h-4 w-4 text-[#e94560]" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold text-[#e94560]">Create New Quotation</p>
+                      <p className={`text-xs ${tMuted}`}>Build a quote for a client</p>
+                    </div>
+                  </div>
+                  <ChevronRight className="h-4 w-4 text-[#e94560] flex-shrink-0" />
+                </div>
+              </Link>
+
               <div className="grid grid-cols-4 gap-2">
                 {[
                   { to: '/sales/attendance', Icon: Calendar, label: 'Attendance', color: 'text-blue-400',   bg: 'bg-blue-400/10' },
                   { to: '/sales/visits',     Icon: MapPin,   label: 'Visits',     color: 'text-purple-400', bg: 'bg-purple-400/10' },
-                  { to: '/sales/quotations', Icon: FileText, label: 'Quotes',     color: 'text-orange-400', bg: 'bg-orange-400/10' },
-                  { to: '/sales/expenses',   Icon: Receipt,  label: 'Expense',    color: 'text-green-400',  bg: 'bg-green-400/10' },
+                  { to: '/sales/quotations', Icon: FileText, label: 'My Quotes',  color: 'text-orange-400', bg: 'bg-orange-400/10' },
+                  { to: '/sales/expenses',   Icon: Receipt,  label: 'Expenses',   color: 'text-green-400',  bg: 'bg-green-400/10' },
                 ].map(({ to, Icon, label, color, bg }) => (
                   <Link key={to} to={to} className={`${card} rounded-xl p-2.5 flex flex-col items-center gap-1.5 hover:opacity-75 transition-opacity`}>
                     <div className={`w-9 h-9 rounded-lg ${bg} flex items-center justify-center`}>
