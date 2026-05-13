@@ -12,6 +12,13 @@ import { UserPlus, Edit2, Trash2, Shield, Users, Eye, EyeOff, Download, Lock, Fi
 import { SALES_ROLES } from '../../lib/salesPermissions';
 import { useTheme } from '../../contexts/ThemeContext';
 
+const ROLE_META = {
+  admin:        { label: 'Admin',    cls: 'bg-[#e94560]/20 text-[#e94560] border-[#e94560]/30' },
+  accounts:     { label: 'Accounts', cls: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30' },
+  store:        { label: 'Store',    cls: 'bg-blue-500/20 text-blue-400 border-blue-500/30' },
+  sales_person: { label: 'Sales',    cls: 'bg-purple-500/20 text-purple-400 border-purple-500/30' },
+};
+
 const LEVELS = [
   { value: 'none', label: 'No Access', short: '—', cls: 'text-[var(--text-muted)]' },
   { value: 'read', label: 'Read Only', short: 'R', cls: 'text-blue-400' },
@@ -111,6 +118,7 @@ export default function UserManagement() {
   const [allModules, setAllModules] = useState([]);
   const [allDesignations, setAllDesignations] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [roleFilter, setRoleFilter] = useState('all');
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editUser, setEditUser] = useState(null);
   const [showPassword, setShowPassword] = useState(false);
@@ -166,13 +174,17 @@ export default function UserManagement() {
     setDialogOpen(true);
   };
 
-  const handleDesignationChange = (code) => {
+  const handleDesignationChange = (v) => {
+    const code = v === '_none' ? '' : v;
     const desg = allDesignations.find(d => d.code === code);
-    if (desg) {
-      setForm(prev => ({ ...prev, designation: code, role: desg.role_level, assigned_modules: desg.default_modules || [] }));
-    } else {
-      setForm(prev => ({ ...prev, designation: code }));
-    }
+    setForm(prev => ({
+      ...prev,
+      designation: code,
+      // auto-apply default modules from designation template only if modules are still empty
+      ...(desg?.default_modules?.length > 0 && Object.keys(prev.module_permissions).length === 0
+        ? { assigned_modules: desg.default_modules }
+        : {}),
+    }));
   };
 
   const handlePermissionsChange = (newPerms) => {
@@ -229,6 +241,8 @@ export default function UserManagement() {
     );
   };
 
+  const filteredUsers = roleFilter === 'all' ? users : users.filter(u => u.role === roleFilter);
+
   if (loading) return <AdminLayout><div className="flex items-center justify-center h-96"><div className="animate-spin rounded-full h-12 w-12 border-4 border-[#e94560] border-t-transparent" /></div></AdminLayout>;
 
   return (
@@ -262,6 +276,22 @@ export default function UserManagement() {
           <span className="text-[#e94560]">DL = Download permission (admin-controlled)</span>
         </div>
 
+        {/* Role filter pills */}
+        <div className="flex items-center gap-2 flex-wrap">
+          {[
+            { id: 'all',         label: `All (${users.length})` },
+            { id: 'admin',       label: `Admin (${users.filter(u => u.role === 'admin').length})` },
+            { id: 'accounts',    label: `Accounts (${users.filter(u => u.role === 'accounts').length})` },
+            { id: 'store',       label: `Store (${users.filter(u => u.role === 'store').length})` },
+            { id: 'sales_person',label: `Sales (${users.filter(u => u.role === 'sales_person').length})` },
+          ].map(f => (
+            <button key={f.id} onClick={() => setRoleFilter(f.id)}
+              className={`text-xs px-3 py-1.5 rounded-full font-medium border transition-all ${roleFilter === f.id ? 'bg-[#e94560] text-white border-[#e94560]' : `${card} border ${textMuted} hover:border-[#e94560]/40`}`}>
+              {f.label}
+            </button>
+          ))}
+        </div>
+
         {/* Users table */}
         <div className={`${card} border rounded-md overflow-hidden`}>
           <div className="overflow-x-auto">
@@ -274,7 +304,7 @@ export default function UserManagement() {
                 <th className={`text-right text-xs uppercase py-3 px-4 ${textMuted}`}>Actions</th>
               </tr></thead>
               <tbody>
-                {users.map(u => (
+                {filteredUsers.map(u => (
                   <tr key={u.user_id} className={`border-b border-[var(--border-color)] hover:bg-[var(--bg-hover)] transition-colors`}>
                     <td className="py-3 px-4">
                       <div className="flex items-center gap-3">
@@ -289,9 +319,17 @@ export default function UserManagement() {
                     </td>
                     <td className="py-3 px-4 hidden sm:table-cell">
                       <div className="flex flex-wrap items-center gap-1">
-                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium border ${u.role === 'admin' ? 'bg-[#e94560]/20 text-[#e94560] border-[#e94560]/30' : 'bg-blue-500/20 text-blue-400 border-blue-500/30'}`}>
-                          {u.designation ? allDesignations.find(d => d.code === u.designation)?.name || u.designation : (u.role === 'admin' ? 'Admin' : 'Sales Person')}
+                        {/* Designation label — shown separately when set */}
+                        {u.designation && (
+                          <span className={`text-xs px-2 py-0.5 rounded-full font-medium border border-[var(--border-color)] bg-[var(--bg-hover)] ${textSec}`}>
+                            {allDesignations.find(d => d.code === u.designation)?.name || u.designation}
+                          </span>
+                        )}
+                        {/* System role badge */}
+                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium border ${(ROLE_META[u.role] || ROLE_META.sales_person).cls}`}>
+                          {(ROLE_META[u.role] || ROLE_META.sales_person).label}
                         </span>
+                        {/* Sales portal sub-role */}
                         {u.role === 'sales_person' && u.sales_role && (
                           <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold border ${SALES_ROLES[u.sales_role]?.cls || 'bg-gray-500/20 text-gray-400 border-gray-500/30'}`}>
                             {SALES_ROLES[u.sales_role]?.label || u.sales_role}
@@ -350,7 +388,7 @@ export default function UserManagement() {
               {/* Designation + Role */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div><Label className={`${textSec} text-xs uppercase tracking-wide mb-1.5 block`}>Designation</Label>
-                  <Select value={form.designation || '_none'} onValueChange={v => handleDesignationChange(v === '_none' ? '' : v)}>
+                  <Select value={form.designation || '_none'} onValueChange={handleDesignationChange}>
                     <SelectTrigger className={inputCls}><SelectValue placeholder="Select..." /></SelectTrigger>
                     <SelectContent className="bg-[var(--bg-card)] border-[var(--border-color)]">
                       <SelectItem value="_none" className={`${textPri} hover:bg-[var(--bg-hover)]`}>-- Custom --</SelectItem>
