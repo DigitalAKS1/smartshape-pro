@@ -93,9 +93,9 @@ export default function ViewQuotation() {
   const d1a      = quot.disc1_amount   || 0;
   const d2p      = quot.discount2_pct  || 0;
   const d2a      = quot.disc2_amount   || 0;
-  const fr       = quot.freight_total  || 0;
-  const sub      = quot.sub_total_after ?? (quot.subtotal - d1a - d2a + fr);
+  const subDisc  = quot.subtotal_after_disc ?? quot.after_disc2 ?? (quot.subtotal - d1a - d2a);
   const gst      = quot.gst_amount     || 0;
+  const frw      = quot.freight_with_gst ?? quot.freight_total ?? 0;
   const gt       = quot.grand_total    || 0;
   const itemsTotal = quot.subtotal     || 0;
 
@@ -311,32 +311,46 @@ export default function ViewQuotation() {
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '5mm' }}>
               <div style={{ width: '94mm' }}>
                 {/* Line items */}
-                {[
-                  { label: 'Items Total',                          val: fmt(itemsTotal), green: false, bold: false },
-                  ...(d1p > 0 ? [{ label: `Discount (${d1p}%)`,           val: `− ${fmt(d1a)}`,    green: true,  bold: false }] : []),
-                  ...(d2p > 0 ? [{ label: `Additional Discount (${d2p}%)`, val: `− ${fmt(d2a)}`,    green: true,  bold: false }] : []),
-                  ...(fr  > 0 ? [{ label: 'Freight & Packing',            val: fmt(fr),            green: false, bold: false }] : []),
-                ].map(({ label, val, green, bold }) => (
-                  <div key={label} style={{
-                    display: 'flex', justifyContent: 'space-between',
-                    padding: '2px 0', fontSize: '8.5px',
-                    color: green ? GREEN : GRAY, fontWeight: bold ? 700 : 400,
-                  }}>
-                    <span>{label}</span>
-                    <span style={{ fontFamily: 'monospace' }}>{val}</span>
-                  </div>
-                ))}
-
-                {/* Sub-total divider */}
-                <div style={{ borderTop: `0.5px solid ${BORDER}`, marginTop: '3px' }} />
-                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', fontSize: '9px', fontWeight: 700, color: NAVY }}>
-                  <span>Sub-total</span>
-                  <span style={{ fontFamily: 'monospace' }}>{fmt(sub)}</span>
-                </div>
+                {/* Items Total */}
                 <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', fontSize: '8.5px', color: GRAY }}>
-                  <span>GST @ 18%</span>
+                  <span>Items Total</span>
+                  <span style={{ fontFamily: 'monospace', color: NAVY, fontWeight: 600 }}>{fmt(itemsTotal)}</span>
+                </div>
+                {/* Discounts */}
+                {d1p > 0 && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', fontSize: '8.5px', color: GREEN }}>
+                    <span>Discount ({d1p}%)</span>
+                    <span style={{ fontFamily: 'monospace' }}>− {fmt(d1a)}</span>
+                  </div>
+                )}
+                {d2p > 0 && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', fontSize: '8.5px', color: GREEN }}>
+                    <span>Additional Discount ({d2p}%)</span>
+                    <span style={{ fontFamily: 'monospace' }}>− {fmt(d2a)}</span>
+                  </div>
+                )}
+                {/* Subtotal after discounts — only shown when discounts exist */}
+                {(d1p > 0 || d2p > 0) && (
+                  <>
+                    <div style={{ borderTop: `0.5px solid ${BORDER}`, marginTop: '3px' }} />
+                    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', fontSize: '9px', fontWeight: 700, color: NAVY }}>
+                      <span>Subtotal After Discounts</span>
+                      <span style={{ fontFamily: 'monospace' }}>{fmt(subDisc)}</span>
+                    </div>
+                  </>
+                )}
+                {/* Total GST */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', fontSize: '8.5px', color: GRAY }}>
+                  <span>Total GST @ 18%</span>
                   <span style={{ fontFamily: 'monospace' }}>{fmt(gst)}</span>
                 </div>
+                {/* Freight */}
+                {frw > 0 && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', fontSize: '8.5px', color: GRAY }}>
+                    <span>Freight Charge incl. 18% GST</span>
+                    <span style={{ fontFamily: 'monospace' }}>{fmt(frw)}</span>
+                  </div>
+                )}
 
                 {/* Grand total — navy box */}
                 <div style={{

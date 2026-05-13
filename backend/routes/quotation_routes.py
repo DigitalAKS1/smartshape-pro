@@ -86,9 +86,9 @@ async def create_quotation(request: Request):
     body = await request.json()
 
     package_id = body.get("package_id")
-    package = await db.packages.find_one({"package_id": package_id}, {"_id": 0})
-    if not package:
-        raise HTTPException(status_code=404, detail="Package not found")
+    package = None
+    if package_id:
+        package = await db.packages.find_one({"package_id": package_id}, {"_id": 0})
 
     sp_id = body.get("sales_person_id", "")
     sp = await db.salespersons.find_one({"sales_person_id": sp_id}, {"_id": 0})
@@ -104,12 +104,15 @@ async def create_quotation(request: Request):
     d2 = body.get("discount2_pct", 0)
     fr = body.get("freight_amount", 0)
 
-    disc1_amount = items_total * (d1 / 100)
-    disc2_amount = items_total * (d2 / 100)
-    freight_base = fr
-    sub_total_after = items_total - disc1_amount - disc2_amount + freight_base
-    gst_amount_final = sub_total_after * 0.18
-    grand_total = sub_total_after + gst_amount_final
+    disc1_amount       = items_total * (d1 / 100)
+    subtotal_after_d1  = items_total - disc1_amount
+    disc2_amount       = subtotal_after_d1 * (d2 / 100)
+    subtotal_after_disc = subtotal_after_d1 - disc2_amount
+    total_gst          = subtotal_after_disc * 0.18
+    freight_base       = fr
+    freight_gst        = freight_base * 0.18
+    freight_with_gst   = freight_base + freight_gst
+    grand_total        = subtotal_after_disc + total_gst + freight_with_gst
 
     quotation_id = f"quot_{uuid.uuid4().hex[:12]}"
     quote_number = await generate_quote_number()
@@ -118,7 +121,7 @@ async def create_quotation(request: Request):
         "quotation_id": quotation_id,
         "quote_number": quote_number,
         "package_id": package_id,
-        "package_name": package["display_name"],
+        "package_name": package["display_name"] if package else "",
         "principal_name": body.get("principal_name", ""),
         "school_name": body.get("school_name", ""),
         "address": body.get("address", ""),
@@ -131,16 +134,19 @@ async def create_quotation(request: Request):
         "discount1_pct": d1,
         "discount2_pct": d2,
         "freight_amount": fr,
-        "freight_gst_pct": 0,
+        "freight_gst_pct": 18,
         "subtotal": items_total,
-        "gst_amount": gst_amount_final,
-        "total_with_gst": grand_total,
+        "gst_amount": total_gst,
+        "total_with_gst": subtotal_after_disc + total_gst,
         "disc1_amount": disc1_amount,
-        "after_disc1": items_total - disc1_amount,
+        "after_disc1": subtotal_after_d1,
         "disc2_amount": disc2_amount,
-        "after_disc2": items_total - disc1_amount - disc2_amount,
-        "sub_total_after": sub_total_after,
-        "freight_total": freight_base,
+        "after_disc2": subtotal_after_disc,
+        "subtotal_after_disc": subtotal_after_disc,
+        "sub_total_after": subtotal_after_disc,
+        "freight_gst": freight_gst,
+        "freight_with_gst": freight_with_gst,
+        "freight_total": freight_with_gst,
         "grand_total": grand_total,
         "font_size_mode": body.get("font_size_mode", "medium"),
         "quotation_status": "draft",
@@ -183,21 +189,28 @@ async def edit_quotation(quotation_id: str, request: Request):
         d1 = allowed.get("discount1_pct", body.get("discount1_pct", existing.get("discount1_pct", 0)))
         d2 = allowed.get("discount2_pct", body.get("discount2_pct", existing.get("discount2_pct", 0)))
         fr = allowed.get("freight_amount", body.get("freight_amount", existing.get("freight_amount", 0)))
-        disc1 = items_total * (d1 / 100)
-        disc2 = items_total * (d2 / 100)
-        sub_total_after = items_total - disc1 - disc2 + fr
-        gst_final = sub_total_after * 0.18
+        disc1              = items_total * (d1 / 100)
+        sub_after_d1       = items_total - disc1
+        disc2              = sub_after_d1 * (d2 / 100)
+        sub_after_disc     = sub_after_d1 - disc2
+        gst_final          = sub_after_disc * 0.18
+        freight_gst_e      = fr * 0.18
+        freight_with_gst_e = fr + freight_gst_e
+        grand              = sub_after_disc + gst_final + freight_with_gst_e
         allowed.update({
             "subtotal": items_total,
             "gst_amount": gst_final,
-            "total_with_gst": sub_total_after + gst_final,
+            "total_with_gst": sub_after_disc + gst_final,
             "disc1_amount": disc1,
-            "after_disc1": items_total - disc1,
+            "after_disc1": sub_after_d1,
             "disc2_amount": disc2,
-            "after_disc2": items_total - disc1 - disc2,
-            "sub_total_after": sub_total_after,
-            "freight_total": fr,
-            "grand_total": sub_total_after + gst_final,
+            "after_disc2": sub_after_disc,
+            "subtotal_after_disc": sub_after_disc,
+            "sub_total_after": sub_after_disc,
+            "freight_gst": freight_gst_e,
+            "freight_with_gst": freight_with_gst_e,
+            "freight_total": freight_with_gst_e,
+            "grand_total": grand,
         })
     await db.quotations.update_one({"quotation_id": quotation_id}, {"$set": allowed})
     return await db.quotations.find_one({"quotation_id": quotation_id}, {"_id": 0})
@@ -739,9 +752,9 @@ async def download_quotation_pdf(quotation_id: str, request: Request):
     d1a = quot.get("disc1_amount", 0)
     d2p = quot.get("discount2_pct", 0)
     d2a = quot.get("disc2_amount", 0)
-    fr  = quot.get("freight_total", 0)
-    sub = quot.get("sub_total_after", items_total - d1a - d2a + fr)
+    sub_disc = quot.get("subtotal_after_disc", quot.get("after_disc2", items_total - d1a - d2a))
     gst = quot.get("gst_amount", 0)
+    frw = quot.get("freight_with_gst", quot.get("freight_total", 0))
     gt  = quot.get("grand_total", 0)
     def fc(n): return f"{n:,.2f}"
 
@@ -750,11 +763,12 @@ async def download_quotation_pdf(quotation_id: str, request: Request):
         sum_rows.append((Paragraph(f"Discount ({d1p}%)", S['SumL']), Paragraph(f"&#8722; {fc(d1a)}", S['SumGrn'])))
     if d2p > 0:
         sum_rows.append((Paragraph(f"Additional Discount ({d2p}%)", S['SumL']), Paragraph(f"&#8722; {fc(d2a)}", S['SumGrn'])))
-    if fr > 0:
-        sum_rows.append((Paragraph("Freight & Packing", S['SumL']), Paragraph(fc(fr), S['SumR'])))
+    if d1p > 0 or d2p > 0:
+        sum_rows.append((Paragraph("Subtotal After Discounts", S['SubL']), Paragraph(fc(sub_disc), S['SubR'])))
     sub_idx = len(sum_rows)
-    sum_rows.append((Paragraph("Sub-total", S['SubL']), Paragraph(fc(sub), S['SubR'])))
-    sum_rows.append((Paragraph("GST @ 18%", S['SumL']), Paragraph(fc(gst), S['SumR'])))
+    sum_rows.append((Paragraph("Total GST @ 18%", S['SumL']), Paragraph(fc(gst), S['SumR'])))
+    if frw > 0:
+        sum_rows.append((Paragraph(f"Freight incl. 18% GST", S['SumL']), Paragraph(fc(frw), S['SumR'])))
 
     sum_tbl = Table([[r[0], r[1]] for r in sum_rows], colWidths=[60*mm, 32*mm])
     sum_tbl.setStyle(TableStyle([
