@@ -1,5 +1,3 @@
-version: "3.9"
-
 # Production compose — MongoDB on Atlas (cloud)
 # No local database container needed.
 
