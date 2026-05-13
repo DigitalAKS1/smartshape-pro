@@ -1,7 +1,23 @@
 version: "3.9"
 
-# Production compose — uses MongoDB Atlas (no local Mongo container)
+# Production compose — two modes:
+#   MODE A (default): MongoDB on VPS (no Atlas needed, no IP whitelist)
+#   MODE B (Atlas):   Comment out the 'mongo' service and change MONGO_URL in backend/.env
+
 services:
+  mongo:
+    image: mongo:7.0
+    container_name: smartshape-mongo
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: smartshape
+      MONGO_INITDB_ROOT_PASSWORD: SmartShape2024
+      MONGO_INITDB_DATABASE: smartshape_prod
+    volumes:
+      - mongo_data:/data/db
+    ports:
+      - "127.0.0.1:27017:27017"   # only accessible from VPS itself, not public internet
+
   backend:
     build:
       context: ./backend
@@ -10,9 +26,13 @@ services:
     env_file: ./backend/.env
     environment:
       - PORT=8000
+      # Override MONGO_URL to point to local mongo container
+      - MONGO_URL=mongodb://smartshape:SmartShape2024@mongo:27017/smartshape_prod?authSource=admin
     ports:
       - "8000:8000"
     restart: unless-stopped
+    depends_on:
+      - mongo
     volumes:
       - backend_uploads:/app/uploads
 
@@ -28,4 +48,5 @@ services:
     restart: unless-stopped
 
 volumes:
+  mongo_data:        # MongoDB data — persists across restarts and updates
   backend_uploads:
