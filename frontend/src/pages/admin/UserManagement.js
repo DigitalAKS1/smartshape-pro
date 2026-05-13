@@ -9,6 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
 import { toast } from 'sonner';
 import { UserPlus, Edit2, Trash2, Shield, Users, Eye, EyeOff, Download, Lock, FileEdit, Trash, ChevronDown } from 'lucide-react';
+import { SALES_ROLES } from '../../lib/salesPermissions';
 import { useTheme } from '../../contexts/ThemeContext';
 
 const LEVELS = [
@@ -117,6 +118,7 @@ export default function UserManagement() {
 
   const [form, setForm] = useState({
     email: '', password: '', name: '', role: 'sales_person',
+    sales_role: 'executive',
     designation: '', phone: '',
     assigned_modules: [],
     module_permissions: {},
@@ -144,7 +146,7 @@ export default function UserManagement() {
 
   const openCreate = () => {
     setEditUser(null);
-    setForm({ email: '', password: '', name: '', role: 'sales_person', designation: '', phone: '', assigned_modules: [], module_permissions: {} });
+    setForm({ email: '', password: '', name: '', role: 'sales_person', sales_role: 'executive', designation: '', phone: '', assigned_modules: [], module_permissions: {} });
     setShowPassword(false);
     setPermTab('matrix');
     setDialogOpen(true);
@@ -154,6 +156,7 @@ export default function UserManagement() {
     setEditUser(u);
     setForm({
       email: u.email, password: '', name: u.name, role: u.role,
+      sales_role: u.sales_role || 'executive',
       designation: u.designation || '', phone: u.phone || '',
       assigned_modules: u.assigned_modules || [],
       module_permissions: u.module_permissions || {},
@@ -184,6 +187,7 @@ export default function UserManagement() {
           name: form.name, role: form.role, designation: form.designation,
           phone: form.phone, assigned_modules: form.assigned_modules,
           module_permissions: form.module_permissions,
+          ...(form.role === 'sales_person' ? { sales_role: form.sales_role } : {}),
         };
         if (form.password) payload.password = form.password;
         await adminUsers.update(editUser.user_id, payload);
@@ -284,9 +288,16 @@ export default function UserManagement() {
                       </div>
                     </td>
                     <td className="py-3 px-4 hidden sm:table-cell">
-                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium border ${u.role === 'admin' ? 'bg-[#e94560]/20 text-[#e94560] border-[#e94560]/30' : 'bg-blue-500/20 text-blue-400 border-blue-500/30'}`}>
-                        {u.designation ? allDesignations.find(d => d.code === u.designation)?.name || u.designation : (u.role === 'admin' ? 'Admin' : 'Sales Person')}
-                      </span>
+                      <div className="flex flex-wrap items-center gap-1">
+                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium border ${u.role === 'admin' ? 'bg-[#e94560]/20 text-[#e94560] border-[#e94560]/30' : 'bg-blue-500/20 text-blue-400 border-blue-500/30'}`}>
+                          {u.designation ? allDesignations.find(d => d.code === u.designation)?.name || u.designation : (u.role === 'admin' ? 'Admin' : 'Sales Person')}
+                        </span>
+                        {u.role === 'sales_person' && u.sales_role && (
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold border ${SALES_ROLES[u.sales_role]?.cls || 'bg-gray-500/20 text-gray-400 border-gray-500/30'}`}>
+                            {SALES_ROLES[u.sales_role]?.label || u.sales_role}
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="py-3 px-4 hidden md:table-cell">{getLevelBadge(u)}</td>
                     <td className="py-3 px-4 text-center">
@@ -361,6 +372,26 @@ export default function UserManagement() {
                   </Select>
                 </div>
               </div>
+
+              {/* Sales Portal Role — only for sales_person role */}
+              {form.role === 'sales_person' && (
+                <div>
+                  <Label className={`${textSec} text-xs uppercase tracking-wide mb-1.5 block`}>Sales Portal Role</Label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {Object.entries(SALES_ROLES).map(([key, def]) => (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => setForm({...form, sales_role: key})}
+                        className={`p-3 rounded-lg border text-left transition-all ${form.sales_role === key ? `${def.cls} ring-1` : `border-[var(--border-color)] hover:bg-[var(--bg-hover)]`}`}
+                      >
+                        <p className={`text-sm font-semibold ${form.sales_role === key ? '' : textPri}`}>{def.label}</p>
+                        <p className={`text-[10px] mt-0.5 ${textMuted} leading-snug`}>{def.description}</p>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {/* Permission Matrix */}
               <div>

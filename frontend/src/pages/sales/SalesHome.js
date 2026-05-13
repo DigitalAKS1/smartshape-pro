@@ -7,6 +7,7 @@ import {
   contacts as contactsApi, quotations as quotationsApi,
 } from '../../lib/api';
 import { useAuth } from '../../contexts/AuthContext';
+import { getSalesPermissions } from '../../lib/salesPermissions';
 import {
   Calendar, MapPin, FileText, Receipt,
   Target, CheckCircle, Clock, Phone, MessageSquare,
@@ -52,6 +53,7 @@ const openWa = (phone) => {
 export default function SalesHome() {
   const { user } = useAuth();
   const today     = new Date().toISOString().split('T')[0];
+  const perms     = getSalesPermissions(user?.sales_role);
 
   const [tab,  setTab]  = useState('overview');
   const [data, setData] = useState({
@@ -66,11 +68,11 @@ export default function SalesHome() {
     try {
       const [att, vis, ldr, tsk, ctr, qts] = await Promise.all([
         attendanceApi.getToday().catch(() => ({ data: null })),
-        visitsApi.getAll().catch(() => ({ data: [] })),
-        leadsApi.getAll().catch(() => ({ data: [] })),
+        perms.visits_log   ? visitsApi.getAll().catch(() => ({ data: [] }))    : Promise.resolve({ data: [] }),
+        perms.leads_view   ? leadsApi.getAll().catch(() => ({ data: [] }))     : Promise.resolve({ data: [] }),
         tasksApi.getAll().catch(() => ({ data: [] })),
         contactsApi.getAll().catch(() => ({ data: [] })),
-        quotationsApi.getAll().catch(() => ({ data: [] })),
+        perms.quotation_view ? quotationsApi.getAll().catch(() => ({ data: [] })) : Promise.resolve({ data: [] }),
       ]);
 
       const allVisits  = vis.data || [];
@@ -104,11 +106,11 @@ export default function SalesHome() {
   };
 
   const TABS = [
-    { id: 'overview',   label: 'Overview' },
-    { id: 'leads',      label: `Leads (${kpi.leads})` },
-    { id: 'contacts',   label: `Contacts (${data.contacts.length})` },
-    { id: 'quotations', label: 'Quotes' },
-  ];
+    { id: 'overview',   label: 'Overview',                      perm: null },
+    { id: 'leads',      label: `Leads (${kpi.leads})`,          perm: 'leads_view' },
+    { id: 'contacts',   label: `Contacts (${data.contacts.length})`, perm: 'leads_details' },
+    { id: 'quotations', label: 'Quotes',                        perm: 'quotation_view' },
+  ].filter(t => !t.perm || perms[t.perm]);
 
   if (loading) return (
     <SalesLayout title="My Dashboard">
@@ -278,37 +280,46 @@ export default function SalesHome() {
             <section>
               <h2 className={`text-xs font-semibold ${tPri} uppercase tracking-wider mb-2.5`}>Quick Actions</h2>
 
-              {/* Create Quotation — featured CTA */}
-              <Link to="/create-quotation" className="block mb-2.5">
-                <div className="bg-[#e94560]/10 border border-[#e94560]/30 rounded-xl p-3.5 flex items-center justify-between active:opacity-75 transition-opacity">
-                  <div className="flex items-center gap-3">
-                    <div className="w-9 h-9 rounded-lg bg-[#e94560]/20 flex items-center justify-center flex-shrink-0">
-                      <FileText className="h-4 w-4 text-[#e94560]" />
+              {/* Create Quotation — featured CTA (executive + manager only) */}
+              {perms.quotation_create && (
+                <Link to="/create-quotation" className="block mb-2.5">
+                  <div className="bg-[#e94560]/10 border border-[#e94560]/30 rounded-xl p-3.5 flex items-center justify-between active:opacity-75 transition-opacity">
+                    <div className="flex items-center gap-3">
+                      <div className="w-9 h-9 rounded-lg bg-[#e94560]/20 flex items-center justify-center flex-shrink-0">
+                        <FileText className="h-4 w-4 text-[#e94560]" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-semibold text-[#e94560]">Create New Quotation</p>
+                        <p className={`text-xs ${tMuted}`}>Build a quote for a client</p>
+                      </div>
                     </div>
-                    <div>
-                      <p className="text-sm font-semibold text-[#e94560]">Create New Quotation</p>
-                      <p className={`text-xs ${tMuted}`}>Build a quote for a client</p>
-                    </div>
+                    <ChevronRight className="h-4 w-4 text-[#e94560] flex-shrink-0" />
                   </div>
-                  <ChevronRight className="h-4 w-4 text-[#e94560] flex-shrink-0" />
-                </div>
-              </Link>
+                </Link>
+              )}
 
-              <div className="grid grid-cols-4 gap-2">
-                {[
-                  { to: '/sales/attendance', Icon: Calendar, label: 'Attendance', color: 'text-blue-400',   bg: 'bg-blue-400/10' },
-                  { to: '/sales/visits',     Icon: MapPin,   label: 'Visits',     color: 'text-purple-400', bg: 'bg-purple-400/10' },
-                  { to: '/sales/quotations', Icon: FileText, label: 'My Quotes',  color: 'text-orange-400', bg: 'bg-orange-400/10' },
-                  { to: '/sales/expenses',   Icon: Receipt,  label: 'Expenses',   color: 'text-green-400',  bg: 'bg-green-400/10' },
-                ].map(({ to, Icon, label, color, bg }) => (
-                  <Link key={to} to={to} className={`${card} rounded-xl p-2.5 flex flex-col items-center gap-1.5 hover:opacity-75 transition-opacity`}>
-                    <div className={`w-9 h-9 rounded-lg ${bg} flex items-center justify-center`}>
-                      <Icon className={`h-4 w-4 ${color}`} />
-                    </div>
-                    <span className={`text-[10px] ${tSec} font-medium text-center leading-tight`}>{label}</span>
-                  </Link>
-                ))}
-              </div>
+              {/* Quick action tiles — filtered by role */}
+              {(() => {
+                const actions = [
+                  { to: '/sales/attendance', Icon: Calendar, label: 'Attendance', color: 'text-blue-400',   bg: 'bg-blue-400/10',   perm: 'attendance' },
+                  { to: '/sales/visits',     Icon: MapPin,   label: 'Visits',     color: 'text-purple-400', bg: 'bg-purple-400/10', perm: 'visits_log' },
+                  { to: '/sales/quotations', Icon: FileText, label: 'My Quotes',  color: 'text-orange-400', bg: 'bg-orange-400/10', perm: 'quotation_view' },
+                  { to: '/sales/expenses',   Icon: Receipt,  label: 'Expenses',   color: 'text-green-400',  bg: 'bg-green-400/10',  perm: 'expenses_log' },
+                ].filter(a => perms[a.perm]);
+                if (actions.length === 0) return null;
+                return (
+                  <div className={`grid gap-2 ${actions.length <= 2 ? 'grid-cols-2' : actions.length === 3 ? 'grid-cols-3' : 'grid-cols-4'}`}>
+                    {actions.map(({ to, Icon, label, color, bg }) => (
+                      <Link key={to} to={to} className={`${card} rounded-xl p-2.5 flex flex-col items-center gap-1.5 hover:opacity-75 transition-opacity`}>
+                        <div className={`w-9 h-9 rounded-lg ${bg} flex items-center justify-center`}>
+                          <Icon className={`h-4 w-4 ${color}`} />
+                        </div>
+                        <span className={`text-[10px] ${tSec} font-medium text-center leading-tight`}>{label}</span>
+                      </Link>
+                    ))}
+                  </div>
+                );
+              })()}
             </section>
           </div>
         )}

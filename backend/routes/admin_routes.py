@@ -91,6 +91,10 @@ async def admin_create_user(request: Request):
     if role not in ("admin", "accounts", "store", "sales_person"):
         role = "sales_person"
     phone = body.get("phone", "")
+    designation = body.get("designation", "")
+    sales_role = body.get("sales_role", "executive")
+    if sales_role not in ("manager", "executive", "trainee"):
+        sales_role = "executive"
     assigned_modules = body.get("assigned_modules", [])
 
     if not email or not password or not name:
@@ -108,6 +112,8 @@ async def admin_create_user(request: Request):
         "name": name,
         "role": role,
         "phone": phone,
+        "designation": designation,
+        "sales_role": sales_role if role == "sales_person" else None,
         "assigned_modules": assigned_modules,
         "is_active": True,
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -142,7 +148,7 @@ async def admin_update_user(user_id: str, request: Request):
 
     body = await request.json()
     allowed_fields = {}
-    for key in ("name", "role", "phone", "assigned_modules", "is_active", "module_permissions"):
+    for key in ("name", "role", "phone", "designation", "sales_role", "assigned_modules", "is_active", "module_permissions"):
         if key in body:
             allowed_fields[key] = body[key]
 

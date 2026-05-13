@@ -3,7 +3,8 @@ import { Link } from 'react-router-dom';
 import SalesLayout from '../../components/layouts/SalesLayout';
 import { leads as leadsApi, tasks as tasksApi } from '../../lib/api';
 import { useAuth } from '../../contexts/AuthContext';
-import { Phone, MessageSquare, Clock, Search, ChevronDown, Plus, User, Building2 } from 'lucide-react';
+import { Phone, MessageSquare, Clock, Search, ChevronDown, Plus, User, Building2, Lock } from 'lucide-react';
+import { getSalesPermissions } from '../../lib/salesPermissions';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { toast } from 'sonner';
@@ -33,6 +34,7 @@ const openWa = (phone) => {
 export default function SalesLeads() {
   const { user } = useAuth();
   const today = new Date().toISOString().split('T')[0];
+  const perms = getSalesPermissions(user?.sales_role);
 
   const [leads, setLeads]     = useState([]);
   const [search, setSearch]   = useState('');
@@ -162,35 +164,43 @@ export default function SalesLeads() {
               {/* Expanded actions */}
               {isExpanded && (
                 <div className="border-t border-[var(--border-color)] px-3 py-2.5 bg-[var(--bg-primary)]">
-                  {/* Info row */}
-                  <div className="grid grid-cols-2 gap-x-3 gap-y-1 mb-3">
-                    {lead.lead_type && (
-                      <div>
-                        <p className={`text-[10px] ${tMuted}`}>Type</p>
-                        <p className={`text-xs font-medium ${tSec} capitalize`}>{lead.lead_type}</p>
-                      </div>
-                    )}
-                    {lead.source && (
-                      <div>
-                        <p className={`text-[10px] ${tMuted}`}>Source</p>
-                        <p className={`text-xs font-medium ${tSec}`}>{lead.source}</p>
-                      </div>
-                    )}
-                    {lead.contact_email && (
-                      <div className="col-span-2">
-                        <p className={`text-[10px] ${tMuted}`}>Email</p>
-                        <a href={`mailto:${lead.contact_email}`} className={`text-xs text-[#e94560]`}>{lead.contact_email}</a>
-                      </div>
-                    )}
-                    {lead.notes && (
-                      <div className="col-span-2">
-                        <p className={`text-[10px] ${tMuted}`}>Last note</p>
-                        <p className={`text-xs ${tSec} line-clamp-2`}>{lead.notes}</p>
-                      </div>
-                    )}
-                  </div>
 
-                  {/* Action buttons */}
+                  {/* Detail info — hidden for trainees */}
+                  {perms.leads_details ? (
+                    <div className="grid grid-cols-2 gap-x-3 gap-y-1 mb-3">
+                      {lead.lead_type && (
+                        <div>
+                          <p className={`text-[10px] ${tMuted}`}>Type</p>
+                          <p className={`text-xs font-medium ${tSec} capitalize`}>{lead.lead_type}</p>
+                        </div>
+                      )}
+                      {lead.source && (
+                        <div>
+                          <p className={`text-[10px] ${tMuted}`}>Source</p>
+                          <p className={`text-xs font-medium ${tSec}`}>{lead.source}</p>
+                        </div>
+                      )}
+                      {lead.contact_email && (
+                        <div className="col-span-2">
+                          <p className={`text-[10px] ${tMuted}`}>Email</p>
+                          <a href={`mailto:${lead.contact_email}`} className="text-xs text-[#e94560]">{lead.contact_email}</a>
+                        </div>
+                      )}
+                      {lead.notes && (
+                        <div className="col-span-2">
+                          <p className={`text-[10px] ${tMuted}`}>Last note</p>
+                          <p className={`text-xs ${tSec} line-clamp-2`}>{lead.notes}</p>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className={`flex items-center gap-1.5 mb-2.5 text-[10px] ${tMuted}`}>
+                      <Lock className="h-3 w-3" />
+                      Contact details restricted — trainee access
+                    </div>
+                  )}
+
+                  {/* Call + WhatsApp — always available to all roles */}
                   <div className="flex gap-2">
                     {lead.contact_phone && (
                       <>
