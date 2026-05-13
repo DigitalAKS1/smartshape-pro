@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SmartShape Pro — Brand Visual</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #06080f; display: flex; align-items: center; justify-content: center; min-height: 100vh; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<canvas id="c" width="1200" height="800"></canvas>
+<script>
+const c = document.getElementById('c');
+const ctx = c.getContext('2d');
+const W = 1200, H = 800;
+
+// ─── Palette ─────────────────────────────────────────────────────────────────
+const BG       = '#06080f';
+const RED      = '#e94560';
+const RED2     = '#f05c75';
+const GRID     = 'rgba(255,255,255,0.03)';
+const LINE     = 'rgba(255,255,255,0.06)';
+const LINE2    = 'rgba(233,69,96,0.18)';
+const WHITE    = '#ffffff';
+const MUTED    = 'rgba(255,255,255,0.35)';
+const FAINT    = 'rgba(255,255,255,0.07)';
+const ACCENT2  = 'rgba(233,69,96,0.08)';
+
+// ─── Background ───────────────────────────────────────────────────────────────
+ctx.fillStyle = BG;
+ctx.fillRect(0, 0, W, H);
+
+// Subtle radial glow – centre-left
+const glow = ctx.createRadialGradient(380, 400, 0, 380, 400, 520);
+glow.addColorStop(0,   'rgba(233,69,96,0.07)');
+glow.addColorStop(0.5, 'rgba(233,69,96,0.02)');
+glow.addColorStop(1,   'transparent');
+ctx.fillStyle = glow;
+ctx.fillRect(0, 0, W, H);
+
+// ─── Fine grid ────────────────────────────────────────────────────────────────
+ctx.strokeStyle = GRID;
+ctx.lineWidth = 0.5;
+const GS = 40;
+for (let x = 0; x <= W; x += GS) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
+for (let y = 0; y <= H; y += GS) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+
+// ─── Helper: draw hexagon ─────────────────────────────────────────────────────
+function hexPath(cx, cy, r, rotate=0) {
+  ctx.beginPath();
+  for (let i = 0; i < 6; i++) {
+    const a = (Math.PI / 3) * i + rotate;
+    const x = cx + r * Math.cos(a), y = cy + r * Math.sin(a);
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+}
+
+// ─── Background hexagonal lattice (left zone) ────────────────────────────────
+const hexR = 34;
+const hRows = 10, hCols = 9;
+for (let row = 0; row < hRows; row++) {
+  for (let col = 0; col < hCols; col++) {
+    const ox = col % 2 === 0 ? 0 : hexR * Math.sqrt(3) / 2;
+    const cx = 60 + col * hexR * Math.sqrt(3) + ox - 60;
+    const cy = 60 + row * hexR * 1.5;
+    if (cx > 620) continue;
+    hexPath(cx, cy, hexR - 2, Math.PI / 6);
+    ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+    ctx.lineWidth = 0.5;
+    ctx.stroke();
+  }
+}
+
+// ─── Central die / shape — large precision hexagon ───────────────────────────
+// Outer ring
+hexPath(340, 400, 180, Math.PI / 6);
+const hexGrad = ctx.createLinearGradient(160, 220, 520, 580);
+hexGrad.addColorStop(0, 'rgba(233,69,96,0.12)');
+hexGrad.addColorStop(1, 'rgba(233,69,96,0.02)');
+ctx.fillStyle = hexGrad;
+ctx.fill();
+ctx.strokeStyle = 'rgba(233,69,96,0.30)';
+ctx.lineWidth = 1;
+ctx.stroke();
+
+// Middle ring
+hexPath(340, 400, 130, Math.PI / 6);
+ctx.strokeStyle = 'rgba(233,69,96,0.15)';
+ctx.lineWidth = 0.75;
+ctx.stroke();
+
+// Inner ring
+hexPath(340, 400, 80, Math.PI / 6);
+ctx.strokeStyle = 'rgba(233,69,96,0.25)';
+ctx.lineWidth = 1;
+ctx.stroke();
+
+// Core fill
+hexPath(340, 400, 80, Math.PI / 6);
+const coreGrad = ctx.createRadialGradient(340, 400, 0, 340, 400, 80);
+coreGrad.addColorStop(0, 'rgba(233,69,96,0.22)');
+coreGrad.addColorStop(1, 'rgba(233,69,96,0.05)');
+ctx.fillStyle = coreGrad;
+ctx.fill();
+
+// Spoke lines from centre to hex vertices
+ctx.strokeStyle = 'rgba(233,69,96,0.20)';
+ctx.lineWidth = 0.75;
+for (let i = 0; i < 6; i++) {
+  const a = (Math.PI / 3) * i + Math.PI / 6;
+  ctx.beginPath();
+  ctx.moveTo(340, 400);
+  ctx.lineTo(340 + 180 * Math.cos(a), 400 + 180 * Math.sin(a));
+  ctx.stroke();
+}
+
+// Tiny dot at centre
+ctx.beginPath();
+ctx.arc(340, 400, 4, 0, Math.PI * 2);
+ctx.fillStyle = RED;
+ctx.fill();
+
+// ─── Pipeline flow — right panel ─────────────────────────────────────────────
+const stages = [
+  { label: 'NEW',       x: 680, pct: 1.00, count: '142' },
+  { label: 'CONTACTED', x: 760, pct: 0.78, count: '110' },
+  { label: 'DEMO',      x: 840, pct: 0.55, count: '78'  },
+  { label: 'QUOTED',    x: 920, pct: 0.37, count: '52'  },
+  { label: 'NEGOTIATION',x:1000,pct: 0.22, count: '31'  },
+  { label: 'WON',       x: 1080,pct: 0.11, count: '16'  },
+];
+
+const barW = 44, barMaxH = 300, barY = 560;
+
+stages.forEach((s, i) => {
+  const barH = barMaxH * s.pct;
+  const by   = barY - barH;
+
+  // Bar background
+  ctx.fillStyle = 'rgba(255,255,255,0.03)';
+  ctx.fillRect(s.x - barW/2, barY - barMaxH, barW, barMaxH);
+
+  // Bar fill gradient
+  const bg = ctx.createLinearGradient(0, by, 0, barY);
+  bg.addColorStop(0, i === 5 ? RED : `rgba(233,69,96,${0.15 + s.pct * 0.45})`);
+  bg.addColorStop(1, `rgba(233,69,96,0.05)`);
+  ctx.fillStyle = bg;
+  ctx.fillRect(s.x - barW/2, by, barW, barH);
+
+  // Bar top accent line
+  ctx.fillStyle = i === 5 ? RED : `rgba(233,69,96,${0.4 + s.pct * 0.5})`;
+  ctx.fillRect(s.x - barW/2, by, barW, 2);
+
+  // Count label
+  ctx.fillStyle = i === 5 ? RED : WHITE;
+  ctx.font = `700 ${i === 5 ? 14 : 11}px "Helvetica Neue", Helvetica, Arial`;
+  ctx.textAlign = 'center';
+  ctx.fillText(s.count, s.x, by - 10);
+
+  // Stage label
+  ctx.fillStyle = MUTED;
+  ctx.font = '600 8px "Helvetica Neue", Helvetica, Arial';
+  ctx.fillText(s.label, s.x, barY + 16);
+
+  // Connecting line to next
+  if (i < stages.length - 1) {
+    const nextS = stages[i + 1];
+    ctx.strokeStyle = 'rgba(233,69,96,0.12)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 6]);
+    ctx.beginPath();
+    ctx.moveTo(s.x + barW/2, barY - barMaxH * s.pct);
+    ctx.lineTo(nextS.x - barW/2, barY - barMaxH * nextS.pct);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+});
+
+// Baseline
+ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+ctx.lineWidth = 1;
+ctx.beginPath();
+ctx.moveTo(650, barY);
+ctx.lineTo(1140, barY);
+ctx.stroke();
+
+// ─── Right panel: KPI micro-cards ────────────────────────────────────────────
+const kpis = [
+  { label: 'TOTAL LEADS',      val: '847',   sub: '+12% this month' },
+  { label: 'WIN RATE',         val: '11.3%', sub: '↑ from 9.8%'     },
+  { label: 'AVG DEAL SIZE',    val: '₹38K',  sub: 'per closed deal'  },
+  { label: 'FOLLOW-UPS DUE',   val: '24',    sub: 'today'            },
+];
+
+kpis.forEach((k, i) => {
+  const kx = 660 + (i % 2) * 240;
+  const ky = 90 + Math.floor(i / 2) * 110;
+
+  // Card bg
+  ctx.fillStyle = 'rgba(255,255,255,0.025)';
+  roundRect(ctx, kx, ky, 210, 88, 6);
+  ctx.fill();
+
+  // Left accent bar
+  ctx.fillStyle = RED;
+  ctx.fillRect(kx, ky, 3, 88);
+
+  // Border
+  ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+  ctx.lineWidth = 0.75;
+  roundRect(ctx, kx, ky, 210, 88, 6);
+  ctx.stroke();
+
+  // Label
+  ctx.fillStyle = MUTED;
+  ctx.font = '600 9px "Helvetica Neue", Helvetica, Arial';
+  ctx.textAlign = 'left';
+  ctx.fillText(k.label, kx + 14, ky + 22);
+
+  // Value
+  ctx.fillStyle = WHITE;
+  ctx.font = '700 28px "Helvetica Neue", Helvetica, Arial';
+  ctx.fillText(k.val, kx + 14, ky + 58);
+
+  // Sub
+  ctx.fillStyle = 'rgba(233,69,96,0.7)';
+  ctx.font = '500 10px "Helvetica Neue", Helvetica, Arial';
+  ctx.fillText(k.sub, kx + 14, ky + 76);
+});
+
+// ─── Connecting bridge — hex to pipeline ─────────────────────────────────────
+ctx.strokeStyle = 'rgba(233,69,96,0.15)';
+ctx.lineWidth = 1;
+ctx.setLineDash([3, 8]);
+ctx.beginPath();
+ctx.moveTo(520, 400);
+ctx.bezierCurveTo(580, 400, 620, 360, 660, 300);
+ctx.stroke();
+ctx.beginPath();
+ctx.moveTo(520, 400);
+ctx.bezierCurveTo(580, 400, 620, 440, 660, 580);
+ctx.stroke();
+ctx.setLineDash([]);
+
+// ─── Left: Stat ring annotations ─────────────────────────────────────────────
+// Small orbital dots around hex
+for (let i = 0; i < 6; i++) {
+  const a = (Math.PI / 3) * i + Math.PI / 6;
+  const r = 205;
+  const dx = 340 + r * Math.cos(a), dy = 400 + r * Math.sin(a);
+  ctx.beginPath();
+  ctx.arc(dx, dy, 3.5, 0, Math.PI * 2);
+  ctx.fillStyle = i < 2 ? RED : 'rgba(255,255,255,0.25)';
+  ctx.fill();
+}
+
+// ─── Divider line ─────────────────────────────────────────────────────────────
+ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+ctx.lineWidth = 1;
+ctx.beginPath();
+ctx.moveTo(630, 60);
+ctx.lineTo(630, 740);
+ctx.stroke();
+
+// ─── Typography — hero left ───────────────────────────────────────────────────
+// Eyebrow
+ctx.fillStyle = RED;
+ctx.font = '600 10px "Helvetica Neue", Helvetica, Arial';
+ctx.letterSpacing = '0.2em';
+ctx.textAlign = 'left';
+ctx.fillText('PRECISION  ·  INTELLIGENCE  ·  GROWTH', 60, 68);
+
+// Main wordmark
+ctx.fillStyle = WHITE;
+ctx.font = '200 52px "Helvetica Neue", Helvetica, Arial';
+ctx.fillText('Smart', 60, 132);
+ctx.font = '700 52px "Helvetica Neue", Helvetica, Arial';
+ctx.fillStyle = RED;
+ctx.fillText('Shape', 60 + ctx.measureText('Smart').width - 2, 132);
+
+// Subtitle
+ctx.font = '300 13px "Helvetica Neue", Helvetica, Arial';
+ctx.fillStyle = 'rgba(255,255,255,0.45)';
+ctx.fillText('Sales Intelligence Platform  ·  v2.0', 60, 158);
+
+// ─── Bottom tagline ───────────────────────────────────────────────────────────
+ctx.fillStyle = 'rgba(255,255,255,0.12)';
+ctx.font = '300 11px "Helvetica Neue", Helvetica, Arial';
+ctx.textAlign = 'center';
+ctx.fillText('FROM LEAD TO LOYALTY — EVERY SHAPE OF YOUR BUSINESS, MASTERED', W / 2, H - 28);
+
+// Thin bottom accent line
+ctx.strokeStyle = RED;
+ctx.lineWidth = 1;
+ctx.globalAlpha = 0.4;
+ctx.beginPath();
+ctx.moveTo(W/2 - 180, H - 18);
+ctx.lineTo(W/2 + 180, H - 18);
+ctx.stroke();
+ctx.globalAlpha = 1;
+
+// ─── Pipeline section label ───────────────────────────────────────────────────
+ctx.fillStyle = MUTED;
+ctx.font = '600 9px "Helvetica Neue", Helvetica, Arial';
+ctx.textAlign = 'left';
+ctx.fillText('SALES PIPELINE', 660, 620);
+
+ctx.fillStyle = 'rgba(255,255,255,0.06)';
+ctx.fillRect(660, 624, 480, 0.5);
+
+// ─── Precision cross-hairs at hex centre ─────────────────────────────────────
+ctx.strokeStyle = 'rgba(233,69,96,0.18)';
+ctx.lineWidth = 0.5;
+ctx.setLineDash([2, 4]);
+ctx.beginPath(); ctx.moveTo(340 - 220, 400); ctx.lineTo(340 - 90, 400); ctx.stroke();
+ctx.beginPath(); ctx.moveTo(340 + 90, 400); ctx.lineTo(340 + 220, 400); ctx.stroke();
+ctx.beginPath(); ctx.moveTo(340, 400 - 220); ctx.lineTo(340, 400 - 90); ctx.stroke();
+ctx.beginPath(); ctx.moveTo(340, 400 + 90); ctx.lineTo(340, 400 + 220); ctx.stroke();
+ctx.setLineDash([]);
+
+// ─── Margin frame ─────────────────────────────────────────────────────────────
+ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+ctx.lineWidth = 1;
+ctx.strokeRect(24, 24, W - 48, H - 48);
+// Corner marks
+const cm = 18;
+[[24,24],[W-24,24],[24,H-24],[W-24,H-24]].forEach(([px,py]) => {
+  const sx = px === 24 ? 1 : -1;
+  const sy = py === 24 ? 1 : -1;
+  ctx.strokeStyle = 'rgba(233,69,96,0.35)';
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(px + sx*cm, py); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(px, py + sy*cm); ctx.stroke();
+});
+
+// ─── Helper: rounded rect ─────────────────────────────────────────────────────
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
+// Re-draw KPI cards with proper rounded rect (helper was defined after first use)
+// (already drawn correctly above since function hoisting applies to declarations, not expressions — redraw)
+kpis.forEach((k, i) => {
+  const kx = 660 + (i % 2) * 240;
+  const ky = 90 + Math.floor(i / 2) * 110;
+  ctx.fillStyle = 'rgba(255,255,255,0.028)';
+  roundRect(ctx, kx, ky, 210, 88, 6);
+  ctx.fill();
+  ctx.fillStyle = RED;
+  ctx.fillRect(kx, ky + 6, 3, 76);
+  ctx.strokeStyle = 'rgba(255,255,255,0.07)';
+  ctx.lineWidth = 0.75;
+  roundRect(ctx, kx, ky, 210, 88, 6);
+  ctx.stroke();
+  ctx.fillStyle = MUTED;
+  ctx.font = '600 9px "Helvetica Neue", Helvetica, Arial';
+  ctx.textAlign = 'left';
+  ctx.fillText(k.label, kx + 14, ky + 24);
+  ctx.fillStyle = i === 1 ? RED : WHITE;
+  ctx.font = `700 ${k.val.length > 4 ? 24 : 28}px "Helvetica Neue", Helvetica, Arial`;
+  ctx.fillText(k.val, kx + 14, ky + 58);
+  ctx.fillStyle = 'rgba(233,69,96,0.65)';
+  ctx.font = '500 10px "Helvetica Neue", Helvetica, Arial';
+  ctx.fillText(k.sub, kx + 14, ky + 76);
+});
+</script>
+</body>
+</html>

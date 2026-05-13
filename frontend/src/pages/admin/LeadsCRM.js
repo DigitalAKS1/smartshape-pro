@@ -1,15 +1,24 @@
 import React, { useState, useEffect, useRef } from 'react';
 import AdminLayout from '../../components/layouts/AdminLayout';
-import { schools as schoolsApi, leads as leadsApi, followups as fuApi, tasks as tasksApi, salesPersons, contacts as contactsApi, exportData, groups as groupsApi, sources as sourcesApi, contactRoles as contactRolesApi, tags as tagsApi } from '../../lib/api';
+import { schools as schoolsApi, leads as leadsApi, followups as fuApi, tasks as tasksApi, salesPersons, contacts as contactsApi, exportData, groups as groupsApi, sources as sourcesApi, contactRoles as contactRolesApi, tags as tagsApi, packages as packagesApi } from '../../lib/api';
+import { formatCurrency, formatDate as _fmt } from '../../lib/utils';
 import { useAuth } from '../../contexts/AuthContext';
 import { useTheme } from '../../contexts/ThemeContext';
 import { formatDate } from '../../lib/utils';
+const PACKAGE_ITEM_TYPES = [
+  { value: 'standard_die', label: 'Standard Die' },
+  { value: 'large_die', label: 'Large Die' },
+  { value: 'machine', label: 'Machine' },
+  { value: 'die_set', label: 'Die Set' },
+  { value: 'custom', label: 'Other / Custom' },
+];
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../../components/ui/dialog';
 import { toast } from 'sonner';
-import { Plus, Phone, MessageSquare, Mail, Calendar, Clock, CheckCircle, AlertTriangle, User, UserCog, Trash2, Edit2, Upload, Search, Target, ChevronRight, Building2, MapPin, UserPlus, ArrowRightCircle, Download, ChevronLeft, LayoutGrid, Lock, Package } from 'lucide-react';
+import { Plus, Phone, MessageSquare, Mail, Calendar, Clock, CheckCircle, AlertTriangle, User, UserCog, Trash2, Edit2, Upload, Search, Target, ChevronRight, Building2, MapPin, UserPlus, ArrowRightCircle, Download, ChevronLeft, LayoutGrid, Lock, Package, MoreHorizontal, X, Save } from 'lucide-react';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../../components/ui/dropdown-menu';
 import WhatsAppSendDialog from '../../components/WhatsAppSendDialog';
 import KanbanBoard, { ageColor, AgeBadge } from '../../components/KanbanBoard';
 import ReassignLeadDialog from '../../components/ReassignLeadDialog';
@@ -104,16 +113,76 @@ export default function LeadsCRM() {
   const [reassignOpen, setReassignOpen] = useState(false);
   const [reassignLead, setReassignLead] = useState(null);
   const [reassignBulkIds, setReassignBulkIds] = useState(null);
+  // Package Master state
+  const [pkgList, setPkgList] = useState([]);
+  const [pkgDialogOpen, setPkgDialogOpen] = useState(false);
+  const [editPkg, setEditPkg] = useState(null);
+  const [pkgForm, setPkgForm] = useState({ display_name: '', gst_pct: 18, items: [] });
+
+  const fetchPackages = async () => {
+    try { const r = await packagesApi.getAll(); setPkgList(r.data); } catch {}
+  };
+
+  const openCreatePkg = () => {
+    setEditPkg(null);
+    setPkgForm({ display_name: '', gst_pct: 18, items: [{ type: 'standard_die', name: 'Standard Die', qty: 10, unit_price: 2000 }] });
+    setPkgDialogOpen(true);
+  };
+
+  const openEditPkg = (pkg) => {
+    setEditPkg(pkg);
+    setPkgForm({ display_name: pkg.display_name, gst_pct: pkg.gst_pct, items: pkg.items || [] });
+    setPkgDialogOpen(true);
+  };
+
+  const addPkgItem = () => setPkgForm(f => ({ ...f, items: [...f.items, { type: 'custom', name: '', qty: 1, unit_price: 0 }] }));
+  const removePkgItem = (idx) => setPkgForm(f => ({ ...f, items: f.items.filter((_, i) => i !== idx) }));
+  const updatePkgItem = (idx, field, val) => {
+    const items = [...pkgForm.items];
+    items[idx] = { ...items[idx], [field]: field === 'name' || field === 'type' ? val : parseFloat(val) || 0 };
+    if (field === 'type') { const lbl = PACKAGE_ITEM_TYPES.find(t => t.value === val); if (lbl && !items[idx].name) items[idx].name = lbl.label; }
+    setPkgForm(f => ({ ...f, items }));
+  };
+  const pkgItemTotal = (item) => (item.qty || 0) * (item.unit_price || 0);
+  const pkgGrandTotal = () => pkgForm.items.reduce((s, i) => s + pkgItemTotal(i), 0);
+
+  const handleSavePkg = async () => {
+    if (!pkgForm.display_name.trim()) { toast.error('Package name is required'); return; }
+    const payload = {
+      display_name: pkgForm.display_name,
+      name: pkgForm.display_name.toLowerCase().replace(/\s+/g, '_'),
+      base_price: pkgGrandTotal(),
+      gst_pct: pkgForm.gst_pct,
+      items: pkgForm.items,
+      std_die_qty: pkgForm.items.filter(i => i.type === 'standard_die').reduce((s, i) => s + (i.qty || 0), 0),
+      large_die_qty: pkgForm.items.filter(i => i.type === 'large_die').reduce((s, i) => s + (i.qty || 0), 0),
+      machine_qty: pkgForm.items.filter(i => i.type === 'machine').reduce((s, i) => s + (i.qty || 0), 0),
+    };
+    try {
+      if (editPkg) { await packagesApi.update(editPkg.package_id, payload); toast.success('Package updated'); }
+      else { await packagesApi.create(payload); toast.success('Package created'); }
+      setPkgDialogOpen(false);
+      fetchPackages();
+    } catch (err) { toast.error(err.response?.data?.detail || 'Failed to save package'); }
+  };
+
+  const handleDeletePkg = async (pkg) => {
+    if (!window.confirm(`Delete "${pkg.display_name}"?`)) return;
+    try { await packagesApi.delete(pkg.package_id); toast.success('Package deleted'); fetchPackages(); }
+    catch { toast.error('Failed to delete'); }
+  };
 
   const fetchData = async () => {
     try {
-      const [lr, sr, tr, spr, cr, gr, srcR, rlR, tgR] = await Promise.all([
+      const [lr, sr, tr, spr, cr, gr, srcR, rlR, tgR, pkgR] = await Promise.all([
         leadsApi.getAll(), schoolsApi.getAll(), tasksApi.getAll(), salesPersons.getAll(), contactsApi.getAll(),
         groupsApi.getAll().catch(() => ({ data: [] })),
         sourcesApi.getAll().catch(() => ({ data: [] })),
         contactRolesApi.getAll().catch(() => ({ data: [] })),
         tagsApi.getAll().catch(() => ({ data: [] })),
+        packagesApi.getAll().catch(() => ({ data: [] })),
       ]);
+      setPkgList(pkgR.data || []);
       setLeadsList(lr.data);
       setSchoolsList(sr.data);
       setTasksList(tr.data);
@@ -453,7 +522,26 @@ export default function LeadsCRM() {
             <h1 className={`text-3xl sm:text-4xl font-semibold ${textPri} tracking-tight`} data-testid="leads-title">School CRM</h1>
             <p className={`${textSec} mt-1 text-sm`}>{contactsList.filter(c => !c.converted_to_lead).length} contacts • {leadsList.length} leads • {schoolsList.length} schools</p>
           </div>
-          <div className="flex flex-wrap gap-2">
+          {/* Mobile header: More menu + New Lead only */}
+          <div className="flex sm:hidden gap-2">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm" className="border-[var(--border-color)] text-[var(--text-secondary)]"><MoreHorizontal className="h-4 w-4" /></Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="bg-[var(--bg-card)] border-[var(--border-color)]">
+                <DropdownMenuItem onClick={openCreateContact} className={textSec}><UserPlus className="mr-2 h-3.5 w-3.5" /> Add Contact</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setImportDialogOpen(true)} className={textSec}><Upload className="mr-2 h-3.5 w-3.5" /> Import CSV</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => { setEditSchool(null); setEditSchoolForm({ school_name: '', school_type: 'CBSE', group_id: '', phone: '', email: '', city: '', state: '', primary_contact_name: '', designation: '', school_strength: 0 }); setSchoolDialogOpen(true); }} className={textSec}><Building2 className="mr-2 h-3.5 w-3.5" /> Add School</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => openCreateTask(null)} className={textSec}><Calendar className="mr-2 h-3.5 w-3.5" /> New Task</DropdownMenuItem>
+                {user?.role === 'admin' && <DropdownMenuItem onClick={async () => { if (!window.confirm('Auto-assign all unassigned leads?')) return; try { const r = await leadsApi.autoAssign(); toast.success(`Auto-assigned ${r.data.assigned} lead(s)`); fetchData(); } catch { toast.error('Auto-assign failed'); } }} className={textSec}><Target className="mr-2 h-3.5 w-3.5" /> Auto-Assign</DropdownMenuItem>}
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <Button onClick={openCreateLead} size="sm" className="bg-[#e94560] hover:bg-[#f05c75] text-white" data-testid="create-lead-button">
+              <Plus className="mr-1 h-3 w-3" /> New Lead
+            </Button>
+          </div>
+          {/* Desktop header: all buttons */}
+          <div className="hidden sm:flex flex-wrap gap-2">
             <Button onClick={openCreateContact} variant="outline" size="sm" className={'border-[var(--border-color)] text-[var(--text-secondary)]'} data-testid="add-contact-btn">
               <UserPlus className="mr-1 h-3 w-3" /> Add Contact
             </Button>
@@ -463,7 +551,7 @@ export default function LeadsCRM() {
             <Button onClick={() => { setEditSchool(null); setEditSchoolForm({ school_name: '', school_type: 'CBSE', group_id: '', phone: '', email: '', city: '', state: '', primary_contact_name: '', designation: '', school_strength: 0 }); setSchoolDialogOpen(true); }} variant="outline" size="sm" className={'border-[var(--border-color)] text-[var(--text-secondary)]'} data-testid="add-school-btn">
               <Building2 className="mr-1 h-3 w-3" /> Add School
             </Button>
-            <Button onClick={() => openCreateTask(null)} variant="outline" size="sm" className={`${'border-[var(--border-color)] text-[var(--text-secondary)]'}`} data-testid="create-task-button">
+            <Button onClick={() => openCreateTask(null)} variant="outline" size="sm" className={'border-[var(--border-color)] text-[var(--text-secondary)]'} data-testid="create-task-button">
               <Calendar className="mr-1 h-3 w-3" /> New Task
             </Button>
             {user?.role === 'admin' && (
@@ -478,7 +566,7 @@ export default function LeadsCRM() {
                 <Target className="mr-1 h-3 w-3" /> Auto-Assign
               </Button>
             )}
-            <Button onClick={openCreateLead} size="sm" className="bg-[#e94560] hover:bg-[#f05c75] text-white" data-testid="create-lead-button">
+            <Button onClick={openCreateLead} size="sm" className="bg-[#e94560] hover:bg-[#f05c75] text-white">
               <Plus className="mr-1 h-3 w-3" /> New Lead
             </Button>
           </div>
@@ -488,12 +576,12 @@ export default function LeadsCRM() {
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className={`${card} border rounded-md p-0.5 flex gap-0.5`} data-testid="lead-view-toggle">
             {[
-              { id: 'pipeline', label: 'Pipeline' },
-              { id: 'kanban', label: 'Kanban' },
-              { id: 'table', label: 'Table' },
+              { id: 'pipeline', label: 'Pipeline', mobileHide: false },
+              { id: 'kanban', label: 'Kanban', mobileHide: true },
+              { id: 'table', label: 'Table', mobileHide: false },
             ].map(v => (
               <button key={v.id} onClick={() => setLeadView(v.id)} data-testid={`view-${v.id}`}
-                className={`px-3 py-1.5 rounded text-xs font-medium transition-all ${leadView === v.id ? 'bg-[#e94560] text-white' : `${textSec} hover:bg-[var(--bg-hover)]`}`}>
+                className={`px-3 py-1.5 rounded text-xs font-medium transition-all ${v.mobileHide ? 'hidden sm:block' : ''} ${leadView === v.id ? 'bg-[#e94560] text-white' : `${textSec} hover:bg-[var(--bg-hover)]`}`}>
                 {v.label}
               </button>
             ))}
@@ -530,9 +618,15 @@ export default function LeadsCRM() {
 
         {/* Tabs */}
         <div className={`flex gap-1 ${card} border rounded-md p-1 overflow-x-auto`}>
-          {['contacts', 'pipeline', 'list', 'tasks', 'schools', 'reports'].map(tab => (
+          {['contacts', 'pipeline', 'list', 'tasks', 'schools', 'packages', 'reports'].map(tab => (
             <button key={tab} onClick={() => setActiveTab(tab)} className={`flex-shrink-0 px-3 py-2 rounded text-xs sm:text-sm font-medium transition-all capitalize ${activeTab === tab ? 'bg-[#e94560] text-white' : `${textSec} ${hoverBg}`}`} data-testid={`tab-${tab}`}>
-              {tab === 'contacts' ? `Contacts (${contactsList.filter(c => !c.converted_to_lead).length})` : tab === 'pipeline' ? `Pipeline` : tab === 'list' ? `Leads (${filtered.length})` : tab === 'tasks' ? `Tasks (${tasksList.length})` : tab === 'schools' ? `Schools (${schoolsList.length})` : `Reports`}
+              {tab === 'contacts' ? `Contacts (${contactsList.filter(c => !c.converted_to_lead).length})`
+                : tab === 'pipeline' ? 'Pipeline'
+                : tab === 'list' ? `Leads (${filtered.length})`
+                : tab === 'tasks' ? `Tasks (${tasksList.length})`
+                : tab === 'schools' ? `Schools (${schoolsList.length})`
+                : tab === 'packages' ? `Packages (${pkgList.filter(p => p.is_active !== false).length})`
+                : 'Reports'}
             </button>
           ))}
         </div>
@@ -571,8 +665,32 @@ export default function LeadsCRM() {
               </div>
             ) : (
               <>
-                {/* Table */}
-                <div className={`${card} border rounded-md overflow-hidden`}>
+                {/* Mobile: contact cards */}
+                <div className="sm:hidden space-y-2" data-testid="contacts-list-mobile">
+                  {paginated.map(contact => (
+                    <div key={contact.contact_id} className={`${card} border rounded-md p-3 flex items-start justify-between gap-2 ${contact.converted_to_lead ? 'opacity-60' : ''}`}>
+                      <div className="flex-1 min-w-0">
+                        <p className={`${textPri} font-medium text-sm truncate`}>{contact.name}</p>
+                        <p className={`text-xs ${textMuted}`}>{contact.designation || contact.company || '—'}</p>
+                        <div className="flex items-center gap-3 mt-1.5 flex-wrap">
+                          <a href={`tel:${contact.phone}`} className={`text-xs ${textSec} flex items-center gap-1`}><Phone className="h-3 w-3" />{contact.phone}</a>
+                          {contact.email && <a href={`mailto:${contact.email}`} className={`text-xs ${textSec} flex items-center gap-1 max-w-[160px] truncate`}><Mail className="h-3 w-3" />{contact.email}</a>}
+                        </div>
+                        {contact.converted_to_lead
+                          ? <span className="mt-1 inline-block text-[10px] px-2 py-0.5 rounded bg-green-500/20 text-green-400 font-medium">Converted</span>
+                          : <span className="mt-1 inline-block text-[10px] px-2 py-0.5 rounded bg-blue-500/20 text-blue-400 font-medium">Active</span>}
+                      </div>
+                      <div className="flex flex-col gap-0.5 flex-shrink-0">
+                        <Button size="sm" variant="ghost" onClick={() => openWaForContact(contact)} className="text-green-500 h-9 w-9 p-0"><MessageSquare className="h-4 w-4" /></Button>
+                        {!contact.converted_to_lead && <Button size="sm" variant="ghost" onClick={() => openConvert(contact)} className="text-[#e94560] h-9 w-9 p-0" data-testid={`convert-contact-${contact.contact_id}`}><ArrowRightCircle className="h-4 w-4" /></Button>}
+                        <Button size="sm" variant="ghost" onClick={() => openEditContact(contact)} className={`${textSec} h-9 w-9 p-0`}><Edit2 className="h-3.5 w-3.5" /></Button>
+                        <Button size="sm" variant="ghost" onClick={() => deleteContact(contact.contact_id)} className="text-red-400 h-9 w-9 p-0"><Trash2 className="h-3.5 w-3.5" /></Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                {/* Desktop: Table */}
+                <div className={`hidden sm:block ${card} border rounded-md overflow-hidden`}>
                   <div className="overflow-x-auto">
                     <table className="w-full text-sm" data-testid="contacts-table">
                       <thead><tr className="bg-[var(--bg-primary)]">
@@ -655,7 +773,47 @@ export default function LeadsCRM() {
 
         {/* PIPELINE VIEW */}
         {activeTab === 'pipeline' && leadView === 'pipeline' && (
-          <div className="flex gap-2 overflow-x-auto pb-4" data-testid="pipeline-board">
+          <>
+          {/* Mobile: vertical stacked list */}
+          <div className="sm:hidden space-y-4" data-testid="pipeline-mobile">
+            {STAGES.map(stage => {
+              const stageLeads = filtered.filter(l => l.stage === stage.id);
+              if (stageLeads.length === 0) return null;
+              return (
+                <div key={stage.id}>
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className={`px-2 py-0.5 rounded text-xs font-medium border ${stage.color}`}>{stage.label}</span>
+                    <span className={`text-xs ${textMuted}`}>{stageLeads.length}</span>
+                  </div>
+                  <div className="space-y-2">
+                    {stageLeads.map(lead => (
+                      <div key={lead.lead_id} onClick={() => openDetail(lead)} className={`${card} border rounded-md p-3 cursor-pointer active:opacity-70 transition-opacity`} data-testid={`lead-card-${lead.lead_id}`}>
+                        <div className="flex items-center justify-between gap-2">
+                          <p className={`${textPri} font-medium text-sm truncate flex-1`}>{lead.company_name || lead.contact_name}</p>
+                          {lead.lead_score > 0 && <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#e94560]/20 text-[#e94560] font-mono font-bold flex-shrink-0">{lead.lead_score}</span>}
+                        </div>
+                        <p className={`text-xs ${textMuted} mt-0.5 truncate`}>{lead.contact_name} • {lead.contact_phone}</p>
+                        <div className="flex items-center gap-2 mt-2 flex-wrap">
+                          {lead.lead_type && <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${lead.lead_type === 'hot' ? 'bg-red-500/20 text-red-400' : lead.lead_type === 'warm' ? 'bg-yellow-500/20 text-yellow-400' : 'bg-blue-500/20 text-blue-400'}`}>{lead.lead_type}</span>}
+                          {lead.next_followup_date && <span className={`text-[10px] ${textMuted} flex items-center gap-1`}><Clock className="h-3 w-3" />{lead.next_followup_date}</span>}
+                          <span className={`text-[10px] ${textMuted} ml-auto`}>{lead.assigned_name?.split(' ')[0]}</span>
+                        </div>
+                        {(lead.tags || []).length > 0 && (
+                          <div className="flex flex-wrap gap-1 mt-1.5">
+                            {(lead.tags || []).slice(0, 3).map(tid => { const tag = tagsList.find(t => t.tag_id === tid); return tag ? <span key={tid} className="text-[9px] px-1.5 py-0.5 rounded-full text-white" style={{ backgroundColor: tag.color }}>{tag.name}</span> : null; })}
+                            {(lead.tags || []).length > 3 && <span className={`text-[9px] ${textMuted}`}>+{(lead.tags || []).length - 3}</span>}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+            {filtered.length === 0 && <p className={`text-center ${textMuted} py-12`}>No leads match your filters</p>}
+          </div>
+          {/* Desktop: horizontal pipeline */}
+          <div className="hidden sm:flex gap-2 overflow-x-auto pb-4" data-testid="pipeline-board">
             {STAGES.map(stage => {
               const stageLeads = filtered.filter(l => l.stage === stage.id);
               return (
@@ -696,10 +854,46 @@ export default function LeadsCRM() {
               );
             })}
           </div>
+          </>
         )}
 
         {/* KANBAN VIEW (FMS Phase 5.2) */}
         {activeTab === 'pipeline' && leadView === 'kanban' && (
+          <>
+          {/* Mobile: kanban not supported — show pipeline list */}
+          <div className="sm:hidden space-y-4">
+            <p className={`text-xs ${textMuted} text-center py-1`}>Kanban not available on mobile — showing pipeline list</p>
+            {STAGES.map(stage => {
+              const stageLeads = filtered.filter(l => l.stage === stage.id);
+              if (stageLeads.length === 0) return null;
+              return (
+                <div key={stage.id}>
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className={`px-2 py-0.5 rounded text-xs font-medium border ${stage.color}`}>{stage.label}</span>
+                    <span className={`text-xs ${textMuted}`}>{stageLeads.length}</span>
+                  </div>
+                  <div className="space-y-2">
+                    {stageLeads.map(lead => (
+                      <div key={lead.lead_id} onClick={() => openDetail(lead)} className={`${card} border rounded-md p-3 cursor-pointer active:opacity-70 transition-opacity`}>
+                        <div className="flex items-center justify-between gap-2">
+                          <p className={`${textPri} font-medium text-sm truncate flex-1`}>{lead.company_name || lead.contact_name}</p>
+                          {lead.lead_score > 0 && <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#e94560]/20 text-[#e94560] font-mono font-bold flex-shrink-0">{lead.lead_score}</span>}
+                        </div>
+                        <p className={`text-xs ${textMuted} mt-0.5 truncate`}>{lead.contact_name} • {lead.contact_phone}</p>
+                        <div className="flex items-center gap-2 mt-2 flex-wrap">
+                          {lead.lead_type && <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${lead.lead_type === 'hot' ? 'bg-red-500/20 text-red-400' : lead.lead_type === 'warm' ? 'bg-yellow-500/20 text-yellow-400' : 'bg-blue-500/20 text-blue-400'}`}>{lead.lead_type}</span>}
+                          {lead.next_followup_date && <span className={`text-[10px] ${textMuted} flex items-center gap-1`}><Clock className="h-3 w-3" />{lead.next_followup_date}</span>}
+                          <span className={`text-[10px] ${textMuted} ml-auto`}>{lead.assigned_name?.split(' ')[0]}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          {/* Desktop: KanbanBoard */}
+          <div className="hidden sm:block">
           <KanbanBoard
             columns={STAGES}
             items={filtered}
@@ -746,6 +940,8 @@ export default function LeadsCRM() {
               );
             }}
           />
+          </div>
+          </>
         )}
 
         {/* TABLE VIEW via toggle */}
@@ -835,7 +1031,33 @@ export default function LeadsCRM() {
           }
           schFiltered = sortData(schFiltered, sortConfig.key, sortConfig.dir);
           return (
-          <div className={`${card} border rounded-md overflow-hidden`}>
+          <div className="space-y-3">
+          {/* Mobile: school cards */}
+          <div className="sm:hidden space-y-2" data-testid="schools-list-mobile">
+            {schFiltered.map(sch => {
+              const schLeads = leadsList.filter(l => l.school_id === sch.school_id);
+              return (
+                <div key={sch.school_id} className={`${card} border rounded-md p-3 flex items-start justify-between gap-2`} data-testid={`school-card-${sch.school_id}`}>
+                  <div className="flex-1 min-w-0">
+                    <p className={`${textPri} font-medium text-sm truncate`}>{sch.school_name}</p>
+                    <p className={`text-xs ${textMuted}`}>{sch.school_type}{sch.city ? ` • ${sch.city}` : ''}</p>
+                    {sch.primary_contact_name && <p className={`text-xs ${textSec} mt-0.5`}>{sch.primary_contact_name}{sch.designation ? ` (${sch.designation})` : ''}</p>}
+                    <div className="flex items-center gap-2 mt-1.5">
+                      <span className="text-xs px-2 py-0.5 rounded bg-[#e94560]/20 text-[#e94560] font-bold">{schLeads.length} leads</span>
+                      {sch.phone && <a href={`tel:${sch.phone}`} className={`text-xs ${textSec}`}>{sch.phone}</a>}
+                    </div>
+                  </div>
+                  <div className="flex gap-1 flex-shrink-0">
+                    <Button size="sm" variant="ghost" onClick={() => openEditSchool(sch)} className={`${textSec} h-9 w-9 p-0`}><Edit2 className="h-3.5 w-3.5" /></Button>
+                    <Button size="sm" variant="ghost" onClick={() => handleDeleteSchool(sch)} className="text-red-400 h-9 w-9 p-0"><Trash2 className="h-3.5 w-3.5" /></Button>
+                  </div>
+                </div>
+              );
+            })}
+            {schFiltered.length === 0 && <p className={`text-center ${textMuted} py-12`}>No schools found</p>}
+          </div>
+          {/* Desktop: table */}
+          <div className={`hidden sm:block ${card} border rounded-md overflow-hidden`}>
             <div className="overflow-x-auto">
               <table className="w-full text-sm" data-testid="schools-table">
                 <thead><tr className={'bg-[var(--bg-primary)]'}>
@@ -884,6 +1106,192 @@ export default function LeadsCRM() {
               </table>
             </div>
           </div>
+          </div>
+          );
+        })()}
+
+        {/* PACKAGES TAB */}
+        {activeTab === 'packages' && (() => {
+          const activePkgs = pkgList.filter(p => p.is_active !== false);
+          const isEditing = pkgDialogOpen;
+          const pkgSubtotal = pkgGrandTotal();
+          const pkgGst = pkgSubtotal * (pkgForm.gst_pct || 18) / 100;
+          return (
+            <div className="flex flex-col lg:flex-row gap-4 min-h-[520px]">
+
+              {/* LEFT — Package List */}
+              <div className={`lg:w-72 flex-shrink-0 ${card} border rounded-md flex flex-col`}>
+                <div className="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border-color)]">
+                  <span className={`text-xs font-semibold uppercase tracking-wide ${textMuted}`}>Packages ({activePkgs.length})</span>
+                  {user?.role === 'admin' && (
+                    <Button size="sm" onClick={openCreatePkg} className="bg-[#e94560] hover:bg-[#f05c75] text-white h-7 px-2 text-xs">
+                      <Plus className="h-3 w-3 mr-1" /> New
+                    </Button>
+                  )}
+                </div>
+                <div className="flex-1 overflow-y-auto">
+                  {activePkgs.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center h-40 gap-2">
+                      <Package className={`h-8 w-8 ${textMuted}`} strokeWidth={1} />
+                      <p className={`text-xs ${textMuted}`}>No packages yet</p>
+                    </div>
+                  ) : activePkgs.map(pkg => {
+                    const items = pkg.items || [];
+                    const sub = items.reduce((s, i) => s + ((i.qty || 0) * (i.unit_price || 0)), 0);
+                    const total = sub * (1 + (pkg.gst_pct || 18) / 100);
+                    const isSelected = editPkg?.package_id === pkg.package_id && isEditing;
+                    return (
+                      <div key={pkg.package_id}
+                        onClick={() => openEditPkg(pkg)}
+                        className={`px-3 py-2.5 border-b border-[var(--border-color)] cursor-pointer transition-colors ${isSelected ? 'bg-[#e94560]/10 border-l-2 border-l-[#e94560]' : `hover:bg-[var(--bg-hover)]`}`}>
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <div className={`w-7 h-7 rounded flex-shrink-0 flex items-center justify-center ${isSelected ? 'bg-[#e94560]/20' : 'bg-[var(--bg-primary)]'}`}>
+                              <Package className={`h-3.5 w-3.5 ${isSelected ? 'text-[#e94560]' : textMuted}`} />
+                            </div>
+                            <div className="min-w-0">
+                              <p className={`text-sm font-medium truncate ${isSelected ? 'text-[#e94560]' : textPri}`}>{pkg.display_name}</p>
+                              <p className={`text-[10px] ${textMuted}`}>{items.length} item{items.length !== 1 ? 's' : ''}</p>
+                            </div>
+                          </div>
+                          <span className={`text-xs font-mono font-semibold flex-shrink-0 ${isSelected ? 'text-[#e94560]' : textPri}`}>{formatCurrency(total)}</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* RIGHT — Editor or Preview */}
+              <div className={`flex-1 ${card} border rounded-md flex flex-col`}>
+                {!isEditing ? (
+                  /* Empty state / select prompt */
+                  <div className="flex flex-col items-center justify-center h-full gap-3 p-8">
+                    <div className="w-16 h-16 rounded-full bg-[#e94560]/10 flex items-center justify-center">
+                      <Package className="h-8 w-8 text-[#e94560]" strokeWidth={1.5} />
+                    </div>
+                    <p className={`${textPri} font-medium`}>Select a package to edit</p>
+                    <p className={`text-sm ${textMuted} text-center`}>Click any package on the left to view and edit it, or create a new one.</p>
+                    {user?.role === 'admin' && (
+                      <Button onClick={openCreatePkg} className="bg-[#e94560] hover:bg-[#f05c75] text-white mt-2">
+                        <Plus className="mr-2 h-4 w-4" /> Create Package
+                      </Button>
+                    )}
+                  </div>
+                ) : (
+                  /* Edit Form */
+                  <div className="flex flex-col h-full">
+                    {/* Form header */}
+                    <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--border-color)]">
+                      <h3 className={`${textPri} font-semibold`}>{editPkg ? 'Edit Package' : 'New Package'}</h3>
+                      <Button size="sm" variant="ghost" onClick={() => setPkgDialogOpen(false)} className={`${textMuted} h-7 w-7 p-0`}><X className="h-4 w-4" /></Button>
+                    </div>
+
+                    <div className="flex-1 overflow-y-auto p-4 space-y-5">
+                      {/* Package meta */}
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div className="sm:col-span-2">
+                          <Label className={`${textSec} text-xs mb-1 block`}>Package Name *</Label>
+                          <Input value={pkgForm.display_name} onChange={e => setPkgForm(f => ({ ...f, display_name: e.target.value }))} className={inputCls} placeholder="e.g. Premium SmartShape Kit" />
+                        </div>
+                        <div>
+                          <Label className={`${textSec} text-xs mb-1 block`}>GST %</Label>
+                          <Input type="number" min="0" max="28" value={pkgForm.gst_pct} onChange={e => setPkgForm(f => ({ ...f, gst_pct: parseFloat(e.target.value) || 0 }))} className={inputCls} />
+                        </div>
+                      </div>
+
+                      {/* Products / Items */}
+                      <div>
+                        <div className="flex items-center justify-between mb-2">
+                          <Label className={`${textSec} text-xs font-semibold uppercase tracking-wide`}>Products / Items</Label>
+                          <Button size="sm" onClick={addPkgItem} variant="outline" className={`h-7 px-2 text-xs border-[var(--border-color)] ${textSec} hover:text-[#e94560] hover:border-[#e94560]`}>
+                            <Plus className="h-3 w-3 mr-1" /> Add Product
+                          </Button>
+                        </div>
+
+                        {pkgForm.items.length === 0 ? (
+                          <div className={`border-2 border-dashed border-[var(--border-color)] rounded-md p-6 text-center`}>
+                            <p className={`text-sm ${textMuted}`}>No products added yet</p>
+                            <Button size="sm" onClick={addPkgItem} className="mt-2 bg-[#e94560]/10 text-[#e94560] border border-[#e94560]/30 hover:bg-[#e94560]/20 text-xs h-7">
+                              <Plus className="h-3 w-3 mr-1" /> Add First Product
+                            </Button>
+                          </div>
+                        ) : (
+                          <div className="space-y-2">
+                            {/* Column headers */}
+                            <div className="hidden sm:grid grid-cols-12 gap-2 px-1">
+                              <span className={`col-span-3 text-[10px] uppercase ${textMuted}`}>Type</span>
+                              <span className={`col-span-4 text-[10px] uppercase ${textMuted}`}>Product Name</span>
+                              <span className={`col-span-1 text-[10px] uppercase ${textMuted} text-center`}>Qty</span>
+                              <span className={`col-span-2 text-[10px] uppercase ${textMuted} text-right`}>Unit Price</span>
+                              <span className={`col-span-2 text-[10px] uppercase ${textMuted} text-right`}>Total</span>
+                            </div>
+                            {pkgForm.items.map((item, idx) => (
+                              <div key={idx} className={`bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-md p-2.5 grid grid-cols-12 gap-2 items-center`}>
+                                {/* Type */}
+                                <div className="col-span-6 sm:col-span-3">
+                                  <select value={item.type} onChange={e => updatePkgItem(idx, 'type', e.target.value)}
+                                    className={`w-full h-8 px-2 rounded text-xs ${inputCls}`}>
+                                    {PACKAGE_ITEM_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+                                  </select>
+                                </div>
+                                {/* Name */}
+                                <div className="col-span-6 sm:col-span-4">
+                                  <Input value={item.name} onChange={e => updatePkgItem(idx, 'name', e.target.value)}
+                                    className={`${inputCls} h-8 text-xs`} placeholder="Product name" />
+                                </div>
+                                {/* Qty */}
+                                <div className="col-span-3 sm:col-span-1">
+                                  <Input type="number" min="1" value={item.qty} onChange={e => updatePkgItem(idx, 'qty', e.target.value)}
+                                    className={`${inputCls} h-8 text-xs text-center`} />
+                                </div>
+                                {/* Unit price */}
+                                <div className="col-span-4 sm:col-span-2">
+                                  <Input type="number" min="0" value={item.unit_price} onChange={e => updatePkgItem(idx, 'unit_price', e.target.value)}
+                                    className={`${inputCls} h-8 text-xs text-right`} placeholder="0" />
+                                </div>
+                                {/* Row total + delete */}
+                                <div className="col-span-5 sm:col-span-2 flex items-center justify-end gap-1">
+                                  <span className={`text-xs font-mono ${textPri} flex-1 text-right`}>{formatCurrency(pkgItemTotal(item))}</span>
+                                  <Button size="sm" variant="ghost" onClick={() => removePkgItem(idx)} className="text-red-400 hover:text-red-300 h-7 w-7 p-0 flex-shrink-0"><X className="h-3.5 w-3.5" /></Button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Price summary + actions — sticky footer */}
+                    <div className={`border-t border-[var(--border-color)] p-4 space-y-2`}>
+                      <div className="flex justify-between text-sm">
+                        <span className={textSec}>Subtotal ({pkgForm.items.length} items)</span>
+                        <span className={`font-mono ${textPri}`}>{formatCurrency(pkgSubtotal)}</span>
+                      </div>
+                      <div className="flex justify-between text-sm">
+                        <span className={textSec}>GST @ {pkgForm.gst_pct}%</span>
+                        <span className={`font-mono ${textMuted}`}>{formatCurrency(pkgGst)}</span>
+                      </div>
+                      <div className="flex justify-between text-base font-bold border-t border-[var(--border-color)] pt-2">
+                        <span className={textPri}>Package Total</span>
+                        <span className="font-mono text-[#e94560]">{formatCurrency(pkgSubtotal + pkgGst)}</span>
+                      </div>
+                      <div className="flex gap-2 pt-1">
+                        {user?.role === 'admin' && editPkg && (
+                          <Button size="sm" variant="ghost" onClick={() => handleDeletePkg(editPkg)} className="text-red-400 hover:text-red-300 border border-red-400/30 hover:border-red-400/60 h-9">
+                            <Trash2 className="h-3.5 w-3.5 mr-1.5" /> Delete
+                          </Button>
+                        )}
+                        <Button size="sm" variant="outline" onClick={() => setPkgDialogOpen(false)} className={`border-[var(--border-color)] ${textSec} h-9 flex-1`}>Cancel</Button>
+                        <Button size="sm" onClick={handleSavePkg} className="bg-[#e94560] hover:bg-[#f05c75] text-white h-9 flex-1">
+                          <Save className="h-3.5 w-3.5 mr-1.5" /> {editPkg ? 'Update' : 'Create'} Package
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
           );
         })()}
 
@@ -1168,13 +1576,13 @@ export default function LeadsCRM() {
                 {/* Schedule Follow-up */}
                 <div className={`${'bg-[var(--bg-primary)] border-[var(--border-color)]'} border rounded-md p-3`}>
                   <p className={`text-xs font-medium ${textSec} mb-2`}>Schedule Follow-up</p>
-                  <div className="flex gap-2 flex-wrap">
-                    <Input type="date" value={fuForm.followup_date} onChange={e => setFuForm({...fuForm, followup_date: e.target.value})} className={`${inputCls} text-sm w-36`} />
-                    <Input type="time" value={fuForm.followup_time} onChange={e => setFuForm({...fuForm, followup_time: e.target.value})} className={`${inputCls} text-sm w-28`} />
-                    <select value={fuForm.followup_type} onChange={e => setFuForm({...fuForm, followup_type: e.target.value})} className={`h-9 px-2 rounded text-sm ${inputCls}`}>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    <Input type="date" value={fuForm.followup_date} onChange={e => setFuForm({...fuForm, followup_date: e.target.value})} className={`${inputCls} text-sm`} />
+                    <Input type="time" value={fuForm.followup_time} onChange={e => setFuForm({...fuForm, followup_time: e.target.value})} className={`${inputCls} text-sm`} />
+                    <select value={fuForm.followup_type} onChange={e => setFuForm({...fuForm, followup_type: e.target.value})} className={`h-10 px-2 rounded text-sm ${inputCls}`}>
                       <option value="call">Call</option><option value="whatsapp">WhatsApp</option><option value="visit">Visit</option>
                     </select>
-                    <Button onClick={addFollowup} size="sm" className="bg-[#e94560] hover:bg-[#f05c75]">Schedule</Button>
+                    <Button onClick={addFollowup} size="sm" className="bg-[#e94560] hover:bg-[#f05c75] h-10 w-full">Schedule</Button>
                   </div>
                 </div>
                 {/* Follow-ups */}
@@ -1201,19 +1609,19 @@ export default function LeadsCRM() {
                 {/* Physical Dispatches */}
                 <div className={`${'bg-[var(--bg-primary)] border-[var(--border-color)]'} border rounded-md p-3`}>
                   <p className={`text-xs font-medium ${textSec} mb-2`}>Physical Material Sent ({physicalDispatches.length})</p>
-                  <div className="flex flex-wrap gap-2 mb-2">
-                    <select value={pdForm.material_type} onChange={e => setPdForm({...pdForm, material_type: e.target.value})} className={`h-8 px-2 rounded text-xs ${inputCls}`}>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-2">
+                    <select value={pdForm.material_type} onChange={e => setPdForm({...pdForm, material_type: e.target.value})} className={`h-9 px-2 rounded text-xs ${inputCls}`}>
                       <option value="brochure">Brochure</option>
                       <option value="sample">Sample</option>
                       <option value="die">Die</option>
                       <option value="catalogue">Catalogue</option>
                       <option value="gift">Gift</option>
                     </select>
-                    <Input value={pdForm.description} onChange={e => setPdForm({...pdForm, description: e.target.value})} placeholder="Description" className={`${inputCls} text-xs h-8 flex-1 min-w-24`} />
-                    <Input value={pdForm.courier_name} onChange={e => setPdForm({...pdForm, courier_name: e.target.value})} placeholder="Courier" className={`${inputCls} text-xs h-8 w-24`} />
-                    <Input value={pdForm.tracking_number} onChange={e => setPdForm({...pdForm, tracking_number: e.target.value})} placeholder="Tracking #" className={`${inputCls} text-xs h-8 w-28`} />
-                    <Input type="date" value={pdForm.sent_date} onChange={e => setPdForm({...pdForm, sent_date: e.target.value})} className={`${inputCls} text-xs h-8 w-32`} />
-                    <Button onClick={addPhysicalDispatch} size="sm" className="bg-[#e94560] hover:bg-[#f05c75] h-8 text-xs">Log</Button>
+                    <Input value={pdForm.description} onChange={e => setPdForm({...pdForm, description: e.target.value})} placeholder="Description" className={`${inputCls} text-xs h-9 sm:col-span-2`} />
+                    <Input value={pdForm.courier_name} onChange={e => setPdForm({...pdForm, courier_name: e.target.value})} placeholder="Courier" className={`${inputCls} text-xs h-9`} />
+                    <Input value={pdForm.tracking_number} onChange={e => setPdForm({...pdForm, tracking_number: e.target.value})} placeholder="Tracking #" className={`${inputCls} text-xs h-9`} />
+                    <Input type="date" value={pdForm.sent_date} onChange={e => setPdForm({...pdForm, sent_date: e.target.value})} className={`${inputCls} text-xs h-9`} />
+                    <Button onClick={addPhysicalDispatch} size="sm" className="bg-[#e94560] hover:bg-[#f05c75] h-9 text-xs col-span-2 sm:col-span-1">Log</Button>
                   </div>
                   {physicalDispatches.length > 0 && (
                     <div className="space-y-1">
@@ -1317,13 +1725,13 @@ export default function LeadsCRM() {
                   {addNewSchool ? (
                     <div className={`${'bg-[var(--bg-primary)] border-[var(--border-color)]'} border rounded-md p-3 space-y-2`}>
                       <Input value={newSchool.school_name} onChange={e => setNewSchool({...newSchool, school_name: e.target.value})} placeholder="School name *" className={`${inputCls} text-sm`} />
-                      <div className="grid grid-cols-2 gap-2">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                         <select value={newSchool.school_type} onChange={e => setNewSchool({...newSchool, school_type: e.target.value})} className={`h-9 px-2 rounded text-sm ${inputCls}`}>
                           {SCHOOL_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
                         </select>
                         <Input value={newSchool.city} onChange={e => setNewSchool({...newSchool, city: e.target.value})} placeholder="City" className={`${inputCls} text-sm`} />
                       </div>
-                      <div className="grid grid-cols-2 gap-2">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                         <Input value={newSchool.phone} onChange={e => setNewSchool({...newSchool, phone: e.target.value})} placeholder="Phone" className={`${inputCls} text-sm`} />
                         <Input type="number" value={newSchool.school_strength} onChange={e => setNewSchool({...newSchool, school_strength: parseInt(e.target.value) || 0})} placeholder="Strength" className={`${inputCls} text-sm`} />
                       </div>
@@ -1336,7 +1744,7 @@ export default function LeadsCRM() {
                   )}
                 </div>
               )}
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div><Label className={`${textSec} text-xs`}>Contact Name *</Label><Input value={leadForm.contact_name} onChange={e => setLeadForm({...leadForm, contact_name: e.target.value})} className={inputCls} data-testid="lead-contact-input" /></div>
                 <div><Label className={`${textSec} text-xs`}>Role / Designation</Label>
                   <select value={leadForm.contact_role_id || ''} onChange={e => { const role = rolesList.find(r => r.role_id === e.target.value); setLeadForm({...leadForm, contact_role_id: e.target.value, designation: role?.name || leadForm.designation}); }} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`} data-testid="lead-role-select">
@@ -1345,11 +1753,11 @@ export default function LeadsCRM() {
                   </select>
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div><Label className={`${textSec} text-xs`}>Phone *</Label><Input value={leadForm.contact_phone} onChange={e => setLeadForm({...leadForm, contact_phone: e.target.value})} className={inputCls} data-testid="lead-phone-input" /></div>
                 <div><Label className={`${textSec} text-xs`}>Email</Label><Input value={leadForm.contact_email} onChange={e => setLeadForm({...leadForm, contact_email: e.target.value})} className={inputCls} /></div>
               </div>
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                 <div><Label className={`${textSec} text-xs`}>Source</Label>
                   <select value={leadForm.source_id || ''} onChange={e => { const src = sourcesList.find(s => s.source_id === e.target.value); setLeadForm({...leadForm, source_id: e.target.value, source: src?.name || ''}); }} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`} data-testid="lead-source-select">
                     <option value="">{sourcesList.length ? 'Select source' : 'Loading sources...'}</option>
@@ -1367,7 +1775,7 @@ export default function LeadsCRM() {
                   </select>
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div><Label className={`${textSec} text-xs`}>Assign To *</Label>
                   <select value={leadForm.assigned_to} onChange={e => setLeadForm({...leadForm, assigned_to: e.target.value})} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`}>
                     <option value="">Select</option>{spList.map(sp => <option key={sp.email} value={sp.email}>{sp.name}</option>)}
@@ -1375,7 +1783,7 @@ export default function LeadsCRM() {
                 </div>
                 <div><Label className={`${textSec} text-xs`}>Next Follow-up</Label><Input type="date" value={leadForm.next_followup_date} onChange={e => setLeadForm({...leadForm, next_followup_date: e.target.value})} className={inputCls} /></div>
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div><Label className={`${textSec} text-xs`}>Assignment Type</Label>
                   <select value={leadForm.assignment_type || 'manual'} onChange={e => setLeadForm({...leadForm, assignment_type: e.target.value})} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`} data-testid="lead-assignment-type-select">
                     <option value="manual">Manual</option>
@@ -1387,7 +1795,7 @@ export default function LeadsCRM() {
                 <div><Label className={`${textSec} text-xs`}>Likely Closure Date</Label><Input type="date" value={leadForm.likely_closure_date || ''} onChange={e => setLeadForm({...leadForm, likely_closure_date: e.target.value})} className={inputCls} data-testid="lead-likely-closure-input" /></div>
               </div>
               <div><Label className={`${textSec} text-xs`}>Notes</Label><Input value={leadForm.notes} onChange={e => setLeadForm({...leadForm, notes: e.target.value})} className={inputCls} /></div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div><Label className={`${textSec} text-xs`}>Referred By (Contact)</Label>
                   <select value={leadForm.referred_by_contact_id || ''} onChange={e => setLeadForm({...leadForm, referred_by_contact_id: e.target.value})} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`}>
                     <option value="">None</option>
@@ -1411,7 +1819,7 @@ export default function LeadsCRM() {
                     return (
                       <button key={t.tag_id} type="button"
                         onClick={() => setLeadForm({...leadForm, tags: sel ? (leadForm.tags||[]).filter(id => id !== t.tag_id) : [...(leadForm.tags||[]), t.tag_id]})}
-                        className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border transition-all ${sel ? 'text-white border-transparent' : `${textMuted} border-[var(--border-color)]`}`}
+                        className={`flex items-center gap-1 px-2 py-1 rounded-full text-xs border transition-all ${sel ? 'text-white border-transparent' : `${textMuted} border-[var(--border-color)]`}`}
                         style={sel ? { backgroundColor: t.color } : {}}>
                         <span className="w-2 h-2 rounded-full" style={{ backgroundColor: t.color }} />
                         {t.name}
@@ -1448,7 +1856,7 @@ export default function LeadsCRM() {
             <DialogHeader><DialogTitle className={textPri}>{editSchool ? 'Edit School' : 'Add School'}</DialogTitle></DialogHeader>
             <div className="space-y-3 py-2">
               <div><Label className={`${textSec} text-xs`}>School Name *</Label><Input value={editSchoolForm.school_name || ''} onChange={e => setEditSchoolForm({...editSchoolForm, school_name: e.target.value})} className={inputCls} data-testid="school-name-input" /></div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div><Label className={`${textSec} text-xs`}>Group / Trust</Label>
                   <select value={editSchoolForm.group_id || ''} onChange={e => setEditSchoolForm({...editSchoolForm, group_id: e.target.value})} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`} data-testid="school-group-select">
                     <option value="">{groupsList.length ? '-- Select Group --' : 'No groups defined'}</option>
@@ -1457,18 +1865,18 @@ export default function LeadsCRM() {
                 </div>
                 <div><Label className={`${textSec} text-xs`}>Email</Label><Input type="email" value={editSchoolForm.email || ''} onChange={e => setEditSchoolForm({...editSchoolForm, email: e.target.value})} className={inputCls} data-testid="school-email-input" /></div>
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div><Label className={`${textSec} text-xs`}>Type</Label>
                   <select value={editSchoolForm.school_type || 'CBSE'} onChange={e => setEditSchoolForm({...editSchoolForm, school_type: e.target.value})} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`}>
                     {SCHOOL_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
                   </select></div>
                 <div><Label className={`${textSec} text-xs`}>Phone</Label><Input value={editSchoolForm.phone || ''} onChange={e => setEditSchoolForm({...editSchoolForm, phone: e.target.value})} className={inputCls} /></div>
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div><Label className={`${textSec} text-xs`}>City</Label><Input value={editSchoolForm.city || ''} onChange={e => setEditSchoolForm({...editSchoolForm, city: e.target.value})} className={inputCls} /></div>
                 <div><Label className={`${textSec} text-xs`}>State</Label><Input value={editSchoolForm.state || ''} onChange={e => setEditSchoolForm({...editSchoolForm, state: e.target.value})} className={inputCls} /></div>
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div><Label className={`${textSec} text-xs`}>Contact Name</Label><Input value={editSchoolForm.primary_contact_name || ''} onChange={e => setEditSchoolForm({...editSchoolForm, primary_contact_name: e.target.value})} className={inputCls} /></div>
                 <div><Label className={`${textSec} text-xs`}>Role / Designation</Label>
                   <select value={editSchoolForm.designation || ''} onChange={e => setEditSchoolForm({...editSchoolForm, designation: e.target.value})} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`} data-testid="school-role-select">
@@ -1476,7 +1884,7 @@ export default function LeadsCRM() {
                     {(rolesList.length ? rolesList.map(r => r.name) : DESIGNATIONS).map(d => <option key={d} value={d}>{d}</option>)}
                   </select></div>
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div><Label className={`${textSec} text-xs`}>Strength</Label><Input type="number" value={editSchoolForm.school_strength || 0} onChange={e => setEditSchoolForm({...editSchoolForm, school_strength: parseInt(e.target.value) || 0})} className={inputCls} /></div>
                 <div><Label className={`${textSec} text-xs`}>Existing Vendor</Label><Input value={editSchoolForm.existing_vendor || ''} onChange={e => setEditSchoolForm({...editSchoolForm, existing_vendor: e.target.value})} className={inputCls} /></div>
               </div>
@@ -1494,7 +1902,7 @@ export default function LeadsCRM() {
             <DialogHeader><DialogTitle className={textPri}>New Task</DialogTitle></DialogHeader>
             <div className="space-y-3 py-2">
               <div><Label className={`${textSec} text-xs`}>Title *</Label><Input value={taskForm.title} onChange={e => setTaskForm({...taskForm, title: e.target.value})} className={inputCls} data-testid="task-title-input" /></div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div><Label className={`${textSec} text-xs`}>Due Date *</Label><Input type="date" value={taskForm.due_date} onChange={e => setTaskForm({...taskForm, due_date: e.target.value})} className={inputCls} /></div>
                 <div><Label className={`${textSec} text-xs`}>Assign To</Label>
                   <select value={taskForm.assigned_to} onChange={e => { const sp = spList.find(s => s.email === e.target.value); setTaskForm({...taskForm, assigned_to: e.target.value, assigned_name: sp?.name || ''}); }} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`}>
@@ -1529,12 +1937,12 @@ export default function LeadsCRM() {
           <DialogContent className={`${dlgCls} max-w-md`}>
             <DialogHeader><DialogTitle className={textPri}>{editContact ? 'Edit Contact' : 'Add Contact'}</DialogTitle></DialogHeader>
             <div className="space-y-3 py-2">
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div><Label className={`${textSec} text-xs`}>Name *</Label><Input value={contactForm.name} onChange={e => setContactForm({...contactForm, name: e.target.value})} className={inputCls} placeholder="Full name" data-testid="contact-name-input" /></div>
                 <div><Label className={`${textSec} text-xs`}>Phone *</Label><Input value={contactForm.phone} onChange={e => setContactForm({...contactForm, phone: e.target.value})} className={inputCls} placeholder="+91..." data-testid="contact-phone-input" /></div>
               </div>
               <div><Label className={`${textSec} text-xs`}>Email</Label><Input value={contactForm.email} onChange={e => setContactForm({...contactForm, email: e.target.value})} className={inputCls} placeholder="email@example.com" data-testid="contact-email-input" /></div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div><Label className={`${textSec} text-xs`}>Company / School</Label><Input value={contactForm.company} onChange={e => setContactForm({...contactForm, company: e.target.value})} className={inputCls} placeholder="Organization" /></div>
                 <div><Label className={`${textSec} text-xs`}>Role / Designation</Label>
                   <select value={contactForm.contact_role_id || ''} onChange={e => { const role = rolesList.find(r => r.role_id === e.target.value); setContactForm({...contactForm, contact_role_id: e.target.value, designation: role?.name || contactForm.designation}); }} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`} data-testid="contact-role-select">
@@ -1598,7 +2006,7 @@ export default function LeadsCRM() {
                     </select>
                   )}
                 </div>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div><Label className={`${textSec} text-xs`}>Lead Type</Label>
                     <select value={convertForm.lead_type} onChange={e => setConvertForm({...convertForm, lead_type: e.target.value})} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`} data-testid="convert-lead-type">
                       <option value="hot">Hot</option><option value="warm">Warm</option><option value="cold">Cold</option>
@@ -1655,6 +2063,15 @@ export default function LeadsCRM() {
           onSuccess={() => { setSelectedLeadIds(new Set()); fetchData(); }}
         />
       </div>
+
+      {/* Mobile FAB — New Lead */}
+      <button
+        onClick={openCreateLead}
+        className="sm:hidden fixed bottom-24 right-4 z-40 w-14 h-14 rounded-full bg-[#e94560] hover:bg-[#f05c75] text-white shadow-xl flex items-center justify-center active:scale-95 transition-transform"
+        aria-label="New Lead"
+      >
+        <Plus className="h-6 w-6" />
+      </button>
     </AdminLayout>
   );
 }

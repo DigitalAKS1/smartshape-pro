@@ -111,11 +111,15 @@ export default function EditQuotation() {
         </div>
 
         {/* Customer Info */}
-        <div className="bg-[var(--bg-card)] border border-[var(--border-color)] rounded-md p-5">
+        <div className="bg-[var(--bg-card)] border border-[var(--border-color)] rounded-md p-5 space-y-3">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div><Label className="text-[var(--text-secondary)] text-xs">Principal</Label><Input value={quot.principal_name || ''} onChange={(e) => setQuot({...quot, principal_name: e.target.value})} className="bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]" /></div>
             <div><Label className="text-[var(--text-secondary)] text-xs">School</Label><Input value={quot.school_name || ''} onChange={(e) => setQuot({...quot, school_name: e.target.value})} className="bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]" /></div>
             <div><Label className="text-[var(--text-secondary)] text-xs">Address</Label><Input value={quot.address || ''} onChange={(e) => setQuot({...quot, address: e.target.value})} className="bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]" /></div>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div><Label className="text-[var(--text-secondary)] text-xs">Phone</Label><Input type="tel" value={quot.customer_phone || ''} onChange={(e) => setQuot({...quot, customer_phone: e.target.value})} placeholder="+91 XXXXX XXXXX" className="bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]" /></div>
+            <div><Label className="text-[var(--text-secondary)] text-xs">Email</Label><Input type="email" value={quot.customer_email || ''} onChange={(e) => setQuot({...quot, customer_email: e.target.value})} placeholder="customer@example.com" className="bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]" /></div>
           </div>
         </div>
 
