@@ -6,6 +6,40 @@ import { Button } from '../../components/ui/button';
 import { Download, Edit2, ArrowLeft, Printer, GitBranch } from 'lucide-react';
 import { toast } from 'sonner';
 
+// ─── helpers ──────────────────────────────────────────────────────────────────
+const fmt = (n) =>
+  typeof n === 'number'
+    ? n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    : '—';
+
+const addDays = (iso, days) => {
+  try {
+    const d = new Date(iso.slice(0, 10));
+    d.setDate(d.getDate() + days);
+    return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+  } catch {
+    return '30 days from date';
+  }
+};
+
+const fmtDate = (iso) => {
+  try {
+    return new Date(iso.slice(0, 10)).toLocaleDateString('en-IN', {
+      day: '2-digit', month: 'short', year: 'numeric',
+    });
+  } catch { return iso?.slice(0, 10) || ''; }
+};
+
+// ─── design tokens (inline styles for print fidelity) ────────────────────────
+const BRAND = '#e94560';
+const NAVY  = '#1a1a2e';
+const GRAY  = '#666677';
+const LGRAY = '#f4f4f7';
+const BORDER= '#c8c8d4';
+const ALT   = '#f8f8fb';
+const GREEN = '#16a34a';
+const WHITE = '#ffffff';
+
 export default function ViewQuotation() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -22,11 +56,10 @@ export default function ViewQuotation() {
         const found = quotRes.data.find(q => q.quotation_id === id);
         if (found) {
           setQuot(found);
-          // Load sibling versions
           try {
             const vRes = await quotations.getVersions(id);
             setVersions(vRes.data || []);
-          } catch { /* versions are optional */ }
+          } catch { /* versions optional */ }
         }
         setCompany(compRes.data || {});
       } catch { toast.error('Failed to load'); }
@@ -44,183 +77,326 @@ export default function ViewQuotation() {
       navigate(`/edit-quotation/${res.data.quotation_id}`);
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Failed to create new version');
-    } finally {
-      setCreatingVersion(false);
-    }
+    } finally { setCreatingVersion(false); }
   };
 
-  const handlePrint = () => window.print();
-
   if (loading || !quot) {
-    return <div className="min-h-screen bg-white flex items-center justify-center"><div className="animate-spin rounded-full h-10 w-10 border-4 border-[#e94560] border-t-transparent" /></div>;
+    return (
+      <div className="min-h-screen bg-white flex items-center justify-center">
+        <div className="animate-spin rounded-full h-10 w-10 border-4 border-[#e94560] border-t-transparent" />
+      </div>
+    );
   }
 
-  const lines = quot.lines || [];
-  const sub = quot.subtotal || 0;
-  const gst = quot.gst_amount || 0;
-  const twg = quot.total_with_gst || 0;
-  const d1p = quot.discount1_pct || 0;
-  const d1a = quot.disc1_amount || 0;
-  const d2p = quot.discount2_pct || 0;
-  const d2a = quot.disc2_amount || 0;
-  const fr = quot.freight_total || 0;
-  const gt = quot.grand_total || 0;
+  const lines    = quot.lines || [];
+  const d1p      = quot.discount1_pct  || 0;
+  const d1a      = quot.disc1_amount   || 0;
+  const d2p      = quot.discount2_pct  || 0;
+  const d2a      = quot.disc2_amount   || 0;
+  const fr       = quot.freight_total  || 0;
+  const sub      = quot.sub_total_after ?? (quot.subtotal - d1a - d2a + fr);
+  const gst      = quot.gst_amount     || 0;
+  const gt       = quot.grand_total    || 0;
+  const itemsTotal = quot.subtotal     || 0;
+
+  const co = {
+    name:  company.company_name || 'SmartShapes',
+    addr:  company.address || '',
+    city:  [company.city, company.state, company.pincode].filter(Boolean).join(', '),
+    phone: company.phone || '',
+    email: company.email || '',
+    gst:   company.gst_number || '',
+    logo:  company.logo_url || '',
+  };
+
+  const coContact = [co.phone && `Ph: ${co.phone}`, co.email].filter(Boolean).join('  |  ');
+
+  const termsRaw = quot.terms_override || company.terms_conditions || '';
+  const terms = termsRaw
+    ? termsRaw.split('\n').filter(t => t.trim()).map(t => t.trim().replace(/^[\d.\s)-]+/, ''))
+    : [
+        'Payment: 50% advance and balance 50% against delivery',
+        'Warranty: 1 year against any manufacturing defect',
+        'Machine not to be used for commercial purpose',
+        'Local duties/taxes extra to be borne by buyer',
+      ];
+
+  const bankRaw  = quot.bank_details_override || company.bank_details || '';
+  const bankLines = bankRaw ? bankRaw.split('\n').filter(l => l.trim()) : [];
 
   return (
     <>
-      {/* Print CSS */}
+      {/* ── Print CSS ─────────────────────────────────────────────────────── */}
       <style>{`
         @media print {
           .no-print { display: none !important; }
           body { background: white !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-          .print-page { box-shadow: none !important; margin: 0 !important; padding: 8mm 10mm !important; max-width: 100% !important; page-break-inside: avoid; }
-          @page { size: A4; margin: 0; }
+          .print-page { box-shadow: none !important; margin: 0 !important; border-radius: 0 !important; }
+          @page { size: A4; margin: 10mm 12mm; }
         }
+        .no-print-bg { background: #e8e8ee; }
       `}</style>
 
-      {/* Action Bar */}
+      {/* ── Action bar ────────────────────────────────────────────────────── */}
       <div className="no-print bg-[var(--bg-primary)] border-b border-[var(--border-color)] px-6 py-3 flex items-center justify-between sticky top-0 z-50">
         <div className="flex items-center gap-3">
-          <Button onClick={() => navigate('/quotations')} variant="ghost" size="sm" className="text-[var(--text-secondary)] hover:text-[var(--text-primary)]">
+          <Button onClick={() => navigate('/quotations')} variant="ghost" size="sm" className="text-[var(--text-secondary)]">
             <ArrowLeft className="mr-2 h-4 w-4" /> Back
           </Button>
           <span className="text-[var(--text-primary)] font-medium">{quot.quote_number}</span>
-          <span className={`px-2 py-0.5 rounded text-xs font-medium ${quot.quotation_status === 'confirmed' ? 'bg-green-500/20 text-green-300' : quot.quotation_status === 'sent' ? 'bg-blue-500/20 text-blue-300' : 'bg-yellow-500/20 text-yellow-300'}`}>
-            {quot.quotation_status}
-          </span>
+          <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+            quot.quotation_status === 'confirmed' ? 'bg-green-500/20 text-green-300' :
+            quot.quotation_status === 'sent'      ? 'bg-blue-500/20  text-blue-300'  :
+            'bg-yellow-500/20 text-yellow-300'
+          }`}>{quot.quotation_status}</span>
         </div>
         <div className="flex items-center gap-2">
-          <Button
-            onClick={handleNewVersion}
-            disabled={creatingVersion}
-            variant="outline"
-            size="sm"
-            className="border-[#3b82f6]/50 text-[#3b82f6] hover:bg-[#3b82f6]/10"
-            title="Clone this quotation as a new draft version"
-          >
+          <Button onClick={handleNewVersion} disabled={creatingVersion} variant="outline" size="sm"
+            className="border-blue-500/50 text-blue-400 hover:bg-blue-500/10">
             <GitBranch className="mr-1.5 h-3 w-3" />
             {creatingVersion ? 'Creating…' : `New Version${quot?.version ? ` (V${quot.version})` : ''}`}
           </Button>
           <Link to={`/edit-quotation/${id}`}>
-            <Button variant="outline" size="sm" className="border-[var(--border-color)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]">
+            <Button variant="outline" size="sm" className="border-[var(--border-color)] text-[var(--text-secondary)]">
               <Edit2 className="mr-2 h-3 w-3" /> Edit
             </Button>
           </Link>
-          <Button onClick={() => quotations.downloadPdf(id)} variant="outline" size="sm" className="border-[var(--border-color)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]" data-testid="download-pdf-btn">
+          <Button onClick={() => quotations.downloadPdf(id)} variant="outline" size="sm"
+            className="border-[var(--border-color)] text-[var(--text-secondary)]" data-testid="download-pdf-btn">
             <Download className="mr-2 h-3 w-3" /> PDF
           </Button>
-          <Button onClick={handlePrint} size="sm" className="bg-[#e94560] hover:bg-[#f05c75] text-white" data-testid="print-btn">
+          <Button onClick={() => window.print()} size="sm" className="bg-[#e94560] hover:bg-[#f05c75] text-white" data-testid="print-btn">
             <Printer className="mr-2 h-3 w-3" /> Print
           </Button>
         </div>
       </div>
 
-      {/* Quotation Document - Light Theme, fits A4 */}
-      <div className="min-h-screen bg-gray-100 py-8 flex justify-center no-print-bg">
-        <div className="print-page bg-white w-[210mm] min-h-[297mm] max-h-[297mm] shadow-xl rounded overflow-hidden" style={{ fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif", fontSize: '11px', color: '#1a1a2e' }}>
-          <div className="p-[10mm]" style={{ height: '273mm', display: 'flex', flexDirection: 'column' }}>
+      {/* ── Quotation document ────────────────────────────────────────────── */}
+      <div className="no-print-bg min-h-screen py-8 flex justify-center">
+        <div
+          className="print-page bg-white w-[210mm] shadow-xl rounded"
+          style={{ fontFamily: "'Segoe UI', Tahoma, sans-serif", color: NAVY, fontSize: '11px' }}
+        >
+          <div style={{ padding: '10mm 12mm' }}>
 
-            {/* Header */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '6mm' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                {company.logo_url && <img src={company.logo_url} alt="Logo" style={{ height: '36px', objectFit: 'contain' }} />}
+            {/* ── HEADER ─────────────────────────────────────────────────── */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '3mm' }}>
+              {/* Left: logo + company */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1 }}>
+                {co.logo && (
+                  <img src={co.logo} alt="logo"
+                    style={{ height: '36px', maxWidth: '60px', objectFit: 'contain', flexShrink: 0 }} />
+                )}
                 <div>
-                  <div style={{ fontSize: '16px', fontWeight: 700, color: '#1a1a2e' }}>{company.company_name || 'SmartShapes'}</div>
-                  <div style={{ fontSize: '8px', color: '#888' }}>{company.email} {company.phone && `| ${company.phone}`}</div>
-                  {company.gst_number && <div style={{ fontSize: '8px', color: '#888' }}>GST: {company.gst_number}</div>}
+                  <div style={{ fontSize: '15px', fontWeight: 700, color: NAVY, lineHeight: '1.2' }}>{co.name}</div>
+                  {(co.addr || co.city) && (
+                    <div style={{ fontSize: '7.5px', color: GRAY, marginTop: '1px' }}>
+                      {[co.addr, co.city].filter(Boolean).join(', ')}
+                    </div>
+                  )}
+                  {coContact && <div style={{ fontSize: '7.5px', color: GRAY }}>{coContact}</div>}
+                  {co.gst && <div style={{ fontSize: '7.5px', color: GRAY }}>GSTIN: {co.gst}</div>}
                 </div>
               </div>
-              <div style={{ textAlign: 'right' }}>
-                <div style={{ fontSize: '22px', fontWeight: 700, color: '#e94560', letterSpacing: '1px' }}>QUOTATION</div>
-                <div style={{ fontSize: '12px', fontWeight: 600, color: '#333' }}>{quot.quote_number}</div>
-                <div style={{ fontSize: '8px', color: '#888' }}>Date: {(quot.created_at || '').slice(0, 10)}</div>
+              {/* Right: QUOTATION title */}
+              <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                <div style={{ fontSize: '22px', fontWeight: 700, color: BRAND, letterSpacing: '1px', lineHeight: 1 }}>
+                  QUOTATION
+                </div>
+                <div style={{ fontSize: '11px', fontWeight: 700, color: NAVY, marginTop: '2px' }}>
+                  {quot.quote_number}
+                </div>
               </div>
             </div>
 
-            {/* Accent line */}
-            <div style={{ height: '2px', background: 'linear-gradient(90deg, #e94560, #1a1a2e)', marginBottom: '5mm' }} />
+            {/* Dual accent lines */}
+            <div style={{ height: '2.5px', background: BRAND, marginBottom: '1px' }} />
+            <div style={{ height: '0.5px', background: NAVY, marginBottom: '4mm' }} />
 
-            {/* Bill To / Package */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5mm' }}>
-              <div>
-                <div style={{ fontSize: '8px', color: '#999', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '2px' }}>Bill To</div>
-                <div style={{ fontSize: '12px', fontWeight: 600 }}>{quot.principal_name}</div>
-                <div style={{ fontSize: '10px', color: '#444' }}>{quot.school_name}</div>
-                {quot.address && <div style={{ fontSize: '9px', color: '#666' }}>{quot.address}</div>}
-                {quot.customer_phone && <div style={{ fontSize: '9px', color: '#666' }}>Ph: {quot.customer_phone}</div>}
-                {quot.customer_email && <div style={{ fontSize: '9px', color: '#666' }}>{quot.customer_email}</div>}
+            {/* ── INFO BLOCK ─────────────────────────────────────────────── */}
+            <div style={{
+              display: 'grid', gridTemplateColumns: '82mm 1fr',
+              border: `0.5px solid ${BORDER}`, background: LGRAY,
+              marginBottom: '4mm',
+            }}>
+              {/* Quote details */}
+              <div style={{ padding: '6px 8px', borderRight: `0.5px solid ${BORDER}` }}>
+                <div style={{ fontSize: '7px', fontWeight: 700, color: BRAND, textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '4px' }}>
+                  Quote Details
+                </div>
+                {[
+                  ['Quote No',    quot.quote_number],
+                  ['Date',        fmtDate(quot.created_at)],
+                  ['Valid Till',  addDays(quot.created_at, 30)],
+                  ['Sales Person',quot.sales_person_name || '—'],
+                  ...(quot.package_name ? [['Package', quot.package_name]] : []),
+                ].map(([k, v]) => (
+                  <div key={k} style={{ display: 'flex', gap: '4px', fontSize: '8px', marginBottom: '1.5px' }}>
+                    <span style={{ color: GRAY, minWidth: '60px' }}>{k}</span>
+                    <span style={{ fontWeight: 600, color: NAVY }}>{v}</span>
+                  </div>
+                ))}
               </div>
-              <div style={{ textAlign: 'right' }}>
-                <div style={{ fontSize: '8px', color: '#999', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '2px' }}>Package</div>
-                <div style={{ fontSize: '11px', fontWeight: 600 }}>{quot.package_name}</div>
-                <div style={{ fontSize: '9px', color: '#666' }}>Sales: {quot.sales_person_name}</div>
+              {/* Bill To */}
+              <div style={{ padding: '6px 8px' }}>
+                <div style={{ fontSize: '7px', fontWeight: 700, color: BRAND, textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '4px' }}>
+                  Bill To
+                </div>
+                {quot.school_name && (
+                  <div style={{ fontSize: '10.5px', fontWeight: 700, color: NAVY }}>{quot.school_name}</div>
+                )}
+                {quot.principal_name && (
+                  <div style={{ fontSize: '9px', color: NAVY }}>{quot.principal_name}</div>
+                )}
+                {quot.address && (
+                  <div style={{ fontSize: '8px', color: GRAY, marginTop: '1px' }}>{quot.address}</div>
+                )}
+                {quot.customer_phone && (
+                  <div style={{ fontSize: '8px', color: GRAY }}>Ph: {quot.customer_phone}</div>
+                )}
+                {quot.customer_email && (
+                  <div style={{ fontSize: '8px', color: GRAY }}>{quot.customer_email}</div>
+                )}
+                {quot.customer_gst && (
+                  <div style={{ fontSize: '8px', color: GRAY }}>GSTIN: {quot.customer_gst}</div>
+                )}
               </div>
             </div>
 
-            {/* Product Lines Table */}
-            <div style={{ flex: 1 }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '9px' }}>
-                <thead>
-                  <tr style={{ background: '#1a1a2e', color: 'white' }}>
-                    <th style={{ padding: '6px 8px', textAlign: 'left', fontWeight: 600, width: '5%' }}>#</th>
-                    <th style={{ padding: '6px 8px', textAlign: 'left', fontWeight: 600 }}>ITEM</th>
-                    <th style={{ padding: '6px 8px', textAlign: 'center', fontWeight: 600, width: '8%' }}>QTY</th>
-                    <th style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 600, width: '15%' }}>UNIT PRICE</th>
-                    <th style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 600, width: '12%' }}>GST</th>
-                    <th style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 600, width: '15%' }}>TOTAL</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {lines.map((l, i) => (
-                    <tr key={i} style={{ borderBottom: '1px solid #eee', background: i % 2 === 1 ? '#f9f9fb' : 'white' }}>
-                      <td style={{ padding: '5px 8px', textAlign: 'center', color: '#888' }}>{i + 1}</td>
-                      <td style={{ padding: '5px 8px', fontWeight: 500 }}>{l.description}</td>
-                      <td style={{ padding: '5px 8px', textAlign: 'center' }}>{l.qty}</td>
-                      <td style={{ padding: '5px 8px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(l.unit_price)}</td>
-                      <td style={{ padding: '5px 8px', textAlign: 'right', fontFamily: 'monospace', color: '#666' }}>{formatCurrency(l.line_gst)}</td>
-                      <td style={{ padding: '5px 8px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 600 }}>{formatCurrency(l.line_total)}</td>
-                    </tr>
+            {/* ── ITEMS TABLE ────────────────────────────────────────────── */}
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '8.5px', marginBottom: '3mm' }}>
+              <thead>
+                <tr style={{ background: NAVY, color: WHITE }}>
+                  {[
+                    { label: 'SR',           align: 'center', w: '5%'  },
+                    { label: 'DESCRIPTION',  align: 'left',   w: '49%' },
+                    { label: 'QTY',          align: 'center', w: '7%'  },
+                    { label: 'RATE (₹)',     align: 'right',  w: '15%' },
+                    { label: 'GST (₹)',      align: 'right',  w: '11%' },
+                    { label: 'AMOUNT (₹)',   align: 'right',  w: '13%' },
+                  ].map(col => (
+                    <th key={col.label} style={{
+                      padding: '5px 6px', fontWeight: 700, fontSize: '7.5px',
+                      textAlign: col.align, width: col.w,
+                    }}>
+                      {col.label}
+                    </th>
                   ))}
-                </tbody>
-              </table>
-            </div>
+                </tr>
+              </thead>
+              <tbody>
+                {lines.map((l, i) => (
+                  <tr key={i} style={{
+                    background: i % 2 === 1 ? ALT : WHITE,
+                    borderBottom: `0.3px solid ${BORDER}`,
+                  }}>
+                    <td style={{ padding: '4px 6px', textAlign: 'center', color: GRAY }}>{i + 1}</td>
+                    <td style={{ padding: '4px 6px', fontWeight: 500 }}>{l.description}</td>
+                    <td style={{ padding: '4px 6px', textAlign: 'center' }}>{l.qty}</td>
+                    <td style={{ padding: '4px 6px', textAlign: 'right', fontFamily: 'monospace' }}>
+                      {(l.unit_price || 0).toLocaleString('en-IN')}
+                    </td>
+                    <td style={{ padding: '4px 6px', textAlign: 'right', fontFamily: 'monospace', color: GRAY }}>
+                      {(l.line_gst || 0).toLocaleString('en-IN')}
+                    </td>
+                    <td style={{ padding: '4px 6px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 700 }}>
+                      {(l.line_total || 0).toLocaleString('en-IN')}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
 
-            {/* Pricing Summary - Right aligned */}
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '4mm' }}>
-              <div style={{ width: '55%' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', fontSize: '9px', color: '#666' }}>
-                  <span>Items Subtotal</span><span style={{ fontFamily: 'monospace' }}>{formatCurrency(sub)}</span>
+            {/* ── SUMMARY ────────────────────────────────────────────────── */}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '5mm' }}>
+              <div style={{ width: '94mm' }}>
+                {/* Line items */}
+                {[
+                  { label: 'Items Total',                          val: fmt(itemsTotal), green: false, bold: false },
+                  ...(d1p > 0 ? [{ label: `Discount (${d1p}%)`,           val: `− ${fmt(d1a)}`,    green: true,  bold: false }] : []),
+                  ...(d2p > 0 ? [{ label: `Additional Discount (${d2p}%)`, val: `− ${fmt(d2a)}`,    green: true,  bold: false }] : []),
+                  ...(fr  > 0 ? [{ label: 'Freight & Packing',            val: fmt(fr),            green: false, bold: false }] : []),
+                ].map(({ label, val, green, bold }) => (
+                  <div key={label} style={{
+                    display: 'flex', justifyContent: 'space-between',
+                    padding: '2px 0', fontSize: '8.5px',
+                    color: green ? GREEN : GRAY, fontWeight: bold ? 700 : 400,
+                  }}>
+                    <span>{label}</span>
+                    <span style={{ fontFamily: 'monospace' }}>{val}</span>
+                  </div>
+                ))}
+
+                {/* Sub-total divider */}
+                <div style={{ borderTop: `0.5px solid ${BORDER}`, marginTop: '3px' }} />
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', fontSize: '9px', fontWeight: 700, color: NAVY }}>
+                  <span>Sub-total</span>
+                  <span style={{ fontFamily: 'monospace' }}>{fmt(sub)}</span>
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', fontSize: '9px', color: '#666' }}>
-                  <span>GST</span><span style={{ fontFamily: 'monospace' }}>{formatCurrency(gst)}</span>
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', fontSize: '8.5px', color: GRAY }}>
+                  <span>GST @ 18%</span>
+                  <span style={{ fontFamily: 'monospace' }}>{fmt(gst)}</span>
                 </div>
-                {d1p > 0 && (
-                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', fontSize: '9px', color: '#16a34a' }}>
-                    <span>Discount ({d1p}%)</span><span style={{ fontFamily: 'monospace' }}>-{formatCurrency(d1a)}</span>
-                  </div>
-                )}
-                {d2p > 0 && (
-                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', fontSize: '9px', color: '#16a34a' }}>
-                    <span>Addl. Discount ({d2p}%)</span><span style={{ fontFamily: 'monospace' }}>-{formatCurrency(d2a)}</span>
-                  </div>
-                )}
-                {fr > 0 && (
-                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', fontSize: '9px', color: '#666' }}>
-                    <span>Freight (incl. GST)</span><span style={{ fontFamily: 'monospace' }}>{formatCurrency(fr)}</span>
-                  </div>
-                )}
-                <div style={{ borderTop: '2px solid #e94560', marginTop: '4px', paddingTop: '6px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontSize: '12px', fontWeight: 700, color: '#1a1a2e' }}>TOTAL PAYABLE</span>
-                  <span style={{ fontSize: '16px', fontWeight: 700, color: '#e94560', fontFamily: 'monospace' }}>{formatCurrency(gt)}</span>
+
+                {/* Grand total — navy box */}
+                <div style={{
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                  background: NAVY, color: WHITE,
+                  padding: '7px 8px', marginTop: '4px', borderRadius: '2px',
+                }}>
+                  <span style={{ fontSize: '10.5px', fontWeight: 700 }}>TOTAL PAYABLE</span>
+                  <span style={{ fontSize: '13px', fontWeight: 700, fontFamily: 'monospace' }}>₹ {fmt(gt)}</span>
                 </div>
               </div>
             </div>
 
-            {/* Footer */}
-            <div style={{ marginTop: '5mm', borderTop: '1px solid #eee', paddingTop: '3mm' }}>
-              <div style={{ fontSize: '7px', color: '#999' }}>Terms: Prices valid for 30 days from quotation date. GST as applicable. Freight charges additional unless specified.</div>
-              <div style={{ fontSize: '7px', color: '#999' }}>Generated by {company.company_name || 'SmartShapes'} | {company.email || ''}</div>
+            {/* ── TERMS & BANK ───────────────────────────────────────────── */}
+            <div style={{
+              display: 'grid', gridTemplateColumns: '110mm 1fr',
+              border: `0.5px solid ${BORDER}`, marginBottom: '6mm',
+            }}>
+              <div style={{ padding: '6px 8px', borderRight: `0.5px solid ${BORDER}` }}>
+                <div style={{ fontSize: '8.5px', fontWeight: 700, color: NAVY, marginBottom: '3px' }}>
+                  Terms &amp; Conditions
+                </div>
+                {terms.map((t, i) => (
+                  <div key={i} style={{ fontSize: '7px', color: GRAY, marginBottom: '1.5px' }}>
+                    {i + 1}.&nbsp; {t}
+                  </div>
+                ))}
+              </div>
+              <div style={{ padding: '6px 8px' }}>
+                <div style={{ fontSize: '8.5px', fontWeight: 700, color: NAVY, marginBottom: '3px' }}>
+                  Bank Details
+                </div>
+                {bankLines.length > 0
+                  ? bankLines.map((ln, i) => (
+                      <div key={i} style={{ fontSize: '7px', color: GRAY, marginBottom: '1.5px' }}>{ln}</div>
+                    ))
+                  : (
+                    <>
+                      <div style={{ fontSize: '7px', color: GRAY }}>Account: {co.name}</div>
+                      <div style={{ fontSize: '7px', color: GRAY, fontStyle: 'italic' }}>
+                        Bank details will be shared separately.
+                      </div>
+                    </>
+                  )
+                }
+              </div>
             </div>
+
+            {/* ── SIGNATURE ──────────────────────────────────────────────── */}
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <div style={{ width: '70mm', textAlign: 'right' }}>
+                <div style={{ fontSize: '8.5px', fontWeight: 700, color: NAVY, marginBottom: '12mm' }}>
+                  For&nbsp;<strong>{co.name}</strong>
+                </div>
+                <div style={{ borderTop: `0.5px solid ${GRAY}`, paddingTop: '3px' }}>
+                  <div style={{ fontSize: '7.5px', color: GRAY }}>Authorized Signatory</div>
+                </div>
+              </div>
+            </div>
+
           </div>
         </div>
       </div>

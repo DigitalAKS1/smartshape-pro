@@ -504,48 +504,88 @@ async def download_quotation_pdf(quotation_id: str, request: Request):
     from reportlab.lib import colors
     from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, HRFlowable
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.lib.enums import TA_RIGHT, TA_CENTER
+    from reportlab.lib.enums import TA_RIGHT, TA_CENTER, TA_LEFT
+    from datetime import datetime as _dt, timedelta
     import io as stdio
 
     buf = stdio.BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=12*mm, rightMargin=12*mm, topMargin=10*mm, bottomMargin=10*mm)
+    doc = SimpleDocTemplate(buf, pagesize=A4,
+        leftMargin=12*mm, rightMargin=12*mm,
+        topMargin=10*mm, bottomMargin=10*mm)
 
-    styles = getSampleStyleSheet()
-    FONT_SCALES = {"small": 0.85, "medium": 1.0, "large": 1.15}
-    fs_mode = (quot.get("font_size_mode") or "medium")
-    scale = FONT_SCALES.get(fs_mode, 1.0)
+    # ── Brand palette ──────────────────────────────────────────────────────────
+    BRAND  = colors.Color(0.914, 0.271, 0.376)  # #e94560
+    NAVY   = colors.Color(0.102, 0.102, 0.180)  # #1a1a2e
+    GRAY   = colors.Color(0.40,  0.40,  0.46)
+    LGRAY  = colors.Color(0.955, 0.955, 0.970)
+    BORDER = colors.Color(0.78,  0.78,  0.84)
+    ALT    = colors.Color(0.978, 0.978, 0.992)
+    GREEN  = colors.Color(0.09,  0.56,  0.22)
+    WHITE  = colors.white
 
-    def sz(n):
-        return max(5, round(n * scale))
+    scale = {"small": 0.85, "medium": 1.0, "large": 1.15}.get(
+        quot.get("font_size_mode") or "medium", 1.0)
+    def sz(n): return max(5, round(n * scale))
 
-    styles.add(ParagraphStyle(name='CoName', fontSize=sz(14), leading=sz(17), fontName='Helvetica-Bold', textColor=colors.Color(0.1, 0.1, 0.2)))
-    styles.add(ParagraphStyle(name='CoSub', fontSize=sz(8), leading=sz(10), textColor=colors.Color(0.3, 0.3, 0.4)))
-    styles.add(ParagraphStyle(name='QTitle', fontSize=sz(13), leading=sz(16), fontName='Helvetica-Bold', textColor=colors.Color(0.1, 0.1, 0.2), alignment=TA_CENTER))
-    styles.add(ParagraphStyle(name='Sm', fontSize=sz(8), leading=sz(10), textColor=colors.Color(0.15, 0.15, 0.2)))
-    styles.add(ParagraphStyle(name='SmR', fontSize=sz(8), leading=sz(10), textColor=colors.Color(0.15, 0.15, 0.2), alignment=TA_RIGHT))
-    styles.add(ParagraphStyle(name='Tiny', fontSize=sz(7), leading=sz(9), textColor=colors.Color(0.4, 0.4, 0.5)))
-    styles.add(ParagraphStyle(name='BoldSm', fontSize=sz(9), leading=sz(11), fontName='Helvetica-Bold', textColor=colors.Color(0.1, 0.1, 0.2)))
-    styles.add(ParagraphStyle(name='BoldSmR', fontSize=sz(9), leading=sz(11), fontName='Helvetica-Bold', textColor=colors.Color(0.1, 0.1, 0.2), alignment=TA_RIGHT))
-    styles.add(ParagraphStyle(name='Total', fontSize=sz(11), leading=sz(14), fontName='Helvetica-Bold', textColor=colors.Color(0.1, 0.1, 0.2), alignment=TA_RIGHT))
+    S = getSampleStyleSheet()
+    def ps(name, **kw): S.add(ParagraphStyle(name=name, **kw))
+
+    ps('CoName',  fontSize=sz(15), leading=sz(19), fontName='Helvetica-Bold', textColor=NAVY)
+    ps('CoSub',   fontSize=sz(7.5),leading=sz(10), textColor=GRAY)
+    ps('QBig',    fontSize=sz(21), leading=sz(25), fontName='Helvetica-Bold', textColor=BRAND, alignment=TA_RIGHT)
+    ps('QNum',    fontSize=sz(10), leading=sz(13), fontName='Helvetica-Bold', textColor=NAVY,  alignment=TA_RIGHT)
+    ps('InfoLbl', fontSize=sz(7),  leading=sz(9),  fontName='Helvetica-Bold', textColor=BRAND)
+    ps('InfoBig', fontSize=sz(10.5),leading=sz(13),fontName='Helvetica-Bold', textColor=NAVY)
+    ps('InfoMed', fontSize=sz(9),  leading=sz(11.5),textColor=NAVY)
+    ps('InfoGry', fontSize=sz(8),  leading=sz(10.5),textColor=GRAY)
+    ps('TblHdrC', fontSize=sz(7.5),leading=sz(9.5),fontName='Helvetica-Bold', textColor=WHITE, alignment=TA_CENTER)
+    ps('TblHdrR', fontSize=sz(7.5),leading=sz(9.5),fontName='Helvetica-Bold', textColor=WHITE, alignment=TA_RIGHT)
+    ps('TblHdrL', fontSize=sz(7.5),leading=sz(9.5),fontName='Helvetica-Bold', textColor=WHITE)
+    ps('TblL',    fontSize=sz(8.5),leading=sz(10.5),textColor=NAVY)
+    ps('TblC',    fontSize=sz(8.5),leading=sz(10.5),textColor=NAVY, alignment=TA_CENTER)
+    ps('TblR',    fontSize=sz(8.5),leading=sz(10.5),textColor=NAVY, alignment=TA_RIGHT)
+    ps('TblRB',   fontSize=sz(8.5),leading=sz(10.5),fontName='Helvetica-Bold', textColor=NAVY, alignment=TA_RIGHT)
+    ps('SumL',    fontSize=sz(8.5),leading=sz(10.5),textColor=GRAY)
+    ps('SumR',    fontSize=sz(8.5),leading=sz(10.5),fontName='Helvetica-Bold', textColor=NAVY, alignment=TA_RIGHT)
+    ps('SumGrn',  fontSize=sz(8.5),leading=sz(10.5),textColor=GREEN, alignment=TA_RIGHT)
+    ps('SubL',    fontSize=sz(9),  leading=sz(11.5),fontName='Helvetica-Bold', textColor=NAVY)
+    ps('SubR',    fontSize=sz(9),  leading=sz(11.5),fontName='Helvetica-Bold', textColor=NAVY, alignment=TA_RIGHT)
+    ps('GrandL',  fontSize=sz(10.5),leading=sz(14),fontName='Helvetica-Bold', textColor=WHITE)
+    ps('GrandR',  fontSize=sz(13), leading=sz(17), fontName='Helvetica-Bold', textColor=WHITE, alignment=TA_RIGHT)
+    ps('Bold8',   fontSize=sz(8.5),leading=sz(10.5),fontName='Helvetica-Bold', textColor=NAVY)
+    ps('Tiny',    fontSize=sz(7),  leading=sz(9),  textColor=GRAY)
+    ps('SigTxt',  fontSize=sz(8),  leading=sz(10), textColor=GRAY, alignment=TA_RIGHT)
+    ps('SigBold', fontSize=sz(8.5),leading=sz(11), fontName='Helvetica-Bold', textColor=NAVY, alignment=TA_RIGHT)
 
     elements = []
-    accent = colors.Color(0.91, 0.27, 0.38)
-    hdr_bg = colors.Color(0.95, 0.95, 0.97)
 
-    co_name = company.get("company_name", "SmartShape Pro")
-    co_addr = company.get("address", "")
-    co_city = f"{company.get('city', '')}{', ' + company.get('state', '') if company.get('state') else ''} {company.get('pincode', '')}"
-    co_contact = f"Phone: {company.get('phone', '')} | Email: {company.get('email', '')}"
-    co_gst = f"GSTIN: {company.get('gst_number', '')}" if company.get('gst_number') else ""
+    # ── Company info ───────────────────────────────────────────────────────────
+    co_name   = company.get("company_name", "SmartShapes")
+    co_addr   = company.get("address", "")
+    co_city   = company.get("city", "")
+    co_state  = company.get("state", "")
+    co_pin    = company.get("pincode", "")
+    co_phone  = company.get("phone", "")
+    co_email  = company.get("email", "")
+    co_gst    = company.get("gst_number", "")
+    city_str  = ", ".join(filter(None, [co_city, co_state, co_pin]))
+    cont_str  = "  |  ".join(filter(None, [f"Ph: {co_phone}" if co_phone else "", co_email]))
 
-    text_block = [Paragraph(co_name, styles['CoName'])]
-    if co_addr:
-        text_block.append(Paragraph(f"{co_addr}, {co_city}", styles['CoSub']))
-    if co_contact:
-        text_block.append(Paragraph(co_contact, styles['CoSub']))
+    left_co = [Paragraph(co_name, S['CoName'])]
+    addr_line = (co_addr + (f", {city_str}" if city_str else "")) if co_addr else city_str
+    if addr_line:
+        left_co.append(Paragraph(addr_line, S['CoSub']))
+    if cont_str:
+        left_co.append(Paragraph(cont_str, S['CoSub']))
     if co_gst:
-        text_block.append(Paragraph(co_gst, styles['CoSub']))
+        left_co.append(Paragraph(f"GSTIN: {co_gst}", S['CoSub']))
 
+    right_co = [
+        Paragraph("QUOTATION", S['QBig']),
+        Paragraph(quot.get("quote_number", ""), S['QNum']),
+    ]
+
+    # Logo
     logo_image = None
     logo_url = company.get("logo_url", "")
     if logo_url:
@@ -559,209 +599,252 @@ async def download_quotation_pdf(quotation_id: str, request: Request):
                 obj_path = logo_url.replace("/api/files/", "", 1)
                 r = requests.get(f"{STORAGE_URL}/objects/{obj_path}",
                                  headers={"X-Storage-Key": key}, timeout=15)
-                if r.ok:
-                    img_bytes = r.content
+                if r.ok: img_bytes = r.content
             elif logo_url.startswith("http://") or logo_url.startswith("https://"):
                 r = requests.get(logo_url, timeout=15)
-                if r.ok:
-                    img_bytes = r.content
+                if r.ok: img_bytes = r.content
             if img_bytes:
                 ir = ImageReader(_io.BytesIO(img_bytes))
                 iw, ih = ir.getSize()
-                target_h = 22 * mm
-                target_w = (iw / ih) * target_h if ih else 30 * mm
-                if target_w > 50 * mm:
-                    target_w = 50 * mm
-                    target_h = (ih / iw) * target_w if iw else target_h
-                logo_image = RLImage(_io.BytesIO(img_bytes), width=target_w, height=target_h)
+                th = 20 * mm
+                tw = (iw / ih) * th if ih else 28 * mm
+                if tw > 44 * mm:
+                    tw = 44 * mm; th = (ih / iw) * tw if iw else th
+                logo_image = RLImage(_io.BytesIO(img_bytes), width=tw, height=th)
         except Exception as _e:
             logging.warning(f"PDF logo load failed: {_e}")
-            logo_image = None
 
-    if logo_image is not None:
-        header_tbl = Table([[logo_image, text_block]], colWidths=[55*mm, 131*mm])
-        header_tbl.setStyle(TableStyle([
+    if logo_image:
+        hdr = Table([[logo_image, left_co, right_co]], colWidths=[46*mm, 86*mm, 54*mm])
+        hdr.setStyle(TableStyle([
+            ('VALIGN', (0, 0), (1, 0), 'MIDDLE'),
+            ('VALIGN', (2, 0), (2, 0), 'TOP'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 0),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+        ]))
+    else:
+        hdr = Table([[left_co, right_co]], colWidths=[132*mm, 54*mm])
+        hdr.setStyle(TableStyle([
             ('VALIGN', (0, 0), (-1, -1), 'TOP'),
             ('LEFTPADDING', (0, 0), (-1, -1), 0),
             ('RIGHTPADDING', (0, 0), (-1, -1), 0),
         ]))
-        elements.append(header_tbl)
-    else:
-        for el in text_block:
-            elements.append(el)
-    elements.append(Spacer(1, 3*mm))
-    elements.append(HRFlowable(width="100%", thickness=1, color=accent))
-    elements.append(Spacer(1, 2*mm))
-    elements.append(Paragraph("QUOTATION", styles['QTitle']))
-    elements.append(Spacer(1, 2*mm))
-    elements.append(HRFlowable(width="100%", thickness=0.5, color=colors.Color(0.8, 0.8, 0.85)))
-    elements.append(Spacer(1, 3*mm))
-
-    quote_date = quot.get("created_at", "")[:10]
-    info_left = f"""<b>Quote No:</b> {quot.get('quote_number', '')}<br/>
-<b>Date:</b> {quote_date}<br/>
-<b>Valid Till:</b> 30 days from date<br/>
-<b>Sales Person:</b> {quot.get('sales_person_name', '')}"""
-
-    info_right = f"""<b>To:</b><br/>
-<b>{quot.get('school_name', '')}</b><br/>
-{quot.get('principal_name', '')}<br/>
-{quot.get('address', '')}<br/>
-Ph: {quot.get('customer_phone', '')} | {quot.get('customer_email', '')}"""
-    if quot.get('customer_gst'):
-        info_right += f"<br/>GSTIN: {quot['customer_gst']}"
-
-    info_table = Table([
-        [Paragraph(info_left, styles['Sm']), Paragraph(info_right, styles['Sm'])]
-    ], colWidths=[90*mm, 96*mm])
-    info_table.setStyle(TableStyle([
-        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-        ('LEFTPADDING', (0, 0), (-1, -1), 0),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 0),
-    ]))
-    elements.append(info_table)
+    elements.append(hdr)
+    elements.append(Spacer(1, 2.5*mm))
+    elements.append(HRFlowable(width="100%", thickness=2.5, color=BRAND, spaceAfter=0.8))
+    elements.append(HRFlowable(width="100%", thickness=0.5, color=NAVY, spaceAfter=0))
     elements.append(Spacer(1, 4*mm))
 
+    # ── Date calculations ──────────────────────────────────────────────────────
+    try:
+        _qd = _dt.fromisoformat(quot.get("created_at", "")[:10])
+        date_str  = _qd.strftime("%d %b %Y")
+        valid_str = (_qd + timedelta(days=30)).strftime("%d %b %Y")
+    except Exception:
+        date_str  = quot.get("created_at", "")[:10]
+        valid_str = "30 days from date"
+
+    # ── Info block ─────────────────────────────────────────────────────────────
+    school    = quot.get("school_name", "")
+    principal = quot.get("principal_name", "")
+    address   = quot.get("address", "")
+    cust_ph   = quot.get("customer_phone", "")
+    cust_em   = quot.get("customer_email", "")
+    cust_gst  = quot.get("customer_gst", "")
+
+    def _kv(k, v):
+        return Paragraph(f'<font color="#888899">{k}</font>  <b>{v}</b>', S['InfoGry'])
+
+    left_info = [
+        Paragraph("QUOTE DETAILS", S['InfoLbl']),
+        Spacer(1, 1.5*mm),
+        _kv("Quote No", quot.get("quote_number", "")),
+        _kv("Date", date_str),
+        _kv("Valid Till", valid_str),
+        _kv("Sales Person", quot.get("sales_person_name", "—")),
+    ]
+    if quot.get("package_name"):
+        left_info.append(_kv("Package", quot["package_name"]))
+
+    right_info = [Paragraph("BILL TO", S['InfoLbl']), Spacer(1, 1.5*mm)]
+    if school:
+        right_info.append(Paragraph(f'<b>{school}</b>', S['InfoBig']))
+        if principal:
+            right_info.append(Paragraph(principal, S['InfoMed']))
+    elif principal:
+        right_info.append(Paragraph(f'<b>{principal}</b>', S['InfoBig']))
+    for _line in filter(None, [
+        address,
+        f"Ph: {cust_ph}" if cust_ph else "",
+        cust_em,
+        f"GSTIN: {cust_gst}" if cust_gst else "",
+    ]):
+        right_info.append(Paragraph(_line, S['InfoGry']))
+
+    info_t = Table([[left_info, right_info]], colWidths=[82*mm, 104*mm])
+    info_t.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, -1), LGRAY),
+        ('BOX',        (0, 0), (-1, -1), 0.5, BORDER),
+        ('LINEAFTER',  (0, 0), (0,  0),  0.5, BORDER),
+        ('VALIGN',     (0, 0), (-1, -1), 'TOP'),
+        ('TOPPADDING',    (0, 0), (-1, -1), 6),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 7),
+        ('LEFTPADDING',   (0, 0), (-1, -1), 7),
+        ('RIGHTPADDING',  (0, 0), (-1, -1), 7),
+    ]))
+    elements.append(info_t)
+    elements.append(Spacer(1, 4*mm))
+
+    # ── Items table (Type column removed) ─────────────────────────────────────
     lines = quot.get("lines", [])
-    tbl_header = ["Sr.", "Description of Product", "Type", "Qty", "Rate", "GST", "Amount"]
-    tbl_data = [tbl_header]
+    # Sr(9) + Description(91) + Qty(13) + Rate(27) + GST(21) + Amount(25) = 186 mm
+    cw = [9*mm, 91*mm, 13*mm, 27*mm, 21*mm, 25*mm]
+
+    tbl_data = [[
+        Paragraph("SR",            S['TblHdrC']),
+        Paragraph("DESCRIPTION",   S['TblHdrL']),
+        Paragraph("QTY",           S['TblHdrC']),
+        Paragraph("RATE (₹)",      S['TblHdrR']),
+        Paragraph("GST (₹)",       S['TblHdrR']),
+        Paragraph("AMOUNT (₹)",    S['TblHdrR']),
+    ]]
     for i, l in enumerate(lines):
         tbl_data.append([
-            str(i + 1),
-            Paragraph(l.get("description", ""), styles['Sm']),
-            l.get("product_type", ""),
-            str(l.get("qty", 0)),
-            f"{l.get('unit_price', 0):,.0f}",
-            f"{l.get('line_gst', 0):,.0f}",
-            f"{l.get('line_total', 0):,.0f}",
+            Paragraph(str(i + 1),                          S['TblC']),
+            Paragraph(l.get("description", ""),            S['TblL']),
+            Paragraph(str(l.get("qty", 0)),                S['TblC']),
+            Paragraph(f"{l.get('unit_price', 0):,.0f}",   S['TblR']),
+            Paragraph(f"{l.get('line_gst', 0):,.0f}",     S['TblR']),
+            Paragraph(f"<b>{l.get('line_total', 0):,.0f}</b>", S['TblRB']),
         ])
 
-    col_widths = [10*mm, 68*mm, 20*mm, 14*mm, 24*mm, 20*mm, 30*mm]
-    items_table = Table(tbl_data, colWidths=col_widths)
-    items_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), hdr_bg),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, -1), 8),
-        ('FONTSIZE', (0, 0), (-1, 0), 7),
-        ('ALIGN', (0, 0), (0, -1), 'CENTER'),
-        ('ALIGN', (3, 0), (-1, -1), 'RIGHT'),
-        ('GRID', (0, 0), (-1, -1), 0.3, colors.Color(0.75, 0.75, 0.8)),
-        ('TOPPADDING', (0, 0), (-1, -1), 3),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
-        ('LEFTPADDING', (0, 0), (-1, -1), 3),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 3),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.Color(0.98, 0.98, 0.99)]),
+    it = Table(tbl_data, colWidths=cw)
+    it.setStyle(TableStyle([
+        ('BACKGROUND',    (0, 0), (-1,  0), NAVY),
+        ('GRID',          (0, 0), (-1, -1), 0.3, BORDER),
+        ('LINEBELOW',     (0, -1),(-1, -1), 0.8, NAVY),
+        ('VALIGN',        (0, 0), (-1, -1), 'MIDDLE'),
+        ('TOPPADDING',    (0, 0), (-1, -1), 4),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ('LEFTPADDING',   (0, 0), (-1, -1), 4),
+        ('RIGHTPADDING',  (0, 0), (-1, -1), 4),
+        ('ROWBACKGROUNDS',(0, 1), (-1, -1), [WHITE, ALT]),
     ]))
-    elements.append(items_table)
+    elements.append(it)
     elements.append(Spacer(1, 3*mm))
 
+    # ── Pricing summary ────────────────────────────────────────────────────────
     items_total = quot.get("subtotal", 0)
     d1p = quot.get("discount1_pct", 0)
     d1a = quot.get("disc1_amount", 0)
     d2p = quot.get("discount2_pct", 0)
     d2a = quot.get("disc2_amount", 0)
-    fr_total = quot.get("freight_total", 0)
-    sub_total = quot.get("sub_total_after", items_total - d1a - d2a + fr_total)
+    fr  = quot.get("freight_total", 0)
+    sub = quot.get("sub_total_after", items_total - d1a - d2a + fr)
     gst = quot.get("gst_amount", 0)
-    gt = quot.get("grand_total", 0)
+    gt  = quot.get("grand_total", 0)
+    def fc(n): return f"{n:,.2f}"
 
-    sum_rows = [["Total", f"{items_total:,.2f}"]]
+    sum_rows = [(Paragraph("Items Total", S['SumL']), Paragraph(fc(items_total), S['SumR']))]
     if d1p > 0:
-        sum_rows.append([f"Discount @ {d1p}%", f"{d1a:,.2f}"])
+        sum_rows.append((Paragraph(f"Discount ({d1p}%)", S['SumL']), Paragraph(f"&#8722; {fc(d1a)}", S['SumGrn'])))
     if d2p > 0:
-        sum_rows.append([f"Spl Additional Discount {d2p}%", f"{d2a:,.2f}"])
-    if fr_total > 0:
-        sum_rows.append(["Freight & Packing", f"{fr_total:,.2f}"])
-    sum_rows.append(["Sub-total", f"{sub_total:,.2f}"])
-    sum_rows.append(["GST @ 18%", f"{gst:,.2f}"])
-    sum_rows.append(["Total", f"{gt:,.2f}"])
+        sum_rows.append((Paragraph(f"Additional Discount ({d2p}%)", S['SumL']), Paragraph(f"&#8722; {fc(d2a)}", S['SumGrn'])))
+    if fr > 0:
+        sum_rows.append((Paragraph("Freight & Packing", S['SumL']), Paragraph(fc(fr), S['SumR'])))
+    sub_idx = len(sum_rows)
+    sum_rows.append((Paragraph("Sub-total", S['SubL']), Paragraph(fc(sub), S['SubR'])))
+    sum_rows.append((Paragraph("GST @ 18%", S['SumL']), Paragraph(fc(gst), S['SumR'])))
 
-    sum_data = []
-    for i, row in enumerate(sum_rows):
-        is_first = i == 0
-        is_last = i == len(sum_rows) - 1
-        is_subtotal = row[0] == "Sub-total"
-        label_style = styles['BoldSm'] if (is_first or is_last or is_subtotal) else styles['Sm']
-        if is_last:
-            value_style = styles['Total']
-        elif is_subtotal or is_first:
-            value_style = styles['BoldSmR']
-        else:
-            value_style = styles['SmR']
-        sum_data.append([Paragraph(row[0], label_style), Paragraph(row[1], value_style)])
+    sum_tbl = Table([[r[0], r[1]] for r in sum_rows], colWidths=[60*mm, 32*mm])
+    sum_tbl.setStyle(TableStyle([
+        ('ALIGN',         (1, 0), (1, -1), 'RIGHT'),
+        ('VALIGN',        (0, 0), (-1, -1), 'MIDDLE'),
+        ('TOPPADDING',    (0, 0), (-1, -1), 2),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
+        ('LINEABOVE', (0, sub_idx), (-1, sub_idx), 0.5, BORDER),
+        ('LINEBELOW', (0, sub_idx), (-1, sub_idx), 0.3, BORDER),
+    ]))
 
-    sum_tbl = Table(sum_data, colWidths=[55*mm, 35*mm])
-    sub_total_row_idx = next((i for i, r in enumerate(sum_rows) if r[0] == "Sub-total"), None)
-    tbl_styles = [
-        ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('LINEABOVE', (0, -1), (-1, -1), 1, accent),
-        ('LINEBELOW', (0, -1), (-1, -1), 1, accent),
-        ('TOPPADDING', (0, -1), (-1, -1), 4),
-        ('BOTTOMPADDING', (0, -1), (-1, -1), 4),
-        ('TOPPADDING', (0, 0), (-1, -2), 2),
-        ('BOTTOMPADDING', (0, 0), (-1, -2), 2),
-    ]
-    if sub_total_row_idx is not None:
-        tbl_styles.append(('LINEABOVE', (0, sub_total_row_idx), (-1, sub_total_row_idx), 0.5, colors.Color(0.7, 0.7, 0.75)))
-    sum_tbl.setStyle(TableStyle(tbl_styles))
-    outer_sum = Table([['', sum_tbl]], colWidths=[96*mm, 90*mm])
-    outer_sum.setStyle(TableStyle([('VALIGN', (0, 0), (-1, -1), 'TOP'), ('LEFTPADDING', (0, 0), (-1, -1), 0)]))
+    grand_tbl = Table([[
+        Paragraph("TOTAL PAYABLE", S['GrandL']),
+        Paragraph(f"&#8377; {fc(gt)}", S['GrandR']),
+    ]], colWidths=[40*mm, 52*mm])
+    grand_tbl.setStyle(TableStyle([
+        ('BACKGROUND',    (0, 0), (-1, -1), NAVY),
+        ('TOPPADDING',    (0, 0), (-1, -1), 7),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 7),
+        ('LEFTPADDING',   (0, 0), (-1, -1), 8),
+        ('RIGHTPADDING',  (0, 0), (-1, -1), 8),
+        ('VALIGN',        (0, 0), (-1, -1), 'MIDDLE'),
+    ]))
+
+    outer_sum = Table([['', sum_tbl], ['', grand_tbl]], colWidths=[94*mm, 92*mm])
+    outer_sum.setStyle(TableStyle([
+        ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
+        ('LEFTPADDING',   (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
+        ('TOPPADDING',    (0, 1), (-1, 1),  3),
+        ('BOTTOMPADDING', (0, 0), (-1, 0),  0),
+    ]))
     elements.append(outer_sum)
     elements.append(Spacer(1, 5*mm))
 
+    # ── Terms & Bank Details ───────────────────────────────────────────────────
     terms_raw = quot.get("terms_override") or company.get("terms_conditions", "")
     if terms_raw:
         terms_lines = [t.strip().lstrip("0123456789. )-") for t in str(terms_raw).split("\n") if t.strip()]
     else:
         terms_lines = [
-            "Payment : 50% advance and balance 50% against Delivery",
-            "Warranty : 1 year against any manufacturing Defect",
+            "Payment: 50% advance and balance 50% against delivery",
+            "Warranty: 1 year against any manufacturing defect",
             "Machine not to be used for commercial purpose",
-            "Local Duties/Taxes extra to be bore by buyer",
+            "Local duties/taxes extra to be borne by buyer",
         ]
 
-    bank_info = quot.get("bank_details_override") or company.get("bank_details", "")
-    bank_lines = [ln.strip() for ln in str(bank_info).split("\n") if ln.strip()] if bank_info else []
+    bank_raw  = quot.get("bank_details_override") or company.get("bank_details", "")
+    bank_lines = [l.strip() for l in str(bank_raw).split("\n") if l.strip()] if bank_raw else []
 
-    terms_block = [Paragraph('<b>Terms &amp; Conditions</b>', styles['BoldSm'])]
+    tc_block = [Paragraph("<b>Terms &amp; Conditions</b>", S['Bold8'])]
     for i, t in enumerate(terms_lines):
-        terms_block.append(Paragraph(f'{i+1}. {t}', styles['Tiny']))
-    terms_block.append(Spacer(1, 2*mm))
+        tc_block.append(Paragraph(f"{i + 1}.  {t}", S['Tiny']))
 
-    bank_block = [Paragraph('<b>Bank Details</b>', styles['BoldSm'])]
+    bk_block = [Paragraph("<b>Bank Details</b>", S['Bold8'])]
     if bank_lines:
         for ln in bank_lines:
-            bank_block.append(Paragraph(ln, styles['Sm']))
+            bk_block.append(Paragraph(ln, S['Tiny']))
     else:
-        bank_block.append(Paragraph(f"<i>Account : {co_name}</i>", styles['Sm']))
-        bank_block.append(Paragraph("Bank details will be shared separately.", styles['Tiny']))
+        bk_block.append(Paragraph(f"Account: {co_name}", S['Tiny']))
+        bk_block.append(Paragraph("Bank details will be shared separately.", S['Tiny']))
 
-    tb_table = Table([[terms_block, bank_block]], colWidths=[105*mm, 81*mm])
-    tb_table.setStyle(TableStyle([
-        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-        ('LEFTPADDING', (0, 0), (-1, -1), 0),
-        ('RIGHTPADDING', (0, 0), (0, 0), 6),
-        ('LEFTPADDING', (1, 0), (1, 0), 6),
-        ('BOX', (0, 0), (-1, -1), 0.3, colors.Color(0.85, 0.85, 0.9)),
-        ('LINEAFTER', (0, 0), (0, 0), 0.3, colors.Color(0.85, 0.85, 0.9)),
-        ('TOPPADDING', (0, 0), (-1, -1), 6),
+    footer_t = Table([[tc_block, bk_block]], colWidths=[110*mm, 76*mm])
+    footer_t.setStyle(TableStyle([
+        ('BOX',           (0, 0), (-1, -1), 0.5, BORDER),
+        ('LINEAFTER',     (0, 0), (0,  0),  0.5, BORDER),
+        ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
+        ('TOPPADDING',    (0, 0), (-1, -1), 6),
         ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+        ('LEFTPADDING',   (0, 0), (-1, -1), 7),
+        ('RIGHTPADDING',  (0, 0), (-1, -1), 7),
     ]))
-    elements.append(tb_table)
+    elements.append(footer_t)
     elements.append(Spacer(1, 6*mm))
 
-    sig_table = Table([
-        ['', Paragraph(f'<font size=8>For <b>{co_name}</b></font>', styles['SmR'])],
+    # ── Signature block ────────────────────────────────────────────────────────
+    sig_t = Table([
+        ['', Paragraph(f'For &nbsp;<b>{co_name}</b>', S['SigBold'])],
         ['', ''],
-        ['', Paragraph('<font size=7>Authorized Signatory</font>', styles['SmR'])],
+        ['', Paragraph("Authorized Signatory", S['SigTxt'])],
     ], colWidths=[120*mm, 66*mm])
-    sig_table.setStyle(TableStyle([
-        ('VALIGN', (0, 0), (-1, -1), 'BOTTOM'),
-        ('TOPPADDING', (0, 1), (-1, 1), 15*mm),
+    sig_t.setStyle(TableStyle([
+        ('VALIGN',        (0, 0), (-1, -1), 'BOTTOM'),
+        ('LEFTPADDING',   (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
+        ('TOPPADDING',    (0, 1), (-1, 1),  12*mm),
+        ('LINEABOVE',     (1, 2), (1,  2),  0.5, GRAY),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
     ]))
-    elements.append(sig_table)
+    elements.append(sig_t)
 
     doc.build(elements)
     buf.seek(0)
