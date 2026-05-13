@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import SalesLayout from '../../components/layouts/SalesLayout';
 import {
   attendance as attendanceApi, visits as visitsApi,
@@ -8,12 +8,11 @@ import {
 } from '../../lib/api';
 import { useAuth } from '../../contexts/AuthContext';
 import {
-  Calendar, MapPin, FileText, Receipt, LogIn,
+  Calendar, MapPin, FileText, Receipt,
   Target, CheckCircle, Clock, Phone, MessageSquare,
-  ChevronRight, ArrowLeft, User, AlertCircle,
+  ChevronRight, User, AlertCircle,
 } from 'lucide-react';
 import { Button } from '../../components/ui/button';
-import { Link as RouterLink } from 'react-router-dom';
 
 // ── Design tokens ────────────────────────────────────────────
 const card   = 'bg-[var(--bg-card)] border border-[var(--border-color)]';
@@ -52,8 +51,6 @@ const openWa = (phone) => {
 // ── Component ────────────────────────────────────────────────
 export default function SalesHome() {
   const { user } = useAuth();
-  const navigate  = useNavigate();
-  const isAdmin   = user?.role === 'admin';
   const today     = new Date().toISOString().split('T')[0];
 
   const [tab,  setTab]  = useState('overview');
@@ -124,18 +121,6 @@ export default function SalesHome() {
   return (
     <SalesLayout title="My Dashboard">
       <div className="space-y-4 pb-28">
-
-        {/* ── Back to Admin Dashboard (admin only) ── */}
-        {isAdmin && (
-          <button
-            onClick={() => navigate('/dashboard')}
-            className="flex items-center gap-1.5 text-sm font-medium text-[#e94560] hover:opacity-75 transition-opacity"
-            data-testid="back-to-dashboard"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            Back to Admin Dashboard
-          </button>
-        )}
 
         {/* ── Header ── */}
         <div className="flex items-center justify-between">

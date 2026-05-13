@@ -50,11 +50,14 @@ export default function SalesLayout({ children, title, showBack }) {
             <button onClick={toggleTheme} className="p-2 rounded-md hover:bg-[var(--bg-hover)] text-[var(--text-secondary)]" data-testid="sales-theme-toggle">
               {isDark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
             </button>
-            {isAdmin && (
-              <Link to="/dashboard" className="px-2.5 py-1.5 rounded-md text-xs font-medium bg-[#e94560]/10 text-[#e94560] hover:bg-[#e94560]/20 transition-colors" data-testid="sales-back-to-admin">
-                Admin
-              </Link>
-            )}
+            <Link
+              to={isAdmin ? '/dashboard' : '/today'}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-semibold bg-[#e94560] text-white hover:bg-[#f05c75] transition-colors shadow-sm"
+              data-testid="sales-back-to-dashboard"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" />
+              Dashboard
+            </Link>
             <Button
               onClick={handleLogout}
               variant="ghost"
