@@ -7,7 +7,7 @@ import {
   Warehouse, ClipboardList, DollarSign, Users, LogOut, Menu, X,
   Smartphone, Layers, IndianRupee, UserCog, Store, MapPin, Target,
   Sun, Moon, CalendarDays, Calendar, ShoppingCart, Upload, Activity,
-  Home, MoreHorizontal
+  Home, MoreHorizontal, Megaphone
 } from 'lucide-react';
 import { Button } from '../ui/button';
 
@@ -44,6 +44,7 @@ const MODULE_ROUTE_MAP = {
     { path: '/leads', icon: Target, label: 'Leads & CRM' },
     { path: '/crm-masters', icon: Layers, label: 'CRM Masters' },
     { path: '/dispatch-tracking', icon: Package, label: 'Dispatch Tracking' },
+    { path: '/customer-engagement', icon: Megaphone, label: 'Customer Engagement' },
   ],
   sales_portal: { path: '/sales', icon: Smartphone, label: 'Sales Portal' },
   user_management: [

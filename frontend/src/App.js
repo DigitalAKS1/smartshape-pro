@@ -35,6 +35,7 @@ import LeadsCRM from './pages/admin/LeadsCRM';
 import EditQuotation from './pages/admin/EditQuotation';
 import ConversionTracking from './pages/admin/ConversionTracking';
 import ViewQuotation from './pages/admin/ViewQuotation';
+import CustomerEngagement from './pages/admin/CustomerEngagement';
 import LeaveManagement from './pages/admin/LeaveManagement';
 import VisitPlanning from './pages/admin/VisitPlanning';
 import VisitCalendar from './pages/admin/VisitCalendar';
@@ -157,6 +158,7 @@ function AppRouter() {
       <Route path="/import-center" element={<ProtectedRoute><ImportCenter /></ProtectedRoute>} />
       <Route path="/activity-logs" element={<ProtectedRoute><ActivityLogsPage /></ProtectedRoute>} />
       <Route path="/dispatch-tracking" element={<ProtectedRoute><DispatchTracking /></ProtectedRoute>} />
+      <Route path="/customer-engagement" element={<ProtectedRoute><CustomerEngagement /></ProtectedRoute>} />
       
       {/* Protected Routes - Sales */}
       <Route path="/sales" element={<ProtectedRoute><SalesHome /></ProtectedRoute>} />

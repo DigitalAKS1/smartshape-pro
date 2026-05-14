@@ -1,6 +1,8 @@
 from fastapi import APIRouter, HTTPException, Request
 from datetime import datetime, timezone
-import uuid, os, logging
+import uuid, os, logging, smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 from database import db
 from auth_utils import get_current_user
@@ -262,3 +264,187 @@ SmartShape Pro Team"""
         logging.info(f"Submission confirmation sent to {customer_email}")
     except Exception as e:
         logging.error(f"Submission confirmation email failed: {e}")
+
+
+# ── Customer Dashboard — aggregated view ──────────────────────────────────────
+
+@router.get("/customer-portal/{token}/dashboard")
+async def get_customer_dashboard(token: str):
+    quot = await db.quotations.find_one({"catalogue_token": token}, {"_id": 0})
+    if not quot:
+        raise HTTPException(status_code=404, detail="Portal not found")
+
+    quotation_id = quot["quotation_id"]
+
+    # Order status
+    order = await db.orders.find_one({"quotation_id": quotation_id}, {"_id": 0})
+
+    # Selection items
+    selection = await db.catalogue_selections.find_one({"quotation_id": quotation_id}, {"_id": 0})
+    items = []
+    if selection:
+        items = await db.catalogue_selection_items.find(
+            {"catalogue_selection_id": selection["selection_id"]}, {"_id": 0}
+        ).to_list(1000)
+
+    # Upcoming sessions (published, status=upcoming, sorted by date)
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    sessions = await db.training_sessions.find(
+        {"is_published": True, "status": "upcoming", "date": {"$gte": today}},
+        {"_id": 0}
+    ).sort("date", 1).to_list(20)
+
+    # Enrich sessions with registration count + whether this customer is registered
+    for sess in sessions:
+        reg_count = await db.session_registrations.count_documents({"session_id": sess["session_id"]})
+        is_reg = await db.session_registrations.find_one(
+            {"session_id": sess["session_id"], "quotation_id": quotation_id}
+        )
+        sess["registration_count"] = reg_count
+        sess["is_registered"] = bool(is_reg)
+
+    # Videos (published, latest first)
+    videos = await db.training_videos.find(
+        {"is_published": True}, {"_id": 0}
+    ).sort("published_at", -1).to_list(50)
+
+    # Active promotions
+    promotions = await db.promotions.find(
+        {"is_active": True, "$or": [
+            {"valid_until": {"$gte": today}},
+            {"valid_until": ""},
+            {"valid_until": {"$exists": False}},
+        ]},
+        {"_id": 0}
+    ).sort("created_at", -1).to_list(20)
+
+    # Announcements (published, latest first)
+    announcements = await db.announcements.find(
+        {"is_published": True}, {"_id": 0}
+    ).sort("published_at", -1).to_list(30)
+
+    # Notifications for this customer
+    notifications = await db.customer_notifications.find(
+        {"quotation_id": quotation_id}, {"_id": 0}
+    ).sort("created_at", -1).to_list(50)
+
+    unread_count = sum(1 for n in notifications if not n.get("is_read"))
+
+    return {
+        "quotation": {
+            "quote_number":       quot.get("quote_number"),
+            "school_name":        quot.get("school_name"),
+            "principal_name":     quot.get("principal_name"),
+            "package_name":       quot.get("package_name"),
+            "grand_total":        quot.get("grand_total"),
+            "quotation_status":   quot.get("quotation_status"),
+            "catalogue_status":   quot.get("catalogue_status"),
+            "sales_person_name":  quot.get("sales_person_name"),
+            "sales_person_email": quot.get("sales_person_email"),
+        },
+        "selection_items": items,
+        "order_status": order.get("order_status") if order else None,
+        "production_stage": order.get("production_stage") if order else None,
+        "sessions": sessions,
+        "videos": videos,
+        "promotions": promotions,
+        "announcements": announcements,
+        "notifications": notifications,
+        "unread_count": unread_count,
+    }
+
+
+# ── Session registration (public) ─────────────────────────────────────────────
+
+@router.post("/customer-portal/{token}/sessions/{session_id}/register")
+async def register_session(token: str, session_id: str):
+    quot = await db.quotations.find_one({"catalogue_token": token}, {"_id": 0})
+    if not quot:
+        raise HTTPException(status_code=404, detail="Portal not found")
+
+    session = await db.training_sessions.find_one({"session_id": session_id}, {"_id": 0})
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    existing = await db.session_registrations.find_one(
+        {"session_id": session_id, "quotation_id": quot["quotation_id"]}
+    )
+    if existing:
+        return {"ok": True, "already_registered": True}
+
+    # Check max_participants
+    if session.get("max_participants", 0) > 0:
+        count = await db.session_registrations.count_documents({"session_id": session_id})
+        if count >= session["max_participants"]:
+            raise HTTPException(status_code=400, detail="Session is full")
+
+    await db.session_registrations.insert_one({
+        "reg_id": f"reg_{uuid.uuid4().hex[:12]}",
+        "session_id": session_id,
+        "quotation_id": quot["quotation_id"],
+        "school_name": quot.get("school_name", ""),
+        "contact_name": quot.get("principal_name", ""),
+        "contact_email": quot.get("customer_email", ""),
+        "registered_at": datetime.now(timezone.utc).isoformat(),
+    })
+
+    # Send confirmation email
+    customer_email = quot.get("customer_email", "")
+    if customer_email:
+        try:
+            s = await db.settings.find_one({"type": "email"}, {"_id": 0})
+            se = s.get("sender_email") if s else None
+            ap = s.get("gmail_app_password") if s else None
+            sn = s.get("sender_name", "SmartShape Pro") if s else "SmartShape Pro"
+            if se and ap:
+                salutation = quot.get("principal_name") or "Sir/Ma'am"
+                body = f"""Dear {salutation},
+
+You are registered for:
+
+{session['title']}
+Date: {session['date']}  |  Time: {session['time']}
+Platform: {session['platform'].upper()}
+{f"Link: {session['meeting_link']}" if session.get('meeting_link') else f"Location: {session.get('location','')}"}
+
+We'll send you a reminder before the session.
+
+Best regards,
+SmartShape Pro Team"""
+                msg = MIMEMultipart()
+                msg["From"] = f"{sn} <{se}>"
+                msg["To"] = customer_email
+                msg["Subject"] = f"Registered: {session['title']}"
+                msg.attach(MIMEText(body, "plain", "utf-8"))
+                with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
+                    smtp.login(se, ap)
+                    smtp.sendmail(se, [customer_email], msg.as_string())
+        except Exception as e:
+            logging.error(f"Registration confirmation email failed: {e}")
+
+    return {"ok": True, "already_registered": False}
+
+
+@router.delete("/customer-portal/{token}/sessions/{session_id}/register")
+async def unregister_session(token: str, session_id: str):
+    quot = await db.quotations.find_one({"catalogue_token": token}, {"_id": 0})
+    if not quot:
+        raise HTTPException(status_code=404, detail="Portal not found")
+    await db.session_registrations.delete_one(
+        {"session_id": session_id, "quotation_id": quot["quotation_id"]}
+    )
+    return {"ok": True}
+
+
+# ── Notifications — mark as read ──────────────────────────────────────────────
+
+@router.post("/customer-portal/{token}/notifications/read")
+async def mark_notifications_read(token: str):
+    quot = await db.quotations.find_one({"catalogue_token": token}, {"_id": 0})
+    if not quot:
+        raise HTTPException(status_code=404, detail="Portal not found")
+    await db.customer_notifications.update_many(
+        {"quotation_id": quot["quotation_id"], "is_read": False},
+        {"$set": {"is_read": True}}
+    )
+    return {"ok": True}
