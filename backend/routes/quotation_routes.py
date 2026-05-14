@@ -356,6 +356,30 @@ async def send_catalogue_with_email(quotation_id: str, request: Request):
     }
 
 
+async def _get_email_settings():
+    """Returns (sender_email, app_password, sender_name) or raises ValueError."""
+    import smtplib
+    email_settings = await db.settings.find_one({"type": "email"}, {"_id": 0})
+    sender_email = email_settings.get("sender_email") if email_settings else None
+    app_password = email_settings.get("gmail_app_password") if email_settings else None
+    sender_name = email_settings.get("sender_name", "SmartShape Pro") if email_settings else "SmartShape Pro"
+    if not sender_email or not app_password:
+        raise ValueError("Email credentials not configured. Go to Settings → Email and enter your Gmail address and App Password.")
+    return sender_email, app_password, sender_name
+
+
+def _build_cc_set(sender_email: str, customer_email: str, cc_emails=None, sp_email=None):
+    seen = {sender_email.lower(), (customer_email or "").lower()}
+    cc_set = []
+    for e in (cc_emails or []):
+        if e and e.lower() not in seen:
+            seen.add(e.lower())
+            cc_set.append(e)
+    if sp_email and sp_email.lower() not in seen:
+        cc_set.append(sp_email)
+    return cc_set
+
+
 async def _send_catalogue_email(quotation_id: str, cc_emails=None):
     import smtplib
     from email.mime.text import MIMEText
@@ -365,38 +389,39 @@ async def _send_catalogue_email(quotation_id: str, cc_emails=None):
     if not quot:
         return {"success": False, "error": "Quotation not found"}
 
-    email_settings = await db.settings.find_one({"type": "email"}, {"_id": 0})
-    sender_email = email_settings.get("sender_email") if email_settings else None
-    app_password = email_settings.get("gmail_app_password") if email_settings else None
-    sender_name = email_settings.get("sender_name", "SmartShape Pro") if email_settings else "SmartShape Pro"
+    to_email = quot.get("customer_email", "").strip()
+    if not to_email:
+        return {"success": False, "error": "Customer email not set on this quotation. Edit the quotation and add the customer email first."}
 
-    if not sender_email or not app_password:
-        return {"success": False, "error": "Email credentials not configured. Ask admin to set Gmail SMTP in App Settings."}
+    token = quot.get("catalogue_token")
+    if not token:
+        return {"success": False, "error": "Catalogue link not generated yet."}
+
+    try:
+        sender_email, app_password, sender_name = await _get_email_settings()
+    except ValueError as ve:
+        return {"success": False, "error": str(ve)}
 
     frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:3000")
-    catalogue_url = f"{frontend_url}/catalogue/{quot['catalogue_token']}"
+    catalogue_url = f"{frontend_url}/catalogue/{token}"
 
-    cc_set = []
-    for e in (cc_emails or []):
-        if e and e.lower() != sender_email.lower() and e.lower() != (quot.get("customer_email") or "").lower() and e not in cc_set:
-            cc_set.append(e)
-    sp_email = quot.get("sales_person_email")
-    if sp_email and sp_email.lower() != sender_email.lower() and sp_email.lower() != (quot.get("customer_email") or "").lower() and sp_email not in cc_set:
-        cc_set.append(sp_email)
+    cc_set = _build_cc_set(sender_email, to_email, cc_emails, quot.get("sales_person_email"))
 
-    subject = f"Catalogue Link - {quot['school_name']}"
-    body = f"""Dear {quot['principal_name']},
+    subject = f"Your SmartShape Catalogue – {quot.get('school_name', '')}"
+    body = f"""Dear {quot.get('principal_name', 'Sir/Ma\'am')},
 
-Thank you for your interest in SmartShape Pro products!
+Thank you for your interest in SmartShape Pro!
 
-We are pleased to share your personalized catalogue for {quot['package_name']}.
+Please click the link below to view and select your preferred shapes from your personalised catalogue:
 
-Please click the link below to view and select your preferred dies:
 {catalogue_url}
 
-For any queries, please contact:
-{quot['sales_person_name']}
-Email: {quot.get('sales_person_email', 'N/A')}
+Quote Reference: {quot.get('quote_number', '')}
+School: {quot.get('school_name', '')}
+
+For any queries please contact your sales representative:
+{quot.get('sales_person_name', '')}
+{quot.get('sales_person_email', '')}
 
 Best regards,
 SmartShape Pro Team"""
@@ -404,19 +429,115 @@ SmartShape Pro Team"""
     try:
         msg = MIMEMultipart()
         msg["From"] = f"{sender_name} <{sender_email}>"
-        msg["To"] = quot["customer_email"]
+        msg["To"] = to_email
         if cc_set:
             msg["Cc"] = ", ".join(cc_set)
         msg["Subject"] = subject
         msg.attach(MIMEText(body, "plain"))
-        recipients = [quot["customer_email"]] + cc_set
+        recipients = [to_email] + cc_set
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
             smtp.login(sender_email, app_password)
             smtp.sendmail(sender_email, recipients, msg.as_string())
+        logging.info(f"Catalogue email sent to {to_email} for quotation {quotation_id}")
         return {"success": True, "message": "Email sent successfully", "cc": cc_set}
     except Exception as e:
-        logging.error(f"Email send error: {e}")
+        logging.error(f"Catalogue email send error for {quotation_id}: {e}")
         return {"success": False, "error": str(e)}
+
+
+@router.post("/quotations/{quotation_id}/send-quotation-email")
+async def send_quotation_email(quotation_id: str, request: Request):
+    """Send the quotation PDF as email attachment to the customer."""
+    import smtplib
+    from email.mime.text import MIMEText
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.application import MIMEApplication
+
+    user = await get_current_user(request)
+    quot = await db.quotations.find_one({"quotation_id": quotation_id}, {"_id": 0})
+    if not quot:
+        raise HTTPException(status_code=404, detail="Quotation not found")
+
+    to_email = quot.get("customer_email", "").strip()
+    if not to_email:
+        raise HTTPException(status_code=400, detail="Customer email not set on this quotation. Edit it and add the customer email first.")
+
+    try:
+        sender_email, app_password, sender_name = await _get_email_settings()
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+
+    cc_set = _build_cc_set(sender_email, to_email, [user.get("email")], quot.get("sales_person_email"))
+
+    gst = quot.get("gst_amount", 0)
+    freight = quot.get("freight_with_gst", quot.get("freight_total", 0))
+    grand = quot.get("grand_total", 0)
+    lines = quot.get("lines", [])
+    line_summary = "\n".join(
+        f"  • {l.get('description', 'Item')}  Qty: {l.get('qty', 1)}  ₹{l.get('line_total', 0):,.0f}"
+        for l in lines
+    )
+    freight_line = f"Freight      : ₹{freight:,.0f}\n" if freight else ""
+
+    salutation = quot.get(‘principal_name’, ‘’) or ‘Sir/Ma\’am’
+    subject = f"Quotation {quot.get(‘quote_number’, ‘’)} – SmartShape Pro"
+    body = f"""Dear {salutation},
+
+Please find attached your quotation from SmartShape Pro.
+
+Quote Number : {quot.get('quote_number', '')}
+School       : {quot.get('school_name', '')}
+Package      : {quot.get('package_name', '') or 'Custom'}
+
+Items:
+{line_summary or '  (No items listed)'}
+
+GST (18%)    : ₹{gst:,.0f}
+{freight_line}─────────────────────────
+TOTAL PAYABLE: ₹{grand:,.0f}
+
+The quotation PDF is attached to this email for your records.
+
+For queries please contact:
+{quot.get('sales_person_name', '')}
+{quot.get('sales_person_email', '')}
+
+Best regards,
+SmartShape Pro Team"""
+
+    # Generate PDF bytes
+    try:
+        company = await db.settings.find_one({"type": "company"}, {"_id": 0}) or {}
+        pdf_bytes = await _generate_pdf_bytes(quot, company)
+    except Exception as pdf_err:
+        logging.error(f"PDF generation error for {quotation_id}: {pdf_err}")
+        raise HTTPException(status_code=500, detail=f"PDF generation failed: {str(pdf_err)}")
+
+    filename = f"Quotation_{quot.get('quote_number', quotation_id)}.pdf"
+
+    try:
+        msg = MIMEMultipart()
+        msg["From"] = f"{sender_name} <{sender_email}>"
+        msg["To"] = to_email
+        if cc_set:
+            msg["Cc"] = ", ".join(cc_set)
+        msg["Subject"] = subject
+        msg.attach(MIMEText(body, "plain", "utf-8"))
+
+        # Attach PDF
+        pdf_part = MIMEApplication(pdf_bytes, _subtype="pdf")
+        pdf_part.add_header("Content-Disposition", "attachment", filename=filename)
+        msg.attach(pdf_part)
+
+        recipients = [to_email] + cc_set
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
+            smtp.login(sender_email, app_password)
+            smtp.sendmail(sender_email, recipients, msg.as_string())
+        logging.info(f"Quotation email+PDF sent to {to_email} for {quotation_id}")
+        return {"success": True, "message": f"Quotation emailed to {to_email}"}
+    except Exception as e:
+        logging.error(f"Quotation email error for {quotation_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Email failed: {str(e)}")
 
 
 # ==================== CATALOGUE PUBLIC ====================
@@ -507,14 +628,8 @@ async def submit_catalogue_selection(token: str, request: Request):
 
 # ==================== QUOTATION PDF ====================
 
-@router.get("/quotations/{quotation_id}/pdf")
-async def download_quotation_pdf(quotation_id: str, request: Request):
-    user = await get_current_user(request)
-    quot = await db.quotations.find_one({"quotation_id": quotation_id}, {"_id": 0})
-    if not quot:
-        raise HTTPException(status_code=404, detail="Quotation not found")
-    company = await db.settings.find_one({"type": "company"}, {"_id": 0}) or {}
-
+async def _generate_pdf_bytes(quot: dict, company: dict) -> bytes:
+    """Generate the quotation PDF and return raw bytes."""
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.units import mm
     from reportlab.lib import colors
@@ -865,6 +980,20 @@ async def download_quotation_pdf(quotation_id: str, request: Request):
 
     doc.build(elements)
     buf.seek(0)
+    return buf.read()
+
+
+@router.get("/quotations/{quotation_id}/pdf")
+async def download_quotation_pdf(quotation_id: str, request: Request):
+    user = await get_current_user(request)
+    quot = await db.quotations.find_one({"quotation_id": quotation_id}, {"_id": 0})
+    if not quot:
+        raise HTTPException(status_code=404, detail="Quotation not found")
+    company = await db.settings.find_one({"type": "company"}, {"_id": 0}) or {}
+    import io as _io
+    pdf_bytes = await _generate_pdf_bytes(quot, company)
     filename = f"Quotation_{quot.get('quote_number', quotation_id)}.pdf"
-    return StreamingResponse(buf, media_type="application/pdf",
-                             headers={"Content-Disposition": f"attachment; filename={filename}"})
+    return StreamingResponse(
+        _io.BytesIO(pdf_bytes), media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )

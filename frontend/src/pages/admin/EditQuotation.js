@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import AdminLayout from '../../components/layouts/AdminLayout';
 import API, { quotations, companySettings } from '../../lib/api';
+import { Loader2 } from 'lucide-react';
 import { formatCurrency } from '../../lib/utils';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
@@ -15,6 +16,7 @@ export default function EditQuotation() {
   const [quot, setQuot] = useState(null);
   const [company, setCompany] = useState({});
   const [loading, setLoading] = useState(true);
+  const [sending, setSending] = useState(false);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -73,6 +75,7 @@ export default function EditQuotation() {
 
   const handleSave = async (status) => {
     try {
+      setSending(status === 'sent');
       const t = calcTotals();
       await quotations.update(id, {
         ...quot,
@@ -87,9 +90,29 @@ export default function EditQuotation() {
         freight_total: t.freight_with_gst,
         grand_total: t.grand_total,
       });
-      toast.success(status === 'sent' ? 'Quotation sent!' : 'Quotation saved');
+      if (status === 'sent') {
+        try {
+          const emailRes = await API.post(`/quotations/${id}/send-quotation-email`);
+          toast.success(`Quotation saved & emailed to ${quot.customer_email || 'customer'}!`);
+        } catch (emailErr) {
+          const detail = emailErr.response?.data?.detail || '';
+          if (detail.includes('not set') || detail.includes('not configured')) {
+            toast.success('Quotation saved!');
+            toast.warning(detail);
+          } else {
+            toast.success('Quotation saved!');
+            toast.error(`Email failed: ${detail || 'Check email settings in Settings → Email'}`);
+          }
+        }
+      } else {
+        toast.success('Quotation saved');
+      }
       navigate('/quotations');
-    } catch { toast.error('Failed to save'); }
+    } catch {
+      toast.error('Failed to save');
+    } finally {
+      setSending(false);
+    }
   };
 
   if (loading || !quot) {
@@ -113,7 +136,9 @@ export default function EditQuotation() {
             <Button onClick={() => navigate('/quotations')} variant="outline" className="border-[var(--border-color)] text-[var(--text-secondary)]"><ArrowLeft className="mr-2 h-4 w-4" /> Back</Button>
             <Button onClick={() => quotations.downloadPdf(id)} variant="outline" className="border-[var(--border-color)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]" data-testid="download-pdf-btn"><Download className="mr-2 h-4 w-4" /> PDF</Button>
             <Button onClick={() => handleSave('draft')} variant="outline" className="border-[var(--border-color)] text-[var(--text-primary)]" data-testid="save-draft-btn"><Save className="mr-2 h-4 w-4" /> Save Draft</Button>
-            <Button onClick={() => handleSave('sent')} className="bg-[#e94560] hover:bg-[#f05c75] text-white" data-testid="send-quotation-btn">Send Quotation</Button>
+            <Button onClick={() => handleSave('sent')} disabled={sending} className="bg-[#e94560] hover:bg-[#f05c75] text-white" data-testid="send-quotation-btn">
+              {sending ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Sending…</> : 'Send Quotation'}
+            </Button>
           </div>
         </div>
 

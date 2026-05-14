@@ -55,33 +55,31 @@ export default function Quotations() {
 
   const handleSendCatalogue = async (quotationId) => {
     try {
-      const res = await quotApi.sendCatalogue(quotationId);
-      
-      // Try sending email if configured
-      try {
-        const emailRes = await API.post(`/quotations/${quotationId}/send-catalogue-email`);
-        if (emailRes.data.email_sent) {
-          toast.success('Catalogue link generated and email sent!');
-          toast.info(emailRes.data.catalogue_url);
-        } else {
-          toast.success('Catalogue link generated!');
-          toast.info(emailRes.data.catalogue_url);
-          if (emailRes.data.email_error) {
-            toast.warning(`Email not sent: ${emailRes.data.email_error}`);
-          }
-        }
-      } catch (emailError) {
+      const emailRes = await API.post(`/quotations/${quotationId}/send-catalogue-email`);
+      const url = emailRes.data.catalogue_url;
+      if (emailRes.data.email_sent) {
+        toast.success('Catalogue link generated and email sent to customer!');
+      } else {
         toast.success('Catalogue link generated!');
-        toast.info(res.data.catalogue_url);
-        toast.warning('Configure email in Settings to send catalogues via email');
+        const err = emailRes.data.email_error || '';
+        if (err.includes('not configured') || err.includes('App Password')) {
+          toast.warning('Email not sent — go to Settings → Email to configure Gmail SMTP.');
+        } else if (err.includes('not set')) {
+          toast.warning('Email not sent — add customer email to this quotation first.');
+        } else if (err) {
+          toast.warning(`Email not sent: ${err}`);
+        }
       }
-      
-      // Refresh quotations
+      if (url) {
+        navigator.clipboard.writeText(url).catch(() => {});
+        toast.info('Link copied to clipboard — share it manually if needed.');
+      }
       const updatedRes = await quotApi.getAll();
       setQuotations(updatedRes.data);
     } catch (error) {
       console.error('Error sending catalogue:', error);
-      toast.error('Failed to generate catalogue link');
+      const detail = error.response?.data?.detail || '';
+      toast.error(detail || 'Failed to generate catalogue link');
     }
   };
 
