@@ -369,7 +369,9 @@ async def send_catalogue_with_email(quotation_id: str, request: Request):
     catalogue_url = f"{frontend_url}/catalogue/{token}"
 
     all_cc = list({user.get("email", "")} | set(extra_cc))
-    email_result = await _send_catalogue_email(quotation_id, cc_emails=all_cc, extra_to=extra_to)
+    # Pass token + url directly — avoids a second DB read that can miss the just-written token
+    email_result = await _send_catalogue_email(quotation_id, cc_emails=all_cc, extra_to=extra_to,
+                                               catalogue_url=catalogue_url, token=token, quot=quot)
 
     return {
         "catalogue_url": catalogue_url,
@@ -404,12 +406,15 @@ def _build_cc_set(sender_email: str, customer_email: str, cc_emails=None, sp_ema
     return cc_set
 
 
-async def _send_catalogue_email(quotation_id: str, cc_emails=None, extra_to=None):
+async def _send_catalogue_email(quotation_id: str, cc_emails=None, extra_to=None,
+                                catalogue_url: str = None, token: str = None, quot: dict = None):
     import smtplib
     from email.mime.text import MIMEText
     from email.mime.multipart import MIMEMultipart
 
-    quot = await db.quotations.find_one({"quotation_id": quotation_id}, {"_id": 0})
+    # Use pre-fetched quot to avoid a second read that may miss a just-written token
+    if quot is None:
+        quot = await db.quotations.find_one({"quotation_id": quotation_id}, {"_id": 0})
     if not quot:
         return {"success": False, "error": "Quotation not found"}
 
@@ -420,17 +425,19 @@ async def _send_catalogue_email(quotation_id: str, cc_emails=None, extra_to=None
     if not all_to:
         return {"success": False, "error": "No recipient email — add customer email to the quotation or enter one in the send dialog."}
 
-    token = quot.get("catalogue_token")
+    # Use passed token/url if available; fall back to DB value
+    if not token:
+        token = quot.get("catalogue_token")
     if not token:
         return {"success": False, "error": "Catalogue link not generated yet."}
+    if not catalogue_url:
+        frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:3000")
+        catalogue_url = f"{frontend_url}/catalogue/{token}"
 
     try:
         sender_email, app_password, sender_name = await _get_email_settings()
     except ValueError as ve:
         return {"success": False, "error": str(ve)}
-
-    frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:3000")
-    catalogue_url = f"{frontend_url}/catalogue/{token}"
 
     cc_set = _build_cc_set(sender_email, all_to[0], cc_emails, quot.get("sales_person_email"))
 

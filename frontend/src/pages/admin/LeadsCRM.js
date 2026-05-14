@@ -16,18 +16,9 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import WhatsAppSendDialog from '../../components/WhatsAppSendDialog';
 import KanbanBoard, { ageColor, AgeBadge } from '../../components/KanbanBoard';
 import ReassignLeadDialog from '../../components/ReassignLeadDialog';
+import { STAGES, SCHOOL_TYPES, DESIGNATIONS } from '../../lib/crmConstants';
+import LeadMobileCard from '../../components/crm/LeadMobileCard';
 
-const STAGES = [
-  { id: 'new', label: 'New', color: 'bg-blue-500/20 text-blue-400 border-blue-500/30' },
-  { id: 'contacted', label: 'Contacted', color: 'bg-cyan-500/20 text-cyan-400 border-cyan-500/30' },
-  { id: 'demo', label: 'Demo', color: 'bg-purple-500/20 text-purple-400 border-purple-500/30' },
-  { id: 'quoted', label: 'Quoted', color: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30' },
-  { id: 'negotiation', label: 'Negotiation', color: 'bg-orange-500/20 text-orange-400 border-orange-500/30' },
-  { id: 'won', label: 'Won', color: 'bg-green-500/20 text-green-400 border-green-500/30' },
-  { id: 'retention', label: 'Retention', color: 'bg-teal-500/20 text-teal-400 border-teal-500/30' },
-  { id: 'resell', label: 'Resell', color: 'bg-indigo-500/20 text-indigo-400 border-indigo-500/30' },
-  { id: 'lost', label: 'Lost', color: 'bg-red-500/20 text-red-400 border-red-500/30' },
-];
 const NOTE_TYPES = [
   { id: 'call', label: 'Call', icon: Phone },
   { id: 'whatsapp', label: 'WhatsApp', icon: MessageSquare },
@@ -35,8 +26,6 @@ const NOTE_TYPES = [
   { id: 'meeting', label: 'Meeting', icon: Calendar },
   { id: 'note', label: 'Note', icon: Edit2 },
 ];
-const SCHOOL_TYPES = ['CBSE', 'ICSE', 'IB', 'State Board', 'Coaching', 'College'];
-const DESIGNATIONS = ['Principal', 'Admin', 'Trustee', 'Purchase Head', 'Director', 'Other'];
 const SOURCES = ['Website', 'Referral', 'Exhibition', 'Cold Call', 'WhatsApp', 'Ads', 'Import'];
 
 export default function LeadsCRM() {
@@ -721,57 +710,16 @@ export default function LeadsCRM() {
                   </div>
                   <div className="space-y-2.5">
                     {stageLeads.map(lead => (
-                      <div key={lead.lead_id} className={`${card} border rounded-xl overflow-hidden`} data-testid={`lead-card-${lead.lead_id}`}>
-                        {/* Card body — tappable for detail */}
-                        <div onClick={() => openDetail(lead)} className="p-3.5 cursor-pointer active:bg-[var(--bg-hover)] transition-colors">
-                          <div className="flex items-start justify-between gap-2">
-                            <div className="flex-1 min-w-0">
-                              <p className={`${textPri} font-semibold text-sm leading-snug truncate`}>{lead.company_name || lead.contact_name}</p>
-                              <p className={`text-xs ${textMuted} mt-0.5 truncate`}>{lead.contact_name}{lead.designation ? ` · ${lead.designation}` : ''}</p>
-                            </div>
-                            {lead.lead_score > 0 && (
-                              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-[#e94560]/20 text-[#e94560] font-mono font-bold flex-shrink-0">{lead.lead_score}</span>
-                            )}
-                          </div>
-                          <div className="flex items-center gap-2 mt-2 flex-wrap">
-                            {lead.lead_type && (
-                              <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold capitalize ${lead.lead_type === 'hot' ? 'bg-red-500/20 text-red-400' : lead.lead_type === 'warm' ? 'bg-yellow-500/20 text-yellow-400' : 'bg-blue-500/20 text-blue-400'}`}>{lead.lead_type}</span>
-                            )}
-                            {lead.visit_required && (
-                              <span className="text-[10px] px-2 py-0.5 rounded-full bg-orange-500/20 text-orange-400 font-medium flex items-center gap-1"><AlertTriangle className="h-2.5 w-2.5" />Visit</span>
-                            )}
-                            {lead.next_followup_date && (
-                              <span className={`text-[10px] ${textMuted} flex items-center gap-1`}><Clock className="h-3 w-3" />{lead.next_followup_date}</span>
-                            )}
-                            <span className={`text-[10px] ${textMuted} ml-auto`}>{lead.assigned_name?.split(' ')[0]}</span>
-                          </div>
-                          {(lead.tags || []).length > 0 && (
-                            <div className="flex flex-wrap gap-1 mt-2">
-                              {(lead.tags || []).slice(0, 3).map(tid => { const tag = tagsList.find(t => t.tag_id === tid); return tag ? <span key={tid} className="text-[9px] px-1.5 py-0.5 rounded-full text-white" style={{ backgroundColor: tag.color }}>{tag.name}</span> : null; })}
-                              {(lead.tags || []).length > 3 && <span className={`text-[9px] ${textMuted}`}>+{(lead.tags || []).length - 3}</span>}
-                            </div>
-                          )}
-                        </div>
-                        {/* Quick-action strip — 1-tap Call / WhatsApp / Detail */}
-                        {lead.contact_phone && (
-                          <div className={`flex border-t border-[var(--border-color)]`}>
-                            <a href={`tel:${lead.contact_phone}`} onClick={e => e.stopPropagation()}
-                              className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 text-[11px] font-semibold text-blue-400 hover:bg-blue-500/10 transition-colors`}>
-                              <Phone className="h-3.5 w-3.5" /> Call
-                            </a>
-                            <div className={`w-px bg-[var(--border-color)]`} />
-                            <a href={`https://wa.me/${lead.contact_phone.replace(/\D/g, '')}`} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()}
-                              className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 text-[11px] font-semibold text-green-400 hover:bg-green-500/10 transition-colors`}>
-                              <MessageSquare className="h-3.5 w-3.5" /> WhatsApp
-                            </a>
-                            <div className={`w-px bg-[var(--border-color)]`} />
-                            <button onClick={e => { e.stopPropagation(); openDetail(lead); }}
-                              className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 text-[11px] font-semibold ${textMuted} hover:bg-[var(--bg-hover)] transition-colors`}>
-                              <ChevronRight className="h-3.5 w-3.5" /> Detail
-                            </button>
-                          </div>
-                        )}
-                      </div>
+                      <LeadMobileCard
+                        key={lead.lead_id}
+                        lead={lead}
+                        onDetail={openDetail}
+                        tagsList={tagsList}
+                        card={card}
+                        textPri={textPri}
+                        textSec={textSec}
+                        textMuted={textMuted}
+                      />
                     ))}
                   </div>
                 </div>
