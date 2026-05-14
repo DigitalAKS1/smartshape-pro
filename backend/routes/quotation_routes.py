@@ -494,7 +494,7 @@ async def send_quotation_email(quotation_id: str, request: Request):
     )
     freight_line = f"Freight      : ₹{freight:,.0f}\n" if freight else ""
 
-    salutation = quot.get(‘principal_name’, ‘’) or ‘Sir/Ma\’am’
+    salutation = quot.get("principal_name", "") or "Sir/Ma’am"
     frontend_url_q = os.environ.get("FRONTEND_URL", "http://localhost:3000")
     catalogue_token = quot.get("catalogue_token", "")
     portal_url = f"{frontend_url_q}/my-quote/{catalogue_token}" if catalogue_token else ""
