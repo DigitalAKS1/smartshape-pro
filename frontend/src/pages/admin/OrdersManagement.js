@@ -490,7 +490,7 @@ export default function OrdersManagement() {
 
         {/* CREATE DISPATCH DIALOG */}
         <Dialog open={dispatchOpen} onOpenChange={setDispatchOpen}>
-          <DialogContent className={`${dlgCls} max-w-md`}>
+          <DialogContent className={`${dlgCls} w-[calc(100vw-1rem)] sm:max-w-md max-h-[88dvh] overflow-y-auto`}>
             <DialogHeader><DialogTitle className={textPri}>Create Dispatch</DialogTitle></DialogHeader>
             {dispatchTarget && (
               <div className="space-y-3 py-2">
@@ -511,7 +511,7 @@ export default function OrdersManagement() {
 
         {/* PAYMENT DIALOG */}
         <Dialog open={paymentOpen} onOpenChange={setPaymentOpen}>
-          <DialogContent className={`${dlgCls} max-w-md`}>
+          <DialogContent className={`${dlgCls} w-[calc(100vw-1rem)] sm:max-w-md max-h-[88dvh] overflow-y-auto`}>
             <DialogHeader>
               <DialogTitle className={textPri}>
                 <div className="flex items-center gap-2">
@@ -583,7 +583,7 @@ export default function OrdersManagement() {
 
         {/* CREATE ORDER DIALOG */}
         <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-          <DialogContent className={`${dlgCls} max-w-md`}>
+          <DialogContent className={`${dlgCls} w-[calc(100vw-1rem)] sm:max-w-md max-h-[88dvh] overflow-y-auto`}>
             <DialogHeader><DialogTitle className={textPri}>Create Order from Quotation</DialogTitle></DialogHeader>
             <div className="space-y-3 py-2">
               {pendingQuots.length === 0 ? (
@@ -609,7 +609,7 @@ export default function OrdersManagement() {
 
         {/* ORDER DETAIL DIALOG */}
         <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
-          <DialogContent className={`${dlgCls} max-w-2xl max-h-[90vh] overflow-y-auto`}>
+          <DialogContent className={`${dlgCls} w-[calc(100vw-1rem)] sm:max-w-2xl max-h-[88dvh] overflow-y-auto`}>
             {detailOrder && (
               <>
                 <DialogHeader>

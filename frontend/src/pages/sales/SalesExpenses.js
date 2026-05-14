@@ -193,7 +193,7 @@ export default function SalesExpenses() {
                 <Plus className="mr-2 h-4 w-4" /> Add Expense
               </Button>
             </DialogTrigger>
-            <DialogContent className="bg-[var(--bg-card)] border-[var(--border-color)] text-[var(--text-primary)] max-w-md max-h-[90vh] overflow-y-auto">
+            <DialogContent className="bg-[var(--bg-card)] border-[var(--border-color)] text-[var(--text-primary)] w-[calc(100vw-1rem)] sm:max-w-md max-h-[88dvh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle className="text-[var(--text-primary)]">Add Expense</DialogTitle>
               </DialogHeader>

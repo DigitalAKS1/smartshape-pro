@@ -1,23 +1,17 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import AdminLayout from '../../components/layouts/AdminLayout';
-import { schools as schoolsApi, leads as leadsApi, followups as fuApi, tasks as tasksApi, salesPersons, contacts as contactsApi, exportData, groups as groupsApi, sources as sourcesApi, contactRoles as contactRolesApi, tags as tagsApi, packages as packagesApi } from '../../lib/api';
+import { schools as schoolsApi, leads as leadsApi, followups as fuApi, tasks as tasksApi, salesPersons, contacts as contactsApi, exportData, groups as groupsApi, sources as sourcesApi, contactRoles as contactRolesApi, tags as tagsApi } from '../../lib/api';
 import { formatCurrency, formatDate as _fmt } from '../../lib/utils';
 import { useAuth } from '../../contexts/AuthContext';
 import { useTheme } from '../../contexts/ThemeContext';
 import { formatDate } from '../../lib/utils';
-const PACKAGE_ITEM_TYPES = [
-  { value: 'standard_die', label: 'Standard Die' },
-  { value: 'large_die', label: 'Large Die' },
-  { value: 'machine', label: 'Machine' },
-  { value: 'die_set', label: 'Die Set' },
-  { value: 'custom', label: 'Other / Custom' },
-];
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../../components/ui/dialog';
 import { toast } from 'sonner';
-import { Plus, Phone, MessageSquare, Mail, Calendar, Clock, CheckCircle, AlertTriangle, User, UserCog, Trash2, Edit2, Upload, Search, Target, ChevronRight, Building2, MapPin, UserPlus, ArrowRightCircle, Download, ChevronLeft, LayoutGrid, Lock, Package, MoreHorizontal, X, Save } from 'lucide-react';
+import { Plus, Phone, MessageSquare, Mail, Calendar, Clock, CheckCircle, AlertTriangle, User, UserCog, Trash2, Edit2, Upload, Search, Target, ChevronRight, Building2, MapPin, UserPlus, ArrowRightCircle, Download, ChevronLeft, LayoutGrid, Lock, Package, MoreHorizontal, X, Eye } from 'lucide-react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../../components/ui/dropdown-menu';
 import WhatsAppSendDialog from '../../components/WhatsAppSendDialog';
 import KanbanBoard, { ageColor, AgeBadge } from '../../components/KanbanBoard';
@@ -48,6 +42,7 @@ const SOURCES = ['Website', 'Referral', 'Exhibition', 'Cold Call', 'WhatsApp', '
 export default function LeadsCRM() {
   const { user } = useAuth();
   const { isDark } = useTheme();
+  const navigate = useNavigate();
   const [leadsList, setLeadsList] = useState([]);
   const [schoolsList, setSchoolsList] = useState([]);
   const [tasksList, setTasksList] = useState([]);
@@ -113,76 +108,16 @@ export default function LeadsCRM() {
   const [reassignOpen, setReassignOpen] = useState(false);
   const [reassignLead, setReassignLead] = useState(null);
   const [reassignBulkIds, setReassignBulkIds] = useState(null);
-  // Package Master state
-  const [pkgList, setPkgList] = useState([]);
-  const [pkgDialogOpen, setPkgDialogOpen] = useState(false);
-  const [editPkg, setEditPkg] = useState(null);
-  const [pkgForm, setPkgForm] = useState({ display_name: '', gst_pct: 18, items: [] });
-
-  const fetchPackages = async () => {
-    try { const r = await packagesApi.getAll(); setPkgList(r.data); } catch {}
-  };
-
-  const openCreatePkg = () => {
-    setEditPkg(null);
-    setPkgForm({ display_name: '', gst_pct: 18, items: [{ type: 'standard_die', name: 'Standard Die', qty: 10, unit_price: 2000 }] });
-    setPkgDialogOpen(true);
-  };
-
-  const openEditPkg = (pkg) => {
-    setEditPkg(pkg);
-    setPkgForm({ display_name: pkg.display_name, gst_pct: pkg.gst_pct, items: pkg.items || [] });
-    setPkgDialogOpen(true);
-  };
-
-  const addPkgItem = () => setPkgForm(f => ({ ...f, items: [...f.items, { type: 'custom', name: '', qty: 1, unit_price: 0 }] }));
-  const removePkgItem = (idx) => setPkgForm(f => ({ ...f, items: f.items.filter((_, i) => i !== idx) }));
-  const updatePkgItem = (idx, field, val) => {
-    const items = [...pkgForm.items];
-    items[idx] = { ...items[idx], [field]: field === 'name' || field === 'type' ? val : parseFloat(val) || 0 };
-    if (field === 'type') { const lbl = PACKAGE_ITEM_TYPES.find(t => t.value === val); if (lbl && !items[idx].name) items[idx].name = lbl.label; }
-    setPkgForm(f => ({ ...f, items }));
-  };
-  const pkgItemTotal = (item) => (item.qty || 0) * (item.unit_price || 0);
-  const pkgGrandTotal = () => pkgForm.items.reduce((s, i) => s + pkgItemTotal(i), 0);
-
-  const handleSavePkg = async () => {
-    if (!pkgForm.display_name.trim()) { toast.error('Package name is required'); return; }
-    const payload = {
-      display_name: pkgForm.display_name,
-      name: pkgForm.display_name.toLowerCase().replace(/\s+/g, '_'),
-      base_price: pkgGrandTotal(),
-      gst_pct: pkgForm.gst_pct,
-      items: pkgForm.items,
-      std_die_qty: pkgForm.items.filter(i => i.type === 'standard_die').reduce((s, i) => s + (i.qty || 0), 0),
-      large_die_qty: pkgForm.items.filter(i => i.type === 'large_die').reduce((s, i) => s + (i.qty || 0), 0),
-      machine_qty: pkgForm.items.filter(i => i.type === 'machine').reduce((s, i) => s + (i.qty || 0), 0),
-    };
-    try {
-      if (editPkg) { await packagesApi.update(editPkg.package_id, payload); toast.success('Package updated'); }
-      else { await packagesApi.create(payload); toast.success('Package created'); }
-      setPkgDialogOpen(false);
-      fetchPackages();
-    } catch (err) { toast.error(err.response?.data?.detail || 'Failed to save package'); }
-  };
-
-  const handleDeletePkg = async (pkg) => {
-    if (!window.confirm(`Delete "${pkg.display_name}"?`)) return;
-    try { await packagesApi.delete(pkg.package_id); toast.success('Package deleted'); fetchPackages(); }
-    catch { toast.error('Failed to delete'); }
-  };
 
   const fetchData = async () => {
     try {
-      const [lr, sr, tr, spr, cr, gr, srcR, rlR, tgR, pkgR] = await Promise.all([
+      const [lr, sr, tr, spr, cr, gr, srcR, rlR, tgR] = await Promise.all([
         leadsApi.getAll(), schoolsApi.getAll(), tasksApi.getAll(), salesPersons.getAll(), contactsApi.getAll(),
         groupsApi.getAll().catch(() => ({ data: [] })),
         sourcesApi.getAll().catch(() => ({ data: [] })),
         contactRolesApi.getAll().catch(() => ({ data: [] })),
         tagsApi.getAll().catch(() => ({ data: [] })),
-        packagesApi.getAll().catch(() => ({ data: [] })),
       ]);
-      setPkgList(pkgR.data || []);
       setLeadsList(lr.data);
       setSchoolsList(sr.data);
       setTasksList(tr.data);
@@ -598,7 +533,7 @@ export default function LeadsCRM() {
         </div>
 
         {/* Search & Filters */}
-        <div className="flex flex-col sm:flex-row gap-2">
+        <div className="sticky top-14 lg:static z-20 -mx-4 sm:mx-0 px-4 sm:px-0 py-2 sm:py-0 bg-[var(--bg-primary)] sm:bg-transparent border-b sm:border-0 border-[var(--border-color)] flex flex-col sm:flex-row gap-2">
           <div className="relative flex-1">
             <Search className={`absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 ${textMuted}`} />
             <Input value={searchTerm} onChange={e => setSearchTerm(e.target.value)} placeholder="Search school, contact, phone, city..." className={`pl-10 ${inputCls}`} data-testid="search-input" />
@@ -618,14 +553,13 @@ export default function LeadsCRM() {
 
         {/* Tabs */}
         <div className={`flex gap-1 ${card} border rounded-md p-1 overflow-x-auto`}>
-          {['contacts', 'pipeline', 'list', 'tasks', 'schools', 'packages', 'reports'].map(tab => (
+          {['contacts', 'pipeline', 'list', 'tasks', 'schools', 'reports'].map(tab => (
             <button key={tab} onClick={() => setActiveTab(tab)} className={`flex-shrink-0 px-3 py-2 rounded text-xs sm:text-sm font-medium transition-all capitalize ${activeTab === tab ? 'bg-[#e94560] text-white' : `${textSec} ${hoverBg}`}`} data-testid={`tab-${tab}`}>
               {tab === 'contacts' ? `Contacts (${contactsList.filter(c => !c.converted_to_lead).length})`
                 : tab === 'pipeline' ? 'Pipeline'
                 : tab === 'list' ? `Leads (${filtered.length})`
                 : tab === 'tasks' ? `Tasks (${tasksList.length})`
                 : tab === 'schools' ? `Schools (${schoolsList.length})`
-                : tab === 'packages' ? `Packages (${pkgList.filter(p => p.is_active !== false).length})`
                 : 'Reports'}
             </button>
           ))}
@@ -775,33 +709,66 @@ export default function LeadsCRM() {
         {activeTab === 'pipeline' && leadView === 'pipeline' && (
           <>
           {/* Mobile: vertical stacked list */}
-          <div className="sm:hidden space-y-4" data-testid="pipeline-mobile">
+          <div className="sm:hidden space-y-5" data-testid="pipeline-mobile">
             {STAGES.map(stage => {
               const stageLeads = filtered.filter(l => l.stage === stage.id);
               if (stageLeads.length === 0) return null;
               return (
                 <div key={stage.id}>
-                  <div className="flex items-center gap-2 mb-2">
-                    <span className={`px-2 py-0.5 rounded text-xs font-medium border ${stage.color}`}>{stage.label}</span>
-                    <span className={`text-xs ${textMuted}`}>{stageLeads.length}</span>
+                  <div className="flex items-center gap-2 mb-2.5">
+                    <span className={`px-2.5 py-1 rounded-full text-xs font-semibold border ${stage.color}`}>{stage.label}</span>
+                    <span className={`text-xs ${textMuted} font-medium`}>{stageLeads.length} lead{stageLeads.length !== 1 ? 's' : ''}</span>
                   </div>
-                  <div className="space-y-2">
+                  <div className="space-y-2.5">
                     {stageLeads.map(lead => (
-                      <div key={lead.lead_id} onClick={() => openDetail(lead)} className={`${card} border rounded-md p-3 cursor-pointer active:opacity-70 transition-opacity`} data-testid={`lead-card-${lead.lead_id}`}>
-                        <div className="flex items-center justify-between gap-2">
-                          <p className={`${textPri} font-medium text-sm truncate flex-1`}>{lead.company_name || lead.contact_name}</p>
-                          {lead.lead_score > 0 && <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#e94560]/20 text-[#e94560] font-mono font-bold flex-shrink-0">{lead.lead_score}</span>}
+                      <div key={lead.lead_id} className={`${card} border rounded-xl overflow-hidden`} data-testid={`lead-card-${lead.lead_id}`}>
+                        {/* Card body — tappable for detail */}
+                        <div onClick={() => openDetail(lead)} className="p-3.5 cursor-pointer active:bg-[var(--bg-hover)] transition-colors">
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="flex-1 min-w-0">
+                              <p className={`${textPri} font-semibold text-sm leading-snug truncate`}>{lead.company_name || lead.contact_name}</p>
+                              <p className={`text-xs ${textMuted} mt-0.5 truncate`}>{lead.contact_name}{lead.designation ? ` · ${lead.designation}` : ''}</p>
+                            </div>
+                            {lead.lead_score > 0 && (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-[#e94560]/20 text-[#e94560] font-mono font-bold flex-shrink-0">{lead.lead_score}</span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2 mt-2 flex-wrap">
+                            {lead.lead_type && (
+                              <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold capitalize ${lead.lead_type === 'hot' ? 'bg-red-500/20 text-red-400' : lead.lead_type === 'warm' ? 'bg-yellow-500/20 text-yellow-400' : 'bg-blue-500/20 text-blue-400'}`}>{lead.lead_type}</span>
+                            )}
+                            {lead.visit_required && (
+                              <span className="text-[10px] px-2 py-0.5 rounded-full bg-orange-500/20 text-orange-400 font-medium flex items-center gap-1"><AlertTriangle className="h-2.5 w-2.5" />Visit</span>
+                            )}
+                            {lead.next_followup_date && (
+                              <span className={`text-[10px] ${textMuted} flex items-center gap-1`}><Clock className="h-3 w-3" />{lead.next_followup_date}</span>
+                            )}
+                            <span className={`text-[10px] ${textMuted} ml-auto`}>{lead.assigned_name?.split(' ')[0]}</span>
+                          </div>
+                          {(lead.tags || []).length > 0 && (
+                            <div className="flex flex-wrap gap-1 mt-2">
+                              {(lead.tags || []).slice(0, 3).map(tid => { const tag = tagsList.find(t => t.tag_id === tid); return tag ? <span key={tid} className="text-[9px] px-1.5 py-0.5 rounded-full text-white" style={{ backgroundColor: tag.color }}>{tag.name}</span> : null; })}
+                              {(lead.tags || []).length > 3 && <span className={`text-[9px] ${textMuted}`}>+{(lead.tags || []).length - 3}</span>}
+                            </div>
+                          )}
                         </div>
-                        <p className={`text-xs ${textMuted} mt-0.5 truncate`}>{lead.contact_name} • {lead.contact_phone}</p>
-                        <div className="flex items-center gap-2 mt-2 flex-wrap">
-                          {lead.lead_type && <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${lead.lead_type === 'hot' ? 'bg-red-500/20 text-red-400' : lead.lead_type === 'warm' ? 'bg-yellow-500/20 text-yellow-400' : 'bg-blue-500/20 text-blue-400'}`}>{lead.lead_type}</span>}
-                          {lead.next_followup_date && <span className={`text-[10px] ${textMuted} flex items-center gap-1`}><Clock className="h-3 w-3" />{lead.next_followup_date}</span>}
-                          <span className={`text-[10px] ${textMuted} ml-auto`}>{lead.assigned_name?.split(' ')[0]}</span>
-                        </div>
-                        {(lead.tags || []).length > 0 && (
-                          <div className="flex flex-wrap gap-1 mt-1.5">
-                            {(lead.tags || []).slice(0, 3).map(tid => { const tag = tagsList.find(t => t.tag_id === tid); return tag ? <span key={tid} className="text-[9px] px-1.5 py-0.5 rounded-full text-white" style={{ backgroundColor: tag.color }}>{tag.name}</span> : null; })}
-                            {(lead.tags || []).length > 3 && <span className={`text-[9px] ${textMuted}`}>+{(lead.tags || []).length - 3}</span>}
+                        {/* Quick-action strip — 1-tap Call / WhatsApp / Detail */}
+                        {lead.contact_phone && (
+                          <div className={`flex border-t border-[var(--border-color)]`}>
+                            <a href={`tel:${lead.contact_phone}`} onClick={e => e.stopPropagation()}
+                              className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 text-[11px] font-semibold text-blue-400 hover:bg-blue-500/10 transition-colors`}>
+                              <Phone className="h-3.5 w-3.5" /> Call
+                            </a>
+                            <div className={`w-px bg-[var(--border-color)]`} />
+                            <a href={`https://wa.me/${lead.contact_phone.replace(/\D/g, '')}`} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()}
+                              className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 text-[11px] font-semibold text-green-400 hover:bg-green-500/10 transition-colors`}>
+                              <MessageSquare className="h-3.5 w-3.5" /> WhatsApp
+                            </a>
+                            <div className={`w-px bg-[var(--border-color)]`} />
+                            <button onClick={e => { e.stopPropagation(); openDetail(lead); }}
+                              className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 text-[11px] font-semibold ${textMuted} hover:bg-[var(--bg-hover)] transition-colors`}>
+                              <ChevronRight className="h-3.5 w-3.5" /> Detail
+                            </button>
                           </div>
                         )}
                       </div>
@@ -1048,6 +1015,7 @@ export default function LeadsCRM() {
                     </div>
                   </div>
                   <div className="flex gap-1 flex-shrink-0">
+                    <Button size="sm" variant="ghost" onClick={() => navigate(`/school-profile/${sch.school_id}`)} className={`${textSec} h-9 w-9 p-0`} title="View School Profile"><Eye className="h-3.5 w-3.5" /></Button>
                     <Button size="sm" variant="ghost" onClick={() => openEditSchool(sch)} className={`${textSec} h-9 w-9 p-0`}><Edit2 className="h-3.5 w-3.5" /></Button>
                     <Button size="sm" variant="ghost" onClick={() => handleDeleteSchool(sch)} className="text-red-400 h-9 w-9 p-0"><Trash2 className="h-3.5 w-3.5" /></Button>
                   </div>
@@ -1095,6 +1063,7 @@ export default function LeadsCRM() {
                         </td>
                         <td className="py-2.5 px-3 text-center"><span className="bg-[#e94560]/20 text-[#e94560] px-2 py-0.5 rounded text-xs font-bold">{schLeads.length}</span></td>
                         <td className="py-2.5 px-3 text-right" onClick={e => e.stopPropagation()}>
+                          <Button size="sm" variant="ghost" onClick={() => navigate(`/school-profile/${sch.school_id}`)} className={`${textSec} h-7`} title="View School Profile"><Eye className="h-3 w-3" /></Button>
                           <Button size="sm" variant="ghost" onClick={() => openEditSchool(sch)} className={`${textSec} h-7`} data-testid={`edit-school-${sch.school_id}`}><Edit2 className="h-3 w-3" /></Button>
                           <Button size="sm" variant="ghost" onClick={() => handleDeleteSchool(sch)} className="text-red-400 h-7" data-testid={`delete-school-${sch.school_id}`}><Trash2 className="h-3 w-3" /></Button>
                         </td>
@@ -1111,190 +1080,6 @@ export default function LeadsCRM() {
         })()}
 
         {/* PACKAGES TAB */}
-        {activeTab === 'packages' && (() => {
-          const activePkgs = pkgList.filter(p => p.is_active !== false);
-          const isEditing = pkgDialogOpen;
-          const pkgSubtotal = pkgGrandTotal();
-          const pkgGst = pkgSubtotal * (pkgForm.gst_pct || 18) / 100;
-          return (
-            <div className="flex flex-col lg:flex-row gap-4 min-h-[520px]">
-
-              {/* LEFT — Package List */}
-              <div className={`lg:w-72 flex-shrink-0 ${card} border rounded-md flex flex-col`}>
-                <div className="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border-color)]">
-                  <span className={`text-xs font-semibold uppercase tracking-wide ${textMuted}`}>Packages ({activePkgs.length})</span>
-                  {user?.role === 'admin' && (
-                    <Button size="sm" onClick={openCreatePkg} className="bg-[#e94560] hover:bg-[#f05c75] text-white h-7 px-2 text-xs">
-                      <Plus className="h-3 w-3 mr-1" /> New
-                    </Button>
-                  )}
-                </div>
-                <div className="flex-1 overflow-y-auto">
-                  {activePkgs.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center h-40 gap-2">
-                      <Package className={`h-8 w-8 ${textMuted}`} strokeWidth={1} />
-                      <p className={`text-xs ${textMuted}`}>No packages yet</p>
-                    </div>
-                  ) : activePkgs.map(pkg => {
-                    const items = pkg.items || [];
-                    const sub = items.reduce((s, i) => s + ((i.qty || 0) * (i.unit_price || 0)), 0);
-                    const total = sub * (1 + (pkg.gst_pct || 18) / 100);
-                    const isSelected = editPkg?.package_id === pkg.package_id && isEditing;
-                    return (
-                      <div key={pkg.package_id}
-                        onClick={() => openEditPkg(pkg)}
-                        className={`px-3 py-2.5 border-b border-[var(--border-color)] cursor-pointer transition-colors ${isSelected ? 'bg-[#e94560]/10 border-l-2 border-l-[#e94560]' : `hover:bg-[var(--bg-hover)]`}`}>
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="flex items-center gap-2 min-w-0">
-                            <div className={`w-7 h-7 rounded flex-shrink-0 flex items-center justify-center ${isSelected ? 'bg-[#e94560]/20' : 'bg-[var(--bg-primary)]'}`}>
-                              <Package className={`h-3.5 w-3.5 ${isSelected ? 'text-[#e94560]' : textMuted}`} />
-                            </div>
-                            <div className="min-w-0">
-                              <p className={`text-sm font-medium truncate ${isSelected ? 'text-[#e94560]' : textPri}`}>{pkg.display_name}</p>
-                              <p className={`text-[10px] ${textMuted}`}>{items.length} item{items.length !== 1 ? 's' : ''}</p>
-                            </div>
-                          </div>
-                          <span className={`text-xs font-mono font-semibold flex-shrink-0 ${isSelected ? 'text-[#e94560]' : textPri}`}>{formatCurrency(total)}</span>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* RIGHT — Editor or Preview */}
-              <div className={`flex-1 ${card} border rounded-md flex flex-col`}>
-                {!isEditing ? (
-                  /* Empty state / select prompt */
-                  <div className="flex flex-col items-center justify-center h-full gap-3 p-8">
-                    <div className="w-16 h-16 rounded-full bg-[#e94560]/10 flex items-center justify-center">
-                      <Package className="h-8 w-8 text-[#e94560]" strokeWidth={1.5} />
-                    </div>
-                    <p className={`${textPri} font-medium`}>Select a package to edit</p>
-                    <p className={`text-sm ${textMuted} text-center`}>Click any package on the left to view and edit it, or create a new one.</p>
-                    {user?.role === 'admin' && (
-                      <Button onClick={openCreatePkg} className="bg-[#e94560] hover:bg-[#f05c75] text-white mt-2">
-                        <Plus className="mr-2 h-4 w-4" /> Create Package
-                      </Button>
-                    )}
-                  </div>
-                ) : (
-                  /* Edit Form */
-                  <div className="flex flex-col h-full">
-                    {/* Form header */}
-                    <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--border-color)]">
-                      <h3 className={`${textPri} font-semibold`}>{editPkg ? 'Edit Package' : 'New Package'}</h3>
-                      <Button size="sm" variant="ghost" onClick={() => setPkgDialogOpen(false)} className={`${textMuted} h-7 w-7 p-0`}><X className="h-4 w-4" /></Button>
-                    </div>
-
-                    <div className="flex-1 overflow-y-auto p-4 space-y-5">
-                      {/* Package meta */}
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                        <div className="sm:col-span-2">
-                          <Label className={`${textSec} text-xs mb-1 block`}>Package Name *</Label>
-                          <Input value={pkgForm.display_name} onChange={e => setPkgForm(f => ({ ...f, display_name: e.target.value }))} className={inputCls} placeholder="e.g. Premium SmartShape Kit" />
-                        </div>
-                        <div>
-                          <Label className={`${textSec} text-xs mb-1 block`}>GST %</Label>
-                          <Input type="number" min="0" max="28" value={pkgForm.gst_pct} onChange={e => setPkgForm(f => ({ ...f, gst_pct: parseFloat(e.target.value) || 0 }))} className={inputCls} />
-                        </div>
-                      </div>
-
-                      {/* Products / Items */}
-                      <div>
-                        <div className="flex items-center justify-between mb-2">
-                          <Label className={`${textSec} text-xs font-semibold uppercase tracking-wide`}>Products / Items</Label>
-                          <Button size="sm" onClick={addPkgItem} variant="outline" className={`h-7 px-2 text-xs border-[var(--border-color)] ${textSec} hover:text-[#e94560] hover:border-[#e94560]`}>
-                            <Plus className="h-3 w-3 mr-1" /> Add Product
-                          </Button>
-                        </div>
-
-                        {pkgForm.items.length === 0 ? (
-                          <div className={`border-2 border-dashed border-[var(--border-color)] rounded-md p-6 text-center`}>
-                            <p className={`text-sm ${textMuted}`}>No products added yet</p>
-                            <Button size="sm" onClick={addPkgItem} className="mt-2 bg-[#e94560]/10 text-[#e94560] border border-[#e94560]/30 hover:bg-[#e94560]/20 text-xs h-7">
-                              <Plus className="h-3 w-3 mr-1" /> Add First Product
-                            </Button>
-                          </div>
-                        ) : (
-                          <div className="space-y-2">
-                            {/* Column headers */}
-                            <div className="hidden sm:grid grid-cols-12 gap-2 px-1">
-                              <span className={`col-span-3 text-[10px] uppercase ${textMuted}`}>Type</span>
-                              <span className={`col-span-4 text-[10px] uppercase ${textMuted}`}>Product Name</span>
-                              <span className={`col-span-1 text-[10px] uppercase ${textMuted} text-center`}>Qty</span>
-                              <span className={`col-span-2 text-[10px] uppercase ${textMuted} text-right`}>Unit Price</span>
-                              <span className={`col-span-2 text-[10px] uppercase ${textMuted} text-right`}>Total</span>
-                            </div>
-                            {pkgForm.items.map((item, idx) => (
-                              <div key={idx} className={`bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-md p-2.5 grid grid-cols-12 gap-2 items-center`}>
-                                {/* Type */}
-                                <div className="col-span-6 sm:col-span-3">
-                                  <select value={item.type} onChange={e => updatePkgItem(idx, 'type', e.target.value)}
-                                    className={`w-full h-8 px-2 rounded text-xs ${inputCls}`}>
-                                    {PACKAGE_ITEM_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
-                                  </select>
-                                </div>
-                                {/* Name */}
-                                <div className="col-span-6 sm:col-span-4">
-                                  <Input value={item.name} onChange={e => updatePkgItem(idx, 'name', e.target.value)}
-                                    className={`${inputCls} h-8 text-xs`} placeholder="Product name" />
-                                </div>
-                                {/* Qty */}
-                                <div className="col-span-3 sm:col-span-1">
-                                  <Input type="number" min="1" value={item.qty} onChange={e => updatePkgItem(idx, 'qty', e.target.value)}
-                                    className={`${inputCls} h-8 text-xs text-center`} />
-                                </div>
-                                {/* Unit price */}
-                                <div className="col-span-4 sm:col-span-2">
-                                  <Input type="number" min="0" value={item.unit_price} onChange={e => updatePkgItem(idx, 'unit_price', e.target.value)}
-                                    className={`${inputCls} h-8 text-xs text-right`} placeholder="0" />
-                                </div>
-                                {/* Row total + delete */}
-                                <div className="col-span-5 sm:col-span-2 flex items-center justify-end gap-1">
-                                  <span className={`text-xs font-mono ${textPri} flex-1 text-right`}>{formatCurrency(pkgItemTotal(item))}</span>
-                                  <Button size="sm" variant="ghost" onClick={() => removePkgItem(idx)} className="text-red-400 hover:text-red-300 h-7 w-7 p-0 flex-shrink-0"><X className="h-3.5 w-3.5" /></Button>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Price summary + actions — sticky footer */}
-                    <div className={`border-t border-[var(--border-color)] p-4 space-y-2`}>
-                      <div className="flex justify-between text-sm">
-                        <span className={textSec}>Subtotal ({pkgForm.items.length} items)</span>
-                        <span className={`font-mono ${textPri}`}>{formatCurrency(pkgSubtotal)}</span>
-                      </div>
-                      <div className="flex justify-between text-sm">
-                        <span className={textSec}>GST @ {pkgForm.gst_pct}%</span>
-                        <span className={`font-mono ${textMuted}`}>{formatCurrency(pkgGst)}</span>
-                      </div>
-                      <div className="flex justify-between text-base font-bold border-t border-[var(--border-color)] pt-2">
-                        <span className={textPri}>Package Total</span>
-                        <span className="font-mono text-[#e94560]">{formatCurrency(pkgSubtotal + pkgGst)}</span>
-                      </div>
-                      <div className="flex gap-2 pt-1">
-                        {user?.role === 'admin' && editPkg && (
-                          <Button size="sm" variant="ghost" onClick={() => handleDeletePkg(editPkg)} className="text-red-400 hover:text-red-300 border border-red-400/30 hover:border-red-400/60 h-9">
-                            <Trash2 className="h-3.5 w-3.5 mr-1.5" /> Delete
-                          </Button>
-                        )}
-                        <Button size="sm" variant="outline" onClick={() => setPkgDialogOpen(false)} className={`border-[var(--border-color)] ${textSec} h-9 flex-1`}>Cancel</Button>
-                        <Button size="sm" onClick={handleSavePkg} className="bg-[#e94560] hover:bg-[#f05c75] text-white h-9 flex-1">
-                          <Save className="h-3.5 w-3.5 mr-1.5" /> {editPkg ? 'Update' : 'Create'} Package
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          );
-        })()}
-
         {/* REPORTS TAB */}
         {activeTab === 'reports' && (() => {
           const totalContacts = contactsList.length;
@@ -1498,7 +1283,7 @@ export default function LeadsCRM() {
         {/* LEAD DETAIL DIALOG */}
         {detailLead && (
           <Dialog open={!!detailLead} onOpenChange={() => setDetailLead(null)}>
-            <DialogContent className={`${dlgCls} max-w-2xl max-h-[90vh] overflow-y-auto`}>
+            <DialogContent className={`${dlgCls} w-[calc(100vw-1rem)] sm:max-w-2xl max-h-[88dvh] overflow-y-auto`}>
               <DialogHeader>
                 <DialogTitle className={`${textPri} text-lg flex items-center justify-between`}>
                   <div>
@@ -1712,7 +1497,7 @@ export default function LeadsCRM() {
 
         {/* LEAD FORM DIALOG */}
         <Dialog open={leadDialogOpen} onOpenChange={setLeadDialogOpen}>
-          <DialogContent className={`${dlgCls} max-w-lg max-h-[90vh] overflow-y-auto`}>
+          <DialogContent className={`${dlgCls} w-[calc(100vw-1rem)] sm:max-w-lg max-h-[88dvh] overflow-y-auto`}>
             <DialogHeader><DialogTitle className={textPri}>{editLead ? 'Edit Lead' : 'New Lead'}</DialogTitle></DialogHeader>
             <div className="space-y-3 py-2">
               {/* School selection */}
@@ -1852,7 +1637,7 @@ export default function LeadsCRM() {
 
         {/* SCHOOL FORM DIALOG */}
         <Dialog open={schoolDialogOpen} onOpenChange={(v) => { setSchoolDialogOpen(v); if (!v) setEditSchool(null); }}>
-          <DialogContent className={`${dlgCls} max-w-lg max-h-[90vh] overflow-y-auto`}>
+          <DialogContent className={`${dlgCls} w-[calc(100vw-1rem)] sm:max-w-lg max-h-[88dvh] overflow-y-auto`}>
             <DialogHeader><DialogTitle className={textPri}>{editSchool ? 'Edit School' : 'Add School'}</DialogTitle></DialogHeader>
             <div className="space-y-3 py-2">
               <div><Label className={`${textSec} text-xs`}>School Name *</Label><Input value={editSchoolForm.school_name || ''} onChange={e => setEditSchoolForm({...editSchoolForm, school_name: e.target.value})} className={inputCls} data-testid="school-name-input" /></div>
@@ -1898,7 +1683,7 @@ export default function LeadsCRM() {
 
         {/* TASK DIALOG */}
         <Dialog open={taskDialogOpen} onOpenChange={setTaskDialogOpen}>
-          <DialogContent className={`${dlgCls} max-w-md`}>
+          <DialogContent className={`${dlgCls} w-[calc(100vw-1rem)] sm:max-w-md`}>
             <DialogHeader><DialogTitle className={textPri}>New Task</DialogTitle></DialogHeader>
             <div className="space-y-3 py-2">
               <div><Label className={`${textSec} text-xs`}>Title *</Label><Input value={taskForm.title} onChange={e => setTaskForm({...taskForm, title: e.target.value})} className={inputCls} data-testid="task-title-input" /></div>
@@ -1920,7 +1705,7 @@ export default function LeadsCRM() {
 
         {/* IMPORT DIALOG */}
         <Dialog open={importDialogOpen} onOpenChange={setImportDialogOpen}>
-          <DialogContent className={`${dlgCls} max-w-md`}>
+          <DialogContent className={`${dlgCls} w-[calc(100vw-1rem)] sm:max-w-md`}>
             <DialogHeader><DialogTitle className={textPri}>Import Leads from CSV</DialogTitle></DialogHeader>
             <div className="py-4 space-y-3">
               <p className={`text-sm ${textSec}`}>CSV columns: school_name, school_type, website, location, contact_name, designation, phone, email, school_strength, source</p>
@@ -1934,7 +1719,7 @@ export default function LeadsCRM() {
         </Dialog>
         {/* CONTACT DIALOG */}
         <Dialog open={contactDialogOpen} onOpenChange={setContactDialogOpen}>
-          <DialogContent className={`${dlgCls} max-w-md`}>
+          <DialogContent className={`${dlgCls} w-[calc(100vw-1rem)] sm:max-w-md`}>
             <DialogHeader><DialogTitle className={textPri}>{editContact ? 'Edit Contact' : 'Add Contact'}</DialogTitle></DialogHeader>
             <div className="space-y-3 py-2">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -1969,7 +1754,7 @@ export default function LeadsCRM() {
 
         {/* CONVERT TO LEAD DIALOG */}
         <Dialog open={convertDialogOpen} onOpenChange={setConvertDialogOpen}>
-          <DialogContent className={`${dlgCls} max-w-md`}>
+          <DialogContent className={`${dlgCls} w-[calc(100vw-1rem)] sm:max-w-md`}>
             <DialogHeader><DialogTitle className={textPri}>Convert to Lead</DialogTitle></DialogHeader>
             {convertContact && (
               <div className="space-y-4 py-2">
@@ -2037,7 +1822,7 @@ export default function LeadsCRM() {
         </Dialog>
         {/* CONTACT IMPORT DIALOG */}
         <Dialog open={contactImportOpen} onOpenChange={setContactImportOpen}>
-          <DialogContent className={`${dlgCls} max-w-md`}>
+          <DialogContent className={`${dlgCls} w-[calc(100vw-1rem)] sm:max-w-md`}>
             <DialogHeader><DialogTitle className={textPri}>Import Contacts from CSV</DialogTitle></DialogHeader>
             <div className="py-4 space-y-3">
               <p className={`text-sm ${textSec}`}>CSV columns: name, phone, email, company, designation, source, notes</p>
@@ -2067,7 +1852,7 @@ export default function LeadsCRM() {
       {/* Mobile FAB — New Lead */}
       <button
         onClick={openCreateLead}
-        className="sm:hidden fixed bottom-24 right-4 z-40 w-14 h-14 rounded-full bg-[#e94560] hover:bg-[#f05c75] text-white shadow-xl flex items-center justify-center active:scale-95 transition-transform"
+        className="sm:hidden fixed z-40 w-14 h-14 rounded-full bg-[#e94560] hover:bg-[#f05c75] text-white shadow-xl flex items-center justify-center active:scale-95 transition-transform" style={{ bottom: 'calc(3.75rem + env(safe-area-inset-bottom) + 1rem)', right: '1rem' }}
         aria-label="New Lead"
       >
         <Plus className="h-6 w-6" />

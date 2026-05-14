@@ -141,6 +141,7 @@ export const schools = {
   create: (data) => API.post('/schools', data),
   update: (id, data) => API.put(`/schools/${id}`, data),
   delete: (id) => API.delete(`/schools/${id}`),
+  getProfile: (id) => API.get(`/schools/${id}/profile`),
 };
 
 // Contacts

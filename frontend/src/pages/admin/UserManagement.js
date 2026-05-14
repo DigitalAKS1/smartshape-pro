@@ -361,7 +361,7 @@ export default function UserManagement() {
 
         {/* Create/Edit Dialog */}
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-          <DialogContent className={`bg-[var(--bg-card)] border-[var(--border-color)] ${textPri} max-w-2xl max-h-[90vh] overflow-y-auto`}>
+          <DialogContent className={`bg-[var(--bg-card)] border-[var(--border-color)] ${textPri} w-[calc(100vw-1rem)] sm:max-w-2xl max-h-[88dvh] overflow-y-auto`}>
             <DialogHeader>
               <DialogTitle className={`${textPri} text-lg`}>{editUser ? 'Edit User' : 'Create New User'}</DialogTitle>
             </DialogHeader>

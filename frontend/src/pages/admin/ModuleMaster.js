@@ -166,7 +166,7 @@ export default function ModuleMaster() {
 
         {/* DESIGNATION DIALOG */}
         <Dialog open={desgOpen} onOpenChange={setDesgOpen}>
-          <DialogContent className={`${dlgCls} max-w-lg max-h-[90vh] overflow-y-auto`}>
+          <DialogContent className={`${dlgCls} w-[calc(100vw-1rem)] sm:max-w-lg max-h-[88dvh] overflow-y-auto`}>
             <DialogHeader><DialogTitle className={textPri}>{editDesg ? 'Edit Designation' : 'Create Designation'}</DialogTitle></DialogHeader>
             <div className="space-y-4 py-2">
               <div className="grid grid-cols-2 gap-3">

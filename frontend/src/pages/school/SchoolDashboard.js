@@ -210,7 +210,7 @@ export default function SchoolDashboard() {
 
       {/* ORDER DETAIL DIALOG */}
       <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
-        <DialogContent className={`${dlgCls} max-w-2xl max-h-[90vh] overflow-y-auto`}>
+        <DialogContent className={`${dlgCls} w-[calc(100vw-1rem)] sm:max-w-2xl max-h-[88dvh] overflow-y-auto`}>
           {detailOrder && (
             <>
               <DialogHeader>

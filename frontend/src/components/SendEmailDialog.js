@@ -93,7 +93,7 @@ export default function SendEmailDialog({ open, onClose, onSend, title, defaultT
 
   return (
     <Dialog open={open} onOpenChange={v => { if (!v) onClose(); }}>
-      <DialogContent className="bg-[var(--bg-card)] border border-[var(--border-color)] max-w-lg">
+      <DialogContent className="bg-[var(--bg-card)] border border-[var(--border-color)] w-[calc(100vw-1rem)] sm:max-w-lg">
         <DialogHeader>
           <DialogTitle className="text-[var(--text-primary)] flex items-center gap-2">
             <Send className="h-4 w-4 text-[#e94560]" />

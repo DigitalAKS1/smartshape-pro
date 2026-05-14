@@ -355,7 +355,7 @@ export default function CRMMasters() {
 
         {/* GROUP DIALOG */}
         <Dialog open={groupOpen} onOpenChange={setGroupOpen}>
-          <DialogContent className={`${dlgCls} max-w-lg`}>
+          <DialogContent className={`${dlgCls} w-[calc(100vw-1rem)] sm:max-w-lg max-h-[88dvh] overflow-y-auto`}>
             <DialogHeader><DialogTitle className={textPri}>{editGroup ? 'Edit Group' : 'Add Group'}</DialogTitle></DialogHeader>
             <div className="space-y-3 py-2">
               <div><Label className={`${textSec} text-xs`}>Group Name *</Label><Input value={groupForm.group_name} onChange={e => setGroupForm({...groupForm, group_name: e.target.value})} className={inputCls} placeholder="e.g. DPS Group" data-testid="group-name-input" /></div>

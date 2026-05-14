@@ -215,7 +215,7 @@ export default function LeaveManagement() {
 
         {/* Apply Leave Dialog */}
         <Dialog open={applyOpen} onOpenChange={setApplyOpen}>
-          <DialogContent className={`${dlgCls} max-w-md`}>
+          <DialogContent className={`${dlgCls} w-[calc(100vw-1rem)] sm:max-w-md max-h-[88dvh] overflow-y-auto`}>
             <DialogHeader><DialogTitle className={textPri}>Apply for Leave</DialogTitle></DialogHeader>
             <div className="space-y-4 py-2">
               {/* Leave Type Selector */}

@@ -181,16 +181,27 @@ export default function AdminLayout({ children }) {
       </aside>
 
       <div className="flex-1 lg:ml-64">
-        <div className={`lg:hidden sticky top-0 z-40 ${mobileBg} backdrop-blur-xl border-b ${borderClr} px-4 py-3`}>
-          <div className="flex items-center justify-between">
-            <h1 className={`text-lg font-bold ${textPri}`}>SmartShape Pro</h1>
-            <div className="flex items-center gap-2">
-              <button onClick={toggleTheme} className={`p-2 rounded-md ${textSec}`}>
-                {isDark ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
+        <div className={`lg:hidden sticky top-0 z-40 ${mobileBg} backdrop-blur-xl border-b ${borderClr} px-4`} style={{ paddingTop: 'max(0.75rem, env(safe-area-inset-top))' }}>
+          <div className="flex items-center justify-between pb-3">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <button onClick={() => setSidebarOpen(!sidebarOpen)} className={`p-1.5 -ml-1.5 rounded-lg ${hoverBg} ${textSec} flex-shrink-0`}>
+                {sidebarOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
               </button>
-              <Button onClick={() => setSidebarOpen(!sidebarOpen)} variant="ghost" size="icon" className={textPri}>
-                {sidebarOpen ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
-              </Button>
+              <span className={`text-base font-bold ${textPri} truncate`}>
+                {(() => {
+                  const allRoutes = Object.values(MODULE_ROUTE_MAP).flat();
+                  const match = allRoutes.find(r => r && r.path === location.pathname);
+                  return match ? match.label : 'SmartShape Pro';
+                })()}
+              </span>
+            </div>
+            <div className="flex items-center gap-1">
+              <button onClick={toggleTheme} className={`p-2 rounded-lg ${hoverBg} ${textSec}`}>
+                {isDark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+              </button>
+              <div className={`w-7 h-7 rounded-full bg-[#e94560]/20 flex items-center justify-center`}>
+                <span className="text-[11px] font-bold text-[#e94560]">{user?.name?.[0]?.toUpperCase() || 'U'}</span>
+              </div>
             </div>
           </div>
         </div>
@@ -208,24 +219,44 @@ export default function AdminLayout({ children }) {
           { path: '/field-sales', icon: MapPin, label: 'Field', module: 'field_sales' },
           { path: '/sales', icon: Smartphone, label: 'Sales', module: 'sales_portal' },
         ].filter(item => isAdmin || userModules.includes(item.module));
+        const allItems = [...bottomItems, { path: '__more__', icon: MoreHorizontal, label: 'More', module: null }];
         return (
-          <nav className={`lg:hidden fixed bottom-0 inset-x-0 z-50 ${sidebarBg} border-t ${borderClr} flex items-stretch`} style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
-            {bottomItems.map(item => {
-              const Icon = item.icon;
-              const isActive = location.pathname === item.path;
-              return (
-                <Link key={item.path} to={item.path} onClick={() => setSidebarOpen(false)}
-                  className={`flex-1 flex flex-col items-center justify-center py-2 gap-0.5 transition-colors ${isActive ? 'text-[#e94560]' : textMuted}`}>
-                  <Icon className="h-5 w-5" strokeWidth={isActive ? 2 : 1.5} />
-                  <span className={`text-[10px] font-medium ${isActive ? 'text-[#e94560]' : ''}`}>{item.label}</span>
-                </Link>
-              );
-            })}
-            <button onClick={() => setSidebarOpen(s => !s)}
-              className={`flex-1 flex flex-col items-center justify-center py-2 gap-0.5 transition-colors ${sidebarOpen ? 'text-[#e94560]' : textMuted}`}>
-              <MoreHorizontal className="h-5 w-5" strokeWidth={sidebarOpen ? 2 : 1.5} />
-              <span className="text-[10px] font-medium">More</span>
-            </button>
+          <nav
+            className={`lg:hidden fixed bottom-0 inset-x-0 z-50 ${sidebarBg} border-t ${borderClr}`}
+            style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
+          >
+            <div className="flex items-stretch h-14">
+              {allItems.map(item => {
+                const Icon = item.icon;
+                const isMore = item.path === '__more__';
+                const isActive = isMore ? sidebarOpen : location.pathname === item.path || location.pathname.startsWith(item.path + '/');
+                const content = (
+                  <>
+                    <div className={`relative flex items-center justify-center`}>
+                      <Icon className="h-[22px] w-[22px]" strokeWidth={isActive ? 2.2 : 1.6} />
+                      {isActive && (
+                        <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-[#e94560]" />
+                      )}
+                    </div>
+                    <span className={`text-[10px] font-semibold mt-1 leading-none ${isActive ? 'text-[#e94560]' : ''}`}>{item.label}</span>
+                  </>
+                );
+                if (isMore) {
+                  return (
+                    <button key="more" onClick={() => setSidebarOpen(s => !s)}
+                      className={`flex-1 flex flex-col items-center justify-center gap-0 pt-2 pb-1 transition-colors ${isActive ? 'text-[#e94560]' : textMuted}`}>
+                      {content}
+                    </button>
+                  );
+                }
+                return (
+                  <Link key={item.path} to={item.path} onClick={() => setSidebarOpen(false)}
+                    className={`flex-1 flex flex-col items-center justify-center gap-0 pt-2 pb-1 transition-colors ${isActive ? 'text-[#e94560]' : textMuted}`}>
+                    {content}
+                  </Link>
+                );
+              })}
+            </div>
           </nav>
         );
       })()}

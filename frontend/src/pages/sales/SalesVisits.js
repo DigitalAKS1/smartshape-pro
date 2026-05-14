@@ -145,7 +145,7 @@ export default function SalesVisits() {
                 <Plus className="mr-2 h-4 w-4" /> Plan Visit
               </Button>
             </DialogTrigger>
-            <DialogContent className="bg-[var(--bg-card)] border-[var(--border-color)] text-[var(--text-primary)] max-w-md">
+            <DialogContent className="bg-[var(--bg-card)] border-[var(--border-color)] text-[var(--text-primary)] w-[calc(100vw-1rem)] sm:max-w-md max-h-[88dvh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle className="text-[var(--text-primary)]">Plan New Visit</DialogTitle>
               </DialogHeader>

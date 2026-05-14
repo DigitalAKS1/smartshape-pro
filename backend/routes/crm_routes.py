@@ -373,6 +373,79 @@ async def delete_school(school_id: str, request: Request):
     return {"message": "School deleted"}
 
 
+@router.get("/schools/{school_id}/profile")
+async def get_school_profile(school_id: str, request: Request):
+    await get_current_user(request)
+    school = await db.schools.find_one({"school_id": school_id}, {"_id": 0})
+    if not school:
+        raise HTTPException(status_code=404, detail="School not found")
+    school_name = school.get("school_name", "")
+
+    leads = await db.leads.find({"school_id": school_id}, {"_id": 0}).to_list(None)
+    lead_ids = [l["lead_id"] for l in leads]
+
+    contacts_list = await db.contacts.find({"company": school_name}, {"_id": 0}).to_list(None)
+
+    quotations = await db.quotations.find(
+        {"school_name": school_name},
+        {"_id": 0, "quotation_id": 1, "quotation_number": 1, "status": 1,
+         "grand_total": 1, "currency_symbol": 1, "created_at": 1, "created_by_name": 1, "items": 1}
+    ).sort("created_at", -1).to_list(None)
+
+    visits = await db.visit_plans.find({"school_id": school_id}, {"_id": 0}).sort("visit_date", -1).to_list(None)
+
+    call_notes = []
+    meetings = []
+    dispatches = []
+    if lead_ids:
+        call_notes = await db.call_notes.find({"lead_id": {"$in": lead_ids}}, {"_id": 0}).sort("created_at", -1).to_list(None)
+        meetings = await db.followups.find(
+            {"lead_id": {"$in": lead_ids}, "followup_type": "meeting"}, {"_id": 0}
+        ).sort("followup_date", -1).to_list(None)
+        dispatches = await db.physical_dispatches.find({"lead_id": {"$in": lead_ids}}, {"_id": 0}).sort("sent_date", -1).to_list(None)
+
+    active_stages = {"new", "contacted", "demo", "quoted", "negotiation"}
+    active_leads_count = sum(1 for l in leads if l.get("stage") in active_stages)
+
+    all_dates = [cn["created_at"] for cn in call_notes if cn.get("created_at")]
+    all_dates += [v["visit_date"] for v in visits if v.get("visit_date")]
+    last_contacted = max(all_dates) if all_dates else None
+
+    days_since = None
+    if last_contacted:
+        from datetime import date as _date
+        try:
+            lc_str = last_contacted[:10]
+            lc = _date.fromisoformat(lc_str)
+            days_since = (_date.today() - lc).days
+        except Exception:
+            pass
+
+    total_revenue_quoted = sum(q.get("grand_total", 0) or 0 for q in quotations)
+
+    return {
+        "school": school,
+        "leads": leads,
+        "contacts": contacts_list,
+        "quotations": quotations,
+        "visits": visits,
+        "call_notes": call_notes,
+        "meetings": meetings,
+        "dispatches": dispatches,
+        "metrics": {
+            "total_leads": len(leads),
+            "active_leads": active_leads_count,
+            "total_contacts": len(contacts_list),
+            "total_visits": len(visits),
+            "total_calls": len(call_notes),
+            "total_quotations": len(quotations),
+            "total_revenue_quoted": total_revenue_quoted,
+            "last_contacted": last_contacted,
+            "days_since_last_contact": days_since,
+        },
+    }
+
+
 @router.put("/schools/{school_id}/set-password")
 async def set_school_password(school_id: str, request: Request):
     from auth_utils import hash_password as _hash_password

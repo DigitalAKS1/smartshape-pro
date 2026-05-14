@@ -184,7 +184,7 @@ export default function TodayDashboard() {
 
       {/* Mark Done Dialog */}
       <Dialog open={!!markDoneCard} onOpenChange={(o) => !o && setMarkDoneCard(null)}>
-        <DialogContent className="bg-[var(--bg-card)] border-[var(--border-color)] max-w-md" data-testid="mark-done-dialog" aria-describedby="mark-done-desc">
+        <DialogContent className="bg-[var(--bg-card)] border-[var(--border-color)] w-[calc(100vw-1rem)] sm:max-w-md" data-testid="mark-done-dialog" aria-describedby="mark-done-desc">
           <DialogHeader>
             <DialogTitle className="text-[var(--text-primary)] flex items-center gap-2">
               <CheckCircle2 className="h-5 w-5 text-green-500" /> Mark as Done

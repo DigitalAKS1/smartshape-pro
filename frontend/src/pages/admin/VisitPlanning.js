@@ -240,7 +240,7 @@ export default function VisitPlanning() {
 
         {/* Plan Visit Dialog */}
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-          <DialogContent className={`${dlgCls} max-w-md`}>
+          <DialogContent className={`${dlgCls} w-[calc(100vw-1rem)] sm:max-w-md max-h-[88dvh] overflow-y-auto`}>
             <DialogHeader><DialogTitle className={textPri}>Plan Visit</DialogTitle></DialogHeader>
             <div className="space-y-3 py-2">
               <div>

@@ -258,7 +258,7 @@ export default function Inventory() {
 
         {/* ADD DIE DIALOG */}
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-          <DialogContent className={`${dlgCls} max-w-md`}>
+          <DialogContent className={`${dlgCls} w-[calc(100vw-1rem)] sm:max-w-md max-h-[88dvh] overflow-y-auto`}>
             <DialogHeader><DialogTitle className={textPri}>Add New Die</DialogTitle></DialogHeader>
             <form onSubmit={handleCreateDie} className="space-y-3">
               <div>
@@ -299,7 +299,7 @@ export default function Inventory() {
 
         {/* IMPORT DIALOG */}
         <Dialog open={importOpen} onOpenChange={setImportOpen}>
-          <DialogContent className={`${dlgCls} max-w-md`}>
+          <DialogContent className={`${dlgCls} w-[calc(100vw-1rem)] sm:max-w-md max-h-[88dvh] overflow-y-auto`}>
             <DialogHeader><DialogTitle className={textPri}>Import Dies from CSV</DialogTitle></DialogHeader>
             <p className={`text-sm ${textSec}`}>CSV columns: code, name, type, category, stock_qty, min_level, description</p>
             <div className="bg-[var(--bg-primary)] border-2 border-dashed border-[var(--border-color)] rounded-md p-8 text-center cursor-pointer" onClick={() => importRef.current?.click()}>
