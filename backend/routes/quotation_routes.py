@@ -319,11 +319,11 @@ async def send_catalogue(quotation_id: str, request: Request):
 
 @router.post("/quotations/{quotation_id}/send-catalogue-email")
 async def send_catalogue_with_email(quotation_id: str, request: Request):
-    import smtplib
-    from email.mime.text import MIMEText
-    from email.mime.multipart import MIMEMultipart
-
     user = await get_current_user(request)
+    body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+    extra_to  = body.get("extra_to", []) if isinstance(body, dict) else []
+    extra_cc  = body.get("extra_cc", []) if isinstance(body, dict) else []
+
     quot = await db.quotations.find_one({"quotation_id": quotation_id}, {"_id": 0})
     if not quot:
         raise HTTPException(status_code=404, detail="Quotation not found")
@@ -345,7 +345,8 @@ async def send_catalogue_with_email(quotation_id: str, request: Request):
     frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:3000")
     catalogue_url = f"{frontend_url}/catalogue/{token}"
 
-    email_result = await _send_catalogue_email(quotation_id, cc_emails=[user.get("email")])
+    all_cc = list({user.get("email", "")} | set(extra_cc))
+    email_result = await _send_catalogue_email(quotation_id, cc_emails=all_cc, extra_to=extra_to)
 
     return {
         "catalogue_url": catalogue_url,
@@ -380,7 +381,7 @@ def _build_cc_set(sender_email: str, customer_email: str, cc_emails=None, sp_ema
     return cc_set
 
 
-async def _send_catalogue_email(quotation_id: str, cc_emails=None):
+async def _send_catalogue_email(quotation_id: str, cc_emails=None, extra_to=None):
     import smtplib
     from email.mime.text import MIMEText
     from email.mime.multipart import MIMEMultipart
@@ -389,9 +390,12 @@ async def _send_catalogue_email(quotation_id: str, cc_emails=None):
     if not quot:
         return {"success": False, "error": "Quotation not found"}
 
-    to_email = quot.get("customer_email", "").strip()
-    if not to_email:
-        return {"success": False, "error": "Customer email not set on this quotation. Edit the quotation and add the customer email first."}
+    primary_to = quot.get("customer_email", "").strip()
+    extra_to_clean = [e.strip().lower() for e in (extra_to or []) if e and e.strip()]
+    all_to = list(dict.fromkeys(filter(None, [primary_to] + extra_to_clean)))
+
+    if not all_to:
+        return {"success": False, "error": "No recipient email — add customer email to the quotation or enter one in the send dialog."}
 
     token = quot.get("catalogue_token")
     if not token:
@@ -405,10 +409,11 @@ async def _send_catalogue_email(quotation_id: str, cc_emails=None):
     frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:3000")
     catalogue_url = f"{frontend_url}/catalogue/{token}"
 
-    cc_set = _build_cc_set(sender_email, to_email, cc_emails, quot.get("sales_person_email"))
+    cc_set = _build_cc_set(sender_email, all_to[0], cc_emails, quot.get("sales_person_email"))
 
     subject = f"Your SmartShape Catalogue – {quot.get('school_name', '')}"
-    body = f"""Dear {quot.get('principal_name', 'Sir/Ma\'am')},
+    salutation = quot.get("principal_name", "") or "Sir/Ma'am"
+    body = f"""Dear {salutation},
 
 Thank you for your interest in SmartShape Pro!
 
@@ -429,16 +434,16 @@ SmartShape Pro Team"""
     try:
         msg = MIMEMultipart()
         msg["From"] = f"{sender_name} <{sender_email}>"
-        msg["To"] = to_email
+        msg["To"] = ", ".join(all_to)
         if cc_set:
             msg["Cc"] = ", ".join(cc_set)
         msg["Subject"] = subject
-        msg.attach(MIMEText(body, "plain"))
-        recipients = [to_email] + cc_set
+        msg.attach(MIMEText(body, "plain", "utf-8"))
+        recipients = all_to + cc_set
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
             smtp.login(sender_email, app_password)
             smtp.sendmail(sender_email, recipients, msg.as_string())
-        logging.info(f"Catalogue email sent to {to_email} for quotation {quotation_id}")
+        logging.info(f"Catalogue email sent to {all_to} for quotation {quotation_id}")
         return {"success": True, "message": "Email sent successfully", "cc": cc_set}
     except Exception as e:
         logging.error(f"Catalogue email send error for {quotation_id}: {e}")
@@ -447,27 +452,37 @@ SmartShape Pro Team"""
 
 @router.post("/quotations/{quotation_id}/send-quotation-email")
 async def send_quotation_email(quotation_id: str, request: Request):
-    """Send the quotation PDF as email attachment to the customer."""
+    """Send the quotation PDF as email attachment. Accepts extra_to / extra_cc in JSON body."""
     import smtplib
     from email.mime.text import MIMEText
     from email.mime.multipart import MIMEMultipart
     from email.mime.application import MIMEApplication
 
     user = await get_current_user(request)
+    body_json = {}
+    try:
+        body_json = await request.json()
+    except Exception:
+        pass
+    extra_to = [e.strip().lower() for e in body_json.get("extra_to", []) if e and e.strip()]
+    extra_cc = [e.strip().lower() for e in body_json.get("extra_cc", []) if e and e.strip()]
+
     quot = await db.quotations.find_one({"quotation_id": quotation_id}, {"_id": 0})
     if not quot:
         raise HTTPException(status_code=404, detail="Quotation not found")
 
-    to_email = quot.get("customer_email", "").strip()
-    if not to_email:
-        raise HTTPException(status_code=400, detail="Customer email not set on this quotation. Edit it and add the customer email first.")
+    primary_to = quot.get("customer_email", "").strip()
+    all_to = list(dict.fromkeys(filter(None, [primary_to] + extra_to)))
+    if not all_to:
+        raise HTTPException(status_code=400, detail="No recipient email — add customer email to the quotation or enter one in the send dialog.")
 
     try:
         sender_email, app_password, sender_name = await _get_email_settings()
     except ValueError as ve:
         raise HTTPException(status_code=400, detail=str(ve))
 
-    cc_set = _build_cc_set(sender_email, to_email, [user.get("email")], quot.get("sales_person_email"))
+    all_cc_inputs = list({user.get("email", "")} | set(extra_cc))
+    cc_set = _build_cc_set(sender_email, all_to[0], all_cc_inputs, quot.get("sales_person_email"))
 
     gst = quot.get("gst_amount", 0)
     freight = quot.get("freight_with_gst", quot.get("freight_total", 0))
@@ -518,7 +533,7 @@ SmartShape Pro Team"""
     try:
         msg = MIMEMultipart()
         msg["From"] = f"{sender_name} <{sender_email}>"
-        msg["To"] = to_email
+        msg["To"] = ", ".join(all_to)
         if cc_set:
             msg["Cc"] = ", ".join(cc_set)
         msg["Subject"] = subject
@@ -529,12 +544,12 @@ SmartShape Pro Team"""
         pdf_part.add_header("Content-Disposition", "attachment", filename=filename)
         msg.attach(pdf_part)
 
-        recipients = [to_email] + cc_set
+        recipients = all_to + cc_set
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
             smtp.login(sender_email, app_password)
             smtp.sendmail(sender_email, recipients, msg.as_string())
-        logging.info(f"Quotation email+PDF sent to {to_email} for {quotation_id}")
-        return {"success": True, "message": f"Quotation emailed to {to_email}"}
+        logging.info(f"Quotation email+PDF sent to {all_to} CC {cc_set} for {quotation_id}")
+        return {"success": True, "message": f"Quotation emailed to {', '.join(all_to)}"}
     except Exception as e:
         logging.error(f"Quotation email error for {quotation_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Email failed: {str(e)}")

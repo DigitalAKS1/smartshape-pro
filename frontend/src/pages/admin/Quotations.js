@@ -5,9 +5,10 @@ import { formatCurrency, formatDate, getStatusColor } from '../../lib/utils';
 import { Link, useNavigate } from 'react-router-dom';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
-import { FileText, Search, Send, ArrowRight, Mail, Download, Edit2, Trash2, GitBranch, Link2, ShoppingCart, ExternalLink } from 'lucide-react';
+import { FileText, Search, Send, ArrowRight, Mail, Download, Edit2, Trash2, GitBranch, Link2, ShoppingCart } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth } from '../../contexts/AuthContext';
+import SendEmailDialog from '../../components/SendEmailDialog';
 
 export default function Quotations() {
   const { user } = useAuth();
@@ -19,6 +20,7 @@ export default function Quotations() {
   const [statusFilter, setStatusFilter] = useState('all');
   const [loading, setLoading] = useState(true);
   const [selectedQuotations, setSelectedQuotations] = useState([]);
+  const [catalogueDialog, setCatalogueDialog] = useState({ open: false, quot: null, sending: false });
 
   useEffect(() => {
     const fetchData = async () => {
@@ -53,33 +55,41 @@ export default function Quotations() {
     setFilteredQuotations(filtered);
   }, [searchTerm, statusFilter, quotations]);
 
-  const handleSendCatalogue = async (quotationId) => {
+  const openCatalogueDialog = (quot) => setCatalogueDialog({ open: true, quot, sending: false });
+
+  const handleSendCatalogue = async ({ extraTo, extraCc }) => {
+    const quot = catalogueDialog.quot;
+    if (!quot) return;
+    setCatalogueDialog(d => ({ ...d, sending: true }));
     try {
-      const emailRes = await API.post(`/quotations/${quotationId}/send-catalogue-email`);
+      const emailRes = await API.post(`/quotations/${quot.quotation_id}/send-catalogue-email`, {
+        extra_to: extraTo, extra_cc: extraCc,
+      });
       const url = emailRes.data.catalogue_url;
       if (emailRes.data.email_sent) {
-        toast.success('Catalogue link generated and email sent to customer!');
+        toast.success('Catalogue link sent to customer!');
       } else {
         toast.success('Catalogue link generated!');
         const err = emailRes.data.email_error || '';
         if (err.includes('not configured') || err.includes('App Password')) {
           toast.warning('Email not sent — go to Settings → Email to configure Gmail SMTP.');
-        } else if (err.includes('not set')) {
-          toast.warning('Email not sent — add customer email to this quotation first.');
+        } else if (err.includes('No recipient')) {
+          toast.warning('Email not sent — no customer email found. Add one in the dialog or edit the quotation.');
         } else if (err) {
           toast.warning(`Email not sent: ${err}`);
         }
       }
       if (url) {
         navigator.clipboard.writeText(url).catch(() => {});
-        toast.info('Link copied to clipboard — share it manually if needed.');
+        toast.info('Link also copied to clipboard.');
       }
+      setCatalogueDialog({ open: false, quot: null, sending: false });
       const updatedRes = await quotApi.getAll();
       setQuotations(updatedRes.data);
     } catch (error) {
-      console.error('Error sending catalogue:', error);
       const detail = error.response?.data?.detail || '';
       toast.error(detail || 'Failed to generate catalogue link');
+      setCatalogueDialog(d => ({ ...d, sending: false }));
     }
   };
 
@@ -292,7 +302,7 @@ export default function Quotations() {
                               </Link>
                             )}
                             {quot.catalogue_status === 'not_sent' && (
-                              <Button size="sm" onClick={() => handleSendCatalogue(quot.quotation_id)} className="bg-[#3b82f6] hover:bg-[#2563eb] text-white h-8" data-testid={`send-catalogue-button-${quot.quote_number}`}>
+                              <Button size="sm" onClick={() => openCatalogueDialog(quot)} className="bg-[#3b82f6] hover:bg-[#2563eb] text-white h-8" data-testid={`send-catalogue-button-${quot.quote_number}`}>
                                 <Send className="mr-1 h-3 w-3" /> Send
                               </Button>
                             )}
@@ -338,7 +348,7 @@ export default function Quotations() {
                         <Download className="h-3 w-3" />
                       </Button>
                       {quot.catalogue_status === 'not_sent' && (
-                        <Button size="sm" onClick={() => handleSendCatalogue(quot.quotation_id)} className="bg-[#3b82f6] hover:bg-[#2563eb] text-white text-xs">
+                        <Button size="sm" onClick={() => openCatalogueDialog(quot)} className="bg-[#3b82f6] hover:bg-[#2563eb] text-white text-xs">
                           <Send className="mr-1 h-3 w-3" /> Send
                         </Button>
                       )}
@@ -360,6 +370,16 @@ export default function Quotations() {
           )}
         </div>
       </div>
+
+      <SendEmailDialog
+        open={catalogueDialog.open}
+        onClose={() => setCatalogueDialog({ open: false, quot: null, sending: false })}
+        onSend={handleSendCatalogue}
+        title="Send Catalogue"
+        defaultTo={catalogueDialog.quot?.customer_email || ''}
+        defaultCc={catalogueDialog.quot?.sales_person_email || ''}
+        sending={catalogueDialog.sending}
+      />
     </AdminLayout>
   );
 }

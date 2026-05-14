@@ -2,13 +2,13 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import AdminLayout from '../../components/layouts/AdminLayout';
 import API, { quotations, companySettings } from '../../lib/api';
-import { Loader2 } from 'lucide-react';
 import { formatCurrency } from '../../lib/utils';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
-import { ArrowLeft, Save, Download, Plus, X } from 'lucide-react';
+import { ArrowLeft, Save, Download, Plus, X, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
+import SendEmailDialog from '../../components/SendEmailDialog';
 
 export default function EditQuotation() {
   const { id } = useParams();
@@ -17,6 +17,7 @@ export default function EditQuotation() {
   const [company, setCompany] = useState({});
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+  const [showEmailDialog, setShowEmailDialog] = useState(false);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -73,43 +74,53 @@ export default function EditQuotation() {
     return { subtotal, disc1, after1, disc2, subtotal_after_disc, total_gst, freight_gst, freight_with_gst, grand_total };
   };
 
+  const doSave = async (status) => {
+    const t = calcTotals();
+    await quotations.update(id, {
+      ...quot,
+      quotation_status: status || quot.quotation_status,
+      subtotal: t.subtotal,
+      disc1_amount: t.disc1, after_disc1: t.after1,
+      disc2_amount: t.disc2, after_disc2: t.subtotal_after_disc,
+      subtotal_after_disc: t.subtotal_after_disc,
+      gst_amount: t.total_gst,
+      freight_gst: t.freight_gst,
+      freight_with_gst: t.freight_with_gst,
+      freight_total: t.freight_with_gst,
+      grand_total: t.grand_total,
+    });
+  };
+
   const handleSave = async (status) => {
     try {
-      setSending(status === 'sent');
-      const t = calcTotals();
-      await quotations.update(id, {
-        ...quot,
-        quotation_status: status || quot.quotation_status,
-        subtotal: t.subtotal,
-        disc1_amount: t.disc1, after_disc1: t.after1,
-        disc2_amount: t.disc2, after_disc2: t.subtotal_after_disc,
-        subtotal_after_disc: t.subtotal_after_disc,
-        gst_amount: t.total_gst,
-        freight_gst: t.freight_gst,
-        freight_with_gst: t.freight_with_gst,
-        freight_total: t.freight_with_gst,
-        grand_total: t.grand_total,
-      });
+      await doSave(status);
       if (status === 'sent') {
-        try {
-          const emailRes = await API.post(`/quotations/${id}/send-quotation-email`);
-          toast.success(`Quotation saved & emailed to ${quot.customer_email || 'customer'}!`);
-        } catch (emailErr) {
-          const detail = emailErr.response?.data?.detail || '';
-          if (detail.includes('not set') || detail.includes('not configured')) {
-            toast.success('Quotation saved!');
-            toast.warning(detail);
-          } else {
-            toast.success('Quotation saved!');
-            toast.error(`Email failed: ${detail || 'Check email settings in Settings → Email'}`);
-          }
-        }
+        setShowEmailDialog(true);
       } else {
         toast.success('Quotation saved');
+        navigate('/quotations');
       }
-      navigate('/quotations');
     } catch {
       toast.error('Failed to save');
+    }
+  };
+
+  const handleSendEmail = async ({ extraTo, extraCc }) => {
+    setSending(true);
+    try {
+      await API.post(`/quotations/${id}/send-quotation-email`, { extra_to: extraTo, extra_cc: extraCc });
+      toast.success('Quotation emailed with PDF attachment!');
+      setShowEmailDialog(false);
+      navigate('/quotations');
+    } catch (err) {
+      const detail = err.response?.data?.detail || '';
+      if (detail.includes('not configured') || detail.includes('App Password')) {
+        toast.warning('Quotation saved. Email not sent — configure Gmail SMTP in Settings → Email.');
+        setShowEmailDialog(false);
+        navigate('/quotations');
+      } else {
+        toast.error(detail || 'Email failed — check Settings → Email');
+      }
     } finally {
       setSending(false);
     }
@@ -216,6 +227,15 @@ export default function EditQuotation() {
           </div>
         </div>
       </div>
+      <SendEmailDialog
+        open={showEmailDialog}
+        onClose={() => { setShowEmailDialog(false); navigate('/quotations'); }}
+        onSend={handleSendEmail}
+        title="Send Quotation"
+        defaultTo={quot?.customer_email || ''}
+        defaultCc={quot?.sales_person_email || ''}
+        sending={sending}
+      />
     </AdminLayout>
   );
 }
