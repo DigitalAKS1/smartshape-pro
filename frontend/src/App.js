@@ -54,6 +54,9 @@ import SalesVisits from './pages/sales/SalesVisits';
 import SalesQuotations from './pages/sales/SalesQuotations';
 import SalesExpenses from './pages/sales/SalesExpenses';
 
+// Error pages
+import NotFound from './pages/NotFound';
+
 // Public page
 import CataloguePage from './pages/CataloguePage';
 import CustomerPortal from './pages/CustomerPortal';
@@ -174,7 +177,7 @@ function AppRouter() {
       
       {/* Default redirect */}
       <Route path="/" element={<ProtectedRoute><SmartRedirect /></ProtectedRoute>} />
-      <Route path="*" element={<ProtectedRoute><SmartRedirect /></ProtectedRoute>} />
+      <Route path="*" element={<NotFound />} />
     </Routes>
   );
 }

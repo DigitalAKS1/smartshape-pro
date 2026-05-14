@@ -18,6 +18,8 @@ import KanbanBoard, { ageColor, AgeBadge } from '../../components/KanbanBoard';
 import ReassignLeadDialog from '../../components/ReassignLeadDialog';
 import { STAGES, SCHOOL_TYPES, DESIGNATIONS } from '../../lib/crmConstants';
 import LeadMobileCard from '../../components/crm/LeadMobileCard';
+import { FieldTooltip } from '../../components/ui/Tooltip';
+import EmptyState, { EMPTY_STATES } from '../../components/ui/EmptyState';
 
 const NOTE_TYPES = [
   { id: 'call', label: 'Call', icon: Phone },
@@ -725,7 +727,7 @@ export default function LeadsCRM() {
                 </div>
               );
             })}
-            {filtered.length === 0 && <p className={`text-center ${textMuted} py-12`}>No leads match your filters</p>}
+            {filtered.length === 0 && <EmptyState {...(searchTerm || filterType !== 'all' ? EMPTY_STATES.searchResult : EMPTY_STATES.leads)} action={{ label: '+ Add Lead', onClick: openCreateLead }} />}
           </div>
           {/* Desktop: horizontal pipeline */}
           <div className="hidden sm:flex gap-2 overflow-x-auto pb-4" data-testid="pipeline-board">
@@ -871,7 +873,7 @@ export default function LeadsCRM() {
                   <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} cursor-pointer select-none`} onClick={() => toggleSort('contact_name')}>Contact{sortIndicator('contact_name')}</th>
                   <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden sm:table-cell cursor-pointer select-none`} onClick={() => toggleSort('lead_type')}>Type{sortIndicator('lead_type')}</th>
                   <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden md:table-cell cursor-pointer select-none`} onClick={() => toggleSort('stage')}>Stage{sortIndicator('stage')}</th>
-                  <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden lg:table-cell cursor-pointer select-none`} onClick={() => toggleSort('lead_score')}>Score{sortIndicator('lead_score')}</th>
+                  <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden lg:table-cell cursor-pointer select-none`} onClick={() => toggleSort('lead_score')}>Score{sortIndicator('lead_score')}<FieldTooltip text="Lead Score (0–100) calculated from engagement, recency, and deal size. Higher = hotter lead." /></th>
                   <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden lg:table-cell`}>Assigned</th>
                   <th className={`text-right text-xs uppercase py-3 px-3 ${textMuted}`}>Actions</th>
                 </tr></thead>
@@ -903,7 +905,7 @@ export default function LeadsCRM() {
                       </tr>
                     );
                   })}
-                  {sortedLeads.length === 0 && <tr><td colSpan="7" className={`py-12 text-center ${textMuted}`}>No leads match your filters</td></tr>}
+                  {sortedLeads.length === 0 && <tr><td colSpan="7"><EmptyState {...(searchTerm ? EMPTY_STATES.searchResult : EMPTY_STATES.leads)} compact /></td></tr>}
                 </tbody>
               </table>
             </div>
@@ -914,7 +916,7 @@ export default function LeadsCRM() {
         {/* TASKS VIEW */}
         {activeTab === 'tasks' && (
           <div className="space-y-2" data-testid="tasks-list">
-            {tasksList.length === 0 ? <p className={`text-center ${textMuted} py-12`}>No tasks yet</p> : tasksList.map(task => {
+            {tasksList.length === 0 ? <EmptyState {...EMPTY_STATES.tasks} action={{ label: '+ Add Task', onClick: () => setTaskDialogOpen(true) }} /> : tasksList.map(task => {
               const isOverdue = task.status === 'pending' && task.due_date && new Date(task.due_date) < new Date();
               return (
                 <div key={task.task_id} className={`${card} border rounded-md p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 ${isOverdue ? '!border-red-500/40' : ''}`}>
@@ -1394,7 +1396,7 @@ export default function LeadsCRM() {
                       </div>
                     );
                   })}
-                  {notes.length === 0 && <p className={`text-xs ${textMuted} text-center py-4`}>No activity yet</p>}
+                  {notes.length === 0 && <EmptyState {...EMPTY_STATES.callNotes} compact />}
                 </div>
 
                 {/* Pipeline History (FMS Phase 2) */}

@@ -10,6 +10,9 @@ import {
   Home, MoreHorizontal, Megaphone
 } from 'lucide-react';
 import { Button } from '../ui/button';
+import HelpButton from '../HelpButton';
+import GuidedTour from '../GuidedTour';
+import KeyboardShortcuts from '../KeyboardShortcuts';
 
 const MODULE_ROUTE_MAP = {
   dashboard: [
@@ -214,6 +217,10 @@ export default function AdminLayout({ children }) {
       </div>
 
       {sidebarOpen && <div className="fixed inset-0 bg-black/50 z-40 lg:hidden" onClick={() => setSidebarOpen(false)} />}
+
+      <HelpButton />
+      <GuidedTour />
+      <KeyboardShortcuts />
 
       {/* Mobile Bottom Navigation */}
       {(() => {

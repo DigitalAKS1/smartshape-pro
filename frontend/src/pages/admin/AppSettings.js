@@ -3,6 +3,7 @@ import AdminLayout from '../../components/layouts/AdminLayout';
 import { settingsApi, whatsappApi, emailApi, whatsappTemplates, whatsappScheduled } from '../../lib/api';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
+import { FieldTooltip } from '../../components/ui/Tooltip';
 import { Label } from '../../components/ui/label';
 import { toast } from 'sonner';
 import { Building2, Mail, MessageSquare, Save, Send, Eye, EyeOff, Upload, Image, X, Plus, Trash2, Edit2, Clock } from 'lucide-react';
@@ -222,8 +223,8 @@ export default function AppSettings() {
               <div><Label className={`${textSec} text-xs`}>Website</Label><Input value={company.website} onChange={e => setCompany({...company, website: e.target.value})} className={inputCls} placeholder="https://www.company.com" /></div>
               <div><Label className={`${textSec} text-xs`}>Contact Person</Label><Input value={company.contact_person} onChange={e => setCompany({...company, contact_person: e.target.value})} className={inputCls} placeholder="MD / Director name" /></div>
               <div><Label className={`${textSec} text-xs`}>Industry</Label><Input value={company.industry} onChange={e => setCompany({...company, industry: e.target.value})} className={inputCls} placeholder="Manufacturing / Education" /></div>
-              <div><Label className={`${textSec} text-xs`}>GST Number</Label><Input value={company.gst_number} onChange={e => setCompany({...company, gst_number: e.target.value})} className={`${inputCls} font-mono`} placeholder="27AAAAA0000A1Z5" maxLength={15} /></div>
-              <div><Label className={`${textSec} text-xs`}>PAN</Label><Input value={company.pan} onChange={e => setCompany({...company, pan: e.target.value})} className={`${inputCls} font-mono`} placeholder="AAAAA0000A" maxLength={10} /></div>
+              <div><Label className={`${textSec} text-xs`}>GST Number<FieldTooltip text="15-digit Goods & Services Tax Identification Number (GSTIN) issued by the government. Format: 2-digit state code + 10-digit PAN + 3 chars." /></Label><Input value={company.gst_number} onChange={e => setCompany({...company, gst_number: e.target.value})} className={`${inputCls} font-mono`} placeholder="27AAAAA0000A1Z5" maxLength={15} /></div>
+              <div><Label className={`${textSec} text-xs`}>PAN<FieldTooltip text="Permanent Account Number — 10-character alphanumeric ID issued by the Income Tax Department. Required for GST registration." /></Label><Input value={company.pan} onChange={e => setCompany({...company, pan: e.target.value})} className={`${inputCls} font-mono`} placeholder="AAAAA0000A" maxLength={10} /></div>
             </div>
 
             {/* Address */}
@@ -234,7 +235,7 @@ export default function AppSettings() {
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div><Label className={`${textSec} text-xs`}>City</Label><Input value={company.city} onChange={e => setCompany({...company, city: e.target.value})} className={inputCls} placeholder="Mumbai" /></div>
               <div><Label className={`${textSec} text-xs`}>State</Label><Input value={company.state} onChange={e => setCompany({...company, state: e.target.value})} className={inputCls} placeholder="Maharashtra" /></div>
-              <div><Label className={`${textSec} text-xs`}>Pincode</Label><Input value={company.pincode} onChange={e => setCompany({...company, pincode: e.target.value})} className={`${inputCls} font-mono`} placeholder="400001" maxLength={6} /></div>
+              <div><Label className={`${textSec} text-xs`}>Pincode<FieldTooltip text="6-digit India Post postal code identifying your business location. Used on invoices and for GST jurisdiction." /></Label><Input value={company.pincode} onChange={e => setCompany({...company, pincode: e.target.value})} className={`${inputCls} font-mono`} placeholder="400001" maxLength={6} /></div>
             </div>
 
             {/* Bank Details (used in Quotation PDF) */}

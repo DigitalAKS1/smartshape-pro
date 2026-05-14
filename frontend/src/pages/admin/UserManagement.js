@@ -3,6 +3,7 @@ import AdminLayout from '../../components/layouts/AdminLayout';
 import { adminUsers, modules as modulesApi, designations as desgApi, exportData } from '../../lib/api';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
+import { FieldTooltip } from '../../components/ui/Tooltip';
 import { Label } from '../../components/ui/label';
 import { Switch } from '../../components/ui/switch';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../../components/ui/dialog';
@@ -398,7 +399,7 @@ export default function UserManagement() {
                     </SelectContent>
                   </Select>
                 </div>
-                <div><Label className={`${textSec} text-xs uppercase tracking-wide mb-1.5 block`}>Role Level</Label>
+                <div><Label className={`${textSec} text-xs uppercase tracking-wide mb-1.5 block`}>Role Level<FieldTooltip text="Controls what data this user can access. Admin = everything. Accounts = financials. Store = inventory. Sales = own leads & quotations only." /></Label>
                   <Select value={form.role} onValueChange={v => setForm({...form, role: v})}>
                     <SelectTrigger className={inputCls}><SelectValue /></SelectTrigger>
                     <SelectContent className="bg-[var(--bg-card)] border-[var(--border-color)]">
@@ -434,7 +435,7 @@ export default function UserManagement() {
               {/* Permission Matrix */}
               <div>
                 <div className="flex items-center justify-between mb-2">
-                  <Label className={`${textSec} text-xs uppercase tracking-wide`}>Module Permissions</Label>
+                  <Label className={`${textSec} text-xs uppercase tracking-wide`}>Module Permissions<FieldTooltip text="Controls which sections of the app this user can open, and whether they can read-only or read+write. Admin role ignores these — admins always get full access." /></Label>
                   {form.role !== 'admin' && (
                     <div className="flex gap-1">
                       <button onClick={() => {

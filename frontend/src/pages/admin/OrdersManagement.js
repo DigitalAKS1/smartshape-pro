@@ -4,6 +4,7 @@ import { orders as ordersApi, holds as holdsApi, quotations as quotApi, dispatch
 import { useAuth } from '../../contexts/AuthContext';
 import { formatCurrency, formatDate, getStatusColor } from '../../lib/utils';
 import { Button } from '../../components/ui/button';
+import EmptyState, { EMPTY_STATES } from '../../components/ui/EmptyState';
 import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../../components/ui/dialog';
@@ -295,10 +296,7 @@ export default function OrdersManagement() {
         {activeTab === 'orders' && (
           <div className="space-y-3" data-testid="orders-list">
             {filteredOrders.length === 0 ? (
-              <div className={`${card} border rounded-md p-12 text-center`}>
-                <Package className={`h-12 w-12 mx-auto mb-3 ${textMuted}`} strokeWidth={1} />
-                <p className={textMuted}>No orders yet</p>
-              </div>
+              <EmptyState {...EMPTY_STATES.orders} desc="Accepted quotations will show up here as confirmed orders." />
             ) : (
               filteredOrders.map(order => {
                 const statusObj = ORDER_STATUSES.find(s => s.id === order.order_status) || ORDER_STATUSES[0];

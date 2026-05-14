@@ -3,6 +3,7 @@ import AdminLayout from '../../components/layouts/AdminLayout';
 import { packages, salesPersons, quotations, companySettings, contacts as contactsApi } from '../../lib/api';
 import { formatCurrency } from '../../lib/utils';
 import { Button } from '../../components/ui/button';
+import { FieldTooltip } from '../../components/ui/Tooltip';
 import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
 import { ArrowRight, ArrowLeft, Check, Plus, X, Search, UserPlus, CheckCircle2, User } from 'lucide-react';
@@ -463,7 +464,7 @@ export default function CreateQuotation() {
                   <Input value={formData.customer_email} onChange={e => setFormData(p => ({...p, customer_email: e.target.value}))} className={`h-11 ${inputCls}`} type="email" />
                 </div>
                 <div>
-                  <Label className={`text-xs ${tMut} mb-1`}>GST Number (Optional)</Label>
+                  <Label className={`text-xs ${tMut} mb-1`}>GST Number (Optional)<FieldTooltip text="Customer's 15-digit GSTIN. Printed on the invoice for B2B transactions and required for GST input credit claims." /></Label>
                   <Input value={formData.customer_gst} onChange={e => setFormData(p => ({...p, customer_gst: e.target.value}))} className={`h-11 ${inputCls}`} />
                 </div>
                 <div>

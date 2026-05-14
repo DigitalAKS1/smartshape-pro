@@ -23,6 +23,18 @@ async def connect_db():
     await db.dies.create_index("code", unique=True)
     await db.login_attempts.create_index("identifier")
     await db.contacts.create_index("contact_id", unique=True)
+    # Performance indexes
+    for col, field, direction in [
+        ("leads", "stage", 1), ("leads", "assigned_to", 1), ("leads", "created_at", -1),
+        ("quotations", "status", 1), ("quotations", "created_at", -1),
+        ("orders", "order_status", 1), ("followups", "lead_id", 1),
+        ("call_notes", "lead_id", 1), ("support_tickets", "created_at", -1),
+        ("activity_logs", "created_at", -1),
+    ]:
+        try:
+            await db[col].create_index([(field, direction)], background=True)
+        except Exception:
+            pass
     logging.info("Database indexes created")
 
 

@@ -4,6 +4,7 @@ import API, { quotations as quotApi, salesPersons, exportData } from '../../lib/
 import { formatCurrency, formatDate, getStatusColor } from '../../lib/utils';
 import { Link, useNavigate } from 'react-router-dom';
 import { Button } from '../../components/ui/button';
+import EmptyState, { EMPTY_STATES } from '../../components/ui/EmptyState';
 import { Input } from '../../components/ui/input';
 import { FileText, Search, Send, ArrowRight, Mail, Download, Edit2, Trash2, GitBranch, Link2, ShoppingCart, Eye } from 'lucide-react';
 import { toast } from 'sonner';
@@ -227,10 +228,10 @@ export default function Quotations() {
               </div>
             </div>
           ) : filteredQuotations.length === 0 ? (
-            <div className="text-center py-12">
-              <FileText className="h-16 w-16 text-[var(--text-muted)] mx-auto mb-4" />
-              <p className="text-[var(--text-muted)]">No quotations found</p>
-            </div>
+            <EmptyState
+              {...(searchTerm ? EMPTY_STATES.searchResult : EMPTY_STATES.quotations)}
+              action={{ label: '+ Create Quotation', onClick: () => navigate('/create-quotation') }}
+            />
           ) : (
             <>
               {/* Desktop table */}
