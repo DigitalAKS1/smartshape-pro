@@ -28,6 +28,7 @@ from routes.hr_routes import router as hr_router
 from routes.admin_routes import router as admin_router, run_auto_reminders
 from routes.settings_routes import router as settings_router
 from routes.school_routes import router as school_router
+from routes.customer_routes import router as customer_router
 
 # ── App instance ───────────────────────────────────────────────────────────────
 app = FastAPI(title="SmartShape Pro API", version="1.0.0")
@@ -59,6 +60,7 @@ app.include_router(hr_router, prefix="/api")
 app.include_router(admin_router, prefix="/api")
 app.include_router(settings_router, prefix="/api")
 app.include_router(school_router, prefix="/api")
+app.include_router(customer_router, prefix="/api")
 
 
 @app.get("/api/health")

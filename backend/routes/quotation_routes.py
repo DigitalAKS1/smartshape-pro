@@ -495,27 +495,31 @@ async def send_quotation_email(quotation_id: str, request: Request):
     freight_line = f"Freight      : ₹{freight:,.0f}\n" if freight else ""
 
     salutation = quot.get(‘principal_name’, ‘’) or ‘Sir/Ma\’am’
+    frontend_url_q = os.environ.get("FRONTEND_URL", "http://localhost:3000")
+    catalogue_token = quot.get("catalogue_token", "")
+    portal_url = f"{frontend_url_q}/my-quote/{catalogue_token}" if catalogue_token else ""
+
     subject = f"Quotation {quot.get(‘quote_number’, ‘’)} – SmartShape Pro"
     body = f"""Dear {salutation},
 
 Please find attached your quotation from SmartShape Pro.
 
-Quote Number : {quot.get('quote_number', '')}
-School       : {quot.get('school_name', '')}
-Package      : {quot.get('package_name', '') or 'Custom'}
+Quote Number : {quot.get(‘quote_number’, ‘’)}
+School       : {quot.get(‘school_name’, ‘’)}
+Package      : {quot.get(‘package_name’, ‘’) or ‘Custom’}
 
 Items:
-{line_summary or '  (No items listed)'}
+{line_summary or ‘  (No items listed)’}
 
 GST (18%)    : ₹{gst:,.0f}
 {freight_line}─────────────────────────
 TOTAL PAYABLE: ₹{grand:,.0f}
 
 The quotation PDF is attached to this email for your records.
-
+{(‘You can track your quotation and view your selection at:’ + chr(10) + portal_url + chr(10)) if portal_url else ‘’}
 For queries please contact:
-{quot.get('sales_person_name', '')}
-{quot.get('sales_person_email', '')}
+{quot.get(‘sales_person_name’, ‘’)}
+{quot.get(‘sales_person_email’, ‘’)}
 
 Best regards,
 SmartShape Pro Team"""
@@ -637,6 +641,13 @@ async def submit_catalogue_selection(token: str, request: Request):
             "quotation_status": "pending",
         }},
     )
+
+    # Send confirmation email to customer (non-blocking)
+    try:
+        from routes.customer_routes import send_submission_confirmation
+        await send_submission_confirmation(quot["quotation_id"], token)
+    except Exception as e:
+        logging.error(f"Submission confirmation email error: {e}")
 
     return {"message": "Selection submitted successfully"}
 
