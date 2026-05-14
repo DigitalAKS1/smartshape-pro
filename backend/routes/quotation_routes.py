@@ -343,7 +343,10 @@ async def send_catalogue(quotation_id: str, request: Request):
 @router.post("/quotations/{quotation_id}/send-catalogue-email")
 async def send_catalogue_with_email(quotation_id: str, request: Request):
     user = await get_current_user(request)
-    body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+    try:
+        body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+    except Exception:
+        body = {}
     extra_to  = body.get("extra_to", []) if isinstance(body, dict) else []
     extra_cc  = body.get("extra_cc", []) if isinstance(body, dict) else []
 
@@ -783,10 +786,12 @@ async def _generate_pdf_bytes(quot: dict, company: dict) -> bytes:
             if img_bytes:
                 ir = ImageReader(_io.BytesIO(img_bytes))
                 iw, ih = ir.getSize()
-                th = 18 * mm
-                tw = (iw / ih) * th if ih else 26 * mm
-                if tw > 42 * mm:
-                    tw = 42 * mm; th = (ih / iw) * tw if iw else th
+                MAX_W, MAX_H = 44 * mm, 20 * mm
+                if iw and ih:
+                    scale = min(MAX_W / iw, MAX_H / ih)
+                    tw, th = iw * scale, ih * scale
+                else:
+                    tw, th = 26 * mm, 18 * mm
                 logo_image = RLImage(_io.BytesIO(img_bytes), width=tw, height=th)
         except Exception as _e:
             logging.warning(f"PDF logo load failed: {_e}")
