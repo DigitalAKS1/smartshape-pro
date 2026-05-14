@@ -1,13 +1,159 @@
-from fastapi import APIRouter, HTTPException, Request
-from datetime import datetime, timezone
-import uuid, os, logging, smtplib
+from fastapi import APIRouter, HTTPException, Request, Response
+from datetime import datetime, timezone, timedelta
+import uuid, os, logging, smtplib, jwt
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
 from database import db
-from auth_utils import get_current_user
+from auth_utils import get_current_user, hash_password, verify_password
 
 router = APIRouter()
+
+JWT_SECRET = os.environ.get("JWT_SECRET", "default-secret-key")
+JWT_ALGORITHM = "HS256"
+
+
+def _customer_token(account_id: str, email: str) -> str:
+    payload = {
+        "sub": account_id,
+        "email": email,
+        "role": "customer",
+        "exp": datetime.now(timezone.utc) + timedelta(days=30),
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+
+async def get_customer_account(request: Request) -> dict:
+    token = request.cookies.get("customer_token")
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        if payload.get("role") != "customer":
+            raise HTTPException(status_code=403, detail="Customer access required")
+        acc = await db.customer_accounts.find_one(
+            {"account_id": payload["sub"]}, {"_id": 0, "password_hash": 0}
+        )
+        if not acc:
+            raise HTTPException(status_code=401, detail="Account not found")
+        return acc
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Session expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+
+# ── Customer account auth ─────────────────────────────────────────────────────
+
+@router.post("/customer/login")
+async def customer_login(request: Request, response: Response):
+    body = await request.json()
+    email = body.get("email", "").strip().lower()
+    password = body.get("password", "")
+    if not email or not password:
+        raise HTTPException(status_code=400, detail="Email and password required")
+
+    acc = await db.customer_accounts.find_one({"email": email}, {"_id": 0})
+    if not acc or not verify_password(password, acc.get("password_hash", "")):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    if not acc.get("is_active", True):
+        raise HTTPException(status_code=403, detail="Account disabled")
+
+    token = _customer_token(acc["account_id"], email)
+    response.set_cookie(
+        "customer_token", token,
+        httponly=True, max_age=30 * 24 * 3600, samesite="lax", secure=False
+    )
+    return {
+        "school_name":    acc.get("school_name"),
+        "principal_name": acc.get("principal_name"),
+        "email":          acc.get("email"),
+        "catalogue_token": acc.get("catalogue_token"),
+    }
+
+
+@router.post("/customer/logout")
+async def customer_logout(response: Response):
+    response.delete_cookie("customer_token")
+    return {"ok": True}
+
+
+@router.get("/customer/me")
+async def customer_me(request: Request):
+    acc = await get_customer_account(request)
+    return acc
+
+
+# ── Admin: manage customer accounts ──────────────────────────────────────────
+
+@router.get("/customer-accounts")
+async def list_customer_accounts(request: Request):
+    await get_current_user(request)
+    accs = await db.customer_accounts.find({}, {"_id": 0, "password_hash": 0}).to_list(500)
+    return accs
+
+
+@router.post("/customer-accounts")
+async def create_customer_account(request: Request):
+    await get_current_user(request)
+    body = await request.json()
+    email = body.get("email", "").strip().lower()
+    password = body.get("password", "").strip()
+    catalogue_token = body.get("catalogue_token", "").strip()
+
+    if not email or not password:
+        raise HTTPException(status_code=400, detail="Email and password required")
+
+    existing = await db.customer_accounts.find_one({"email": email})
+    if existing:
+        raise HTTPException(status_code=400, detail="Account with this email already exists")
+
+    # Auto-link quotation info if token provided
+    school_name, principal_name = "", ""
+    if catalogue_token:
+        q = await db.quotations.find_one({"catalogue_token": catalogue_token}, {"_id": 0})
+        if q:
+            school_name    = q.get("school_name", "")
+            principal_name = q.get("principal_name", "")
+
+    acc = {
+        "account_id":      f"cust_{uuid.uuid4().hex[:12]}",
+        "email":           email,
+        "password_hash":   hash_password(password),
+        "catalogue_token": catalogue_token,
+        "school_name":     body.get("school_name") or school_name,
+        "principal_name":  body.get("principal_name") or principal_name,
+        "is_active":       True,
+        "created_at":      datetime.now(timezone.utc).isoformat(),
+    }
+    await db.customer_accounts.insert_one(acc)
+    acc.pop("password_hash", None)
+    acc.pop("_id", None)
+    return acc
+
+
+@router.put("/customer-accounts/{account_id}")
+async def update_customer_account(account_id: str, request: Request):
+    await get_current_user(request)
+    body = await request.json()
+    updates = {}
+    if "password" in body and body["password"]:
+        updates["password_hash"] = hash_password(body["password"])
+    for f in ["email", "catalogue_token", "school_name", "principal_name", "is_active"]:
+        if f in body:
+            updates[f] = body[f]
+    if not updates:
+        return {"ok": True}
+    updates["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await db.customer_accounts.update_one({"account_id": account_id}, {"$set": updates})
+    return {"ok": True}
+
+
+@router.delete("/customer-accounts/{account_id}")
+async def delete_customer_account(account_id: str, request: Request):
+    await get_current_user(request)
+    await db.customer_accounts.delete_one({"account_id": account_id})
+    return {"ok": True}
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────

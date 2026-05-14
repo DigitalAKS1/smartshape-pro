@@ -56,6 +56,7 @@ import SalesExpenses from './pages/sales/SalesExpenses';
 // Public page
 import CataloguePage from './pages/CataloguePage';
 import CustomerPortal from './pages/CustomerPortal';
+import CustomerLogin from './pages/CustomerLogin';
 
 // School Portal
 import SchoolLogin from './pages/SchoolLogin';
@@ -122,6 +123,7 @@ function AppRouter() {
       <Route path="/register" element={<Register />} />
       <Route path="/catalogue/:token" element={<CataloguePage />} />
       <Route path="/my-quote/:token" element={<CustomerPortal />} />
+      <Route path="/customer-login" element={<CustomerLogin />} />
       <Route path="/school/login" element={<SchoolLogin />} />
       <Route path="/school" element={<SchoolDashboard />} />
       

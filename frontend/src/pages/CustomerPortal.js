@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 
 const BACKEND = process.env.REACT_APP_BACKEND_URL || '';
@@ -92,6 +92,7 @@ function Spinner() {
 // ── Main component ────────────────────────────────────────────────────────────
 export default function CustomerPortal() {
   const { token } = useParams();
+  const navigate = useNavigate();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState('overview');
@@ -99,6 +100,7 @@ export default function CustomerPortal() {
   const [registering, setRegistering] = useState({});
   const [notifRead, setNotifRead] = useState(false);
   const [vidCategory, setVidCategory] = useState('all');
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
 
   const fetchDashboard = useCallback(async () => {
     try {
@@ -114,6 +116,20 @@ export default function CustomerPortal() {
   }, [token]);
 
   useEffect(() => { fetchDashboard(); }, [fetchDashboard]);
+
+  // Check if logged in via cookie
+  useEffect(() => {
+    fetch(`${BACKEND}/api/customer/me`, { credentials: 'include' })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d?.catalogue_token) setIsLoggedIn(true); })
+      .catch(() => {});
+  }, []);
+
+  const handleLogout = async () => {
+    await fetch(`${BACKEND}/api/customer/logout`, { method: 'POST', credentials: 'include' });
+    setIsLoggedIn(false);
+    navigate('/customer-login');
+  };
 
   const markRead = useCallback(async () => {
     if (notifRead) return;
@@ -208,10 +224,21 @@ export default function CustomerPortal() {
               <h1 className="text-2xl sm:text-3xl font-bold text-white leading-tight">{q.school_name}</h1>
               <p className="text-[#a0a0b0] text-sm mt-1">{q.principal_name} · {q.quote_number}</p>
             </div>
+            {/* Header actions */}
+            <div className="flex items-center gap-2 mt-1">
+              {isLoggedIn && (
+                <button onClick={handleLogout}
+                  className="p-2 rounded-full bg-[#1a1a2e] border border-[#2d2d44] hover:border-red-500/50 transition-colors"
+                  title="Sign out">
+                  <svg className="h-4 w-4 text-[#6b6b80]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                  </svg>
+                </button>
+              )}
             {/* Notification bell */}
             <button
               onClick={() => { setTab('overview'); markRead(); }}
-              className="relative mt-1 p-2 rounded-full bg-[#1a1a2e] border border-[#2d2d44] hover:border-[#e94560]/50 transition-colors">
+              className="relative p-2 rounded-full bg-[#1a1a2e] border border-[#2d2d44] hover:border-[#e94560]/50 transition-colors">
               <svg className="h-5 w-5 text-[#a0a0b0]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
               </svg>
@@ -219,6 +246,7 @@ export default function CustomerPortal() {
                 <span className="absolute -top-1 -right-1 h-5 w-5 bg-[#e94560] rounded-full text-[10px] font-bold flex items-center justify-center">{unread_count > 9 ? '9+' : unread_count}</span>
               )}
             </button>
+            </div>
           </div>
 
           {/* Order status mini-tracker */}
