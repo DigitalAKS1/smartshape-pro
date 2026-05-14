@@ -190,8 +190,12 @@ export default function AdminLayout({ children }) {
               <span className={`text-base font-bold ${textPri} truncate`}>
                 {(() => {
                   const allRoutes = Object.values(MODULE_ROUTE_MAP).flat();
-                  const match = allRoutes.find(r => r && r.path === location.pathname);
-                  return match ? match.label : 'SmartShape Pro';
+                  const exact = allRoutes.find(r => r && r.path === location.pathname);
+                  if (exact) return exact.label;
+                  if (location.pathname.startsWith('/school-profile/')) return 'School Profile';
+                  if (location.pathname.startsWith('/view-quotation/')) return 'Quotation';
+                  if (location.pathname.startsWith('/edit-quotation/')) return 'Edit Quotation';
+                  return 'SmartShape Pro';
                 })()}
               </span>
             </div>
