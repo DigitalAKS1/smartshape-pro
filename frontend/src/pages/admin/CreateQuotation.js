@@ -44,6 +44,7 @@ export default function CreateQuotation() {
     freight_amount: 0, lines: [],
     bank_details_override: '', terms_override: '',
     font_size_mode: 'medium',
+    currency_symbol: '₹',
   });
   const [selectedPackage, setSelectedPackage] = useState(null);
 
@@ -158,19 +159,25 @@ export default function CreateQuotation() {
     setFormData(prev => ({ ...prev, lines: prev.lines.filter((_, i) => i !== idx) }));
   };
 
-  // ── Totals ───────────────────────────────────────────────────────────────────
+  // ── Totals (new formula: freight in sub-total, per-line GST, combined GST line) ─
   const calcTotals = () => {
-    const items_total       = formData.lines.reduce((s, l) => s + l.line_subtotal, 0);
-    const disc1_amount      = items_total * (formData.discount1_pct / 100);
-    const subtotal_after_d1 = items_total - disc1_amount;
-    const disc2_amount      = subtotal_after_d1 * (formData.discount2_pct / 100);
-    const subtotal_after_disc = subtotal_after_d1 - disc2_amount;
-    const total_gst         = subtotal_after_disc * 0.18;
-    const freight_base      = Number(formData.freight_amount) || 0;
-    const freight_gst       = freight_base * 0.18;
-    const freight_with_gst  = freight_base + freight_gst;
-    const grand_total       = subtotal_after_disc + total_gst + freight_with_gst;
-    return { items_total, disc1_amount, disc2_amount, subtotal_after_disc, total_gst, freight_base, freight_gst, freight_with_gst, grand_total };
+    const lines        = formData.lines || [];
+    const items_total  = lines.reduce((s, l) => s + (l.line_subtotal || 0), 0);
+    const disc1_amount = items_total * ((formData.discount1_pct || 0) / 100);
+    const after_d1     = items_total - disc1_amount;
+    const disc2_amount = after_d1 * ((formData.discount2_pct || 0) / 100);
+    const after_disc   = after_d1 - disc2_amount;
+    const freight_base = Number(formData.freight_amount) || 0;
+    const sub_total    = after_disc + freight_base;
+
+    const discount_factor  = items_total > 0 ? after_disc / items_total : 1;
+    const raw_items_gst    = lines.reduce((s, l) => s + (l.line_subtotal || 0) * ((l.gst_pct || 18) / 100), 0);
+    const items_gst        = raw_items_gst * discount_factor;
+    const freight_gst      = freight_base * 0.18;
+    const total_gst        = items_gst + freight_gst;
+    const grand_total      = sub_total + total_gst;
+
+    return { items_total, disc1_amount, disc2_amount, after_disc, freight_base, sub_total, items_gst, freight_gst, total_gst, grand_total };
   };
 
   const handleSubmit = async () => {
@@ -604,56 +611,75 @@ export default function CreateQuotation() {
                 </div>
               </div>
               <div>
-                <Label className={`text-xs ${tMut} mb-1`}>Freight & Packing — Base Amount (excl. GST)</Label>
+                <Label className={`text-xs ${tMut} mb-1`}>Freight & Packing (base amount, excl. GST)</Label>
                 <Input type="number" value={formData.freight_amount} onChange={e => setFormData(p => ({...p, freight_amount: parseFloat(e.target.value) || 0}))} className={`h-11 ${inputCls}`} data-testid="freight-input" min="0" />
-                <p className={`text-[10px] ${tMut} mt-1`}>18% GST on freight is added automatically in the total</p>
+                <p className={`text-[10px] ${tMut} mt-1`}>Freight added in Sub Total. GST @ 18% on freight calculated separately.</p>
+              </div>
+              <div>
+                <Label className={`text-xs ${tMut} mb-1`}>Currency Symbol</Label>
+                <div className="flex gap-2 flex-wrap">
+                  {['₹', '$', '€', '£', 'AED', '¥'].map(sym => (
+                    <button key={sym} type="button"
+                      onClick={() => setFormData(p => ({...p, currency_symbol: sym}))}
+                      className={`px-3 py-2 rounded-lg text-sm font-medium border transition-all ${formData.currency_symbol === sym ? 'bg-[#e94560] text-white border-[#e94560]' : `bg-[var(--bg-primary)] border-[var(--border-color)] ${tSec} hover:border-[#e94560]/40`}`}>
+                      {sym}
+                    </button>
+                  ))}
+                  <Input
+                    value={['₹','$','€','£','AED','¥'].includes(formData.currency_symbol) ? '' : formData.currency_symbol}
+                    onChange={e => setFormData(p => ({...p, currency_symbol: e.target.value || '₹'}))}
+                    placeholder="Other"
+                    className={`h-10 w-20 text-sm text-center ${inputCls}`}
+                  />
+                </div>
               </div>
             </div>
 
             {/* Price Summary */}
             <div className={`${card} p-4`} data-testid="price-summary">
               <h3 className={`font-semibold text-sm ${tPri} mb-4`}>Price Summary</h3>
-              <div className="space-y-2.5">
-                <div className="flex justify-between items-center">
-                  <span className={`text-sm ${tSec}`}>Items Total</span>
-                  <span className={`font-mono text-sm font-semibold ${tPri}`}>{formatCurrency(totals.items_total)}</span>
-                </div>
-                {formData.discount1_pct > 0 && (
-                  <div className="flex justify-between items-center">
-                    <span className="text-sm text-green-400">Discount @ {formData.discount1_pct}%</span>
-                    <span className="font-mono text-sm text-green-400">−{formatCurrency(totals.disc1_amount)}</span>
-                  </div>
-                )}
-                {formData.discount2_pct > 0 && (
-                  <div className="flex justify-between items-center">
-                    <span className="text-sm text-green-400">Additional Discount @ {formData.discount2_pct}%</span>
-                    <span className="font-mono text-sm text-green-400">−{formatCurrency(totals.disc2_amount)}</span>
-                  </div>
-                )}
-                {(formData.discount1_pct > 0 || formData.discount2_pct > 0) && (
-                  <div className="flex justify-between items-center pt-2 border-t border-[var(--border-color)]">
-                    <span className={`text-sm font-semibold ${tPri}`}>Subtotal After Discounts</span>
-                    <span className={`font-mono text-sm font-semibold ${tPri}`}>{formatCurrency(totals.subtotal_after_disc)}</span>
-                  </div>
-                )}
-                <div className="flex justify-between items-center">
-                  <span className={`text-sm ${tSec}`}>Total GST @ 18%</span>
-                  <span className={`font-mono text-sm ${tSec}`}>{formatCurrency(totals.total_gst)}</span>
-                </div>
-                {formData.freight_amount > 0 && (
-                  <div className="flex justify-between items-center">
-                    <div>
-                      <p className={`text-sm ${tSec}`}>Freight Charge incl. 18% GST</p>
-                      <p className={`text-[10px] ${tMut}`}>Base {formatCurrency(totals.freight_base)} + GST {formatCurrency(totals.freight_gst)}</p>
+              {(() => {
+                const sym = formData.currency_symbol || '₹';
+                const fmt = (n) => `${sym} ${(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+                return (
+                  <div className="space-y-2">
+                    <div className="flex justify-between items-center">
+                      <span className={`text-sm ${tSec}`}>Item Total</span>
+                      <span className={`font-mono text-sm font-semibold ${tPri}`}>{fmt(totals.items_total)}</span>
                     </div>
-                    <span className={`font-mono text-sm ${tSec}`}>{formatCurrency(totals.freight_with_gst)}</span>
+                    {formData.discount1_pct > 0 && (
+                      <div className="flex justify-between items-center">
+                        <span className="text-sm text-green-400">Discount @ {formData.discount1_pct}%</span>
+                        <span className="font-mono text-sm text-green-400">− {fmt(totals.disc1_amount)}</span>
+                      </div>
+                    )}
+                    {formData.discount2_pct > 0 && (
+                      <div className="flex justify-between items-center">
+                        <span className="text-sm text-green-400">Additional Discount @ {formData.discount2_pct}%</span>
+                        <span className="font-mono text-sm text-green-400">− {fmt(totals.disc2_amount)}</span>
+                      </div>
+                    )}
+                    {totals.freight_base > 0 && (
+                      <div className="flex justify-between items-center">
+                        <span className={`text-sm ${tSec}`}>Freight</span>
+                        <span className={`font-mono text-sm ${tSec}`}>+ {fmt(totals.freight_base)}</span>
+                      </div>
+                    )}
+                    <div className="flex justify-between items-center py-2 border-t border-b border-[var(--border-color)]">
+                      <span className={`text-sm font-semibold ${tPri}`}>Sub Total</span>
+                      <span className={`font-mono text-sm font-semibold ${tPri}`}>{fmt(totals.sub_total)}</span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className={`text-sm ${tSec}`}>GST</span>
+                      <span className={`font-mono text-sm ${tSec}`}>{fmt(totals.total_gst)}</span>
+                    </div>
+                    <div className="flex justify-between items-center bg-[#1a1a2e] rounded-xl p-4 mt-2">
+                      <span className="text-white font-bold text-base">Total Payable</span>
+                      <span className="font-mono text-xl font-bold text-[#e94560]">{fmt(totals.grand_total)}</span>
+                    </div>
                   </div>
-                )}
-                <div className="flex justify-between items-center bg-[#1a1a2e] rounded-xl p-4 mt-2">
-                  <span className="text-white font-bold text-base">Total Payable Amount</span>
-                  <span className="font-mono text-xl font-bold text-[#e94560]">{formatCurrency(totals.grand_total)}</span>
-                </div>
-              </div>
+                );
+              })()}
             </div>
 
             {/* PDF Font Size */}

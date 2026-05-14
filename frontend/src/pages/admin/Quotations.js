@@ -5,7 +5,7 @@ import { formatCurrency, formatDate, getStatusColor } from '../../lib/utils';
 import { Link, useNavigate } from 'react-router-dom';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
-import { FileText, Search, Send, ArrowRight, Mail, Download, Edit2, Trash2, GitBranch, Link2, ShoppingCart } from 'lucide-react';
+import { FileText, Search, Send, ArrowRight, Mail, Download, Edit2, Trash2, GitBranch, Link2, ShoppingCart, Eye } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth } from '../../contexts/AuthContext';
 import SendEmailDialog from '../../components/SendEmailDialog';
@@ -293,14 +293,17 @@ export default function Quotations() {
                         </td>
                         <td className="px-4 py-4">
                           <div className="flex items-center gap-1">
+                            <Link to={`/view-quotation/${quot.quotation_id}`}>
+                              <Button size="sm" variant="ghost" className="text-[var(--text-secondary)] hover:text-[#e94560] h-8 px-2" title="View Quotation">
+                                <Eye className="h-3.5 w-3.5" />
+                              </Button>
+                            </Link>
                             <Button size="sm" variant="ghost" onClick={() => quotApi.downloadPdf(quot.quotation_id)} className="text-[var(--text-secondary)] hover:text-[var(--text-primary)] h-8 px-2" data-testid={`download-pdf-${quot.quote_number}`}>
                               <Download className="h-3 w-3" />
                             </Button>
-                            {(quot.quotation_status === 'draft' || quot.quotation_status === 'pending') && (
-                              <Link to={`/edit-quotation/${quot.quotation_id}`}>
-                                <Button size="sm" variant="ghost" className="text-[var(--text-secondary)] hover:text-[var(--text-primary)] h-8 px-2" data-testid={`edit-quot-${quot.quote_number}`}><Edit2 className="h-3 w-3" /></Button>
-                              </Link>
-                            )}
+                            <Link to={`/edit-quotation/${quot.quotation_id}`}>
+                              <Button size="sm" variant="ghost" className="text-[var(--text-secondary)] hover:text-[var(--text-primary)] h-8 px-2" data-testid={`edit-quot-${quot.quote_number}`}><Edit2 className="h-3 w-3" /></Button>
+                            </Link>
                             {quot.catalogue_status === 'not_sent' && (
                               <Button size="sm" onClick={() => openCatalogueDialog(quot)} className="bg-[#3b82f6] hover:bg-[#2563eb] text-white h-8" data-testid={`send-catalogue-button-${quot.quote_number}`}>
                                 <Send className="mr-1 h-3 w-3" /> Send
