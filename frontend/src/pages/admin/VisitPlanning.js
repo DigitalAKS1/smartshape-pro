@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import AdminLayout from '../../components/layouts/AdminLayout';
 import { visitPlans, leads as leadsApi, salesPersons } from '../../lib/api';
 import { useAuth } from '../../contexts/AuthContext';
@@ -9,7 +9,7 @@ import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../../components/ui/dialog';
 import { toast } from 'sonner';
-import { Plus, MapPin, Calendar, CheckCircle, Clock, AlertTriangle, Trash2, Edit2, RotateCcw, History } from 'lucide-react';
+import { Plus, MapPin, Calendar, CheckCircle, Clock, AlertTriangle, Trash2, Edit2, RotateCcw, History, Navigation, Link } from 'lucide-react';
 import WhatsAppSendDialog from '../../components/WhatsAppSendDialog';
 
 export default function VisitPlanning() {
@@ -21,7 +21,9 @@ export default function VisitPlanning() {
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [filter, setFilter] = useState('all');
-  const [form, setForm] = useState({ lead_id: '', school_name: '', lead_name: '', assigned_to: '', assigned_name: '', visit_date: '', visit_time: '', purpose: '' });
+  const [form, setForm] = useState({ lead_id: '', school_name: '', lead_name: '', assigned_to: '', assigned_name: '', visit_date: '', visit_time: '', purpose: '', planned_address: '', planned_lat: null, planned_lng: null });
+  const [mapsInput, setMapsInput] = useState('');
+  const [gpsLoading, setGpsLoading] = useState(false);
   // FMS Phase 4: WhatsApp auto-popup after visit check-out
   const [waOpen, setWaOpen] = useState(false);
   const [waCtx, setWaCtx] = useState({ module: 'visit', context: {}, title: 'Send WhatsApp' });
@@ -46,8 +48,54 @@ export default function VisitPlanning() {
   };
   useEffect(() => { fetchData(); }, []);
 
+  const parseMapsInput = (raw) => {
+    const s = raw.trim();
+    const atMatch = s.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
+    if (atMatch) return { lat: parseFloat(atMatch[1]), lng: parseFloat(atMatch[2]) };
+    const qMatch = s.match(/[?&]q=(-?\d+\.\d+),(-?\d+\.\d+)/);
+    if (qMatch) return { lat: parseFloat(qMatch[1]), lng: parseFloat(qMatch[2]) };
+    const rawMatch = s.match(/^(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)$/);
+    if (rawMatch) return { lat: parseFloat(rawMatch[1]), lng: parseFloat(rawMatch[2]) };
+    return null;
+  };
+
+  const reverseGeocode = async (lat, lng) => {
+    try {
+      const r = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`, { headers: { 'User-Agent': 'SmartShapePro/1.0' } });
+      const d = await r.json();
+      return d.display_name || `${lat}, ${lng}`;
+    } catch { return `${lat}, ${lng}`; }
+  };
+
+  const handleMapsInputChange = async (val) => {
+    setMapsInput(val);
+    const coords = parseMapsInput(val);
+    if (coords) {
+      const addr = await reverseGeocode(coords.lat, coords.lng);
+      setForm(f => ({ ...f, planned_lat: coords.lat, planned_lng: coords.lng, planned_address: addr }));
+      toast.success('Location extracted from Maps link');
+    }
+  };
+
+  const handleGpsLocation = async () => {
+    if (!navigator.geolocation) { toast.error('GPS not supported'); return; }
+    setGpsLoading(true);
+    navigator.geolocation.getCurrentPosition(async (pos) => {
+      const { latitude: lat, longitude: lng } = pos.coords;
+      const addr = await reverseGeocode(lat, lng);
+      setForm(f => ({ ...f, planned_lat: lat, planned_lng: lng, planned_address: addr }));
+      setMapsInput(`${lat}, ${lng}`);
+      setGpsLoading(false);
+      toast.success('Current location captured');
+    }, (err) => {
+      toast.error(`GPS denied: ${err.message}`);
+      setGpsLoading(false);
+    }, { enableHighAccuracy: true, timeout: 10000 });
+  };
+
   const openCreate = () => {
-    setForm({ lead_id: '', school_name: '', lead_name: '', assigned_to: user?.email || '', assigned_name: user?.name || '', visit_date: '', visit_time: '', purpose: '' });
+    setForm({ lead_id: '', school_name: '', lead_name: '', assigned_to: user?.email || '', assigned_name: user?.name || '', visit_date: '', visit_time: '', purpose: '', planned_address: '', planned_lat: null, planned_lng: null });
+    setMapsInput('');
     setDialogOpen(true);
   };
 
@@ -241,12 +289,19 @@ export default function VisitPlanning() {
                       <span>{plan.assigned_name}</span>
                       {plan.purpose && <span>| {plan.purpose}</span>}
                     </div>
+                    {plan.planned_address && <p className={`text-xs ${textMuted} mt-1 flex items-center gap-1`}><MapPin className="h-3 w-3" />{plan.planned_address}</p>}
                     {plan.visit_notes && <p className={`text-xs ${textSec} mt-1`}>Notes: {plan.visit_notes}</p>}
                     {plan.outcome && <p className="text-xs text-green-400 mt-1">Outcome: {plan.outcome}</p>}
                     {plan.reschedule_count > 0 && <p className="text-xs text-orange-400 mt-1">Rescheduled {plan.reschedule_count}× · Last reason: {plan.reschedule_reason || '—'}</p>}
                   </div>
                 </div>
-                <div className="flex items-center gap-1 flex-shrink-0">
+                <div className="flex items-center gap-1 flex-shrink-0 flex-wrap justify-end">
+                  {plan.planned_lat && plan.planned_lng && (
+                    <Button size="sm" variant="ghost" onClick={() => window.open(`https://www.google.com/maps/dir/?api=1&destination=${plan.planned_lat},${plan.planned_lng}`, '_blank')}
+                      className={`${textMuted} h-7 text-xs`} title="Navigate">
+                      <Navigation className="h-3.5 w-3.5 mr-1" />Navigate
+                    </Button>
+                  )}
                   {plan.status === 'planned' && (
                     <>
                       <Button size="sm" onClick={() => handleCheckIn(plan, 'field')} className="bg-blue-600 hover:bg-blue-700 text-white h-7 text-xs" data-testid={`checkin-${plan.plan_id}`}>GPS Check-In</Button>
@@ -288,6 +343,39 @@ export default function VisitPlanning() {
               {!form.lead_id && (
                 <div><Label className={`${textSec} text-xs`}>School/Location Name</Label><Input value={form.school_name} onChange={e => setForm({...form, school_name: e.target.value})} className={inputCls} placeholder="Enter school name" /></div>
               )}
+              {/* Location */}
+              <div className="space-y-2">
+                <Label className={`${textSec} text-xs`}>Add Location</Label>
+                <div className="flex gap-2">
+                  <div className="relative flex-1">
+                    <Link className={`absolute left-2.5 top-2.5 h-3.5 w-3.5 ${textMuted}`} />
+                    <Input
+                      value={mapsInput}
+                      onChange={e => handleMapsInputChange(e.target.value)}
+                      className={`${inputCls} pl-8`}
+                      placeholder="Paste Google Maps link or lat,lng"
+                    />
+                  </div>
+                  <Button type="button" size="sm" variant="outline" onClick={handleGpsLocation}
+                    disabled={gpsLoading}
+                    className={`border-[var(--border-color)] ${textSec} h-10 px-3 flex-shrink-0`}
+                    title="Use current GPS location">
+                    <Navigation className={`h-3.5 w-3.5 ${gpsLoading ? 'animate-spin' : ''}`} />
+                  </Button>
+                </div>
+                {form.planned_lat && (
+                  <div className="flex items-start gap-2 rounded-md bg-green-500/10 border border-green-500/20 px-3 py-2">
+                    <MapPin className="h-3.5 w-3.5 text-green-400 mt-0.5 flex-shrink-0" />
+                    <p className="text-xs text-green-400 break-all">{form.planned_address}</p>
+                  </div>
+                )}
+                <Input
+                  value={form.planned_address}
+                  onChange={e => setForm({...form, planned_address: e.target.value})}
+                  className={`${inputCls} text-xs`}
+                  placeholder="Or enter address manually"
+                />
+              </div>
               <div className="grid grid-cols-2 gap-3">
                 <div><Label className={`${textSec} text-xs`}>Visit Date *</Label><Input type="date" value={form.visit_date} onChange={e => setForm({...form, visit_date: e.target.value})} className={inputCls} data-testid="visit-date-input" /></div>
                 <div><Label className={`${textSec} text-xs`}>Time</Label><Input type="time" value={form.visit_time} onChange={e => setForm({...form, visit_time: e.target.value})} className={inputCls} /></div>

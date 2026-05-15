@@ -54,24 +54,26 @@ export default function SalesAttendance() {
   const handleCheckIn = async () => {
     setGettingLocation(true);
     try {
-      const location = await getLocation();
+      let location = null;
+      if (workType === 'field') {
+        try {
+          location = await getLocation();
+        } catch (gpsErr) {
+          toast.error('GPS denied. Switch to WFH to check in without location, or enable location in browser settings.');
+          setGettingLocation(false);
+          return;
+        }
+      }
       setLoading(true);
-      
       await attendanceApi.checkIn({
         work_type: workType,
-        lat: location.lat,
-        lng: location.lng
+        ...(location ? { lat: location.lat, lng: location.lng } : {}),
       });
-      
       toast.success('Checked in successfully!');
       fetchAttendance();
     } catch (error) {
       console.error('Error checking in:', error);
-      if (error.message === 'Geolocation is not supported') {
-        toast.error('Your browser does not support GPS location');
-      } else {
-        toast.error('Failed to check in. Please enable location access.');
-      }
+      toast.error(error?.response?.data?.detail || 'Check-in failed. Please try again.');
     } finally {
       setLoading(false);
       setGettingLocation(false);
@@ -81,16 +83,25 @@ export default function SalesAttendance() {
   const handleCheckOut = async () => {
     setGettingLocation(true);
     try {
-      const location = await getLocation();
+      let lat, lng;
+      try {
+        const location = await getLocation();
+        lat = location.lat;
+        lng = location.lng;
+      } catch {
+        // GPS optional for checkout
+      }
       setLoading(true);
-      
-      await attendanceApi.checkOut(location.lat, location.lng);
-      
+      if (lat !== undefined) {
+        await attendanceApi.checkOut(lat, lng);
+      } else {
+        await attendanceApi.checkOut(0, 0);
+      }
       toast.success('Checked out successfully!');
       fetchAttendance();
     } catch (error) {
       console.error('Error checking out:', error);
-      toast.error('Failed to check out. Please enable location access.');
+      toast.error(error?.response?.data?.detail || 'Check-out failed. Please try again.');
     } finally {
       setLoading(false);
       setGettingLocation(false);

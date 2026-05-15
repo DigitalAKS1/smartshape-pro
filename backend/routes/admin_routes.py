@@ -347,7 +347,7 @@ async def admin_funnel(request: Request):
 @router.get("/admin/attendance")
 async def get_all_attendance(request: Request):
     user = await get_current_user(request)
-    require_teams(user, "admin")
+    require_teams(user, "admin", "accounts")
     records = await db.attendance.find({}, {"_id": 0}).sort("date", -1).limit(200).to_list(200)
     return records
 
@@ -355,7 +355,7 @@ async def get_all_attendance(request: Request):
 @router.get("/admin/visits")
 async def get_all_visits(request: Request):
     user = await get_current_user(request)
-    require_teams(user, "admin")
+    require_teams(user, "admin", "accounts")
     visits = await db.field_visits.find({}, {"_id": 0}).sort("visit_date", -1).limit(200).to_list(200)
     return visits
 
@@ -378,7 +378,7 @@ async def get_all_expenses(request: Request):
 @router.get("/admin/field-sales/summary")
 async def get_field_sales_summary(request: Request):
     user = await get_current_user(request)
-    require_teams(user, "admin")
+    require_teams(user, "admin", "accounts")
 
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     current_month = datetime.now(timezone.utc).strftime("%Y-%m")

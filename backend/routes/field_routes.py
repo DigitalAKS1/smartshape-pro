@@ -69,8 +69,8 @@ async def log_activity(user_email: str, action: str, entity_type: str, entity_id
 
 class AttendanceCheckIn(BaseModel):
     work_type: str
-    lat: float
-    lng: float
+    lat: Optional[float] = None
+    lng: Optional[float] = None
 
 
 class FieldVisitCreate(BaseModel):
@@ -113,18 +113,22 @@ class TravelExpenseCreate(BaseModel):
 async def check_in(check_in_data: AttendanceCheckIn, request: Request):
     user = await get_current_user(request)
 
+    if check_in_data.work_type == "field" and (check_in_data.lat is None or check_in_data.lng is None):
+        raise HTTPException(status_code=400, detail="GPS location required for field check-in. Please enable location access or choose WFH.")
+
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     existing = await db.attendance.find_one({"sales_person_email": user["email"], "date": today})
     if existing:
         raise HTTPException(status_code=400, detail="Already checked in today")
 
-    address = reverse_geocode(check_in_data.lat, check_in_data.lng)
+    address = reverse_geocode(check_in_data.lat, check_in_data.lng) if check_in_data.lat is not None and check_in_data.lng is not None else "Work From Home"
 
     # ── Geofence check ───────────────────────────────────────────────────────
     geofence_breach = False
     distance_from_office_m = None
     office_settings = await db.settings.find_one({"type": "field_settings"}, {"_id": 0})
-    if (office_settings and office_settings.get("office_lat") and office_settings.get("office_lng")
+    if (check_in_data.lat is not None and check_in_data.lng is not None
+            and office_settings and office_settings.get("office_lat") and office_settings.get("office_lng")
             and check_in_data.work_type in ("office", "field")):
         off_lat = float(office_settings["office_lat"])
         off_lng = float(office_settings["office_lng"])
@@ -246,6 +250,9 @@ async def create_visit_plan(request: Request):
         "visit_date": body.get("visit_date", ""),
         "visit_time": body.get("visit_time", ""),
         "purpose": body.get("purpose", ""),
+        "planned_address": body.get("planned_address", ""),
+        "planned_lat": body.get("planned_lat"),
+        "planned_lng": body.get("planned_lng"),
         "status": "planned",
         "check_in_time": None,
         "check_in_lat": None,
@@ -267,6 +274,7 @@ async def update_visit_plan(plan_id: str, request: Request):
     body = await request.json()
     allowed = {}
     for k in ("visit_date", "visit_time", "purpose", "status", "assigned_to", "assigned_name",
+              "planned_address", "planned_lat", "planned_lng",
               "check_in_time", "check_in_lat", "check_in_lng", "check_out_time",
               "visit_notes", "outcome"):
         if k in body:
