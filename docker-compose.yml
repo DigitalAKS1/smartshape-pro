@@ -21,10 +21,13 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        REACT_APP_BACKEND_URL: ${REACT_APP_BACKEND_URL:-http://187.127.167.10}
+        REACT_APP_BACKEND_URL: ${REACT_APP_BACKEND_URL:-https://187.127.167.10}
     container_name: smartshape-frontend
     ports:
-      - "3000:80"
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /etc/ssl/smartshape:/etc/nginx/certs:ro
     depends_on:
       - backend
     restart: unless-stopped
