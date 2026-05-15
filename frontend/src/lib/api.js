@@ -353,6 +353,7 @@ export const holds = {
   getAll: () => API.get('/holds'),
   release: (itemId) => API.post(`/holds/${itemId}/release`),
   confirm: (itemId) => API.post(`/holds/${itemId}/confirm`),
+  bulkRelease: (itemIds) => API.post('/holds/bulk-release', { item_ids: itemIds }),
 };
 
 // School Portal Auth

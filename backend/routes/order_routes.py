@@ -520,6 +520,26 @@ async def get_holds(request: Request):
     return holds
 
 
+@router.post("/holds/bulk-release")
+async def bulk_release_holds(request: Request):
+    user = await get_current_user(request)
+    body = await request.json()
+    item_ids = body.get("item_ids", [])
+    if not item_ids:
+        raise HTTPException(status_code=400, detail="No item IDs provided")
+    released = []
+    skipped = []
+    for order_item_id in item_ids:
+        item = await db.order_items.find_one({"order_item_id": order_item_id})
+        if not item or item.get("status") != "on_hold":
+            skipped.append(order_item_id)
+            continue
+        await db.dies.update_one({"die_id": item["die_id"]}, {"$inc": {"reserved_qty": -item.get("quantity", 1)}})
+        await db.order_items.update_one({"order_item_id": order_item_id}, {"$set": {"status": "released"}})
+        released.append(order_item_id)
+    return {"released": len(released), "skipped": len(skipped), "released_ids": released}
+
+
 @router.post("/holds/{order_item_id}/release")
 async def release_hold(order_item_id: str, request: Request):
     user = await get_current_user(request)
