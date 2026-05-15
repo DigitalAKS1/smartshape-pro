@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import AdminLayout from '../../components/layouts/AdminLayout';
 import { orders as ordersApi, holds as holdsApi, quotations as quotApi, dispatches as dispatchesApi, dispatchApi } from '../../lib/api';
 import { useAuth } from '../../contexts/AuthContext';
@@ -9,9 +9,74 @@ import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../../components/ui/dialog';
 import { toast } from 'sonner';
-import { Package, Truck, CheckCircle, Clock, XCircle, Search, Eye, ArrowRight, Lock, Unlock, ShieldCheck, AlertTriangle, MessageSquare, CreditCard, DollarSign, Square, CheckSquare, Layers } from 'lucide-react';
+import { Package, Truck, CheckCircle, Clock, XCircle, Search, Eye, ArrowRight, Lock, Unlock, ShieldCheck, AlertTriangle, MessageSquare, CreditCard, DollarSign, Square, CheckSquare, Layers, Smartphone, Monitor } from 'lucide-react';
 import KanbanBoard from '../../components/KanbanBoard';
 import WhatsAppSendDialog from '../../components/WhatsAppSendDialog';
+
+// WhatsApp picker: shows Mobile App vs Web options
+function WaPickerButton({ phone, message, label = 'Send via WhatsApp', className = '', testId = '' }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  const num = (phone || '').replace(/\D/g, '');
+  const e164 = num ? (num.startsWith('91') ? num : '91' + num) : '';
+  const encoded = encodeURIComponent(message || '');
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, [open]);
+
+  const send = (type) => {
+    setOpen(false);
+    if (!e164) {
+      navigator.clipboard?.writeText(message || '');
+      toast.success('No phone found — message copied to clipboard');
+      return;
+    }
+    const url = type === 'web'
+      ? `https://web.whatsapp.com/send?phone=${e164}&text=${encoded}`
+      : `https://wa.me/${e164}?text=${encoded}`;
+    window.open(url, '_blank');
+  };
+
+  return (
+    <div className="relative" ref={ref}>
+      <Button variant="outline" size="sm" onClick={() => setOpen(o => !o)}
+        className={`border-green-600/50 text-green-500 hover:bg-green-500/10 ${className}`}
+        data-testid={testId}>
+        <MessageSquare className="mr-1 h-3 w-3" /> {label}
+      </Button>
+      {open && (
+        <div className="absolute right-0 bottom-full mb-1 z-50 w-52 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] shadow-xl overflow-hidden">
+          <p className="text-[10px] text-[var(--text-muted)] uppercase tracking-widest font-semibold px-3 pt-2.5 pb-1">Open in</p>
+          <button onClick={() => send('mobile')}
+            className="flex items-center gap-2.5 w-full px-3 py-2.5 text-sm text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors">
+            <Smartphone className="h-4 w-4 text-green-400 flex-shrink-0" />
+            <div className="text-left">
+              <p className="font-medium leading-tight">WhatsApp App</p>
+              <p className="text-[10px] text-[var(--text-muted)]">Mobile / Desktop app</p>
+            </div>
+          </button>
+          <button onClick={() => send('web')}
+            className="flex items-center gap-2.5 w-full px-3 py-2.5 text-sm text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors border-t border-[var(--border-color)]">
+            <Monitor className="h-4 w-4 text-blue-400 flex-shrink-0" />
+            <div className="text-left">
+              <p className="font-medium leading-tight">WhatsApp Web</p>
+              <p className="text-[10px] text-[var(--text-muted)]">web.whatsapp.com</p>
+            </div>
+          </button>
+          {!e164 && (
+            <div className="px-3 py-2 border-t border-[var(--border-color)]">
+              <p className="text-[10px] text-amber-400">No phone — will copy message</p>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 const PROD_STAGES = [
   { id: 'order_created', label: 'Order Created', color: 'border-yellow-500/40' },
@@ -593,20 +658,11 @@ export default function OrdersManagement() {
                     }} className={`border-[var(--border-color)] ${textSec}`} data-testid={`edit-tracking-${d.dispatch_number}`}>
                       <Truck className="mr-1 h-3 w-3" /> Tracking
                     </Button>
-                    {(d.tracking_number || d.courier_name) && (
-                      <Button variant="outline" size="sm" onClick={() => {
-                        const phone = (d.phone || '').replace(/\D/g, '');
-                        const dateStr = d.dispatch_date ? new Date(d.dispatch_date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '';
-                        const msg = `Hello,\n\nYour order has been dispatched! Here are the details:\n\n🏫 School: ${d.school_name}\n📦 Order: ${d.order_number}\n🚚 Courier: ${d.courier_name || 'N/A'}\n🔖 Tracking: ${d.tracking_number || 'N/A'}\n📅 Date: ${dateStr}\n\nPlease track your shipment using the tracking number above.\n\nThank you!\nSmartShape Pro`;
-                        if (phone) {
-                          window.open(`https://wa.me/${phone.startsWith('91') ? phone : '91' + phone}?text=${encodeURIComponent(msg)}`, '_blank');
-                        } else {
-                          navigator.clipboard?.writeText(msg).then(() => toast.success('Message copied! Open WhatsApp manually.'));
-                        }
-                      }} className="border-green-600/50 text-green-500 hover:bg-green-500/10" data-testid={`wa-tracking-${d.dispatch_number}`}>
-                        <MessageSquare className="mr-1 h-3 w-3" /> Send via WhatsApp
-                      </Button>
-                    )}
+                    {(d.tracking_number || d.courier_name) && (() => {
+                      const dateStr = d.dispatch_date ? new Date(d.dispatch_date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '';
+                      const msg = `Hello,\n\nYour order has been dispatched! Here are the details:\n\n🏫 School: ${d.school_name}\n📦 Order: ${d.order_number}\n🚚 Courier: ${d.courier_name || 'N/A'}\n🔖 Tracking: ${d.tracking_number || 'N/A'}\n📅 Date: ${dateStr}\n\nPlease track your shipment using the tracking number above.\n\nThank you!\nSmartShape Pro`;
+                      return <WaPickerButton phone={d.phone} message={msg} label="Send via WhatsApp" testId={`wa-tracking-${d.dispatch_number}`} />;
+                    })()}
                     <Button variant="outline" size="sm" onClick={() => dispatchApi.downloadPdf(d.dispatch_id)} className={`border-[var(--border-color)] ${textSec}`} data-testid={`dispatch-pdf-${d.dispatch_number}`}>
                       PDF
                     </Button>
@@ -873,21 +929,12 @@ export default function OrdersManagement() {
             )}
             <DialogFooter className="flex flex-col sm:flex-row gap-2">
               <Button variant="outline" onClick={() => setTrackingDialog({ open: false, dispatch: null })} className={`border-[var(--border-color)] ${textSec}`} disabled={trackingSaving}>Cancel</Button>
-              <Button variant="outline" onClick={async () => {
-                if (!trackingDialog.dispatch) return;
+              {trackingDialog.dispatch && (() => {
                 const d = trackingDialog.dispatch;
-                const phone = (d.phone || '').replace(/\D/g, '');
                 const dateStr = d.dispatch_date ? new Date(d.dispatch_date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '';
                 const msg = `Hello,\n\nYour order has been dispatched! Here are the details:\n\n🏫 School: ${d.school_name}\n📦 Order: ${d.order_number}\n🚚 Courier: ${trackingForm.courier_name || 'N/A'}\n🔖 Tracking: ${trackingForm.tracking_number || 'N/A'}\n📅 Date: ${dateStr}\n\nPlease track your shipment using the tracking number above.\n\nThank you!\nSmartShape Pro`;
-                if (phone) {
-                  window.open(`https://wa.me/${phone.startsWith('91') ? phone : '91' + phone}?text=${encodeURIComponent(msg)}`, '_blank');
-                } else {
-                  await navigator.clipboard?.writeText(msg);
-                  toast.success('Message copied! Open WhatsApp manually.');
-                }
-              }} className="border-green-600/50 text-green-500 hover:bg-green-500/10 flex-1">
-                <MessageSquare className="mr-1.5 h-4 w-4" /> Send WhatsApp
-              </Button>
+                return <WaPickerButton phone={d.phone} message={msg} label="Send WhatsApp" className="flex-1 justify-center" />;
+              })()}
               <Button onClick={async () => {
                 setTrackingSaving(true);
                 try {
