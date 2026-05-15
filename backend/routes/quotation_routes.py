@@ -718,9 +718,9 @@ async def _generate_pdf_bytes(quot: dict, company: dict) -> bytes:
     WHITE  = colors.white
     BLACK  = colors.black
 
-    scale = {"small": 0.85, "medium": 1.0, "large": 1.15}.get(
+    font_scale = {"small": 0.85, "medium": 1.0, "large": 1.15}.get(
         quot.get("font_size_mode") or "medium", 1.0)
-    def sz(n): return max(5, round(n * scale))
+    def sz(n): return max(5, round(n * font_scale))
 
     SYM = quot.get("currency_symbol", "₹")  # default ₹
 
@@ -786,12 +786,16 @@ async def _generate_pdf_bytes(quot: dict, company: dict) -> bytes:
             if img_bytes:
                 ir = ImageReader(_io.BytesIO(img_bytes))
                 iw, ih = ir.getSize()
-                MAX_W, MAX_H = 44 * mm, 20 * mm
+                MAX_LOGO_W, MAX_LOGO_H = 40 * mm, 16 * mm
                 if iw and ih:
-                    scale = min(MAX_W / iw, MAX_H / ih)
-                    tw, th = iw * scale, ih * scale
+                    logo_scale = min(MAX_LOGO_W / iw, MAX_LOGO_H / ih)
+                    tw = min(iw * logo_scale, MAX_LOGO_W)
+                    th = min(ih * logo_scale, MAX_LOGO_H)
                 else:
-                    tw, th = 26 * mm, 18 * mm
+                    tw, th = 24 * mm, 14 * mm
+                # Hard safety clamp — never let logo overflow the page frame
+                tw = min(tw, MAX_LOGO_W)
+                th = min(th, MAX_LOGO_H)
                 logo_image = RLImage(_io.BytesIO(img_bytes), width=tw, height=th)
         except Exception as _e:
             logging.warning(f"PDF logo load failed: {_e}")
