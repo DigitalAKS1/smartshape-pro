@@ -652,8 +652,6 @@ export default function CustomerPortal() {
           </>
         )}
 
-      </div>
-
         {/* ════ HELP & SUPPORT ════ */}
         {tab === 'support' && (
           <div className="space-y-6">
