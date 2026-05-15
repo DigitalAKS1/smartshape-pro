@@ -96,7 +96,23 @@ export const visitPlans = {
   checkIn: (id, data) => API.post(`/visit-plans/${id}/check-in`, data),
   checkOut: (id, data) => API.post(`/visit-plans/${id}/check-out`, data),
   distance: (id, lat, lng) => API.get(`/visit-plans/${id}/distance`, { params: { lat, lng } }),
+  reschedule: (id, data) => API.post(`/visit-plans/${id}/reschedule`, data),
 };
+
+// Office Location & Geofence
+export const officeSettings = {
+  get: () => API.get('/settings/office-location'),
+  save: (data) => API.post('/settings/office-location', data),
+};
+
+// Admin field monitoring
+export const fieldAdmin = {
+  geofenceAlerts: () => API.get('/admin/geofence-alerts'),
+  loginLogs: () => API.get('/admin/login-logs'),
+};
+
+// Auth location update (post-login geo ping)
+export const authLocationUpdate = (lat, lng) => API.post('/auth/login-location', { lat, lng });
 
 // Packages
 export const packages = {

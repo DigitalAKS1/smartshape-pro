@@ -1,31 +1,43 @@
 import React, { useState, useEffect } from 'react';
 import AdminLayout from '../../components/layouts/AdminLayout';
-import API, { exportData } from '../../lib/api';
+import API, { exportData, fieldAdmin } from '../../lib/api';
 import { formatCurrency, formatDate, getStatusColor } from '../../lib/utils';
-import { MapPin, Calendar, Users, Route, Clock, CheckCircle, TrendingUp, Navigation, Download } from 'lucide-react';
+import { MapPin, Calendar, Users, Route, Clock, CheckCircle, TrendingUp, Navigation, Download, AlertTriangle, LogIn } from 'lucide-react';
 import { Button } from '../../components/ui/button';
+
+const WORK_MODE_COLORS = {
+  office: 'bg-green-500/20 text-green-400',
+  wfh:    'bg-blue-500/20 text-blue-400',
+  unknown:'bg-gray-500/20 text-gray-400',
+};
 
 export default function FieldSales() {
   const [summary, setSummary] = useState(null);
   const [attendance, setAttendance] = useState([]);
   const [visits, setVisits] = useState([]);
   const [expenses, setExpenses] = useState([]);
+  const [loginLogs, setLoginLogs] = useState([]);
+  const [geoAlerts, setGeoAlerts] = useState([]);
   const [activeTab, setActiveTab] = useState('overview');
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [summaryRes, attRes, visitsRes, expRes] = await Promise.all([
+        const [summaryRes, attRes, visitsRes, expRes, logsRes, alertsRes] = await Promise.all([
           API.get('/admin/field-sales/summary'),
           API.get('/admin/attendance'),
           API.get('/admin/visits'),
           API.get('/admin/expenses'),
+          fieldAdmin.loginLogs().catch(() => ({ data: [] })),
+          fieldAdmin.geofenceAlerts().catch(() => ({ data: [] })),
         ]);
         setSummary(summaryRes.data);
         setAttendance(attRes.data);
         setVisits(visitsRes.data);
         setExpenses(expRes.data);
+        setLoginLogs(logsRes.data || []);
+        setGeoAlerts(alertsRes.data || []);
       } catch (err) {
         console.error('Error:', err);
       } finally {
@@ -35,11 +47,14 @@ export default function FieldSales() {
     fetchData();
   }, []);
 
+  const unreadAlerts = geoAlerts.filter(a => !a.is_read).length;
   const tabs = [
-    { id: 'overview', label: 'Overview' },
+    { id: 'overview',   label: 'Overview' },
     { id: 'attendance', label: `Attendance (${attendance.length})` },
-    { id: 'visits', label: `Visits (${visits.length})` },
-    { id: 'expenses', label: `Expenses (${expenses.length})` },
+    { id: 'visits',     label: `Visits (${visits.length})` },
+    { id: 'expenses',   label: `Expenses (${expenses.length})` },
+    { id: 'login_logs', label: `Login Logs (${loginLogs.length})` },
+    { id: 'geo_alerts', label: `Geo Alerts${unreadAlerts > 0 ? ` (${unreadAlerts}🔴)` : ` (${geoAlerts.length})`}` },
   ];
 
   if (loading) {
@@ -107,6 +122,90 @@ export default function FieldSales() {
         {activeTab === 'attendance' && <AttendanceTab records={attendance} />}
         {activeTab === 'visits' && <VisitsTab visits={visits} />}
         {activeTab === 'expenses' && <ExpensesTab expenses={expenses} />}
+
+        {/* ── Login Logs ────────────────────────────────────────────────── */}
+        {activeTab === 'login_logs' && (
+          <div>
+            <p className="text-sm text-[var(--text-secondary)] mb-4">Login and logout events with location and work mode auto-detection.</p>
+            <div className="overflow-x-auto rounded-md border border-[var(--border-color)]">
+              <table className="w-full text-sm">
+                <thead className="bg-[var(--bg-card)] border-b border-[var(--border-color)]">
+                  <tr>
+                    {['User', 'Role', 'Login Time', 'Logout Time', 'Work Mode', 'IP Address', 'Location'].map(h => (
+                      <th key={h} className="px-3 py-2 text-left text-xs font-semibold text-[var(--text-muted)] uppercase">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {loginLogs.length === 0
+                    ? <tr><td colSpan={7} className="text-center py-10 text-[var(--text-muted)]">No login logs yet</td></tr>
+                    : loginLogs.map(log => (
+                      <tr key={log.log_id} className="border-b border-[var(--border-color)] hover:bg-[var(--bg-hover)] transition-colors">
+                        <td className="px-3 py-2">
+                          <p className="font-medium text-[var(--text-primary)]">{log.user_name}</p>
+                          <p className="text-xs text-[var(--text-muted)]">{log.user_email}</p>
+                        </td>
+                        <td className="px-3 py-2 text-[var(--text-secondary)] capitalize text-xs">{log.role?.replace('_',' ')}</td>
+                        <td className="px-3 py-2 text-[var(--text-secondary)] text-xs">{log.login_time ? new Date(log.login_time).toLocaleString() : '—'}</td>
+                        <td className="px-3 py-2 text-[var(--text-secondary)] text-xs">{log.logout_time ? new Date(log.logout_time).toLocaleString() : <span className="text-green-400">Active</span>}</td>
+                        <td className="px-3 py-2">
+                          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${WORK_MODE_COLORS[log.work_mode] || WORK_MODE_COLORS.unknown}`}>
+                            {log.work_mode === 'office' ? '🏢 Office' : log.work_mode === 'wfh' ? '🏠 WFH' : '❓ Unknown'}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2 text-[var(--text-muted)] text-xs font-mono">{log.ip_address || '—'}</td>
+                        <td className="px-3 py-2 text-[var(--text-muted)] text-xs max-w-xs truncate" title={log.address}>{log.address || (log.lat ? `${Number(log.lat).toFixed(4)}, ${Number(log.lng).toFixed(4)}` : '—')}</td>
+                      </tr>
+                    ))
+                  }
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* ── Geo Alerts ────────────────────────────────────────────────── */}
+        {activeTab === 'geo_alerts' && (
+          <div>
+            <div className="flex items-center gap-2 mb-4">
+              <AlertTriangle className="h-5 w-5 text-red-400" />
+              <div>
+                <p className="text-sm font-medium text-[var(--text-primary)]">Geofence Breach Alerts</p>
+                <p className="text-xs text-[var(--text-muted)]">Triggered when an employee checks in as "Office" but is outside the configured geofence radius.</p>
+              </div>
+            </div>
+            {geoAlerts.length === 0
+              ? <div className="bg-green-500/10 border border-green-500/30 rounded-xl p-8 text-center">
+                  <CheckCircle className="h-10 w-10 text-green-400 mx-auto mb-3" />
+                  <p className="text-green-400 font-semibold">No Geofence Breaches</p>
+                  <p className="text-[var(--text-muted)] text-sm mt-1">All check-ins are within the office geofence.</p>
+                </div>
+              : <div className="space-y-3">
+                  {geoAlerts.map(alert => (
+                    <div key={alert.alert_id} className="bg-red-500/10 border border-red-500/30 rounded-xl p-4">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-start gap-3">
+                          <AlertTriangle className="h-5 w-5 text-red-400 mt-0.5 flex-shrink-0" />
+                          <div>
+                            <p className="font-semibold text-[var(--text-primary)]">{alert.user_name}</p>
+                            <p className="text-xs text-[var(--text-muted)]">{alert.user_email}</p>
+                          </div>
+                        </div>
+                        <span className="text-[10px] text-red-400 bg-red-500/20 px-2 py-0.5 rounded-full font-semibold">BREACH</span>
+                      </div>
+                      <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                        <div><p className="text-[var(--text-muted)]">Claimed Mode</p><p className="text-[var(--text-primary)] font-medium capitalize">{alert.claimed_work_type}</p></div>
+                        <div><p className="text-[var(--text-muted)]">Distance from Office</p><p className="text-red-400 font-semibold">{alert.distance_from_office_m ? `${alert.distance_from_office_m}m` : '—'}</p></div>
+                        <div><p className="text-[var(--text-muted)]">Office Radius</p><p className="text-[var(--text-primary)] font-medium">{alert.office_radius_m}m</p></div>
+                        <div><p className="text-[var(--text-muted)]">Triggered At</p><p className="text-[var(--text-primary)] font-medium">{alert.triggered_at ? new Date(alert.triggered_at).toLocaleString() : '—'}</p></div>
+                      </div>
+                      {alert.address && <p className="text-xs text-[var(--text-muted)] mt-2 flex items-center gap-1"><MapPin className="h-3 w-3" />{alert.address}</p>}
+                    </div>
+                  ))}
+                </div>
+            }
+          </div>
+        )}
       </div>
     </AdminLayout>
   );

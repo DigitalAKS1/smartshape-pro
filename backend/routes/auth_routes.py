@@ -114,13 +114,67 @@ async def login(input: LoginInput, response: Response, request: Request):
     response.set_cookie(key="refresh_token", value=refresh_token, max_age=2592000, **_COOKIE_KWARGS)
 
     user_data = await db.users.find_one({"email": email}, {"_id": 0, "password_hash": 0})
+
+    # Log login event
+    await db.login_logs.insert_one({
+        "log_id":     f"ll_{uuid.uuid4().hex[:12]}",
+        "user_email": email,
+        "user_name":  user_data.get("name", ""),
+        "role":       user_data.get("role", ""),
+        "login_time": datetime.now(timezone.utc).isoformat(),
+        "logout_time": None,
+        "ip_address": ip,
+        "lat":        None,
+        "lng":        None,
+        "address":    None,
+        "work_mode":  "unknown",
+    })
+
     return user_data
 
 
+@router.post("/auth/login-location")
+async def update_login_location(request: Request):
+    """Called by frontend after login to attach GPS coordinates to the login log."""
+    from routes.field_routes import haversine_distance, reverse_geocode
+    user = await get_current_user(request)
+    body = await request.json()
+    lat = body.get("lat")
+    lng = body.get("lng")
+    if lat is None or lng is None:
+        return {"message": "No coordinates provided"}
+
+    address = reverse_geocode(float(lat), float(lng))
+    office = await db.settings.find_one({"type": "field_settings"}, {"_id": 0})
+    work_mode = "unknown"
+    if office and office.get("office_lat") and office.get("office_lng"):
+        dist_km = haversine_distance(float(lat), float(lng),
+                                     float(office["office_lat"]), float(office["office_lng"]))
+        radius_m = float(office.get("office_radius_m", 300))
+        work_mode = "office" if dist_km * 1000 <= radius_m else "wfh"
+
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    await db.login_logs.update_one(
+        {"user_email": user["email"], "login_time": {"$regex": f"^{today}"}, "logout_time": None},
+        {"$set": {"lat": lat, "lng": lng, "address": address, "work_mode": work_mode}},
+    )
+    return {"message": "Location logged", "work_mode": work_mode}
+
+
 @router.post("/auth/logout")
-async def logout(response: Response):
-    response.delete_cookie("access_token")
-    response.delete_cookie("refresh_token")
+async def logout(response: Response, request: Request):
+    # Mark logout time on latest login log
+    try:
+        user = await get_current_user(request)
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        await db.login_logs.update_one(
+            {"user_email": user["email"], "login_time": {"$regex": f"^{today}"}, "logout_time": None},
+            {"$set": {"logout_time": datetime.now(timezone.utc).isoformat()}},
+        )
+    except Exception:
+        pass
+    response.delete_cookie("access_token", path="/")
+    response.delete_cookie("refresh_token", path="/")
     return {"message": "Logged out"}
 
 

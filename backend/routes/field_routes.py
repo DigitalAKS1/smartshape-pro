@@ -120,24 +120,58 @@ async def check_in(check_in_data: AttendanceCheckIn, request: Request):
 
     address = reverse_geocode(check_in_data.lat, check_in_data.lng)
 
+    # ── Geofence check ───────────────────────────────────────────────────────
+    geofence_breach = False
+    distance_from_office_m = None
+    office_settings = await db.settings.find_one({"type": "field_settings"}, {"_id": 0})
+    if (office_settings and office_settings.get("office_lat") and office_settings.get("office_lng")
+            and check_in_data.work_type in ("office", "field")):
+        off_lat = float(office_settings["office_lat"])
+        off_lng = float(office_settings["office_lng"])
+        radius_m = float(office_settings.get("office_radius_m", 300))
+        dist_m = haversine_distance(check_in_data.lat, check_in_data.lng, off_lat, off_lng) * 1000
+        distance_from_office_m = round(dist_m, 1)
+        if dist_m > radius_m and check_in_data.work_type == "office":
+            geofence_breach = True
+            # Store alert in geofence_alerts collection
+            await db.geofence_alerts.insert_one({
+                "alert_id":          f"ga_{uuid.uuid4().hex[:12]}",
+                "user_email":        user["email"],
+                "user_name":         user["name"],
+                "alert_type":        "office_checkin_outside_geofence",
+                "claimed_work_type": check_in_data.work_type,
+                "lat":               check_in_data.lat,
+                "lng":               check_in_data.lng,
+                "address":           address,
+                "distance_from_office_m": distance_from_office_m,
+                "office_radius_m":   radius_m,
+                "triggered_at":      datetime.now(timezone.utc).isoformat(),
+                "is_read":           False,
+            })
+
     attendance_id = f"att_{uuid.uuid4().hex[:12]}"
     attendance_doc = {
-        "attendance_id": attendance_id,
-        "sales_person_email": user["email"],
-        "sales_person_name": user["name"],
-        "date": today,
-        "work_type": check_in_data.work_type,
-        "check_in_time": datetime.now(timezone.utc).isoformat(),
-        "check_in_lat": check_in_data.lat,
-        "check_in_lng": check_in_data.lng,
-        "check_in_address": address,
-        "check_out_time": None,
-        "check_out_lat": None,
-        "check_out_lng": None,
-        "check_out_address": None,
+        "attendance_id":          attendance_id,
+        "sales_person_email":     user["email"],
+        "sales_person_name":      user["name"],
+        "date":                   today,
+        "work_type":              check_in_data.work_type,
+        "check_in_time":          datetime.now(timezone.utc).isoformat(),
+        "check_in_lat":           check_in_data.lat,
+        "check_in_lng":           check_in_data.lng,
+        "check_in_address":       address,
+        "check_out_time":         None,
+        "check_out_lat":          None,
+        "check_out_lng":          None,
+        "check_out_address":      None,
+        "geofence_breach":        geofence_breach,
+        "distance_from_office_m": distance_from_office_m,
     }
     await db.attendance.insert_one(attendance_doc)
-    return await db.attendance.find_one({"attendance_id": attendance_id}, {"_id": 0})
+    result = await db.attendance.find_one({"attendance_id": attendance_id}, {"_id": 0})
+    if geofence_breach:
+        result["geofence_warning"] = f"You checked in as 'office' but are {distance_from_office_m}m from the office. This has been flagged."
+    return result
 
 
 @router.post("/sales/attendance/check-out")
@@ -527,3 +561,96 @@ async def submit_reimbursement(month_year: str, request: Request):
         )
 
     return await db.payroll_reimbursements.find_one({"reimbursement_id": reimbursement_id}, {"_id": 0})
+
+
+# ==================== VISIT RESCHEDULE ====================
+
+@router.post("/visit-plans/{plan_id}/reschedule")
+async def reschedule_visit(plan_id: str, request: Request):
+    user = await get_current_user(request)
+    body = await request.json()
+    plan = await db.visit_plans.find_one({"plan_id": plan_id}, {"_id": 0})
+    if not plan:
+        raise HTTPException(status_code=404, detail="Visit plan not found")
+    if plan.get("status") == "completed":
+        raise HTTPException(status_code=400, detail="Cannot reschedule a completed visit")
+
+    new_date = body.get("new_date", "").strip()
+    new_time = body.get("new_time", plan.get("visit_time", "")).strip()
+    reason   = body.get("reason", "").strip()
+    if not new_date:
+        raise HTTPException(status_code=400, detail="new_date is required")
+
+    history_entry = {
+        "old_date":        plan.get("visit_date"),
+        "old_time":        plan.get("visit_time"),
+        "new_date":        new_date,
+        "new_time":        new_time,
+        "reason":          reason,
+        "rescheduled_by":  user["email"],
+        "rescheduled_at":  datetime.now(timezone.utc).isoformat(),
+    }
+
+    await db.visit_plans.update_one(
+        {"plan_id": plan_id},
+        {
+            "$set": {
+                "visit_date":       new_date,
+                "visit_time":       new_time,
+                "status":           "planned",
+                "reschedule_reason": reason,
+                "reschedule_count": (plan.get("reschedule_count") or 0) + 1,
+            },
+            "$push": {"reschedule_history": history_entry},
+        },
+    )
+    await log_activity(user["email"], "visit_rescheduled", "visit_plan", plan_id,
+                       details=f"Rescheduled from {plan.get('visit_date')} to {new_date}. Reason: {reason}")
+    return await db.visit_plans.find_one({"plan_id": plan_id}, {"_id": 0})
+
+
+# ==================== OFFICE LOCATION SETTINGS ====================
+
+@router.get("/settings/office-location")
+async def get_office_location(request: Request):
+    await get_current_user(request)
+    settings = await db.settings.find_one({"type": "field_settings"}, {"_id": 0})
+    if not settings:
+        return {"office_lat": None, "office_lng": None, "office_address": "", "office_radius_m": 300}
+    return settings
+
+
+@router.post("/settings/office-location")
+async def save_office_location(request: Request):
+    user = await get_current_user(request)
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    body = await request.json()
+    await db.settings.update_one(
+        {"type": "field_settings"},
+        {"$set": {**body, "type": "field_settings", "updated_at": datetime.now(timezone.utc).isoformat()}},
+        upsert=True,
+    )
+    return {"message": "Office location saved"}
+
+
+# ==================== GEOFENCE ALERTS ====================
+
+@router.get("/admin/geofence-alerts")
+async def get_geofence_alerts(request: Request):
+    user = await get_current_user(request)
+    if user.get("role") != "admin" and "field_sales" not in user.get("assigned_modules", []):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    alerts = await db.attendance.find(
+        {"geofence_breach": True}, {"_id": 0}
+    ).sort("check_in_time", -1).to_list(500)
+    return alerts
+
+
+@router.get("/admin/login-logs")
+async def get_login_logs(request: Request):
+    user = await get_current_user(request)
+    if user.get("role") != "admin" and "field_sales" not in user.get("assigned_modules", []):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    logs = await db.login_logs.find({}, {"_id": 0}).sort("login_time", -1).to_list(1000)
+    return logs

@@ -594,3 +594,85 @@ async def mark_notifications_read(token: str):
         {"$set": {"is_read": True}}
     )
     return {"ok": True}
+
+
+# ── School support tickets (public, by catalogue token) ───────────────────────
+
+@router.post("/customer-portal/{token}/support-ticket")
+async def submit_school_support_ticket(token: str, request: Request):
+    """School submits a support ticket from their customer portal."""
+    quot = await db.quotations.find_one({"catalogue_token": token}, {"_id": 0})
+    if not quot:
+        raise HTTPException(status_code=404, detail="Portal not found")
+
+    body = await request.json()
+    title       = body.get("title", "").strip()
+    description = body.get("description", "").strip()
+    priority    = body.get("priority", "medium")
+    if not title or not description:
+        raise HTTPException(status_code=400, detail="Title and description are required")
+
+    ticket_count = await db.support_tickets.count_documents({})
+    ticket_number = f"TKT-{ticket_count + 1001:04d}"
+
+    ticket_doc = {
+        "ticket_id":           f"tk_{uuid.uuid4().hex[:12]}",
+        "ticket_number":       ticket_number,
+        "title":               title,
+        "description":         description,
+        "priority":            priority,
+        "status":              "open",
+        "source":              "school_portal",
+        "submitted_by_name":   quot.get("principal_name", quot.get("school_name", "")),
+        "submitted_by_email":  quot.get("customer_email", ""),
+        "school_name":         quot.get("school_name", ""),
+        "quotation_id":        quot.get("quotation_id", ""),
+        "catalogue_token":     token,
+        "created_at":          datetime.now(timezone.utc).isoformat(),
+        "has_screenshot":      False,
+    }
+    await db.support_tickets.insert_one(ticket_doc)
+
+    # Try to notify admin by email
+    try:
+        email_settings = await db.settings.find_one({"type": "email"}, {"_id": 0})
+        if email_settings and email_settings.get("enabled") and email_settings.get("sender_email"):
+            admin_email = email_settings.get("sender_email")
+            msg = MIMEMultipart()
+            msg["From"]    = f"SmartShape Pro <{admin_email}>"
+            msg["To"]      = admin_email
+            msg["Subject"] = f"[{priority.upper()}] New Support Ticket {ticket_number} from {quot.get('school_name','')}"
+            body_text = f"""
+New support ticket from school portal:
+
+Ticket: {ticket_number}
+School: {quot.get('school_name','')}
+Contact: {quot.get('principal_name','')} <{quot.get('customer_email','')}>
+Priority: {priority.upper()}
+Title: {title}
+
+{description}
+"""
+            msg.attach(MIMEText(body_text, "plain", "utf-8"))
+            with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
+                smtp.login(admin_email, email_settings["gmail_app_password"])
+                smtp.send_message(msg)
+    except Exception:
+        pass  # email notification is best-effort
+
+    result = dict(ticket_doc)
+    result.pop("_id", None)
+    return result
+
+
+@router.get("/customer-portal/{token}/support-tickets")
+async def get_school_support_tickets(token: str):
+    """Fetch tickets submitted by this school."""
+    quot = await db.quotations.find_one({"catalogue_token": token}, {"_id": 0})
+    if not quot:
+        raise HTTPException(status_code=404, detail="Portal not found")
+    tickets = await db.support_tickets.find(
+        {"catalogue_token": token},
+        {"_id": 0, "screenshot_data": 0}
+    ).sort("created_at", -1).to_list(50)
+    return tickets

@@ -9,7 +9,7 @@ import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../../components/ui/dialog';
 import { toast } from 'sonner';
-import { Plus, MapPin, Calendar, CheckCircle, Clock, AlertTriangle, Trash2, Edit2 } from 'lucide-react';
+import { Plus, MapPin, Calendar, CheckCircle, Clock, AlertTriangle, Trash2, Edit2, RotateCcw, History } from 'lucide-react';
 import WhatsAppSendDialog from '../../components/WhatsAppSendDialog';
 
 export default function VisitPlanning() {
@@ -25,6 +25,10 @@ export default function VisitPlanning() {
   // FMS Phase 4: WhatsApp auto-popup after visit check-out
   const [waOpen, setWaOpen] = useState(false);
   const [waCtx, setWaCtx] = useState({ module: 'visit', context: {}, title: 'Send WhatsApp' });
+  // Reschedule
+  const [rescheduleDialog, setRescheduleDialog] = useState({ open: false, plan: null, saving: false });
+  const [rescheduleForm, setRescheduleForm] = useState({ new_date: '', new_time: '', reason: '' });
+  const [historyDialog, setHistoryDialog] = useState({ open: false, plan: null });
 
   const card = isDark ? 'bg-[var(--bg-card)] border-[var(--border-color)]' : 'bg-white border-[var(--border-color)]';
   const inputCls = 'bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]';
@@ -149,6 +153,26 @@ export default function VisitPlanning() {
     await visitPlans.delete(planId); toast.success('Deleted'); fetchData();
   };
 
+  const openReschedule = (plan) => {
+    setRescheduleForm({ new_date: plan.visit_date || '', new_time: plan.visit_time || '', reason: '' });
+    setRescheduleDialog({ open: true, plan, saving: false });
+  };
+
+  const handleReschedule = async () => {
+    const { plan } = rescheduleDialog;
+    if (!rescheduleForm.new_date) { toast.error('New date is required'); return; }
+    setRescheduleDialog(d => ({ ...d, saving: true }));
+    try {
+      await visitPlans.reschedule(plan.plan_id, rescheduleForm);
+      toast.success(`Visit rescheduled to ${rescheduleForm.new_date}`);
+      setRescheduleDialog({ open: false, plan: null, saving: false });
+      fetchData();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Reschedule failed');
+      setRescheduleDialog(d => ({ ...d, saving: false }));
+    }
+  };
+
   const filtered = filter === 'all' ? plans : plans.filter(p => p.status === filter);
   const today = new Date().toISOString().split('T')[0];
   const todayPlans = plans.filter(p => p.visit_date === today);
@@ -219,6 +243,7 @@ export default function VisitPlanning() {
                     </div>
                     {plan.visit_notes && <p className={`text-xs ${textSec} mt-1`}>Notes: {plan.visit_notes}</p>}
                     {plan.outcome && <p className="text-xs text-green-400 mt-1">Outcome: {plan.outcome}</p>}
+                    {plan.reschedule_count > 0 && <p className="text-xs text-orange-400 mt-1">Rescheduled {plan.reschedule_count}× · Last reason: {plan.reschedule_reason || '—'}</p>}
                   </div>
                 </div>
                 <div className="flex items-center gap-1 flex-shrink-0">
@@ -226,11 +251,18 @@ export default function VisitPlanning() {
                     <>
                       <Button size="sm" onClick={() => handleCheckIn(plan, 'field')} className="bg-blue-600 hover:bg-blue-700 text-white h-7 text-xs" data-testid={`checkin-${plan.plan_id}`}>GPS Check-In</Button>
                       <Button size="sm" variant="outline" onClick={() => handleCheckIn(plan, 'wfh')} className="border-purple-500/40 text-purple-400 hover:bg-purple-500/10 h-7 text-xs" data-testid={`checkin-wfh-${plan.plan_id}`}>WFH</Button>
+                      <Button size="sm" variant="outline" onClick={() => openReschedule(plan)} className="border-orange-500/40 text-orange-400 hover:bg-orange-500/10 h-7 text-xs" title="Reschedule" data-testid={`reschedule-${plan.plan_id}`}><RotateCcw className="h-3 w-3 mr-1" />Reschedule</Button>
                       <Button size="sm" variant="ghost" onClick={() => handleDelete(plan.plan_id)} className="text-red-400 h-7"><Trash2 className="h-3 w-3" /></Button>
                     </>
                   )}
                   {plan.status === 'in_progress' && (
-                    <Button size="sm" onClick={() => handleCheckOut(plan)} className="bg-green-600 hover:bg-green-700 text-white h-7 text-xs" data-testid={`checkout-${plan.plan_id}`}>Check Out</Button>
+                    <>
+                      <Button size="sm" onClick={() => handleCheckOut(plan)} className="bg-green-600 hover:bg-green-700 text-white h-7 text-xs" data-testid={`checkout-${plan.plan_id}`}>Check Out</Button>
+                      <Button size="sm" variant="outline" onClick={() => openReschedule(plan)} className="border-orange-500/40 text-orange-400 hover:bg-orange-500/10 h-7 text-xs"><RotateCcw className="h-3 w-3 mr-1" />Reschedule</Button>
+                    </>
+                  )}
+                  {(plan.reschedule_count > 0) && (
+                    <Button size="sm" variant="ghost" onClick={() => setHistoryDialog({ open: true, plan })} className={`${textMuted} h-7 text-xs`} title="View reschedule history"><History className="h-3 w-3 mr-1" />{plan.reschedule_count}</Button>
                   )}
                 </div>
               </div>
@@ -276,6 +308,58 @@ export default function VisitPlanning() {
         </Dialog>
 
         <WhatsAppSendDialog open={waOpen} onOpenChange={setWaOpen} module={waCtx.module} context={waCtx.context} title={waCtx.title} />
+
+        {/* ── Reschedule Dialog ──────────────────────────────────────────── */}
+        <Dialog open={rescheduleDialog.open} onOpenChange={o => !rescheduleDialog.saving && setRescheduleDialog(d => ({...d, open: o}))}>
+          <DialogContent className={`${dlgCls} w-[calc(100vw-1rem)] sm:max-w-sm`}>
+            <DialogHeader><DialogTitle className={textPri}>Reschedule Visit</DialogTitle></DialogHeader>
+            <div className="space-y-3 py-2">
+              {rescheduleDialog.plan && (
+                <div className={`rounded-md p-3 text-sm ${isDark ? 'bg-[var(--bg-hover)]' : 'bg-[#f5f5fa]'}`}>
+                  <p className={textPri + ' font-medium'}>{rescheduleDialog.plan.school_name || rescheduleDialog.plan.lead_name}</p>
+                  <p className={`${textMuted} text-xs mt-0.5`}>Current: {rescheduleDialog.plan.visit_date} {rescheduleDialog.plan.visit_time}</p>
+                </div>
+              )}
+              <div className="grid grid-cols-2 gap-3">
+                <div><Label className={`${textSec} text-xs`}>New Date *</Label><Input type="date" value={rescheduleForm.new_date} onChange={e => setRescheduleForm(f => ({...f, new_date: e.target.value}))} className={inputCls} /></div>
+                <div><Label className={`${textSec} text-xs`}>New Time</Label><Input type="time" value={rescheduleForm.new_time} onChange={e => setRescheduleForm(f => ({...f, new_time: e.target.value}))} className={inputCls} /></div>
+              </div>
+              <div>
+                <Label className={`${textSec} text-xs`}>Reason for Reschedule</Label>
+                <Input value={rescheduleForm.reason} onChange={e => setRescheduleForm(f => ({...f, reason: e.target.value}))} className={inputCls} placeholder="e.g. School holiday, Availability conflict..." />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setRescheduleDialog({ open: false, plan: null, saving: false })} className={'border-[var(--border-color)] text-[var(--text-secondary)]'} disabled={rescheduleDialog.saving}>Cancel</Button>
+              <Button onClick={handleReschedule} disabled={rescheduleDialog.saving} className="bg-orange-500 hover:bg-orange-600 text-white">
+                <RotateCcw className="mr-1 h-3 w-3" />{rescheduleDialog.saving ? 'Saving…' : 'Confirm Reschedule'}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* ── Reschedule History Dialog ──────────────────────────────────── */}
+        <Dialog open={historyDialog.open} onOpenChange={o => setHistoryDialog(d => ({...d, open: o}))}>
+          <DialogContent className={`${dlgCls} w-[calc(100vw-1rem)] sm:max-w-md`}>
+            <DialogHeader><DialogTitle className={textPri}><History className="inline h-4 w-4 mr-2" />Reschedule History</DialogTitle></DialogHeader>
+            <div className="py-2 space-y-2 max-h-72 overflow-y-auto">
+              {(historyDialog.plan?.reschedule_history || []).map((h, i) => (
+                <div key={i} className={`rounded-md p-3 text-sm ${isDark ? 'bg-[var(--bg-hover)]' : 'bg-[#f5f5fa]'}`}>
+                  <div className="flex items-center justify-between">
+                    <span className="text-orange-400 font-mono text-xs">#{i + 1}</span>
+                    <span className={`${textMuted} text-xs`}>{h.rescheduled_at?.slice(0,10)} · {h.rescheduled_by}</span>
+                  </div>
+                  <p className={`${textSec} text-xs mt-1`}>{h.old_date} {h.old_time} → <span className={textPri + ' font-medium'}>{h.new_date} {h.new_time}</span></p>
+                  {h.reason && <p className={`${textMuted} text-xs italic mt-0.5`}>"{h.reason}"</p>}
+                </div>
+              ))}
+              {(historyDialog.plan?.reschedule_history || []).length === 0 && <p className={textMuted + ' text-sm text-center py-4'}>No history</p>}
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setHistoryDialog({ open: false, plan: null })} className={'border-[var(--border-color)] text-[var(--text-secondary)]'}>Close</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
     </AdminLayout>
   );
