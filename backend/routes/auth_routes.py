@@ -40,7 +40,18 @@ class LoginInput(BaseModel):
 # ==================== AUTH ENDPOINTS ====================
 
 @router.post("/auth/register")
-async def register(input: RegisterInput, response: Response):
+async def register(input: RegisterInput, request: Request, response: Response):
+    # Self-registration is disabled. Users are created by admin only.
+    # This endpoint still works but requires the caller to be an authenticated admin.
+    try:
+        caller = await get_current_user(request)
+        if caller.get("role") != "admin":
+            raise HTTPException(status_code=403, detail="Only admins can create user accounts. Contact your administrator.")
+    except HTTPException as e:
+        if e.status_code in (401, 403):
+            raise HTTPException(status_code=403, detail="User accounts can only be created by an administrator.")
+        raise
+
     email = input.email.lower()
     existing = await db.users.find_one({"email": email})
     if existing:
@@ -64,13 +75,6 @@ async def register(input: RegisterInput, response: Response):
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.users.insert_one(user_doc)
-
-    access_token = create_access_token(user_id, email)
-    refresh_token = create_refresh_token(user_id)
-
-    response.set_cookie(key="access_token", value=access_token, max_age=86400, **_COOKIE_KWARGS)
-    response.set_cookie(key="refresh_token", value=refresh_token, max_age=2592000, **_COOKIE_KWARGS)
-
     user = await db.users.find_one({"email": email}, {"_id": 0, "password_hash": 0})
     return user
 

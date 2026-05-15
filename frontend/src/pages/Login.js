@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useNavigate, Link, Navigate } from 'react-router-dom';
+import { useNavigate, Navigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -197,11 +197,8 @@ export default function Login() {
                 </Button>
               </form>
 
-              <p className="text-center text-[var(--text-muted)]">
-                Don't have an account?{' '}
-                <Link to="/register" className="text-[#e94560] hover:text-[#f05c75] font-medium" data-testid="register-link">
-                  Sign up
-                </Link>
+              <p className="text-center text-xs text-[var(--text-muted)]">
+                Contact your administrator to get access.
               </p>
             </>
           )}
