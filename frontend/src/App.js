@@ -67,6 +67,7 @@ import SchoolLogin from './pages/SchoolLogin';
 import SchoolDashboard from './pages/school/SchoolDashboard';
 
 import { ThemeProvider } from './contexts/ThemeContext';
+import GeofenceGuard from './components/GeofenceGuard';
 
 import './App.css';
 
@@ -121,7 +122,9 @@ function AppRouter() {
   }
 
   return (
-    <Routes>
+    <>
+      <GeofenceGuard />
+      <Routes>
       {/* Public Routes */}
       <Route path="/login" element={<Login />} />
       <Route path="/register" element={<Register />} />
@@ -179,6 +182,7 @@ function AppRouter() {
       <Route path="/" element={<ProtectedRoute><SmartRedirect /></ProtectedRoute>} />
       <Route path="*" element={<NotFound />} />
     </Routes>
+    </>
   );
 }
 

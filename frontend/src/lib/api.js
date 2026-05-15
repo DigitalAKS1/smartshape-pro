@@ -114,6 +114,14 @@ export const fieldAdmin = {
 // Auth location update (post-login geo ping)
 export const authLocationUpdate = (lat, lng) => API.post('/auth/login-location', { lat, lng });
 
+// Punch Clock
+export const punchApi = {
+  punch:         (data)   => API.post('/attendance/punch', data),
+  todayPunches:  ()       => API.get('/attendance/today-punches'),
+  geofenceExit:  (data)   => API.post('/attendance/geofence-exit', data),
+  punchReport:   (params) => API.get('/admin/punch-report', { params }),
+};
+
 // Trusted Device Management (admin)
 export const deviceApi = {
   list:       (status = 'all', user_email = '') => API.get('/admin/devices', { params: { status, user_email } }),

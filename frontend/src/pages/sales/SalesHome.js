@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import SalesLayout from '../../components/layouts/SalesLayout';
+import PunchClock from '../../components/PunchClock';
 import {
   attendance as attendanceApi, visits as visitsApi,
   leads as leadsApi, tasks as tasksApi,
@@ -123,6 +124,9 @@ export default function SalesHome() {
   return (
     <SalesLayout title="My Dashboard">
       <div className="space-y-4 pb-28">
+
+        {/* ── Punch Clock ── */}
+        <PunchClock />
 
         {/* ── Header ── */}
         <div className="flex items-center justify-between">

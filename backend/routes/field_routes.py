@@ -654,3 +654,228 @@ async def get_login_logs(request: Request):
         raise HTTPException(status_code=403, detail="Admin access required")
     logs = await db.login_logs.find({}, {"_id": 0}).sort("login_time", -1).to_list(1000)
     return logs
+
+
+# ==================== PUNCH CLOCK ====================
+
+@router.post("/attendance/punch")
+async def record_punch(request: Request):
+    user = await get_current_user(request)
+    body = await request.json()
+    punch_type = body.get("type")
+    lat = body.get("lat")
+    lng = body.get("lng")
+    source = body.get("source", "manual")
+
+    if punch_type not in ("in", "out"):
+        raise HTTPException(400, "type must be 'in' or 'out'")
+
+    now   = datetime.now(timezone.utc)
+    today = now.strftime("%Y-%m-%d")
+
+    address = None
+    if lat is not None and lng is not None:
+        address = reverse_geocode(float(lat), float(lng))
+
+    distance_m = None
+    office = await db.settings.find_one({"type": "field_settings"}, {"_id": 0})
+    if office and office.get("office_lat") and lat is not None:
+        d_km = haversine_distance(float(lat), float(lng), float(office["office_lat"]), float(office["office_lng"]))
+        distance_m = round(d_km * 1000, 1)
+
+    doc = {
+        "punch_id":               f"pch_{uuid.uuid4().hex[:12]}",
+        "user_email":             user["email"],
+        "user_name":              user["name"],
+        "date":                   today,
+        "type":                   punch_type,
+        "timestamp":              now.isoformat(),
+        "lat":                    lat,
+        "lng":                    lng,
+        "address":                address,
+        "distance_from_office_m": distance_m,
+        "source":                 source,
+    }
+    await db.punch_logs.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@router.get("/attendance/today-punches")
+async def get_today_punches(request: Request):
+    user = await get_current_user(request)
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    punches = await db.punch_logs.find(
+        {"user_email": user["email"], "date": today}, {"_id": 0}
+    ).sort("timestamp", 1).to_list(100)
+    return punches
+
+
+@router.post("/attendance/geofence-exit")
+async def geofence_exit(request: Request):
+    """Called by the frontend when auto-logout due to leaving the geofence."""
+    user = await get_current_user(request)
+    body = await request.json()
+    lat        = body.get("lat")
+    lng        = body.get("lng")
+    distance_m = body.get("distance_m")
+
+    now   = datetime.now(timezone.utc)
+    today = now.strftime("%Y-%m-%d")
+
+    address = None
+    if lat is not None and lng is not None:
+        address = reverse_geocode(float(lat), float(lng))
+
+    office     = await db.settings.find_one({"type": "field_settings"}, {"_id": 0}) or {}
+    radius_m   = float(office.get("office_radius_m", 300))
+
+    # Auto punch-out
+    punch_doc = {
+        "punch_id":               f"pch_{uuid.uuid4().hex[:12]}",
+        "user_email":             user["email"],
+        "user_name":              user["name"],
+        "date":                   today,
+        "type":                   "out",
+        "timestamp":              now.isoformat(),
+        "lat":                    lat,
+        "lng":                    lng,
+        "address":                address,
+        "distance_from_office_m": distance_m,
+        "source":                 "geofence_auto_logout",
+    }
+    await db.punch_logs.insert_one(punch_doc)
+
+    # Create geofence alert
+    await db.geofence_alerts.insert_one({
+        "alert_id":               f"ga_{uuid.uuid4().hex[:12]}",
+        "user_email":             user["email"],
+        "user_name":              user["name"],
+        "alert_type":             "geofence_exit_auto_logout",
+        "lat":                    lat,
+        "lng":                    lng,
+        "address":                address,
+        "distance_from_office_m": distance_m,
+        "office_radius_m":        radius_m,
+        "triggered_at":           now.isoformat(),
+        "is_read":                False,
+    })
+
+    # Notify admin + HR (best-effort email)
+    try:
+        import smtplib
+        from email.mime.text import MIMEText
+        from email.mime.multipart import MIMEMultipart
+
+        email_cfg = await db.settings.find_one({"type": "email"}, {"_id": 0})
+        admins    = await db.users.find(
+            {"role": {"$in": ["admin", "hr"]}, "is_active": True}, {"email": 1, "_id": 0}
+        ).to_list(20)
+        to_list = [a["email"] for a in admins if a.get("email")]
+
+        if email_cfg and email_cfg.get("enabled") and email_cfg.get("sender_email") and to_list:
+            msg = MIMEMultipart("alternative")
+            msg["Subject"] = f"⚠️ Geofence Exit Auto-Logout: {user['name']}"
+            msg["From"]    = email_cfg["sender_email"]
+            msg["To"]      = ", ".join(to_list)
+            html = f"""
+            <div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:20px;">
+              <h2 style="color:#e94560;margin-top:0;">⚠️ Geofence Exit Alert</h2>
+              <p><strong>{user['name']}</strong> ({user['email']}) left the office zone and was automatically logged out.</p>
+              <table style="width:100%;border-collapse:collapse;margin-top:12px;">
+                <tr style="background:#f9f9f9;"><td style="padding:8px;color:#555;border:1px solid #eee;">Time</td>
+                    <td style="padding:8px;font-weight:bold;border:1px solid #eee;">{now.strftime('%d %b %Y %H:%M:%S UTC')}</td></tr>
+                <tr><td style="padding:8px;color:#555;border:1px solid #eee;">Distance from Office</td>
+                    <td style="padding:8px;font-weight:bold;color:#e94560;border:1px solid #eee;">{distance_m}m away (allowed radius: {radius_m}m)</td></tr>
+                <tr style="background:#f9f9f9;"><td style="padding:8px;color:#555;border:1px solid #eee;">Location</td>
+                    <td style="padding:8px;border:1px solid #eee;">{address or 'Unknown'}</td></tr>
+              </table>
+              <p style="color:#888;font-size:12px;margin-top:16px;">View full details → SmartShape Pro → Field Sales → Geo Alerts</p>
+            </div>"""
+            msg.attach(MIMEText(html, "html"))
+            with smtplib.SMTP("smtp.gmail.com", 587) as smtp:
+                smtp.ehlo(); smtp.starttls()
+                smtp.login(email_cfg["sender_email"], email_cfg.get("gmail_app_password", ""))
+                smtp.sendmail(email_cfg["sender_email"], to_list, msg.as_string())
+    except Exception:
+        pass
+
+    punch_doc.pop("_id", None)
+    return {"message": "Geofence exit logged and notifications sent", "punch": punch_doc}
+
+
+@router.get("/admin/punch-report")
+async def get_punch_report(
+    request: Request,
+    date_from: str = "",
+    date_to:   str = "",
+    user_email: str = "",
+):
+    user = await get_current_user(request)
+    if user.get("role") != "admin" and "field_sales" not in user.get("assigned_modules", []):
+        raise HTTPException(403, "Insufficient permissions")
+
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    filt: dict = {}
+    if date_from and date_to:
+        filt["date"] = {"$gte": date_from, "$lte": date_to}
+    elif date_from:
+        filt["date"] = {"$gte": date_from}
+    elif date_to:
+        filt["date"] = {"$lte": date_to}
+    else:
+        filt["date"] = today
+    if user_email:
+        filt["user_email"] = user_email
+
+    all_punches = await db.punch_logs.find(filt, {"_id": 0}).sort(
+        [("date", 1), ("timestamp", 1)]
+    ).to_list(10000)
+
+    from collections import defaultdict
+    grouped: dict = defaultdict(list)
+    for p in all_punches:
+        grouped[(p["date"], p["user_email"])].append(p)
+
+    report = []
+    for (date, email), punches in sorted(grouped.items(), key=lambda x: x[0][0], reverse=True):
+        ins  = [p for p in punches if p["type"] == "in"]
+        outs = [p for p in punches if p["type"] == "out"]
+
+        first_in  = min((p["timestamp"] for p in ins),  default=None)
+        last_out  = max((p["timestamp"] for p in outs), default=None)
+
+        total_hours = None
+        if first_in and last_out:
+            try:
+                from datetime import datetime as _dt
+                fi = _dt.fromisoformat(first_in.replace("Z", "+00:00"))
+                lo = _dt.fromisoformat(last_out.replace("Z", "+00:00"))
+                total_hours = round((lo - fi).total_seconds() / 3600, 2)
+            except Exception:
+                pass
+
+        cycles       = min(len(ins), len(outs))
+        auto_logouts = sum(1 for p in punches if p.get("source") == "geofence_auto_logout")
+
+        if cycles <= 1:   efficiency = "optimal"
+        elif cycles == 2: efficiency = "good"
+        elif cycles == 3: efficiency = "moderate"
+        else:             efficiency = "frequent_exits"
+
+        report.append({
+            "user_email":       email,
+            "user_name":        punches[0]["user_name"] if punches else email,
+            "date":             date,
+            "first_in":         first_in,
+            "last_out":         last_out,
+            "total_hours":      total_hours,
+            "punch_count":      len(punches),
+            "in_count":         len(ins),
+            "out_count":        len(outs),
+            "auto_logout_count": auto_logouts,
+            "efficiency":       efficiency,
+            "punches":          punches,
+        })
+
+    return report
