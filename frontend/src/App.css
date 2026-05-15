@@ -18,6 +18,10 @@
   text-decoration: none;
 }
 
+/* Hide scrollbar but keep scroll functionality */
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
 .App-link:hover {
   color: #f05c75;
 }
