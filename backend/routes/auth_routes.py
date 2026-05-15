@@ -33,6 +33,8 @@ class RegisterInput(BaseModel):
 class LoginInput(BaseModel):
     email: EmailStr
     password: str
+    device_token: Optional[str] = None
+    device_info: Optional[dict] = None
 
 
 # ==================== AUTH ENDPOINTS ====================
@@ -105,6 +107,67 @@ async def login(input: LoginInput, response: Response, request: Request):
 
     # Clear failed attempts
     await db.login_attempts.delete_one({"identifier": identifier})
+
+    # ── Device Trust Check ──────────────────────────────────────────────────────
+    device_token = input.device_token
+    device_info  = input.device_info or {}
+    if device_token:
+        policy = await db.settings.find_one({"type": "device_policy"}, {"_id": 0}) or {}
+        enforcement       = policy.get("enforcement_enabled", False)
+        auto_approve_admin = policy.get("auto_approve_admin", True)
+        role = user.get("role", "")
+        skip_check = (not enforcement) or (role == "admin" and auto_approve_admin)
+        if not skip_check:
+            existing_dev = await db.trusted_devices.find_one(
+                {"user_email": email, "device_token": device_token}, {"_id": 0}
+            )
+            if existing_dev:
+                dev_status = existing_dev.get("status", "pending")
+                if dev_status == "approved":
+                    await db.trusted_devices.update_one(
+                        {"device_id": existing_dev["device_id"]},
+                        {"$set": {"last_used": datetime.now(timezone.utc).isoformat(), "last_ip": ip}},
+                    )
+                elif dev_status == "revoked":
+                    raise HTTPException(
+                        status_code=403,
+                        detail={"code": "DEVICE_REVOKED",
+                                "message": "This device has been revoked by your administrator. Contact admin to restore access."},
+                    )
+                else:
+                    raise HTTPException(
+                        status_code=403,
+                        detail={"code": "DEVICE_PENDING",
+                                "message": "This device is awaiting administrator approval. Try again after your admin approves it."},
+                    )
+            else:
+                # New device — register as pending and block login
+                await db.trusted_devices.insert_one({
+                    "device_id":    f"dev_{uuid.uuid4().hex[:12]}",
+                    "device_token": device_token,
+                    "user_email":   email,
+                    "user_name":    user.get("name", ""),
+                    "role":         user.get("role", ""),
+                    "device_label": device_info.get("label", "Unknown Device"),
+                    "platform":     device_info.get("platform", "web"),
+                    "screen":       device_info.get("screen", ""),
+                    "timezone":     device_info.get("timezone", ""),
+                    "language":     device_info.get("language", ""),
+                    "status":       "pending",
+                    "requested_at": datetime.now(timezone.utc).isoformat(),
+                    "approved_at":  None,
+                    "approved_by":  None,
+                    "revoked_at":   None,
+                    "revoked_by":   None,
+                    "last_used":    None,
+                    "last_ip":      ip,
+                })
+                raise HTTPException(
+                    status_code=403,
+                    detail={"code": "DEVICE_PENDING",
+                            "message": "New device detected. Your administrator has been notified and will approve your access shortly."},
+                )
+    # ── End Device Trust Check ──────────────────────────────────────────────────
 
     user_id = user.get("user_id", str(user["_id"]))
     access_token = create_access_token(user_id, email)

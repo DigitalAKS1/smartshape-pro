@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { auth, formatApiErrorDetail } from '../lib/api';
+import { getOrCreateDeviceToken, getDeviceInfo } from '../utils/deviceService';
 
 const AuthContext = createContext(null);
 
@@ -38,11 +39,17 @@ export const AuthProvider = ({ children }) => {
 
   const login = async (email, password) => {
     try {
-      const { data } = await auth.login({ email, password });
+      const device_token = getOrCreateDeviceToken();
+      const device_info  = getDeviceInfo();
+      const { data } = await auth.login({ email, password, device_token, device_info });
       setUser(data);
       return { success: true };
     } catch (error) {
-      return { success: false, error: formatApiErrorDetail(error.response?.data?.detail) || error.message };
+      const detail = error.response?.data?.detail;
+      if (detail && typeof detail === 'object' && detail.code) {
+        return { success: false, error: detail.message, deviceCode: detail.code };
+      }
+      return { success: false, error: formatApiErrorDetail(detail) || error.message };
     }
   };
 

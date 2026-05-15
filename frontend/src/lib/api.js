@@ -114,6 +114,16 @@ export const fieldAdmin = {
 // Auth location update (post-login geo ping)
 export const authLocationUpdate = (lat, lng) => API.post('/auth/login-location', { lat, lng });
 
+// Trusted Device Management (admin)
+export const deviceApi = {
+  list:       (status = 'all', user_email = '') => API.get('/admin/devices', { params: { status, user_email } }),
+  approve:    (id) => API.post(`/admin/devices/${id}/approve`),
+  revoke:     (id) => API.post(`/admin/devices/${id}/revoke`),
+  remove:     (id) => API.delete(`/admin/devices/${id}`),
+  getPolicy:  ()   => API.get('/admin/devices/policy'),
+  savePolicy: (data) => API.put('/admin/devices/policy', data),
+};
+
 // Packages
 export const packages = {
   getAll: () => API.get('/packages'),

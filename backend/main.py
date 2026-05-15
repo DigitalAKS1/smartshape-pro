@@ -32,6 +32,7 @@ from routes.customer_routes import router as customer_router
 from routes.training_routes import router as training_router
 from routes.promotions_routes import router as promotions_router
 from routes.support_routes import router as support_router
+from routes.device_routes import router as device_router
 
 # ── App instance ───────────────────────────────────────────────────────────────
 app = FastAPI(title="SmartShape Pro API", version="1.0.0")
@@ -67,6 +68,7 @@ app.include_router(customer_router, prefix="/api")
 app.include_router(training_router, prefix="/api")
 app.include_router(promotions_router, prefix="/api")
 app.include_router(support_router, prefix="/api")
+app.include_router(device_router, prefix="/api")
 
 
 @app.get("/api/health")
