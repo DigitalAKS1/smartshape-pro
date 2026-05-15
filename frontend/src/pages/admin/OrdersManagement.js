@@ -56,6 +56,10 @@ export default function OrdersManagement() {
   const [selectedHolds, setSelectedHolds] = useState(new Set());
   const [holdSchoolFilter, setHoldSchoolFilter] = useState('all');
   const [bulkReleasing, setBulkReleasing] = useState(false);
+  // Tracking dialog
+  const [trackingDialog, setTrackingDialog] = useState({ open: false, dispatch: null });
+  const [trackingForm, setTrackingForm] = useState({ courier_name: '', tracking_number: '' });
+  const [trackingSaving, setTrackingSaving] = useState(false);
 
   // Dispatch dialog
   const [dispatchOpen, setDispatchOpen] = useState(false);
@@ -380,7 +384,7 @@ export default function OrdersManagement() {
                           data-testid={`payment-order-${order.order_number}`}
                         >
                           <CreditCard className="h-3 w-3 mr-1" />
-                          {order.payment_status === 'paid' ? 'Paid' : order.payment_status === 'partial' ? 'Partial' : 'Pay'}
+                          {order.payment_status === 'paid' ? 'Paid' : order.payment_status === 'partial' ? 'Partial' : 'Record Payment'}
                         </Button>
                         <Button variant="outline" size="sm" onClick={() => openStatusChange(order)} className={`border-[var(--border-color)] ${textSec}`} data-testid={`status-order-${order.order_number}`}>
                           <ArrowRight className="h-3 w-3" />
@@ -564,32 +568,42 @@ export default function OrdersManagement() {
             ) : dispatchList.map(d => (
               <div key={d.dispatch_id} className={`${card} border rounded-md p-4`} data-testid={`dispatch-${d.dispatch_number}`}>
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-                  <div>
-                    <div className="flex items-center gap-2 mb-1">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-1 flex-wrap">
                       <span className="font-mono text-sm text-[#e94560] font-medium">{d.dispatch_number}</span>
                       <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium border ${d.status === 'delivered' ? 'text-green-400 bg-green-500/10 border-green-500/30' : 'text-purple-400 bg-purple-500/10 border-purple-500/30'}`}>{d.status}</span>
                     </div>
-                    <p className={`text-sm ${textPri}`}>{d.school_name}</p>
-                    <div className={`flex flex-wrap gap-3 text-xs ${textMuted} mt-1`}>
-                      <span>Order: {d.order_number}</span>
-                      {d.courier_name && <span>Courier: {d.courier_name}</span>}
-                      {d.tracking_number && <span>Tracking: {d.tracking_number}</span>}
+                    <p className={`text-sm font-medium ${textPri}`}>{d.school_name}</p>
+                    <div className={`flex flex-wrap gap-x-3 gap-y-0.5 text-xs ${textMuted} mt-1`}>
+                      <span>Order: <span className="font-mono text-[#e94560]">{d.order_number}</span></span>
+                      {d.courier_name && <span>Courier: <span className={textSec}>{d.courier_name}</span></span>}
+                      {d.tracking_number && <span>Tracking: <span className={`font-mono ${textSec}`}>{d.tracking_number}</span></span>}
                       <span>{formatDate(d.dispatch_date)}</span>
                     </div>
+                    {d.phone && (
+                      <p className={`text-xs ${textMuted} mt-0.5`}>
+                        Phone: <a href={`tel:${d.phone}`} className="text-[#e94560] hover:underline">{d.phone}</a>
+                      </p>
+                    )}
                   </div>
-                  <div className="flex gap-2 flex-shrink-0 flex-wrap">
+                  <div className="flex gap-2 flex-shrink-0 flex-wrap justify-end">
                     <Button variant="outline" size="sm" onClick={() => {
-                      const tn = window.prompt('Tracking number:', d.tracking_number || '') || '';
-                      const cn = window.prompt('Courier name:', d.courier_name || '') || '';
-                      if (!tn && !cn) return;
-                      dispatchesApi.updateTracking(d.dispatch_id, { tracking_number: tn, courier_name: cn })
-                        .then(() => { toast.success('Tracking updated'); fetchData(); })
-                        .catch(() => toast.error('Update failed'));
+                      setTrackingForm({ courier_name: d.courier_name || '', tracking_number: d.tracking_number || '' });
+                      setTrackingDialog({ open: true, dispatch: d });
                     }} className={`border-[var(--border-color)] ${textSec}`} data-testid={`edit-tracking-${d.dispatch_number}`}>
                       <Truck className="mr-1 h-3 w-3" /> Tracking
                     </Button>
-                    {d.tracking_number && (
-                      <Button variant="outline" size="sm" onClick={() => { setWaDispatch(d); setWaDispatchOpen(true); }} className="border-green-600/50 text-green-500 hover:bg-green-500/10" data-testid={`wa-tracking-${d.dispatch_number}`}>
+                    {(d.tracking_number || d.courier_name) && (
+                      <Button variant="outline" size="sm" onClick={() => {
+                        const phone = (d.phone || '').replace(/\D/g, '');
+                        const dateStr = d.dispatch_date ? new Date(d.dispatch_date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '';
+                        const msg = `Hello,\n\nYour order has been dispatched! Here are the details:\n\n🏫 School: ${d.school_name}\n📦 Order: ${d.order_number}\n🚚 Courier: ${d.courier_name || 'N/A'}\n🔖 Tracking: ${d.tracking_number || 'N/A'}\n📅 Date: ${dateStr}\n\nPlease track your shipment using the tracking number above.\n\nThank you!\nSmartShape Pro`;
+                        if (phone) {
+                          window.open(`https://wa.me/${phone.startsWith('91') ? phone : '91' + phone}?text=${encodeURIComponent(msg)}`, '_blank');
+                        } else {
+                          navigator.clipboard?.writeText(msg).then(() => toast.success('Message copied! Open WhatsApp manually.'));
+                        }
+                      }} className="border-green-600/50 text-green-500 hover:bg-green-500/10" data-testid={`wa-tracking-${d.dispatch_number}`}>
                         <MessageSquare className="mr-1 h-3 w-3" /> Send via WhatsApp
                       </Button>
                     )}
@@ -822,6 +836,70 @@ export default function OrdersManagement() {
             <DialogFooter>
               <Button variant="outline" onClick={() => setStatusOpen(false)} className={`border-[var(--border-color)] ${textSec}`}>Cancel</Button>
               <Button onClick={handleStatusChange} disabled={!newStatus} className="bg-[#e94560] hover:bg-[#f05c75] text-white" data-testid="confirm-status-change">Update</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* TRACKING DIALOG */}
+        <Dialog open={trackingDialog.open} onOpenChange={o => !trackingSaving && setTrackingDialog(d => ({ ...d, open: o }))}>
+          <DialogContent className={`${dlgCls} w-[calc(100vw-1rem)] sm:max-w-md`}>
+            <DialogHeader><DialogTitle className={textPri}>Update Tracking — {trackingDialog.dispatch?.dispatch_number}</DialogTitle></DialogHeader>
+            {trackingDialog.dispatch && (
+              <div className="space-y-4 py-2">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label className={`${textSec} text-xs`}>Courier Name</Label>
+                    <Input value={trackingForm.courier_name} onChange={e => setTrackingForm(f => ({ ...f, courier_name: e.target.value }))} className={inputCls} placeholder="e.g. BlueDart, FedEx" />
+                  </div>
+                  <div>
+                    <Label className={`${textSec} text-xs`}>Tracking Number</Label>
+                    <Input value={trackingForm.tracking_number} onChange={e => setTrackingForm(f => ({ ...f, tracking_number: e.target.value }))} className={inputCls} placeholder="Tracking ID" />
+                  </div>
+                </div>
+                {/* Message preview */}
+                <div>
+                  <Label className={`${textSec} text-xs mb-1.5 block`}>WhatsApp Message Preview</Label>
+                  <div className={`rounded-md p-3 text-xs font-mono whitespace-pre-wrap bg-[var(--bg-primary)] border border-[var(--border-color)] ${textSec} max-h-48 overflow-y-auto`}>
+                    {`Hello,\n\nYour order has been dispatched! Here are the details:\n\n🏫 School: ${trackingDialog.dispatch.school_name}\n📦 Order: ${trackingDialog.dispatch.order_number}\n🚚 Courier: ${trackingForm.courier_name || 'N/A'}\n🔖 Tracking: ${trackingForm.tracking_number || 'N/A'}\n📅 Date: ${trackingDialog.dispatch.dispatch_date ? new Date(trackingDialog.dispatch.dispatch_date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : ''}\n\nPlease track your shipment using the tracking number above.\n\nThank you!\nSmartShape Pro`}
+                  </div>
+                  {trackingDialog.dispatch.phone && (
+                    <p className={`text-xs ${textMuted} mt-1`}>Will send to: <span className="text-green-400">{trackingDialog.dispatch.phone}</span></p>
+                  )}
+                  {!trackingDialog.dispatch.phone && (
+                    <p className="text-xs text-amber-400 mt-1">No phone number found — message will be copied to clipboard.</p>
+                  )}
+                </div>
+              </div>
+            )}
+            <DialogFooter className="flex flex-col sm:flex-row gap-2">
+              <Button variant="outline" onClick={() => setTrackingDialog({ open: false, dispatch: null })} className={`border-[var(--border-color)] ${textSec}`} disabled={trackingSaving}>Cancel</Button>
+              <Button variant="outline" onClick={async () => {
+                if (!trackingDialog.dispatch) return;
+                const d = trackingDialog.dispatch;
+                const phone = (d.phone || '').replace(/\D/g, '');
+                const dateStr = d.dispatch_date ? new Date(d.dispatch_date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '';
+                const msg = `Hello,\n\nYour order has been dispatched! Here are the details:\n\n🏫 School: ${d.school_name}\n📦 Order: ${d.order_number}\n🚚 Courier: ${trackingForm.courier_name || 'N/A'}\n🔖 Tracking: ${trackingForm.tracking_number || 'N/A'}\n📅 Date: ${dateStr}\n\nPlease track your shipment using the tracking number above.\n\nThank you!\nSmartShape Pro`;
+                if (phone) {
+                  window.open(`https://wa.me/${phone.startsWith('91') ? phone : '91' + phone}?text=${encodeURIComponent(msg)}`, '_blank');
+                } else {
+                  await navigator.clipboard?.writeText(msg);
+                  toast.success('Message copied! Open WhatsApp manually.');
+                }
+              }} className="border-green-600/50 text-green-500 hover:bg-green-500/10 flex-1">
+                <MessageSquare className="mr-1.5 h-4 w-4" /> Send WhatsApp
+              </Button>
+              <Button onClick={async () => {
+                setTrackingSaving(true);
+                try {
+                  await dispatchesApi.updateTracking(trackingDialog.dispatch.dispatch_id, trackingForm);
+                  toast.success('Tracking updated');
+                  setTrackingDialog({ open: false, dispatch: null });
+                  fetchData();
+                } catch { toast.error('Update failed'); }
+                finally { setTrackingSaving(false); }
+              }} disabled={trackingSaving} className="bg-[#e94560] hover:bg-[#f05c75] text-white flex-1">
+                <Truck className="mr-1.5 h-4 w-4" />{trackingSaving ? 'Saving…' : 'Save Tracking'}
+              </Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>

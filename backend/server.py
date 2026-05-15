@@ -1671,6 +1671,25 @@ async def create_dispatch(request: Request):
 async def get_dispatches(request: Request):
     await get_current_user(request)
     dispatches = await db.dispatches.find({}, {"_id": 0}).sort("created_at", -1).to_list(5000)
+    # Enrich with phone number from order → quotation or school
+    for d in dispatches:
+        if d.get("phone"):
+            continue
+        phone = ""
+        if d.get("order_id"):
+            order = await db.orders.find_one({"order_id": d["order_id"]}, {"quotation_id": 1, "school_id": 1})
+            if order:
+                if order.get("quotation_id"):
+                    quot = await db.quotations.find_one({"quotation_id": order["quotation_id"]}, {"contact_phone": 1, "contact_name": 1})
+                    if quot:
+                        phone = quot.get("contact_phone", "")
+                        if not d.get("contact_name"):
+                            d["contact_name"] = quot.get("contact_name", "")
+                if not phone and order.get("school_id"):
+                    school = await db.schools.find_one({"school_id": order["school_id"]}, {"primary_contact_phone": 1, "phone": 1})
+                    if school:
+                        phone = school.get("primary_contact_phone") or school.get("phone", "")
+        d["phone"] = phone
     return dispatches
 
 @api_router.put("/dispatches/{dispatch_id}/delivered")
@@ -3340,6 +3359,24 @@ async def get_holds(request: Request):
             "status": item.get("status", "on_hold"),
         })
     return holds
+
+@api_router.post("/holds/bulk-release")
+async def bulk_release_holds(request: Request):
+    await get_current_user(request)
+    body = await request.json()
+    item_ids = body.get("item_ids", [])
+    if not item_ids:
+        raise HTTPException(status_code=400, detail="No item IDs provided")
+    released, skipped = [], []
+    for oid in item_ids:
+        item = await db.order_items.find_one({"order_item_id": oid})
+        if not item or item.get("status") != "on_hold":
+            skipped.append(oid)
+            continue
+        await db.dies.update_one({"die_id": item["die_id"]}, {"$inc": {"reserved_qty": -item.get("quantity", 1)}})
+        await db.order_items.update_one({"order_item_id": oid}, {"$set": {"status": "released"}})
+        released.append(oid)
+    return {"released": len(released), "skipped": len(skipped), "released_ids": released}
 
 @api_router.post("/holds/{order_item_id}/release")
 async def release_hold(order_item_id: str, request: Request):
