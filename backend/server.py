@@ -20,8 +20,10 @@ import secrets
 import requests
 import math
 import smtplib
+import io
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.mime.application import MIMEApplication
 from emergentintegrations.llm.chat import LlmChat, UserMessage
 
 # MongoDB connection
@@ -1025,23 +1027,16 @@ async def edit_quotation(quotation_id: str, request: Request):
     await db.quotations.update_one({"quotation_id": quotation_id}, {"$set": allowed})
     return await db.quotations.find_one({"quotation_id": quotation_id}, {"_id": 0})
 
-@api_router.get("/quotations/{quotation_id}/pdf")
-async def download_quotation_pdf(quotation_id: str, request: Request):
-    user = await get_current_user(request)
-    quot = await db.quotations.find_one({"quotation_id": quotation_id}, {"_id": 0})
-    if not quot:
-        raise HTTPException(status_code=404, detail="Quotation not found")
-    company = await db.settings.find_one({"type": "company"}, {"_id": 0}) or {}
-
+def build_quotation_pdf_buffer(quot: dict, company: dict) -> io.BytesIO:
+    """Generate a quotation PDF and return a seeked BytesIO buffer."""
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.units import mm
     from reportlab.lib import colors
     from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, HRFlowable
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.enums import TA_RIGHT, TA_CENTER
-    import io as stdio
 
-    buf = stdio.BytesIO()
+    buf = io.BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=12*mm, rightMargin=12*mm, topMargin=10*mm, bottomMargin=10*mm)
 
     styles = getSampleStyleSheet()
@@ -1309,6 +1304,17 @@ Ph: {quot.get('customer_phone', '')} | {quot.get('customer_email', '')}"""
 
     doc.build(elements)
     buf.seek(0)
+    return buf
+
+
+@api_router.get("/quotations/{quotation_id}/pdf")
+async def download_quotation_pdf(quotation_id: str, request: Request):
+    await get_current_user(request)
+    quot = await db.quotations.find_one({"quotation_id": quotation_id}, {"_id": 0})
+    if not quot:
+        raise HTTPException(status_code=404, detail="Quotation not found")
+    company = await db.settings.find_one({"type": "company"}, {"_id": 0}) or {}
+    buf = build_quotation_pdf_buffer(quot, company)
     filename = f"Quotation_{quot.get('quote_number', quotation_id)}.pdf"
     return StreamingResponse(buf, media_type="application/pdf", headers={"Content-Disposition": f"attachment; filename={filename}"})
 
@@ -4812,6 +4818,16 @@ async def send_catalogue_email(quotation_id: str, cc_emails: Optional[List[str]]
     if not sender_email or not app_password:
         return {"success": False, "error": "Email credentials not configured. Ask admin to set Gmail SMTP in App Settings."}
 
+    # Generate quotation PDF to attach
+    pdf_bytes = None
+    pdf_filename = f"Quotation_{quot.get('quote_number', quotation_id)}.pdf"
+    try:
+        company = await db.settings.find_one({"type": "company"}, {"_id": 0}) or {}
+        pdf_buf = build_quotation_pdf_buffer(quot, company)
+        pdf_bytes = pdf_buf.read()
+    except Exception as _e:
+        logging.warning(f"PDF generation for email attachment failed: {_e}")
+
     frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:3000")
     catalogue_url = f"{frontend_url}/catalogue/{quot['catalogue_token']}"
 
@@ -4850,13 +4866,17 @@ SmartShape Pro Team"""
             msg['Cc'] = ", ".join(cc_set)
         msg['Subject'] = subject
         msg.attach(MIMEText(body, 'plain'))
+        if pdf_bytes:
+            part = MIMEApplication(pdf_bytes, Name=pdf_filename)
+            part['Content-Disposition'] = f'attachment; filename="{pdf_filename}"'
+            msg.attach(part)
 
         recipients = [quot['customer_email']] + cc_set
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
             smtp.login(sender_email, app_password)
             smtp.sendmail(sender_email, recipients, msg.as_string())
 
-        return {"success": True, "message": "Email sent successfully", "cc": cc_set}
+        return {"success": True, "message": "Email sent successfully", "cc": cc_set, "pdf_attached": pdf_bytes is not None}
     except Exception as e:
         logging.error(f"Email send error: {e}")
         return {"success": False, "error": str(e)}
