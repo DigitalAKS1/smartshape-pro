@@ -4841,31 +4841,103 @@ async def send_catalogue_email(quotation_id: str, cc_emails: Optional[List[str]]
     if sp_email and sp_email.lower() != sender_email.lower() and sp_email.lower() != (quot.get('customer_email') or '').lower() and sp_email not in cc_set:
         cc_set.append(sp_email)
 
-    subject = f"Catalogue Link - {quot['school_name']}"
-    body = f"""Dear {quot['principal_name']},
+    subject = f"Your Personalized Catalogue — {quot['school_name']}"
+    html_body = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Your Catalogue is Ready</title>
+</head>
+<body style="margin:0;padding:0;background:#f0f2f5;font-family:Arial,Helvetica,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f0f2f5;padding:32px 16px;">
+    <tr><td align="center">
+      <table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.10);">
 
-Thank you for your interest in SmartShape Pro products!
+        <!-- Header -->
+        <tr>
+          <td style="background:linear-gradient(135deg,#0a0a12 0%,#1a0a1a 60%,#0a0a12 100%);padding:40px 40px 32px;text-align:center;">
+            <div style="display:inline-block;width:56px;height:56px;background:#e94560;border-radius:14px;line-height:56px;font-size:26px;font-weight:900;color:#fff;margin-bottom:14px;">S</div>
+            <h1 style="margin:0;font-size:26px;font-weight:800;color:#ffffff;letter-spacing:-0.5px;">SmartShape<span style="color:#e94560;">Pro</span></h1>
+            <p style="margin:6px 0 0;font-size:13px;color:rgba(255,255,255,0.5);">Select Your Shapes, Seal the Deal</p>
+          </td>
+        </tr>
 
-We are pleased to share your personalized catalogue for {quot['package_name']}.
+        <!-- Body -->
+        <tr>
+          <td style="padding:40px 40px 32px;">
+            <h2 style="margin:0 0 8px;font-size:22px;font-weight:700;color:#1a1a2e;">Hello, {quot.get('principal_name', 'there')}!</h2>
+            <p style="margin:0 0 20px;font-size:15px;color:#555555;line-height:1.7;">
+              Thank you for your interest in <strong style="color:#1a1a2e;">SmartShape Pro</strong>. Your personalized product catalogue has been prepared and is ready to view.
+            </p>
 
-Please click the link below to view and select your preferred dies:
-{catalogue_url}
+            <!-- Highlight box -->
+            <table width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 28px;">
+              <tr>
+                <td style="background:#fdf2f4;border-left:4px solid #e94560;border-radius:0 10px 10px 0;padding:18px 20px;">
+                  <p style="margin:0 0 4px;font-size:13px;color:#888;">Catalogue prepared for</p>
+                  <p style="margin:0;font-size:16px;font-weight:700;color:#1a1a2e;">{quot.get('school_name', '')}</p>
+                  <p style="margin:4px 0 0;font-size:13px;color:#e94560;font-weight:600;">{quot.get('package_name', '')}</p>
+                </td>
+              </tr>
+            </table>
 
-For any queries, please contact:
-{quot['sales_person_name']}
-Email: {quot.get('sales_person_email', 'N/A')}
+            <p style="margin:0 0 28px;font-size:15px;color:#555555;line-height:1.7;">
+              Browse through our product range and select your preferred dies. Your selections will be sent directly to our team for processing.
+            </p>
 
-Best regards,
-SmartShape Pro Team"""
+            <!-- CTA Button -->
+            <table width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 24px;">
+              <tr>
+                <td align="center">
+                  <a href="{catalogue_url}" style="display:inline-block;background:#e94560;color:#ffffff;text-decoration:none;font-size:16px;font-weight:700;padding:16px 44px;border-radius:50px;letter-spacing:0.2px;box-shadow:0 4px 16px rgba(233,69,96,0.35);">
+                    🎨&nbsp;&nbsp;Open My Catalogue
+                  </a>
+                </td>
+              </tr>
+            </table>
+
+            <p style="margin:0 0 28px;font-size:12px;color:#aaaaaa;text-align:center;">
+              Or copy this link into your browser:<br>
+              <a href="{catalogue_url}" style="color:#e94560;font-size:11px;word-break:break-all;">{catalogue_url}</a>
+            </p>
+
+            <!-- Divider -->
+            <table width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 24px;">
+              <tr><td style="border-top:1px solid #eeeeee;"></td></tr>
+            </table>
+
+            <p style="margin:0 0 4px;font-size:13px;color:#888888;">Your sales executive</p>
+            <p style="margin:0;font-size:15px;font-weight:700;color:#1a1a2e;">{quot.get('sales_person_name', '')}</p>
+            <p style="margin:2px 0 0;font-size:13px;color:#555555;">{quot.get('sales_person_email', '')}</p>
+          </td>
+        </tr>
+
+        <!-- Footer -->
+        <tr>
+          <td style="background:#f8f9fb;padding:24px 40px;border-top:1px solid #eeeeee;text-align:center;">
+            <p style="margin:0;font-size:12px;color:#aaaaaa;line-height:1.6;">
+              This email was sent by SmartShape Pro on behalf of {quot.get('sales_person_name', 'your sales team')}.<br>
+              Please do not reply to this email directly.
+            </p>
+            <p style="margin:10px 0 0;font-size:11px;color:#cccccc;">© 2025 SmartShape Pro. All rights reserved.</p>
+          </td>
+        </tr>
+
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>"""
 
     try:
-        msg = MIMEMultipart()
+        msg = MIMEMultipart('alternative')
         msg['From'] = f"{sender_name} <{sender_email}>"
         msg['To'] = quot['customer_email']
         if cc_set:
             msg['Cc'] = ", ".join(cc_set)
         msg['Subject'] = subject
-        msg.attach(MIMEText(body, 'plain'))
+        msg.attach(MIMEText(html_body, 'html'))
         if pdf_bytes:
             part = MIMEApplication(pdf_bytes, Name=pdf_filename)
             part['Content-Disposition'] = f'attachment; filename="{pdf_filename}"'
