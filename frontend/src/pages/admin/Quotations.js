@@ -484,15 +484,13 @@ export default function Quotations() {
                             {/* WhatsApp — available for all quotations */}
                             <WaBtn quot={quot} />
 
-                            {/* Email send (only when not yet sent) */}
-                            {quot.catalogue_status === 'not_sent' && (
-                              <Button size="sm" onClick={() => openCatalogueDialog(quot)}
-                                className="bg-[#3b82f6] hover:bg-[#2563eb] text-white h-8 px-2"
-                                data-testid={`send-catalogue-button-${quot.quote_number}`}
-                                title="Send via Email">
-                                <Mail className="h-3.5 w-3.5" />
-                              </Button>
-                            )}
+                            {/* Email — always available (send/resend catalogue + PDF) */}
+                            <Button size="sm" onClick={() => openCatalogueDialog(quot)}
+                              className="bg-[#3b82f6] hover:bg-[#2563eb] text-white h-8 px-2"
+                              data-testid={`send-catalogue-button-${quot.quote_number}`}
+                              title={quot.catalogue_status === 'not_sent' ? 'Send Catalogue + PDF' : 'Resend Catalogue + PDF'}>
+                              <Mail className="h-3.5 w-3.5" />
+                            </Button>
                             {canDelete && (
                               <Button size="sm" variant="ghost" onClick={() => handleDelete(quot.quotation_id)}
                                 className="text-red-400 hover:text-red-300 h-8 px-2"
@@ -550,18 +548,18 @@ export default function Quotations() {
                         <Download className="h-3 w-3" />
                       </Button>
 
-                      {/* WhatsApp button — always visible */}
+                      {/* WhatsApp — always visible */}
                       <Button size="sm" onClick={() => handleOpenWhatsApp(quot)}
                         className="bg-[#25d366] hover:bg-[#22c55e] text-white text-xs px-3 gap-1.5">
                         <MessageCircle className="h-3.5 w-3.5" /> WA
                       </Button>
 
-                      {quot.catalogue_status === 'not_sent' && (
-                        <Button size="sm" onClick={() => openCatalogueDialog(quot)}
-                          className="bg-[#3b82f6] hover:bg-[#2563eb] text-white text-xs px-3 gap-1.5">
-                          <Mail className="h-3.5 w-3.5" /> Email
-                        </Button>
-                      )}
+                      {/* Email — always visible (send/resend catalogue + PDF) */}
+                      <Button size="sm" onClick={() => openCatalogueDialog(quot)}
+                        className="bg-[#3b82f6] hover:bg-[#2563eb] text-white text-xs px-3 gap-1.5"
+                        title={quot.catalogue_status === 'not_sent' ? 'Send Catalogue + PDF' : 'Resend Catalogue + PDF'}>
+                        <Mail className="h-3.5 w-3.5" /> Email
+                      </Button>
                       {quot.catalogue_token && (quot.catalogue_status === 'sent' || quot.catalogue_status === 'opened') && (
                         <Button size="sm" variant="outline" onClick={() => handleCopyLink(quot.catalogue_token)}
                           className="border-blue-500/40 text-blue-400 text-xs px-3">
