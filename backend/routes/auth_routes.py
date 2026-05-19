@@ -6,6 +6,10 @@ import uuid
 import jwt
 import requests
 import os
+import logging
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 # In production (HTTPS) use samesite=none + secure=True for cross-domain cookies
 _PROD = os.environ.get("FRONTEND_URL", "").startswith("https")
@@ -20,6 +24,63 @@ from auth_utils import (
 )
 
 router = APIRouter()
+
+
+async def _notify_admin_new_device(user_name: str, user_email: str, device_label: str, ip: str):
+    """Send email to all admin users when a new device registers as pending."""
+    try:
+        email_settings = await db.settings.find_one({"type": "email"}, {"_id": 0}) or {}
+        sender_email = email_settings.get("smtp_user", "")
+        app_password = email_settings.get("smtp_password", "")
+        if not sender_email or not app_password:
+            return
+
+        admins = await db.users.find({"role": "admin", "is_active": {"$ne": False}}, {"_id": 0, "email": 1}).to_list(20)
+        admin_emails = [a["email"] for a in admins if a.get("email")]
+        if not admin_emails:
+            return
+
+        frontend_url = os.environ.get("FRONTEND_URL", "https://app.smartshape.in")
+        subject = f"[SmartShape] New Device Pending Approval — {user_name}"
+        html = f"""
+        <div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;">
+          <div style="background:#123c69;padding:20px 30px;">
+            <h2 style="color:#fff;margin:0;font-size:18px;">New Device Approval Required</h2>
+          </div>
+          <div style="padding:24px 30px;background:#f8fafc;border:1px solid #e2e8f0;">
+            <p style="color:#334155;font-size:14px;margin:0 0 16px;">
+              A team member is trying to log in from an <strong>unrecognized device</strong>.
+            </p>
+            <table style="width:100%;border-collapse:collapse;font-size:13px;color:#475569;">
+              <tr><td style="padding:6px 0;font-weight:600;width:120px;">User</td><td>{user_name} ({user_email})</td></tr>
+              <tr><td style="padding:6px 0;font-weight:600;">Device</td><td>{device_label}</td></tr>
+              <tr><td style="padding:6px 0;font-weight:600;">IP Address</td><td>{ip}</td></tr>
+              <tr><td style="padding:6px 0;font-weight:600;">Time</td><td>{datetime.now(timezone.utc).strftime('%d %b %Y, %H:%M UTC')}</td></tr>
+            </table>
+            <div style="margin-top:20px;text-align:center;">
+              <a href="{frontend_url}/admin-control"
+                 style="display:inline-block;background:#123c69;color:#fff;text-decoration:none;
+                        padding:12px 28px;border-radius:6px;font-size:14px;font-weight:600;">
+                Review & Approve Device
+              </a>
+            </div>
+          </div>
+          <p style="font-size:11px;color:#94a3b8;text-align:center;margin:12px 0;">
+            SmartShape Pro — Device Management
+          </p>
+        </div>"""
+
+        msg = MIMEMultipart("alternative")
+        msg["From"]    = sender_email
+        msg["To"]      = ", ".join(admin_emails)
+        msg["Subject"] = subject
+        msg.attach(MIMEText(html, "html", "utf-8"))
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
+            smtp.login(sender_email, app_password)
+            smtp.sendmail(sender_email, admin_emails, msg.as_string())
+        logging.info(f"Device approval alert sent to {admin_emails}")
+    except Exception as e:
+        logging.warning(f"Device approval alert failed: {e}")
 
 # ==================== MODELS ====================
 
@@ -145,7 +206,23 @@ async def login(input: LoginInput, response: Response, request: Request):
                                 "message": "This device is awaiting administrator approval. Try again after your admin approves it."},
                     )
             else:
-                # New device — register as pending and block login
+                # New device — check if user is already at device limit
+                max_devices = int(policy.get("max_devices_per_user", 3))
+                approved_count = await db.trusted_devices.count_documents(
+                    {"user_email": email, "status": "approved"}
+                )
+                if approved_count >= max_devices:
+                    raise HTTPException(
+                        status_code=403,
+                        detail={
+                            "code": "DEVICE_LIMIT_REACHED",
+                            "message": (
+                                f"You have reached the maximum of {max_devices} approved device(s). "
+                                "Ask your administrator to revoke an existing device before adding a new one."
+                            ),
+                        },
+                    )
+                # Register as pending and block login
                 await db.trusted_devices.insert_one({
                     "device_id":    f"dev_{uuid.uuid4().hex[:12]}",
                     "device_token": device_token,
@@ -166,6 +243,12 @@ async def login(input: LoginInput, response: Response, request: Request):
                     "last_used":    None,
                     "last_ip":      ip,
                 })
+                # Fire-and-forget email alert to admin(s)
+                import asyncio as _aio
+                _aio.create_task(_notify_admin_new_device(
+                    user.get("name", ""), email,
+                    device_info.get("label", "Unknown Device"), ip,
+                ))
                 raise HTTPException(
                     status_code=403,
                     detail={"code": "DEVICE_PENDING",

@@ -144,10 +144,30 @@ async def ws_today_actions(websocket: WebSocket):
 
 @app.on_event("startup")
 async def startup():
+    # Unique / critical indexes first
     await db.users.create_index("email", unique=True)
     await db.dies.create_index("code", unique=True)
     await db.login_attempts.create_index("identifier")
     await db.contacts.create_index("contact_id", unique=True)
+
+    # Performance indexes (non-blocking background build)
+    _idx = [
+        (db.schools,           [("school_name", 1), ("is_deleted", 1)]),
+        (db.contacts,          [("school_id", 1), ("phone", 1), ("email", 1), ("is_deleted", 1)]),
+        (db.quotations,        [("school_name", 1), ("customer_phone", 1), ("customer_email", 1), ("created_at", -1)]),
+        (db.leads,             [("school_id", 1), ("assigned_to", 1), ("stage", 1)]),
+        (db.visit_plans,       [("school_id", 1), ("visit_date", -1), ("status", 1)]),
+        (db.trusted_devices,   [("user_email", 1), ("device_token", 1), ("status", 1)]),
+        (db.salespersons,      [("email", 1), ("user_id", 1)]),
+        (db.stock_movements,   [("die_id", 1), ("movement_date", -1)]),
+        (db.activity_logs,     [("entity_id", 1), ("timestamp", -1)]),
+    ]
+    for coll, fields in _idx:
+        for field in fields:
+            try:
+                await coll.create_index([field], background=True)
+            except Exception:
+                pass
 
     # Seed admin
     admin_email = os.environ.get("ADMIN_EMAIL", "admin@smartshape.com").lower()
@@ -254,34 +274,36 @@ async def startup():
     if admin_user:
         await db.users.update_one({"email": admin_email}, {"$set": {"assigned_modules": all_mod_names, "is_active": True}})
 
-    # Seed dme@pfcpl24.in user
-    dme_email = "dme@pfcpl24.in"
-    dme_user = await db.users.find_one({"email": dme_email})
-    dme_modules = ["accounts", "hr", "store", "inventory", "stock_management", "purchase_alerts", "physical_count", "payroll", "field_sales"]
-    if dme_user:
-        update = {"assigned_modules": dme_modules, "is_active": True}
-        if not dme_user.get("password_hash"):
-            update["password_hash"] = hash_password("admin@123")
+    # Seed secondary user from env (no hardcoded credentials in source)
+    dme_email    = os.environ.get("SEED_USER_EMAIL", "")
+    dme_password = os.environ.get("SEED_USER_PASSWORD", "")
+    dme_name     = os.environ.get("SEED_USER_NAME", "Ops User")
+    dme_role     = os.environ.get("SEED_USER_ROLE", "sales_person")
+    dme_modules  = [m.strip() for m in os.environ.get(
+        "SEED_USER_MODULES",
+        "accounts,hr,store,inventory,stock_management,purchase_alerts,physical_count,payroll,field_sales"
+    ).split(",") if m.strip()]
+
+    if dme_email and dme_password:
+        dme_user = await db.users.find_one({"email": dme_email})
+        if dme_user:
+            update = {"assigned_modules": dme_modules, "is_active": True}
+            if not dme_user.get("password_hash") or not verify_password(dme_password, dme_user["password_hash"]):
+                update["password_hash"] = hash_password(dme_password)
+            await db.users.update_one({"email": dme_email}, {"$set": update})
         else:
-            try:
-                if not verify_password("admin@123", dme_user["password_hash"]):
-                    update["password_hash"] = hash_password("admin@123")
-            except Exception:
-                update["password_hash"] = hash_password("admin@123")
-        await db.users.update_one({"email": dme_email}, {"$set": update})
-    else:
-        await db.users.insert_one({
-            "user_id": f"user_{uuid.uuid4().hex[:12]}",
-            "email": dme_email,
-            "password_hash": hash_password("admin@123"),
-            "name": "Aman DME",
-            "role": "sales_person",
-            "phone": "",
-            "assigned_modules": dme_modules,
-            "is_active": True,
-            "created_at": datetime.now(timezone.utc).isoformat()
-        })
-    logging.info(f"DME user configured: {dme_email}")
+            await db.users.insert_one({
+                "user_id": f"user_{uuid.uuid4().hex[:12]}",
+                "email": dme_email,
+                "password_hash": hash_password(dme_password),
+                "name": dme_name,
+                "role": dme_role,
+                "phone": "",
+                "assigned_modules": dme_modules,
+                "is_active": True,
+                "created_at": datetime.now(timezone.utc).isoformat()
+            })
+        logging.info(f"Seed user configured: {dme_email}")
 
     # Ensure all existing users have is_active and assigned_modules fields
     users_without_modules = db.users.find({"$or": [
@@ -300,7 +322,7 @@ async def startup():
         if update_fields:
             await db.users.update_one({"user_id": u.get("user_id")}, {"$set": update_fields})
 
-    # Sync users -> salespersons (auto-link)
+    # Sync users -> salespersons (users is authoritative; salespersons is kept for FK lookups on quotations)
     all_users = await db.users.find({}, {"_id": 0}).to_list(1000)
     for u in all_users:
         sp_existing = await db.salespersons.find_one({"email": u["email"]})
@@ -311,13 +333,18 @@ async def startup():
                 "email": u["email"],
                 "phone": u.get("phone", ""),
                 "user_id": u.get("user_id"),
-                "is_active": u.get("is_active", True)
+                "is_active": u.get("is_active", True),
             })
         else:
-            # Update existing salesperson to link with user
+            # Keep salespersons in sync with users — name/phone/active come from users
             await db.salespersons.update_one(
                 {"email": u["email"]},
-                {"$set": {"name": u["name"], "user_id": u.get("user_id"), "is_active": u.get("is_active", True)}}
+                {"$set": {
+                    "name": u["name"],
+                    "phone": u.get("phone", sp_existing.get("phone", "")),
+                    "user_id": u.get("user_id"),
+                    "is_active": u.get("is_active", True),
+                }}
             )
 
     # Seed sales persons

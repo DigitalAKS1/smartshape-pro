@@ -35,7 +35,7 @@ export default function CreateQuotation() {
   const [selectedContact, setSelectedContact] = useState(null);
   const [showNewContact, setShowNewContact] = useState(false);
   const [savingContact, setSavingContact] = useState(false);
-  const [newContactData, setNewContactData] = useState({ name: '', phone: '', email: '', company: '', designation: '' });
+  const [newContactData, setNewContactData] = useState({ name: '', phone: '', email: '', company: '', school_id: null, designation: '' });
 
   // School autocomplete inside New Contact form
   const [schoolQuery, setSchoolQuery]         = useState('');
@@ -128,7 +128,7 @@ export default function CreateQuotation() {
       const created = res.data;
       setContactsList(prev => [created, ...prev]);
       selectContact(created);
-      setNewContactData({ name: '', phone: '', email: '', company: '', designation: '' });
+      setNewContactData({ name: '', phone: '', email: '', company: '', school_id: null, designation: '' });
       setShowNewContact(false);
       toast.success('Contact created & selected');
     } catch {
@@ -149,7 +149,7 @@ export default function CreateQuotation() {
   const pickSchool = (school) => {
     const name = school.school_name;
     setSchoolQuery(name);
-    setNewContactData(prev => ({ ...prev, company: name }));
+    setNewContactData(prev => ({ ...prev, company: name, school_id: school.school_id || null }));
     setShowSchoolDrop(false);
   };
 

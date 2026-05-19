@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { auth, formatApiErrorDetail } from '../lib/api';
-import { getOrCreateDeviceToken, getDeviceInfo } from '../utils/deviceService';
+import { getOrCreateDeviceToken, getOrCreateDeviceTokenSync, getDeviceInfo } from '../utils/deviceService';
 
 const AuthContext = createContext(null);
 
@@ -39,7 +39,11 @@ export const AuthProvider = ({ children }) => {
 
   const login = async (email, password) => {
     try {
-      const device_token = getOrCreateDeviceToken();
+      // Prefer async (reads IndexedDB) but fall back synchronously if it hangs
+      const device_token = await Promise.race([
+        getOrCreateDeviceToken(),
+        new Promise(r => setTimeout(() => r(getOrCreateDeviceTokenSync()), 800)),
+      ]);
       const device_info  = getDeviceInfo();
       const { data } = await auth.login({ email, password, device_token, device_info });
       setUser(data);

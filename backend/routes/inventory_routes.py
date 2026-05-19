@@ -376,25 +376,27 @@ async def get_sales_person_stock(request: Request):
 
 
 # ==================== SALESPERSONS ====================
+# Single source of truth: users collection.
+# salespersons collection is kept in sync but users is authoritative.
 
 @router.get("/salespersons")
 async def get_salespersons(request: Request):
     await get_current_user(request)
-    persons = await db.salespersons.find({"is_active": {"$ne": False}}, {"_id": 0}).to_list(1000)
-    return persons
-
-
-@router.post("/salespersons")
-async def create_salesperson(request: Request):
-    await get_current_user(request)
-    body = await request.json()
-    person_id = f"sp_{uuid.uuid4().hex[:12]}"
-    person_doc = {
-        "sales_person_id": person_id,
-        "name": body.get("name", ""),
-        "email": body.get("email", ""),
-        "phone": body.get("phone", ""),
-        "is_active": True,
-    }
-    await db.salespersons.insert_one(person_doc)
-    return await db.salespersons.find_one({"sales_person_id": person_id}, {"_id": 0})
+    # Read from users — project to the salesperson shape callers expect
+    users = await db.users.find(
+        {"is_active": {"$ne": False}, "role": {"$in": ["admin", "sales_person", "accounts", "store"]}},
+        {"_id": 0, "user_id": 1, "name": 1, "email": 1, "phone": 1, "role": 1, "is_active": 1}
+    ).to_list(1000)
+    result = []
+    for u in users:
+        # Find matching salesperson record for the sales_person_id field
+        sp = await db.salespersons.find_one({"email": u["email"]}, {"_id": 0, "sales_person_id": 1})
+        result.append({
+            "sales_person_id": sp["sales_person_id"] if sp else u["user_id"],
+            "name": u["name"],
+            "email": u["email"],
+            "phone": u.get("phone", ""),
+            "is_active": u.get("is_active", True),
+            "user_id": u["user_id"],
+        })
+    return result

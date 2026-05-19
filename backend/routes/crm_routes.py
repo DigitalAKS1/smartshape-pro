@@ -311,6 +311,7 @@ async def get_schools(request: Request):
             {"created_by": user["email"]},
             {"school_id": {"$in": linked_school_ids}} if linked_school_ids else {"school_id": "__none__"},
         ]}
+    query["is_deleted"] = {"$ne": True}
     schools = await db.schools.find(query, {"_id": 0}).sort("school_name", 1).to_list(10000)
     return schools
 
@@ -367,12 +368,44 @@ async def update_school(school_id: str, request: Request):
 
 
 @router.delete("/schools/{school_id}")
-async def delete_school(school_id: str, request: Request):
+async def delete_school(school_id: str, request: Request, force: bool = False):
     user = await get_current_user(request)
     if user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Admin only")
-    await db.schools.delete_one({"school_id": school_id})
-    return {"message": "School deleted"}
+
+    # Cascade check — block hard delete if live data references this school
+    if not force:
+        linked_leads = await db.leads.count_documents({"school_id": school_id, "is_deleted": {"$ne": True}})
+        linked_contacts = await db.contacts.count_documents({"school_id": school_id, "is_deleted": {"$ne": True}})
+        linked_quotations = await db.quotations.count_documents({"school_id": school_id})
+        linked_visits = await db.visit_plans.count_documents({"school_id": school_id})
+        if linked_leads or linked_contacts or linked_quotations or linked_visits:
+            return {
+                "blocked": True,
+                "reason": "School has linked data. Soft-deleted instead.",
+                "links": {"leads": linked_leads, "contacts": linked_contacts,
+                          "quotations": linked_quotations, "visits": linked_visits},
+            }
+
+    # Soft delete — keeps the record but marks it invisible to normal queries
+    now_iso = datetime.now(timezone.utc).isoformat()
+    await db.schools.update_one(
+        {"school_id": school_id},
+        {"$set": {"is_deleted": True, "deleted_at": now_iso, "deleted_by": user["email"]}}
+    )
+    return {"message": "School archived (soft-deleted)"}
+
+
+@router.put("/schools/{school_id}/restore")
+async def restore_school(school_id: str, request: Request):
+    user = await get_current_user(request)
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    await db.schools.update_one(
+        {"school_id": school_id},
+        {"$unset": {"is_deleted": "", "deleted_at": "", "deleted_by": ""}}
+    )
+    return {"message": "School restored"}
 
 
 @router.get("/schools/{school_id}/profile")
@@ -386,7 +419,13 @@ async def get_school_profile(school_id: str, request: Request):
     leads = await db.leads.find({"school_id": school_id}, {"_id": 0}).to_list(None)
     lead_ids = [l["lead_id"] for l in leads]
 
-    contacts_list = await db.contacts.find({"company": school_name}, {"_id": 0}).to_list(None)
+    # Query by FK first, fall back to string match for legacy records; deduplicate
+    contacts_by_fk = await db.contacts.find({"school_id": school_id}, {"_id": 0}).to_list(None)
+    fk_ids = {c["contact_id"] for c in contacts_by_fk}
+    contacts_by_name = await db.contacts.find(
+        {"company": school_name, "contact_id": {"$nin": list(fk_ids)}}, {"_id": 0}
+    ).to_list(None)
+    contacts_list = contacts_by_fk + contacts_by_name
 
     quotations = await db.quotations.find(
         {"school_name": school_name},
@@ -474,6 +513,7 @@ async def get_contacts(request: Request):
         return []
     else:  # sales
         query = {"created_by": user["email"]}
+    query["is_deleted"] = {"$ne": True}
     contacts = await db.contacts.find(query, {"_id": 0}).sort("created_at", -1).to_list(10000)
     return contacts
 
@@ -486,12 +526,24 @@ async def create_contact(request: Request):
         raise HTTPException(status_code=400, detail="Name and phone are required")
     contact_id = f"con_{uuid.uuid4().hex[:12]}"
     now_iso = datetime.now(timezone.utc).isoformat()
+
+    # Resolve school_id → company (FK wins over string if both supplied)
+    school_id = body.get("school_id") or None
+    company = body.get("company", "")
+    if school_id:
+        sch = await db.schools.find_one({"school_id": school_id}, {"_id": 0, "school_name": 1})
+        if sch:
+            company = sch["school_name"]
+        else:
+            school_id = None  # invalid FK — ignore it
+
     contact_doc = {
         "contact_id": contact_id,
         "name": body.get("name", ""),
         "phone": body.get("phone", ""),
         "email": body.get("email", ""),
-        "company": body.get("company", ""),
+        "company": company,
+        "school_id": school_id,
         "designation": body.get("designation", ""),
         "contact_role_id": body.get("contact_role_id", ""),
         "source": body.get("source", ""),
@@ -501,6 +553,7 @@ async def create_contact(request: Request):
         "status": "active",
         "converted_to_lead": False,
         "lead_id": None,
+        "previous_schools": [],
         "last_activity_date": now_iso,
         "created_by": user["email"],
         "created_at": now_iso,
@@ -514,9 +567,38 @@ async def update_contact(contact_id: str, request: Request):
     await get_current_user(request)
     body = await request.json()
     allowed = {}
-    for k in ("name", "phone", "email", "company", "designation", "contact_role_id", "source", "source_id", "notes", "status", "birthday"):
+    for k in ("name", "phone", "email", "designation", "contact_role_id", "source", "source_id", "notes", "status", "birthday"):
         if k in body:
             allowed[k] = body[k]
+
+    # school_id change: update FK, sync company, log previous school
+    new_school_id = body.get("school_id")
+    if "school_id" in body:
+        if new_school_id:
+            sch = await db.schools.find_one({"school_id": new_school_id}, {"_id": 0, "school_name": 1})
+            if not sch:
+                raise HTTPException(status_code=404, detail="School not found")
+            existing = await db.contacts.find_one({"contact_id": contact_id}, {"_id": 0, "school_id": 1, "company": 1})
+            old_school_id = existing.get("school_id") if existing else None
+            if old_school_id and old_school_id != new_school_id:
+                # Log the school change in history
+                await db.contacts.update_one(
+                    {"contact_id": contact_id},
+                    {"$push": {"previous_schools": {
+                        "school_id": old_school_id,
+                        "company": existing.get("company", ""),
+                        "until": datetime.now(timezone.utc).isoformat(),
+                    }}}
+                )
+            allowed["school_id"] = new_school_id
+            allowed["company"] = sch["school_name"]
+        else:
+            allowed["school_id"] = None
+
+    # Allow direct company edit only when no school_id is being set
+    elif "company" in body:
+        allowed["company"] = body["company"]
+
     allowed["last_activity_date"] = datetime.now(timezone.utc).isoformat()
     await db.contacts.update_one({"contact_id": contact_id}, {"$set": allowed})
     return await db.contacts.find_one({"contact_id": contact_id}, {"_id": 0})
@@ -524,11 +606,31 @@ async def update_contact(contact_id: str, request: Request):
 
 @router.delete("/contacts/{contact_id}")
 async def delete_contact(contact_id: str, request: Request):
-    await get_current_user(request)
-    result = await db.contacts.delete_one({"contact_id": contact_id})
-    if result.deleted_count == 0:
+    user = await get_current_user(request)
+    contact = await db.contacts.find_one({"contact_id": contact_id}, {"_id": 0, "contact_id": 1, "converted_to_lead": 1})
+    if not contact:
         raise HTTPException(status_code=404, detail="Contact not found")
-    return {"message": "Contact deleted"}
+    # Block deletion if contact has been converted to an active lead
+    if contact.get("converted_to_lead") and contact.get("lead_id"):
+        lead = await db.leads.find_one({"lead_id": contact["lead_id"], "is_deleted": {"$ne": True}}, {"_id": 0, "lead_id": 1})
+        if lead:
+            raise HTTPException(status_code=409, detail="Contact is linked to an active lead. Delete the lead first or unlink it.")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    await db.contacts.update_one(
+        {"contact_id": contact_id},
+        {"$set": {"is_deleted": True, "deleted_at": now_iso, "deleted_by": user["email"]}}
+    )
+    return {"message": "Contact archived (soft-deleted)"}
+
+
+@router.put("/contacts/{contact_id}/restore")
+async def restore_contact(contact_id: str, request: Request):
+    user = await get_current_user(request)
+    await db.contacts.update_one(
+        {"contact_id": contact_id},
+        {"$unset": {"is_deleted": "", "deleted_at": "", "deleted_by": ""}}
+    )
+    return {"message": "Contact restored"}
 
 
 @router.post("/contacts/{contact_id}/convert-to-lead")

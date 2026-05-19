@@ -95,6 +95,121 @@ async def generate_quote_number() -> str:
     return f"Q-{year}-{next_num:03d}"
 
 
+# ==================== AUTO-REGISTER HELPER ====================
+
+async def _auto_register_from_quotation(quot: dict, created_by_email: str):
+    """After a quotation is saved, silently upsert the school and contact into CRM."""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    sname  = (quot.get("school_name") or "").strip()
+    pname  = (quot.get("principal_name") or "").strip()
+    phone  = (quot.get("customer_phone") or "").strip()
+    email  = (quot.get("customer_email") or "").strip()
+    addr   = (quot.get("address") or "").strip()
+
+    school_id = None
+
+    # ── 1. School ──────────────────────────────────────────────────────────────
+    if sname:
+        existing_school = await db.schools.find_one(
+            {"school_name": {"$regex": f"^{sname}$", "$options": "i"}},
+            {"_id": 0, "school_id": 1}
+        )
+        if existing_school:
+            school_id = existing_school["school_id"]
+            await db.schools.update_one(
+                {"school_id": school_id},
+                {"$set": {"last_activity_date": now_iso}}
+            )
+        else:
+            school_id = f"sch_{uuid.uuid4().hex[:12]}"
+            await db.schools.insert_one({
+                "school_id": school_id,
+                "school_name": sname,
+                "school_type": "School",
+                "board": "",
+                "group_id": "",
+                "website": "",
+                "email": email,
+                "phone": phone,
+                "city": "",
+                "state": "",
+                "pincode": "",
+                "address": addr,
+                "primary_contact_name": pname,
+                "designation": "Principal",
+                "alternate_contact": "",
+                "school_strength": 0,
+                "number_of_branches": 1,
+                "annual_budget_range": "",
+                "existing_vendor": "",
+                "social_profiles": {},
+                "anniversary": "",
+                "source": "quotation",
+                "source_id": quot.get("quotation_id"),
+                "last_activity_date": now_iso,
+                "created_by": created_by_email,
+                "created_at": now_iso,
+            })
+            logging.info(f"Auto-created school '{sname}' from quotation {quot.get('quotation_id')}")
+
+    # ── 2. Contact ─────────────────────────────────────────────────────────────
+    if pname and (phone or email):
+        or_clauses = []
+        if phone:
+            or_clauses.append({"phone": phone})
+        if email:
+            or_clauses.append({"email": email})
+        existing_contact = await db.contacts.find_one(
+            {"$or": or_clauses},
+            {"_id": 0, "contact_id": 1, "school_id": 1, "company": 1}
+        )
+        if existing_contact:
+            update_fields = {"last_activity_date": now_iso}
+            existing_school_id = existing_contact.get("school_id")
+            if school_id:
+                if not existing_school_id:
+                    # Backfill FK on legacy contact that only had company string
+                    update_fields["school_id"] = school_id
+                    if not existing_contact.get("company"):
+                        update_fields["company"] = sname
+                elif existing_school_id != school_id:
+                    # Contact found at a DIFFERENT school — do not auto-reassign.
+                    # Log a warning so admin can investigate.
+                    logging.warning(
+                        f"Quotation {quot.get('quotation_id')}: contact {existing_contact['contact_id']} "
+                        f"belongs to school '{existing_contact.get('company')}' but quotation is for '{sname}'. "
+                        "No auto-reassignment — manual review needed."
+                    )
+            await db.contacts.update_one(
+                {"contact_id": existing_contact["contact_id"]},
+                {"$set": update_fields}
+            )
+        else:
+            contact_id = f"con_{uuid.uuid4().hex[:12]}"
+            await db.contacts.insert_one({
+                "contact_id": contact_id,
+                "name": pname,
+                "phone": phone,
+                "email": email,
+                "company": sname,
+                "school_id": school_id,
+                "designation": "Principal",
+                "contact_role_id": "",
+                "source": "quotation",
+                "source_id": quot.get("quotation_id"),
+                "notes": "",
+                "birthday": "",
+                "status": "active",
+                "converted_to_lead": False,
+                "lead_id": None,
+                "previous_schools": [],
+                "last_activity_date": now_iso,
+                "created_by": created_by_email,
+                "created_at": now_iso,
+            })
+            logging.info(f"Auto-created contact '{pname}' (school_id={school_id}) from quotation {quot.get('quotation_id')}")
+
+
 # ==================== QUOTATION ENDPOINTS ====================
 
 @router.get("/quotations")
@@ -177,13 +292,9 @@ async def create_quotation(request: Request):
 
     await db.quotations.insert_one(quot_doc)
     try:
-        sname = (body.get("school_name") or "").strip()
-        if sname:
-            sch = await db.schools.find_one({"school_name": sname}, {"_id": 0, "school_id": 1})
-            if sch and sch.get("school_id"):
-                await touch_last_activity("school", sch["school_id"])
-    except Exception:
-        pass
+        await _auto_register_from_quotation(quot_doc, user["email"])
+    except Exception as _e:
+        logging.warning(f"Auto-register from quotation failed: {_e}")
     return await db.quotations.find_one({"quotation_id": quotation_id}, {"_id": 0})
 
 
@@ -452,91 +563,149 @@ async def _send_catalogue_email(quotation_id: str, cc_emails=None, extra_to=None
         logging.warning(f"PDF generation for email attachment failed: {_pdf_err}")
 
     # ── HTML email body ────────────────────────────────────────────────────────
-    subject   = f"Your Personalized Catalogue — {quot.get('school_name', '')}"
-    principal = quot.get("principal_name", "") or "there"
+    school_name = quot.get('school_name', '')
+    quote_number = quot.get('quote_number', '')
+    subject = f"{school_name} & {quote_number} Quotation Attached – A Smarter Way to Create Engaging Classrooms"
+    sp_name  = quot.get('sales_person_name', 'Sales Team')
+    sp_email = quot.get('sales_person_email', '')
     html_body = f"""<!DOCTYPE html>
 <html lang="en">
-<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"></head>
-<body style="margin:0;padding:0;background:#f0f2f5;font-family:Arial,Helvetica,sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f0f2f5;padding:32px 16px;">
-    <tr><td align="center">
-      <table width="600" cellpadding="0" cellspacing="0"
-             style="max-width:600px;width:100%;background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.10);">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <title>SMARTS-SHAPES Quotation</title>
+</head>
+<body style="margin:0;padding:0;background:#f0f4f8;font-family:Arial,Helvetica,sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f0f4f8;padding:32px 16px;">
+  <tr><td align="center">
+  <table width="600" cellpadding="0" cellspacing="0"
+         style="max-width:600px;width:100%;background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,0.08);">
 
-        <!-- Header -->
-        <tr>
-          <td style="background:linear-gradient(135deg,#0a0a12 0%,#1a0a1a 60%,#0a0a12 100%);padding:40px 40px 32px;text-align:center;">
-            <div style="display:inline-block;width:56px;height:56px;background:#e94560;border-radius:14px;line-height:56px;font-size:26px;font-weight:900;color:#fff;margin-bottom:14px;">S</div>
-            <h1 style="margin:0;font-size:26px;font-weight:800;color:#ffffff;letter-spacing:-0.5px;">SmartShape<span style="color:#e94560;">Pro</span></h1>
-            <p style="margin:6px 0 0;font-size:13px;color:rgba(255,255,255,0.5);">Select Your Shapes, Seal the Deal</p>
-          </td>
-        </tr>
+    <!-- Header -->
+    <tr>
+      <td style="background:#123c69;padding:36px 40px 28px;text-align:center;">
+        <h1 style="margin:0;font-size:28px;font-weight:900;color:#ffffff;letter-spacing:1px;">SMARTS-SHAPES</h1>
+        <p style="margin:8px 0 0;font-size:13px;color:rgba(255,255,255,0.75);letter-spacing:0.3px;">A smarter way to create engaging classrooms</p>
+      </td>
+    </tr>
 
-        <!-- Body -->
-        <tr>
-          <td style="padding:40px 40px 32px;">
-            <h2 style="margin:0 0 8px;font-size:22px;font-weight:700;color:#1a1a2e;">Hello, {principal}!</h2>
-            <p style="margin:0 0 20px;font-size:15px;color:#555555;line-height:1.7;">
-              Thank you for your interest in <strong style="color:#1a1a2e;">SmartShape Pro</strong>.
-              Your personalized product catalogue and quotation are ready.
-            </p>
+    <!-- Body -->
+    <tr>
+      <td style="padding:36px 40px 28px;">
 
-            <!-- School info box -->
-            <table width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 28px;">
-              <tr>
-                <td style="background:#fdf2f4;border-left:4px solid #e94560;border-radius:0 10px 10px 0;padding:18px 20px;">
-                  <p style="margin:0 0 4px;font-size:13px;color:#888;">Catalogue prepared for</p>
-                  <p style="margin:0;font-size:16px;font-weight:700;color:#1a1a2e;">{quot.get('school_name', '')}</p>
-                  <p style="margin:4px 0 0;font-size:13px;color:#e94560;font-weight:600;">{quot.get('package_name', '')} &nbsp;·&nbsp; Quote: {quot.get('quote_number', '')}</p>
-                </td>
-              </tr>
-            </table>
+        <p style="margin:0 0 20px;font-size:16px;color:#222222;font-weight:600;">Dear Principal,</p>
 
-            <p style="margin:0 0 28px;font-size:15px;color:#555555;line-height:1.7;">
-              Browse our product range and select your preferred dies. Your selections will be sent directly to our team.
-              The quotation PDF is also attached for your reference.
-            </p>
+        <p style="margin:0 0 20px;font-size:15px;color:#444444;line-height:1.75;">
+          Thank you for your time and interest in <strong style="color:#123c69;">SMARTS-SHAPES</strong>.
+          Please find your personalized quotation attached to this email.
+        </p>
 
-            <!-- CTA Button -->
-            <table width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 24px;">
-              <tr>
-                <td align="center">
-                  <a href="{catalogue_url}"
-                     style="display:inline-block;background:#e94560;color:#ffffff;text-decoration:none;font-size:16px;font-weight:700;padding:16px 44px;border-radius:50px;letter-spacing:0.2px;box-shadow:0 4px 16px rgba(233,69,96,0.35);">
-                    🎨&nbsp;&nbsp;Open My Catalogue
-                  </a>
-                </td>
-              </tr>
-            </table>
+        <!-- Blue highlight box -->
+        <table width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 24px;">
+          <tr>
+            <td style="background:#eef6ff;border-left:5px solid #123c69;border-radius:0 8px 8px 0;padding:18px 20px;">
+              <p style="margin:0 0 8px;font-size:14px;font-weight:700;color:#123c69;">About SMARTS-SHAPES Die-Cutting Machine</p>
+              <p style="margin:0;font-size:14px;color:#333333;line-height:1.7;">
+                Our zero-maintenance die-cutting machine empowers teachers to create stunning classroom decorations,
+                teaching aids, and learning materials in minutes — saving up to <strong>80% of preparation time</strong>
+                while delivering consistent, professional results every time.
+              </p>
+            </td>
+          </tr>
+        </table>
 
-            <p style="margin:0 0 28px;font-size:12px;color:#aaaaaa;text-align:center;">
-              Or copy this link into your browser:<br>
-              <a href="{catalogue_url}" style="color:#e94560;font-size:11px;word-break:break-all;">{catalogue_url}</a>
-            </p>
+        <p style="margin:0 0 16px;font-size:15px;color:#444444;line-height:1.75;">
+          Schools across India are using SMARTS-SHAPES to:
+        </p>
+        <ul style="margin:0 0 24px;padding-left:20px;font-size:14px;color:#444444;line-height:2.0;">
+          <li>Create <strong>experiential learning environments</strong> without extra effort</li>
+          <li><strong>Reduce decoration costs</strong> by up to 60% compared to outsourcing</li>
+          <li>Promote <strong>sustainability</strong> with reusable, long-lasting dies</li>
+          <li>Build <strong>visually enriched classrooms</strong> that students love</li>
+        </ul>
 
-            <table width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 24px;">
-              <tr><td style="border-top:1px solid #eeeeee;"></td></tr>
-            </table>
+        <!-- School info box -->
+        <table width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 24px;">
+          <tr>
+            <td style="background:#f5f8fc;border:1px solid #d0e4f5;border-radius:8px;padding:16px 20px;">
+              <p style="margin:0 0 4px;font-size:12px;color:#888;text-transform:uppercase;letter-spacing:0.5px;">Quotation prepared for</p>
+              <p style="margin:0;font-size:17px;font-weight:700;color:#123c69;">{school_name}</p>
+              <p style="margin:6px 0 0;font-size:13px;color:#555555;">{quot.get('package_name', '')} &nbsp;&bull;&nbsp; Quote No: <strong>{quote_number}</strong></p>
+            </td>
+          </tr>
+        </table>
 
-            <p style="margin:0 0 4px;font-size:13px;color:#888888;">Your sales executive</p>
-            <p style="margin:0;font-size:15px;font-weight:700;color:#1a1a2e;">{quot.get('sales_person_name', '')}</p>
-            <p style="margin:2px 0 0;font-size:13px;color:#555555;">{quot.get('sales_person_email', '')}</p>
-          </td>
-        </tr>
+        <!-- Highlight box -->
+        <table width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 28px;">
+          <tr>
+            <td style="background:#f0f7ff;border-left:5px solid #1a5fa8;border-radius:0 8px 8px 0;padding:16px 20px;">
+              <p style="margin:0;font-size:14px;color:#0d2e50;line-height:1.7;">
+                <strong>SMARTS-SHAPES</strong> is a long-term investment in your school's future —
+                boosting <strong>teacher efficiency</strong>, enhancing <strong>student engagement</strong>,
+                and strengthening your <strong>school's brand</strong> as a forward-thinking institution.
+              </p>
+            </td>
+          </tr>
+        </table>
 
-        <!-- Footer -->
-        <tr>
-          <td style="background:#f8f9fb;padding:24px 40px;border-top:1px solid #eeeeee;text-align:center;">
-            <p style="margin:0;font-size:12px;color:#aaaaaa;line-height:1.6;">
-              This email was sent by SmartShape Pro on behalf of {quot.get('sales_person_name', 'your sales team')}.<br>
-              Please do not reply to this email directly.
-            </p>
-            <p style="margin:10px 0 0;font-size:11px;color:#cccccc;">© 2025 SmartShape Pro. All rights reserved.</p>
-          </td>
-        </tr>
-      </table>
-    </td></tr>
+        <!-- Primary CTA: Personalised Catalogue -->
+        <table width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 16px;">
+          <tr>
+            <td align="center">
+              <a href="{catalogue_url}"
+                 style="display:inline-block;background:#123c69;color:#ffffff;text-decoration:none;font-size:15px;font-weight:700;padding:14px 40px;border-radius:6px;letter-spacing:0.3px;">
+                View Your Personalised Catalogue
+              </a>
+            </td>
+          </tr>
+        </table>
+
+        <p style="margin:0 0 4px;font-size:12px;color:#aaaaaa;text-align:center;">
+          Or copy this link: <a href="{catalogue_url}" style="color:#123c69;font-size:11px;word-break:break-all;">{catalogue_url}</a>
+        </p>
+
+        <!-- Divider -->
+        <table width="100%" cellpadding="0" cellspacing="0" style="margin:24px 0;">
+          <tr><td style="border-top:1px solid #e8ecf0;"></td></tr>
+        </table>
+
+        <!-- Terms -->
+        <p style="margin:0 0 10px;font-size:13px;font-weight:700;color:#333333;">Terms &amp; Conditions:</p>
+        <ul style="margin:0 0 24px;padding-left:18px;font-size:13px;color:#555555;line-height:1.9;">
+          <li>Prices are valid for 30 days from the date of this quotation.</li>
+          <li>Delivery within 7–10 working days after order confirmation.</li>
+          <li>50% advance payment required to confirm the order.</li>
+          <li>GST applicable as per prevailing government norms.</li>
+        </ul>
+
+        <!-- Divider -->
+        <table width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 20px;">
+          <tr><td style="border-top:1px solid #e8ecf0;"></td></tr>
+        </table>
+
+        <!-- Signature -->
+        <p style="margin:0 0 2px;font-size:14px;font-weight:700;color:#123c69;">{sp_name}</p>
+        <p style="margin:0 0 2px;font-size:13px;color:#555555;">Sales Executive, SMARTS-SHAPES</p>
+        <p style="margin:0;font-size:13px;color:#555555;">{sp_email}</p>
+
+      </td>
+    </tr>
+
+    <!-- Footer -->
+    <tr>
+      <td style="background:#123c69;padding:20px 40px;text-align:center;">
+        <p style="margin:0;font-size:12px;color:rgba(255,255,255,0.8);line-height:1.6;">
+          SMARTS-SHAPES | Empowering Teachers. Engaging Students. Building Creative Schools.
+        </p>
+        <p style="margin:8px 0 0;font-size:11px;color:rgba(255,255,255,0.5);">
+          This email was sent on behalf of {sp_name}. Please do not reply directly to this email.
+        </p>
+      </td>
+    </tr>
+
   </table>
+  </td></tr>
+</table>
 </body>
 </html>"""
 
@@ -835,7 +1004,7 @@ async def _generate_pdf_bytes(quot: dict, company: dict) -> bytes:
 
     ps('CoName',  fontSize=sz(14), leading=sz(18), fontName=_FONTB, textColor=NAVY)
     ps('CoSub',   fontSize=sz(7.5),leading=sz(10.5),fontName=_FONT,  textColor=GRAY)
-    ps('QTitle',  fontSize=sz(22), leading=sz(26), fontName=_FONTB, textColor=BRAND, alignment=TA_RIGHT)
+    ps('QTitle',  fontSize=sz(24), leading=sz(28), fontName=_FONTB, textColor=BRAND, alignment=TA_RIGHT, wordWrap='CJK')
     ps('QNum',    fontSize=sz(9.5),leading=sz(12.5),fontName=_FONTB, textColor=NAVY, alignment=TA_RIGHT)
     ps('QDate',   fontSize=sz(7.5),leading=sz(10),  fontName=_FONT,  textColor=GRAY, alignment=TA_RIGHT)
     ps('SectLbl', fontSize=sz(6.5),leading=sz(8.5), fontName=_FONTB, textColor=BRAND, spaceAfter=1)
@@ -890,18 +1059,16 @@ async def _generate_pdf_bytes(quot: dict, company: dict) -> bytes:
             if img_bytes:
                 ir = ImageReader(_io.BytesIO(img_bytes))
                 iw, ih = ir.getSize()
-                MAX_LOGO_W, MAX_LOGO_H = 40 * mm, 16 * mm
+                MAX_LOGO_W, MAX_LOGO_H = 54 * mm, 22 * mm   # bigger logo
                 if iw and ih:
                     logo_scale = min(MAX_LOGO_W / iw, MAX_LOGO_H / ih)
                     tw = min(iw * logo_scale, MAX_LOGO_W)
                     th = min(ih * logo_scale, MAX_LOGO_H)
                 else:
-                    tw, th = 24 * mm, 14 * mm
-                # Hard safety clamp — never let logo overflow the page frame
+                    tw, th = 36 * mm, 18 * mm
                 tw = min(tw, MAX_LOGO_W)
                 th = min(th, MAX_LOGO_H)
                 logo_image = RLImage(_io.BytesIO(img_bytes), width=tw, height=th)
-                # Force dimensions — some ReportLab builds ignore ctor params on BytesIO
                 logo_image.drawWidth  = tw
                 logo_image.drawHeight = th
         except Exception as _e:
@@ -945,13 +1112,16 @@ async def _generate_pdf_bytes(quot: dict, company: dict) -> bytes:
         Paragraph(date_str, S['QDate']),
     ]
 
-    col_logo = 44 * mm if logo_image else 0   # already in points
-    col_left = 182 * mm - col_logo - 52 * mm  # all in points — avoids unit mismatch
+    # Right column must fit "QUOTATION" at 24pt bold on a single line — 68mm ≈ 193pt is safe
+    col_right = 68 * mm
+    col_logo  = 56 * mm if logo_image else 0
+    col_left  = 182 * mm - col_logo - col_right
     if logo_image:
         hdr = Table([[logo_image, left_co, right_co]],
-                    colWidths=[col_logo, col_left, 52*mm])
+                    colWidths=[col_logo, col_left, col_right])
         hdr.setStyle(TableStyle([
-            ('VALIGN', (0, 0), (1, 0), 'MIDDLE'),
+            ('VALIGN', (0, 0), (0, 0), 'MIDDLE'),
+            ('VALIGN', (1, 0), (1, 0), 'MIDDLE'),
             ('VALIGN', (2, 0), (2, 0), 'TOP'),
             ('LEFTPADDING',  (0,0),(-1,-1), 0),
             ('RIGHTPADDING', (0,0),(-1,-1), 0),
@@ -959,7 +1129,7 @@ async def _generate_pdf_bytes(quot: dict, company: dict) -> bytes:
             ('BOTTOMPADDING',(0,0),(-1,-1), 0),
         ]))
     else:
-        hdr = Table([[left_co, right_co]], colWidths=[130*mm, 52*mm])
+        hdr = Table([[left_co, right_co]], colWidths=[114*mm, col_right])
         hdr.setStyle(TableStyle([
             ('VALIGN', (0,0),(-1,-1), 'TOP'),
             ('LEFTPADDING',  (0,0),(-1,-1), 0),

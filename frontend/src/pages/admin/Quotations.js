@@ -33,25 +33,28 @@ function WhatsAppDialog({ open, onClose, quot, link, generating }) {
     const name = q.principal_name || q.school_name || 'there';
     const total = `${q.currency_symbol || '₹'}${(q.grand_total || 0).toLocaleString('en-IN')}`;
     return (
-`Hello ${name}! 👋
+`Dear ${name},
 
-Greetings from SmartShape Pro!
+Greetings from *SMARTS-SHAPES*! 🎓
 
-We are pleased to share your personalized product catalogue.
+We are delighted to share your personalized quotation and product catalogue. Please find the details below:
 
 🏫 *School:* ${q.school_name || ''}
 📦 *Package:* ${q.package_name || ''}
-💰 *Quote Total:* ${total}
-🔖 *Quote No:* ${q.quote_number || ''}
+💰 *Total Amount:* ${total}
+🔖 *Quotation No:* ${q.quote_number || ''}
 
-Please browse and select your preferred dies from the link below:
+Please browse your personalised catalogue and select your preferred dies:
 👉 ${l || '(generating link…)'}
 
-Feel free to reach out for any assistance.
+SMARTS-SHAPES is a zero-maintenance die-cutting solution trusted by schools across India to create engaging, visually enriched classrooms — saving teachers up to *80% of preparation time*.
+
+For any queries or to confirm your order, feel free to reach out.
 
 Warm regards,
-${q.sales_person_name || 'SmartShape Pro Team'}
-SmartShape Pro 🎯`
+*${q.sales_person_name || 'SMARTS-SHAPES Team'}*
+SMARTS-SHAPES
+_A smarter way to create engaging classrooms_ ✨`
     );
   }
 
