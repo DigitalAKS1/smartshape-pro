@@ -48,7 +48,7 @@ export default function LeadsCRM() {
   // new tag inline-create input in lead form
   const [newTagInput, setNewTagInput] = useState('');
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState('pipeline');
+  const [activeTab, setActiveTab] = useState('schools');
   const [searchTerm, setSearchTerm] = useState('');
   const [filterType, setFilterType] = useState('all');
   // Dialogs
@@ -544,7 +544,7 @@ export default function LeadsCRM() {
 
         {/* Tabs */}
         <div className={`flex gap-1 ${card} border rounded-md p-1 overflow-x-auto`}>
-          {['contacts', 'pipeline', 'list', 'tasks', 'schools', 'reports'].map(tab => (
+          {['schools', 'contacts', 'list', 'pipeline', 'tasks', 'reports'].map(tab => (
             <button key={tab} onClick={() => setActiveTab(tab)} className={`flex-shrink-0 px-3 py-2 rounded text-xs sm:text-sm font-medium transition-all capitalize ${activeTab === tab ? 'bg-[#e94560] text-white' : `${textSec} ${hoverBg}`}`} data-testid={`tab-${tab}`}>
               {tab === 'contacts' ? `Contacts (${contactsList.filter(c => !c.converted_to_lead).length})`
                 : tab === 'pipeline' ? 'Pipeline'
