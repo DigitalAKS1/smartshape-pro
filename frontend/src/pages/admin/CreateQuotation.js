@@ -1,14 +1,16 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import AdminLayout from '../../components/layouts/AdminLayout';
-import { packages, salesPersons, quotations, companySettings, contacts as contactsApi } from '../../lib/api';
+import { packages, salesPersons, quotations, companySettings, contacts as contactsApi, schools as schoolsApi } from '../../lib/api';
 import { formatCurrency } from '../../lib/utils';
 import { Button } from '../../components/ui/button';
 import { FieldTooltip } from '../../components/ui/Tooltip';
 import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
-import { ArrowRight, ArrowLeft, Check, Plus, X, Search, UserPlus, CheckCircle2, User } from 'lucide-react';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../../components/ui/dialog';
+import { ArrowRight, ArrowLeft, Check, Plus, X, Search, UserPlus, CheckCircle2, User, Building2, ChevronDown } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
+import { SCHOOL_TYPES } from '../../lib/crmConstants';
 
 const STEP_LABELS = ['Contact', 'Package', 'Pricing'];
 
@@ -25,6 +27,7 @@ export default function CreateQuotation() {
   const [packagesList, setPackagesList]   = useState([]);
   const [salesPersonsList, setSalesPersonsList] = useState([]);
   const [contactsList, setContactsList]   = useState([]);
+  const [schoolsList, setSchoolsList]     = useState([]);
   const [company, setCompany]             = useState({});
 
   // Step 1 — Contact
@@ -33,6 +36,14 @@ export default function CreateQuotation() {
   const [showNewContact, setShowNewContact] = useState(false);
   const [savingContact, setSavingContact] = useState(false);
   const [newContactData, setNewContactData] = useState({ name: '', phone: '', email: '', company: '', designation: '' });
+
+  // School autocomplete inside New Contact form
+  const [schoolQuery, setSchoolQuery]         = useState('');
+  const [showSchoolDrop, setShowSchoolDrop]   = useState(false);
+  const [addSchoolOpen, setAddSchoolOpen]     = useState(false);
+  const [savingSchool, setSavingSchool]       = useState(false);
+  const [newSchoolData, setNewSchoolData]     = useState({ school_name: '', school_type: 'CBSE', city: '', phone: '' });
+  const schoolDropRef = useRef(null);
 
   // Step 3 — Add product
   const [showAddProduct, setShowAddProduct] = useState(false);
@@ -52,12 +63,13 @@ export default function CreateQuotation() {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [pkgsRes, spRes, compRes, ctRes] = await Promise.all([
-          packages.getAll(), salesPersons.getAll(), companySettings.get(), contactsApi.getAll(),
+        const [pkgsRes, spRes, compRes, ctRes, schRes] = await Promise.all([
+          packages.getAll(), salesPersons.getAll(), companySettings.get(), contactsApi.getAll(), schoolsApi.getAll(),
         ]);
         setPackagesList(pkgsRes.data || []);
         setSalesPersonsList(spRes.data || []);
         setContactsList(ctRes.data || []);
+        setSchoolsList(schRes.data || []);
         const comp = compRes.data || {};
         setCompany(comp);
         setFormData(prev => ({
@@ -70,6 +82,17 @@ export default function CreateQuotation() {
       }
     };
     fetchData();
+  }, []);
+
+  // Close school dropdown on outside click
+  useEffect(() => {
+    const handler = (e) => {
+      if (schoolDropRef.current && !schoolDropRef.current.contains(e.target)) {
+        setShowSchoolDrop(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
   }, []);
 
   // ── Contact helpers ──────────────────────────────────────────────────────────
@@ -112,6 +135,42 @@ export default function CreateQuotation() {
       toast.error('Failed to create contact');
     } finally {
       setSavingContact(false);
+    }
+  };
+
+  // ── School autocomplete helpers ──────────────────────────────────────────────
+  const filteredSchools = schoolQuery.trim()
+    ? schoolsList.filter(s =>
+        s.school_name?.toLowerCase().includes(schoolQuery.toLowerCase()) ||
+        s.city?.toLowerCase().includes(schoolQuery.toLowerCase())
+      ).slice(0, 8)
+    : [];
+
+  const pickSchool = (school) => {
+    const name = school.school_name;
+    setSchoolQuery(name);
+    setNewContactData(prev => ({ ...prev, company: name }));
+    setShowSchoolDrop(false);
+  };
+
+  const handleCreateSchool = async () => {
+    if (!newSchoolData.school_name.trim() || !newSchoolData.city.trim()) {
+      toast.error('School name and city are required');
+      return;
+    }
+    setSavingSchool(true);
+    try {
+      const res = await schoolsApi.create(newSchoolData);
+      const created = res.data;
+      setSchoolsList(prev => [created, ...prev]);
+      pickSchool(created);
+      setAddSchoolOpen(false);
+      setNewSchoolData({ school_name: '', school_type: 'CBSE', city: '', phone: '' });
+      toast.success('School added & selected');
+    } catch {
+      toast.error('Failed to create school');
+    } finally {
+      setSavingSchool(false);
     }
   };
 
@@ -346,7 +405,7 @@ export default function CreateQuotation() {
               <div className={`${card} border rounded-xl p-4 space-y-3`}>
                 <div className="flex items-center justify-between">
                   <h3 className={`font-semibold text-sm ${tPri}`}>New Contact</h3>
-                  <button onClick={() => setShowNewContact(false)} className={tMut}><X className="h-4 w-4" /></button>
+                  <button onClick={() => { setShowNewContact(false); setSchoolQuery(''); setShowSchoolDrop(false); }} className={tMut}><X className="h-4 w-4" /></button>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
@@ -361,9 +420,59 @@ export default function CreateQuotation() {
                     <Label className={`text-xs ${tSec} mb-1`}>Email</Label>
                     <Input value={newContactData.email} onChange={e => setNewContactData(p => ({...p, email: e.target.value}))} placeholder="Email address" className={`h-11 ${inputCls}`} type="email" />
                   </div>
-                  <div>
+                  <div className="relative" ref={schoolDropRef}>
                     <Label className={`text-xs ${tSec} mb-1`}>School / Company</Label>
-                    <Input value={newContactData.company} onChange={e => setNewContactData(p => ({...p, company: e.target.value}))} placeholder="Organization name" className={`h-11 ${inputCls}`} />
+                    <div className="relative">
+                      <Building2 className={`absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 ${tMut} pointer-events-none`} />
+                      <Input
+                        value={schoolQuery}
+                        onChange={e => {
+                          const v = e.target.value;
+                          setSchoolQuery(v);
+                          setNewContactData(p => ({ ...p, company: v }));
+                          setShowSchoolDrop(true);
+                        }}
+                        onFocus={() => schoolQuery && setShowSchoolDrop(true)}
+                        placeholder="Type school name…"
+                        className={`h-11 pl-9 pr-9 ${inputCls}`}
+                        autoComplete="off"
+                      />
+                      {schoolQuery && (
+                        <button type="button" onClick={() => { setSchoolQuery(''); setNewContactData(p => ({ ...p, company: '' })); setShowSchoolDrop(false); }}
+                          className={`absolute right-3 top-1/2 -translate-y-1/2 ${tMut}`}>
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    </div>
+                    {/* Dropdown */}
+                    {showSchoolDrop && schoolQuery.trim() && (
+                      <div className={`absolute z-50 left-0 right-0 mt-1 rounded-xl border ${inputCls} shadow-lg overflow-hidden`}>
+                        {filteredSchools.length > 0 ? (
+                          <div className="max-h-48 overflow-y-auto divide-y divide-[var(--border-color)]">
+                            {filteredSchools.map(s => (
+                              <button key={s.school_id} type="button"
+                                onMouseDown={() => pickSchool(s)}
+                                className={`w-full text-left px-3 py-2.5 hover:bg-[var(--bg-hover)] transition-colors flex items-center gap-2`}>
+                                <Building2 className={`h-3.5 w-3.5 flex-shrink-0 ${tMut}`} />
+                                <div className="min-w-0">
+                                  <p className={`text-sm font-medium ${tPri} truncate`}>{s.school_name}</p>
+                                  <p className={`text-xs ${tMut} truncate`}>{[s.school_type, s.city].filter(Boolean).join(' · ')}</p>
+                                </div>
+                              </button>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className={`px-3 py-2 text-xs ${tMut}`}>No schools found</div>
+                        )}
+                        {/* Add new school option */}
+                        <button type="button"
+                          onMouseDown={() => { setNewSchoolData(p => ({ ...p, school_name: schoolQuery.trim() })); setShowSchoolDrop(false); setAddSchoolOpen(true); }}
+                          className={`w-full text-left px-3 py-2.5 border-t border-[var(--border-color)] flex items-center gap-2 text-[#e94560] hover:bg-[#e94560]/5 transition-colors`}>
+                          <Plus className="h-3.5 w-3.5 flex-shrink-0" />
+                          <span className="text-sm font-medium">Add "{schoolQuery.trim()}" as new school</span>
+                        </button>
+                      </div>
+                    )}
                   </div>
                   <div className="sm:col-span-2">
                     <Label className={`text-xs ${tSec} mb-1`}>Designation</Label>
@@ -374,7 +483,7 @@ export default function CreateQuotation() {
                   <Button onClick={handleCreateContact} disabled={savingContact} className="flex-1 h-11 bg-[#e94560] hover:bg-[#f05c75] text-white font-semibold">
                     {savingContact ? 'Saving...' : 'Create & Use Contact'}
                   </Button>
-                  <Button variant="outline" onClick={() => setShowNewContact(false)} className={`border-[var(--border-color)] ${tSec} h-11`}>Cancel</Button>
+                  <Button variant="outline" onClick={() => { setShowNewContact(false); setSchoolQuery(''); setShowSchoolDrop(false); }} className={`border-[var(--border-color)] ${tSec} h-11`}>Cancel</Button>
                 </div>
               </div>
             )}
@@ -768,6 +877,67 @@ export default function CreateQuotation() {
           </div>
         )}
       </div>
+
+      {/* ── Quick Add School Dialog ── */}
+      <Dialog open={addSchoolOpen} onOpenChange={setAddSchoolOpen}>
+        <DialogContent className={`bg-[var(--bg-card)] border-[var(--border-color)] text-[var(--text-primary)] w-[calc(100vw-1rem)] sm:max-w-sm`}>
+          <DialogHeader>
+            <DialogTitle className={tPri}>Add New School</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-1">
+            <div>
+              <Label className={`text-xs ${tSec} mb-1`}>School Name *</Label>
+              <Input
+                value={newSchoolData.school_name}
+                onChange={e => setNewSchoolData(p => ({ ...p, school_name: e.target.value }))}
+                placeholder="e.g. Delhi Public School"
+                className={`h-11 ${inputCls}`}
+                autoFocus
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className={`text-xs ${tSec} mb-1`}>Type</Label>
+                <select
+                  value={newSchoolData.school_type}
+                  onChange={e => setNewSchoolData(p => ({ ...p, school_type: e.target.value }))}
+                  className={`w-full h-11 px-3 rounded-md text-sm ${inputCls}`}
+                >
+                  {SCHOOL_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </div>
+              <div>
+                <Label className={`text-xs ${tSec} mb-1`}>City *</Label>
+                <Input
+                  value={newSchoolData.city}
+                  onChange={e => setNewSchoolData(p => ({ ...p, city: e.target.value }))}
+                  placeholder="e.g. Mumbai"
+                  className={`h-11 ${inputCls}`}
+                />
+              </div>
+            </div>
+            <div>
+              <Label className={`text-xs ${tSec} mb-1`}>Phone</Label>
+              <Input
+                value={newSchoolData.phone}
+                onChange={e => setNewSchoolData(p => ({ ...p, phone: e.target.value }))}
+                placeholder="School contact number"
+                className={`h-11 ${inputCls}`}
+                type="tel"
+              />
+            </div>
+          </div>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button variant="outline" onClick={() => setAddSchoolOpen(false)} className={`border-[var(--border-color)] ${tSec}`}>
+              Cancel
+            </Button>
+            <Button onClick={handleCreateSchool} disabled={savingSchool} className="bg-[#e94560] hover:bg-[#f05c75] text-white">
+              {savingSchool ? 'Adding…' : 'Add School'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
     </AdminLayout>
   );
 }
