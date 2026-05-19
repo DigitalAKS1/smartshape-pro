@@ -14,12 +14,12 @@ const CATEGORIES = ['decorative','flowers','leaf','alphabets','numbers','butterf
 const CAT_LABELS = { decorative:'Decorative Dies', flowers:'Flowers', leaf:'Leaf', alphabets:'Alphabets', numbers:'Numbers', butterfly:'Butterfly', borders:'Borders', giant_flowers:'Giant Flowers', '3d_flowers':'3D Rolled Flowers', animals_birds:'Animals & Birds', snowflake:'Snowflake', fruits:'Fruits', shapes:'Shapes', other:'Other' };
 const TYPES = ['standard','large','machine'];
 
-const BLANK_DIE = { code:'', name:'', type:'standard', category:'decorative', min_level:5, description:'' };
+const BLANK_DIE = { code:'', name:'', type:'standard', category:'decorative', min_level:5, description:'', stock_qty:0 };
 
 export default function Inventory() {
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
-  const canWrite = isAdmin || user?.team === 'store';
+  const canWrite = isAdmin || user?.role === 'store';
 
   const [dies, setDies] = useState([]);
   const [filteredDies, setFilteredDies] = useState([]);
@@ -402,10 +402,17 @@ export default function Inventory() {
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-3">
-                <div><Label className={`${textSec} text-xs`}>Min Level</Label><Input type="number" min={0} value={newDie.min_level} onChange={e => setNewDie({...newDie, min_level: parseInt(e.target.value) || 0})} className={inputCls} /></div>
-                <div><Label className={`${textSec} text-xs`}>Description</Label><Input value={newDie.description} onChange={e => setNewDie({...newDie, description: e.target.value})} className={inputCls} placeholder="Optional" /></div>
+                <div>
+                  <Label className={`${textSec} text-xs`}>Initial Stock</Label>
+                  <Input type="number" min={0} value={newDie.stock_qty} onChange={e => setNewDie({...newDie, stock_qty: parseInt(e.target.value) || 0})} className={inputCls} placeholder="0" data-testid="die-stock-input" />
+                </div>
+                <div>
+                  <Label className={`${textSec} text-xs`}>Min Level (alert below)</Label>
+                  <Input type="number" min={0} value={newDie.min_level} onChange={e => setNewDie({...newDie, min_level: parseInt(e.target.value) || 0})} className={inputCls} />
+                </div>
               </div>
-              <Button type="submit" className="w-full bg-[#e94560] hover:bg-[#f05c75] text-white" data-testid="create-die-submit">Create Die</Button>
+              <div><Label className={`${textSec} text-xs`}>Description</Label><Input value={newDie.description} onChange={e => setNewDie({...newDie, description: e.target.value})} className={inputCls} placeholder="Optional notes" /></div>
+              <Button type="submit" className="w-full bg-[#e94560] hover:bg-[#f05c75] text-white" data-testid="create-die-submit">Add Die</Button>
             </form>
           </DialogContent>
         </Dialog>

@@ -6,12 +6,14 @@ export function cn(...inputs) {
 }
 
 export function formatCurrency(amount) {
+  const n = Number(amount);
+  if (!isFinite(n)) return '₹0';
   return new Intl.NumberFormat('en-IN', {
     style: 'currency',
     currency: 'INR',
     minimumFractionDigits: 0,
     maximumFractionDigits: 0
-  }).format(amount);
+  }).format(n);
 }
 
 export function formatDate(dateString) {

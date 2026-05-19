@@ -51,6 +51,7 @@ class DieCreate(BaseModel):
     category: Optional[str] = "decorative"
     min_level: int = 5
     description: Optional[str] = None
+    stock_qty: int = 0
 
 
 class StockMovementCreate(BaseModel):
@@ -76,10 +77,12 @@ async def create_die(die_input: DieCreate, request: Request):
     user = await get_current_user(request)
     require_teams(user, "admin", "store")
     die_id = f"die_{uuid.uuid4().hex[:12]}"
+    data = die_input.model_dump()
+    initial_qty = data.pop("stock_qty", 0)
     die_doc = {
         "die_id": die_id,
-        **die_input.model_dump(),
-        "stock_qty": 0,
+        **data,
+        "stock_qty": max(0, initial_qty),
         "reserved_qty": 0,
         "image_url": None,
         "is_active": True,

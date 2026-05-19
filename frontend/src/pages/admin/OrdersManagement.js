@@ -350,9 +350,14 @@ export default function OrdersManagement() {
         <div className={`flex gap-1 ${card} border rounded-md p-1`}>
           {['orders', 'kanban', 'holds', 'dispatches'].map(tab => (
             <button key={tab} onClick={() => setActiveTab(tab)}
-              className={`flex-1 px-4 py-2 rounded text-sm font-medium transition-all ${activeTab === tab ? 'bg-[#e94560] text-white' : `${textSec} hover:bg-[var(--bg-hover)]`}`}
+              className={`flex-1 px-1 sm:px-4 py-2 rounded text-xs sm:text-sm font-medium transition-all ${activeTab === tab ? 'bg-[#e94560] text-white' : `${textSec} hover:bg-[var(--bg-hover)]`}`}
               data-testid={`tab-${tab}`}>
-              {tab === 'orders' ? `Orders (${ordersList.length})` : tab === 'kanban' ? 'Production Pipeline' : tab === 'holds' ? `Hold Monitor (${holdsList.length})` : `Dispatches (${dispatchList.length})`}
+              <span className="sm:hidden">
+                {tab === 'orders' ? `Orders (${ordersList.length})` : tab === 'kanban' ? 'Pipeline' : tab === 'holds' ? `Holds (${holdsList.length})` : `Dispatch (${dispatchList.length})`}
+              </span>
+              <span className="hidden sm:inline">
+                {tab === 'orders' ? `Orders (${ordersList.length})` : tab === 'kanban' ? 'Production Pipeline' : tab === 'holds' ? `Hold Monitor (${holdsList.length})` : `Dispatches (${dispatchList.length})`}
+              </span>
             </button>
           ))}
         </div>
@@ -430,30 +435,35 @@ export default function OrdersManagement() {
                           <span>{formatDate(order.created_at)}</span>
                         </div>
                       </div>
-                      <div className="flex items-center gap-2 flex-shrink-0">
-                        <span className={`font-mono text-lg font-bold ${textPri}`}>{formatCurrency(order.grand_total)}</span>
-                        <Button variant="outline" size="sm" onClick={() => openDetail(order)} className={`border-[var(--border-color)] ${textSec}`} data-testid={`view-order-${order.order_number}`}>
-                          <Eye className="h-3 w-3" />
-                        </Button>
-                        {(order.order_status === 'confirmed' || order.order_status === 'pending') && (
-                          <Button size="sm" onClick={() => openDispatchDialog(order)} className="bg-purple-600 hover:bg-purple-700 text-white" data-testid={`dispatch-order-${order.order_number}`}>
-                            <Truck className="h-3 w-3 mr-1" /> Dispatch
+                      <div className="flex items-center justify-between sm:justify-end gap-2 flex-shrink-0 mt-1 sm:mt-0">
+                        <span className={`font-mono text-base sm:text-lg font-bold ${textPri}`}>{formatCurrency(order.grand_total)}</span>
+                        <div className="flex items-center gap-1.5">
+                          <Button variant="outline" size="sm" onClick={() => openDetail(order)} className={`border-[var(--border-color)] ${textSec} h-8 w-8 p-0 sm:h-9 sm:w-auto sm:px-3`} data-testid={`view-order-${order.order_number}`} title="View details">
+                            <Eye className="h-3.5 w-3.5" />
                           </Button>
-                        )}
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => openPaymentDialog(order)}
-                          className={`border-[#10b981]/40 text-[#10b981] hover:bg-[#10b981]/10 ${order.payment_status === 'paid' ? 'opacity-50' : ''}`}
-                          title="Record payment"
-                          data-testid={`payment-order-${order.order_number}`}
-                        >
-                          <CreditCard className="h-3 w-3 mr-1" />
-                          {order.payment_status === 'paid' ? 'Paid' : order.payment_status === 'partial' ? 'Partial' : 'Record Payment'}
-                        </Button>
-                        <Button variant="outline" size="sm" onClick={() => openStatusChange(order)} className={`border-[var(--border-color)] ${textSec}`} data-testid={`status-order-${order.order_number}`}>
-                          <ArrowRight className="h-3 w-3" />
-                        </Button>
+                          {(order.order_status === 'confirmed' || order.order_status === 'pending') && (
+                            <Button size="sm" onClick={() => openDispatchDialog(order)} className="bg-purple-600 hover:bg-purple-700 text-white h-8 w-8 p-0 sm:h-9 sm:w-auto sm:px-3" data-testid={`dispatch-order-${order.order_number}`} title="Create dispatch">
+                              <Truck className="h-3.5 w-3.5" />
+                              <span className="hidden sm:inline ml-1">Dispatch</span>
+                            </Button>
+                          )}
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => openPaymentDialog(order)}
+                            className={`border-[#10b981]/40 text-[#10b981] hover:bg-[#10b981]/10 h-8 w-8 p-0 sm:h-9 sm:w-auto sm:px-3 ${order.payment_status === 'paid' ? 'opacity-50' : ''}`}
+                            title={order.payment_status === 'paid' ? 'Paid' : order.payment_status === 'partial' ? 'Partial payment' : 'Record payment'}
+                            data-testid={`payment-order-${order.order_number}`}
+                          >
+                            <CreditCard className="h-3.5 w-3.5" />
+                            <span className="hidden sm:inline ml-1">
+                              {order.payment_status === 'paid' ? 'Paid' : order.payment_status === 'partial' ? 'Partial' : 'Payment'}
+                            </span>
+                          </Button>
+                          <Button variant="outline" size="sm" onClick={() => openStatusChange(order)} className={`border-[var(--border-color)] ${textSec} h-8 w-8 p-0 sm:h-9 sm:w-auto sm:px-3`} data-testid={`status-order-${order.order_number}`} title="Change status">
+                            <ArrowRight className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
                       </div>
                     </div>
                   </div>

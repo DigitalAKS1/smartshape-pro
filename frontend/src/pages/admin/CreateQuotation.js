@@ -202,11 +202,15 @@ export default function CreateQuotation() {
       <div className="max-w-3xl mx-auto pb-8">
 
         {/* Header */}
-        <div className="flex items-center gap-3 px-4 sm:px-0 py-4 sm:py-0 sm:mb-6">
-          {company.logo_url && <img src={company.logo_url} alt="Logo" className="h-10 object-contain" />}
-          <div>
-            <h1 className={`text-2xl font-bold ${tPri}`} data-testid="create-quotation-title">Create Quotation</h1>
-            <p className={`text-sm ${tSec}`}>Follow the steps to create a new quotation</p>
+        <div className="px-4 sm:px-0 py-4 sm:py-0 sm:mb-6">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
+            {company.logo_url && (
+              <img src={company.logo_url} alt="Logo" className="h-8 sm:h-10 max-w-[160px] object-contain flex-shrink-0" />
+            )}
+            <div>
+              <h1 className={`text-xl sm:text-2xl font-bold ${tPri} leading-tight`} data-testid="create-quotation-title">Create Quotation</h1>
+              <p className={`text-sm ${tSec}`}>Follow the steps to create a new quotation</p>
+            </div>
           </div>
         </div>
 
@@ -234,16 +238,16 @@ export default function CreateQuotation() {
           <div className="px-4 sm:px-0 space-y-4">
             <div>
               <h2 className={`text-lg font-semibold ${tPri} mb-0.5`}>Select Contact</h2>
-              <p className={`text-sm ${tSec}`}>Choose an existing contact or create a new one</p>
+              <p className={`text-sm ${tSec}`}>Search for an existing contact or add a new one</p>
             </div>
 
             {/* Search */}
             <div className="relative">
               <Search className={`absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 ${tMut}`} />
               <Input
-                placeholder="Search by name, phone, or company..."
+                placeholder="Search by name, phone, or school..."
                 value={contactQuery}
-                onChange={e => setContactQuery(e.target.value)}
+                onChange={e => { setContactQuery(e.target.value); setShowNewContact(false); }}
                 className={`pl-10 h-12 text-base ${inputCls}`}
                 autoFocus
               />
@@ -270,57 +274,76 @@ export default function CreateQuotation() {
               </div>
             )}
 
-            {/* Contact list */}
+            {/* Contact table / empty state */}
             {!showNewContact && (
-              <div className="space-y-2 max-h-[50vh] overflow-y-auto">
-                {filteredContacts.map(contact => (
-                  <button
-                    key={contact.contact_id}
-                    onClick={() => selectContact(contact)}
-                    className={`w-full text-left p-3 rounded-xl border transition-all active:opacity-70 ${
-                      selectedContact?.contact_id === contact.contact_id
-                        ? 'border-[#10b981] bg-[#10b981]/5'
-                        : `${card} hover:border-[#e94560]/40`
-                    }`}
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="w-9 h-9 rounded-full bg-[#e94560]/15 flex items-center justify-center flex-shrink-0">
-                        <User className="h-4 w-4 text-[#e94560]" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className={`font-semibold text-sm ${tPri} truncate`}>{contact.name}</p>
-                        <p className={`text-xs ${tMut} truncate`}>
-                          {[contact.designation, contact.company].filter(Boolean).join(' · ')}
-                        </p>
-                        {contact.phone && <p className={`text-xs ${tSec} font-mono`}>{contact.phone}</p>}
-                      </div>
-                      {selectedContact?.contact_id === contact.contact_id && (
-                        <CheckCircle2 className="h-5 w-5 text-[#10b981] flex-shrink-0" />
-                      )}
+              <>
+                {filteredContacts.length > 0 ? (
+                  <div className={`${card} border rounded-xl overflow-hidden`}>
+                    {/* Table header */}
+                    <div className={`grid grid-cols-[1fr_1fr_auto] gap-0 border-b border-[var(--border-color)] px-3 py-2 bg-[var(--bg-primary)]`}>
+                      <span className={`text-[10px] font-semibold uppercase tracking-wider ${tMut}`}>Name</span>
+                      <span className={`text-[10px] font-semibold uppercase tracking-wider ${tMut}`}>School / Company</span>
+                      <span className={`text-[10px] font-semibold uppercase tracking-wider ${tMut} text-right`}>Phone</span>
                     </div>
-                  </button>
-                ))}
-                {filteredContacts.length === 0 && contactQuery && (
-                  <div className={`${card} p-6 text-center`}>
-                    <User className={`h-10 w-10 ${tMut} mx-auto mb-2`} />
-                    <p className={`text-sm ${tSec} mb-1`}>No contacts found for "{contactQuery}"</p>
-                    <p className={`text-xs ${tMut}`}>Create a new contact below</p>
+                    {/* Table rows */}
+                    <div className="max-h-[40vh] overflow-y-auto divide-y divide-[var(--border-color)]">
+                      {filteredContacts.map(contact => {
+                        const isSelected = selectedContact?.contact_id === contact.contact_id;
+                        return (
+                          <button
+                            key={contact.contact_id}
+                            onClick={() => selectContact(contact)}
+                            className={`w-full text-left grid grid-cols-[1fr_1fr_auto] gap-0 px-3 py-2.5 transition-colors active:opacity-70 ${
+                              isSelected ? 'bg-[#10b981]/8 border-l-2 border-l-[#10b981]' : 'hover:bg-[var(--bg-hover)]'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              {isSelected
+                                ? <CheckCircle2 className="h-3.5 w-3.5 text-[#10b981] flex-shrink-0" />
+                                : <User className={`h-3.5 w-3.5 ${tMut} flex-shrink-0`} />
+                              }
+                              <span className={`text-sm font-medium ${tPri} truncate`}>{contact.name}</span>
+                            </div>
+                            <span className={`text-sm ${tSec} truncate self-center`}>{contact.company || <span className={tMut}>—</span>}</span>
+                            <span className={`text-xs font-mono ${tSec} self-center text-right pl-3`}>{contact.phone || '—'}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
-                )}
-              </div>
+                ) : contactQuery ? (
+                  /* No results — show skip option prominently */
+                  <div className={`${card} border rounded-xl p-5 text-center space-y-3`}>
+                    <div className="w-12 h-12 rounded-full bg-[var(--bg-primary)] flex items-center justify-center mx-auto">
+                      <Search className={`h-5 w-5 ${tMut}`} />
+                    </div>
+                    <div>
+                      <p className={`text-sm font-medium ${tPri}`}>No contact found for "{contactQuery}"</p>
+                      <p className={`text-xs ${tMut} mt-0.5`}>This school may not be in your contacts yet</p>
+                    </div>
+                    <div className="flex flex-col gap-2 pt-1">
+                      <Button
+                        onClick={() => setStep(2)}
+                        className="h-11 bg-[#e94560] hover:bg-[#f05c75] text-white font-semibold"
+                      >
+                        Skip &amp; Enter Manually <ArrowRight className="ml-2 h-4 w-4" />
+                      </Button>
+                      <p className={`text-xs ${tMut}`}>You can enter customer details manually in the pricing step</p>
+                      <button
+                        onClick={() => setShowNewContact(true)}
+                        className={`text-xs ${tSec} underline underline-offset-2 hover:text-[#e94560] transition-colors`}
+                      >
+                        + Add new contact instead
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+              </>
             )}
 
-            {/* New Contact */}
-            {!showNewContact ? (
-              <button
-                onClick={() => setShowNewContact(true)}
-                className={`w-full p-4 rounded-xl border-2 border-dashed border-[var(--border-color)] hover:border-[#e94560]/50 transition-colors flex items-center justify-center gap-2 ${tSec}`}
-              >
-                <UserPlus className="h-5 w-5" />
-                <span className="font-medium">Create New Contact</span>
-              </button>
-            ) : (
-              <div className={`${card} p-4 space-y-3`}>
+            {/* New Contact form */}
+            {showNewContact && (
+              <div className={`${card} border rounded-xl p-4 space-y-3`}>
                 <div className="flex items-center justify-between">
                   <h3 className={`font-semibold text-sm ${tPri}`}>New Contact</h3>
                   <button onClick={() => setShowNewContact(false)} className={tMut}><X className="h-4 w-4" /></button>
@@ -354,6 +377,17 @@ export default function CreateQuotation() {
                   <Button variant="outline" onClick={() => setShowNewContact(false)} className={`border-[var(--border-color)] ${tSec} h-11`}>Cancel</Button>
                 </div>
               </div>
+            )}
+
+            {/* Add new contact button (shown when not in new-contact mode and results exist or no query) */}
+            {!showNewContact && (filteredContacts.length > 0 || !contactQuery) && (
+              <button
+                onClick={() => setShowNewContact(true)}
+                className={`w-full p-3.5 rounded-xl border-2 border-dashed border-[var(--border-color)] hover:border-[#e94560]/50 transition-colors flex items-center justify-center gap-2 ${tSec}`}
+              >
+                <UserPlus className="h-4 w-4" />
+                <span className="text-sm font-medium">Add New Contact</span>
+              </button>
             )}
 
             {/* Next */}
