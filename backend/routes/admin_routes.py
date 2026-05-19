@@ -811,14 +811,16 @@ async def export_inventory(request: Request):
     dies = await db.dies.find({}, {"_id": 0}).to_list(5000)
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["Code", "Name", "Type", "Stock Qty", "Reserved Qty", "Available", "Min Level", "Status"])
+    writer.writerow(["Code", "Name", "Type", "Category", "Stock Qty", "Reserved Qty", "Available", "Min Level", "Status", "Description"])
     for d in dies:
         avail = d.get("stock_qty", 0) - d.get("reserved_qty", 0)
         status = "Low Stock" if d.get("stock_qty", 0) < d.get("min_level", 5) else "OK"
         writer.writerow([
             d.get("code"), d.get("name"), d.get("type"),
+            d.get("category", "decorative"),
             d.get("stock_qty", 0), d.get("reserved_qty", 0), avail,
             d.get("min_level", 5), status,
+            d.get("description", ""),
         ])
     output.seek(0)
     return StreamingResponse(iter([output.getvalue()]), media_type="text/csv",

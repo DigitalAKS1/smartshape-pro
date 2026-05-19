@@ -166,13 +166,17 @@ async def import_dies_csv(file: UploadFile = File(...), request: Request = None)
                 duplicates += 1
                 continue
             die_id = f"die_{uuid.uuid4().hex[:8]}"
+            valid_categories = {"decorative","flowers","leaf","alphabets","numbers","butterfly","borders","giant_flowers","3d_flowers","animals_birds","snowflake","fruits","shapes","other"}
+            raw_cat = row.get("category", "decorative").strip().lower().replace(" ", "_")
+            category = raw_cat if raw_cat in valid_categories else "decorative"
             await db.dies.insert_one({
                 "die_id": die_id,
                 "code": code,
                 "name": name,
                 "type": row.get("type", "standard").strip().lower(),
+                "category": category,
                 "stock_qty": int(row.get("stock_qty", 0) or 0),
-                "reserved_qty": int(row.get("reserved_qty", 0) or 0),
+                "reserved_qty": 0,
                 "min_level": int(row.get("min_level", 5) or 5),
                 "image_url": "",
                 "description": row.get("description", "").strip(),
@@ -335,6 +339,37 @@ async def update_alert_status(alert_id: str, status: str, request: Request):
     user = await get_current_user(request)
     await db.purchase_alerts.update_one({"alert_id": alert_id}, {"$set": {"status": status}})
     return {"message": "Alert updated"}
+
+
+# ==================== SALES PERSON STOCK HOLDINGS ====================
+
+@router.get("/sales-person-stock")
+async def get_sales_person_stock(request: Request):
+    user = await get_current_user(request)
+    require_teams(user, "admin", "store")
+    holdings = await db.sales_person_stock.find({}, {"_id": 0}).to_list(1000)
+    # Enrich with salesperson name and die info
+    sp_map = {sp["sales_person_id"]: sp async for sp in db.salespersons.find({}, {"_id": 0})}
+    die_map = {d["die_id"]: d async for d in db.dies.find({}, {"_id": 0})}
+    result = []
+    for h in holdings:
+        sp = sp_map.get(h.get("sales_person_id"), {})
+        die = die_map.get(h.get("die_id"), {})
+        result.append({
+            **h,
+            "sales_person_name": sp.get("name", "Unknown"),
+            "die_code": die.get("code", ""),
+            "die_name": die.get("name", ""),
+        })
+    # Group by sales person
+    grouped = {}
+    for r in result:
+        sp_id = r["sales_person_id"]
+        if sp_id not in grouped:
+            grouped[sp_id] = {"sales_person_id": sp_id, "sales_person_name": r["sales_person_name"], "holdings": [], "total_units": 0}
+        grouped[sp_id]["holdings"].append(r)
+        grouped[sp_id]["total_units"] += r.get("current_holding", 0)
+    return list(grouped.values())
 
 
 # ==================== SALESPERSONS ====================
