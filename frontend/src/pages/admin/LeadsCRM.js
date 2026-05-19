@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import AdminLayout from '../../components/layouts/AdminLayout';
 import { schools as schoolsApi, leads as leadsApi, followups as fuApi, tasks as tasksApi, salesPersons, contacts as contactsApi, exportData, groups as groupsApi, sources as sourcesApi, contactRoles as contactRolesApi, tags as tagsApi } from '../../lib/api';
 import { formatCurrency, formatDate as _fmt } from '../../lib/utils';
@@ -34,6 +34,7 @@ export default function LeadsCRM() {
   const { user } = useAuth();
   const { isDark } = useTheme();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [leadsList, setLeadsList] = useState([]);
   const [schoolsList, setSchoolsList] = useState([]);
   const [tasksList, setTasksList] = useState([]);
@@ -122,6 +123,19 @@ export default function LeadsCRM() {
     finally { setLoading(false); }
   };
   useEffect(() => { fetchData(); }, []);
+
+  // Open lead detail from URL ?lead=<lead_id>
+  useEffect(() => {
+    const leadParam = searchParams.get('lead');
+    if (!loading && leadParam && leadsList.length > 0) {
+      const lead = leadsList.find(l => l.lead_id === leadParam);
+      if (lead) {
+        setActiveTab('pipeline');
+        openDetail(lead);
+        setSearchParams({}, { replace: true });
+      }
+    }
+  }, [loading, leadsList, searchParams]); // eslint-disable-line
 
   // Theme colors
   const card = isDark ? 'bg-[var(--bg-card)] border-[var(--border-color)]' : 'bg-white border-[var(--border-color)]';
@@ -339,8 +353,14 @@ export default function LeadsCRM() {
   const saveContact = async () => {
     if (!contactForm.name || !contactForm.phone) { toast.error('Name and phone required'); return; }
     try {
-      if (editContact) { await contactsApi.update(editContact.contact_id, contactForm); toast.success('Contact updated'); }
-      else { await contactsApi.create(contactForm); toast.success('Contact added'); }
+      const payload = { ...contactForm };
+      // Auto-link school_id when company name exactly matches a school
+      if (payload.company && !payload.school_id) {
+        const matched = schoolsList.find(s => s.school_name.toLowerCase() === payload.company.toLowerCase());
+        if (matched) payload.school_id = matched.school_id;
+      }
+      if (editContact) { await contactsApi.update(editContact.contact_id, payload); toast.success('Contact updated'); }
+      else { await contactsApi.create(payload); toast.success('Contact added'); }
       setContactDialogOpen(false); fetchData();
     } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
   };
@@ -498,8 +518,8 @@ export default function LeadsCRM() {
           </div>
         </div>
 
-        {/* View Toggle + Bulk Actions (FMS Phase 5.1 + 5.2) */}
-        <div className="flex flex-wrap items-center justify-between gap-2">
+        {/* View Toggle + Bulk Actions — only visible on pipeline tab */}
+        {activeTab === 'pipeline' && <div className="flex flex-wrap items-center justify-between gap-2">
           <div className={`${card} border rounded-md p-0.5 flex gap-0.5`} data-testid="lead-view-toggle">
             {[
               { id: 'pipeline', label: 'Pipeline', mobileHide: false },
@@ -521,7 +541,7 @@ export default function LeadsCRM() {
               <Button size="sm" variant="outline" onClick={() => setSelectedLeadIds(new Set())} className={`border-[var(--border-color)] ${textSec} h-8`}>Clear</Button>
             </div>
           )}
-        </div>
+        </div>}
 
         {/* Search & Filters */}
         <div className="sticky top-14 lg:static z-20 -mx-4 sm:mx-0 px-4 sm:px-0 py-2 sm:py-0 bg-[var(--bg-primary)] sm:bg-transparent border-b sm:border-0 border-[var(--border-color)] flex flex-col sm:flex-row gap-2">
@@ -692,6 +712,75 @@ export default function LeadsCRM() {
                 )}
               </>
             )}
+          </div>
+          );
+        })()}
+
+        {/* LEADS LIST VIEW (flat sortable table) */}
+        {activeTab === 'list' && (() => {
+          const sortedLeads = sortData(filtered, sortConfig.key, sortConfig.dir);
+          return (
+          <div className={`${card} border rounded-md overflow-hidden`} data-testid="leads-list-view">
+            {/* Mobile cards */}
+            <div className="sm:hidden divide-y divide-[var(--border-color)]">
+              {sortedLeads.map(lead => {
+                const stg = getStageObj(lead.stage);
+                return (
+                  <div key={lead.lead_id} onClick={() => openDetail(lead)} className="p-3 flex items-start justify-between gap-2 active:bg-[var(--bg-hover)]">
+                    <div className="flex-1 min-w-0">
+                      <p className={`${textPri} font-medium text-sm truncate`}>{lead.company_name || lead.contact_name}</p>
+                      <p className={`text-xs ${textMuted}`}>{lead.contact_name} • {lead.contact_phone}</p>
+                      <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium border ${stg.color}`}>{stg.label}</span>
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${lead.lead_type === 'hot' ? 'bg-red-500/20 text-red-400' : lead.lead_type === 'warm' ? 'bg-yellow-500/20 text-yellow-400' : 'bg-blue-500/20 text-blue-400'}`}>{lead.lead_type}</span>
+                      </div>
+                    </div>
+                    <ChevronRight className={`h-4 w-4 ${textMuted} flex-shrink-0 mt-1`} />
+                  </div>
+                );
+              })}
+              {sortedLeads.length === 0 && <div className="p-8 text-center"><p className={`text-sm ${textMuted}`}>No leads found</p></div>}
+            </div>
+            {/* Desktop table */}
+            <div className="hidden sm:block overflow-x-auto">
+              <table className="w-full text-sm" data-testid="leads-flat-table">
+                <thead><tr className="bg-[var(--bg-primary)]">
+                  <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} cursor-pointer select-none`} onClick={() => toggleSort('company_name')}>School{sortIndicator('company_name')}</th>
+                  <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} cursor-pointer select-none`} onClick={() => toggleSort('contact_name')}>Contact{sortIndicator('contact_name')}</th>
+                  <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} cursor-pointer select-none`} onClick={() => toggleSort('lead_type')}>Type{sortIndicator('lead_type')}</th>
+                  <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} cursor-pointer select-none`} onClick={() => toggleSort('stage')}>Stage{sortIndicator('stage')}</th>
+                  <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} cursor-pointer select-none`} onClick={() => toggleSort('lead_score')}>Score{sortIndicator('lead_score')}</th>
+                  <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden lg:table-cell`}>Assigned</th>
+                  <th className={`text-right text-xs uppercase py-3 px-3 ${textMuted}`}>Actions</th>
+                </tr></thead>
+                <tbody>
+                  {sortedLeads.map(lead => {
+                    const stg = getStageObj(lead.stage);
+                    return (
+                      <tr key={lead.lead_id} className="border-t border-[var(--border-color)] hover:bg-[var(--bg-hover)] cursor-pointer" onClick={() => openDetail(lead)}>
+                        <td className="py-2.5 px-3">
+                          <p className={`${textPri} font-medium text-sm`}>{lead.company_name}</p>
+                          <p className={`text-xs ${textMuted}`}>{lead.school_type} {lead.school_city && `| ${lead.school_city}`}</p>
+                        </td>
+                        <td className="py-2.5 px-3">
+                          <p className={`${textPri} text-sm`}>{lead.contact_name}</p>
+                          <p className={`text-xs ${textMuted}`}>{lead.contact_phone}</p>
+                        </td>
+                        <td className="py-2.5 px-3"><span className={`text-xs px-2 py-0.5 rounded font-medium ${lead.lead_type === 'hot' ? 'bg-red-500/20 text-red-400' : lead.lead_type === 'warm' ? 'bg-yellow-500/20 text-yellow-400' : 'bg-blue-500/20 text-blue-400'}`}>{lead.lead_type}</span></td>
+                        <td className="py-2.5 px-3"><span className={`text-xs px-2 py-0.5 rounded font-medium border ${stg.color}`}>{stg.label}</span></td>
+                        <td className="py-2.5 px-3"><span className="font-mono text-sm text-[#e94560]">{lead.lead_score || 0}</span></td>
+                        <td className={`py-2.5 px-3 hidden lg:table-cell text-sm ${textSec}`}>{lead.assigned_name?.split(' ')[0]}</td>
+                        <td className="py-2.5 px-3 text-right" onClick={e => e.stopPropagation()}>
+                          <Button size="sm" variant="ghost" onClick={() => openEditLead(lead)} className={`${textSec} h-7`}><Edit2 className="h-3 w-3" /></Button>
+                          <Button size="sm" variant="ghost" onClick={async () => { if (!window.confirm('Delete this lead?')) return; await leadsApi.delete(lead.lead_id); fetchData(); toast.success('Deleted'); }} className="text-red-400 h-7"><Trash2 className="h-3 w-3" /></Button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {sortedLeads.length === 0 && <tr><td colSpan="7"><EmptyState {...(searchTerm ? EMPTY_STATES.searchResult : EMPTY_STATES.leads)} compact /></td></tr>}
+                </tbody>
+              </table>
+            </div>
           </div>
           );
         })()}
@@ -1678,7 +1767,18 @@ export default function LeadsCRM() {
               </div>
               <div><Label className={`${textSec} text-xs`}>Email</Label><Input value={contactForm.email} onChange={e => setContactForm({...contactForm, email: e.target.value})} className={inputCls} placeholder="email@example.com" data-testid="contact-email-input" /></div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div><Label className={`${textSec} text-xs`}>Company / School</Label><Input value={contactForm.company} onChange={e => setContactForm({...contactForm, company: e.target.value})} className={inputCls} placeholder="Organization" /></div>
+                <div>
+                  <Label className={`${textSec} text-xs`}>Company / School</Label>
+                  <Input value={contactForm.company} onChange={e => setContactForm({...contactForm, company: e.target.value})} className={inputCls} placeholder="Search school or type name" list="contact-school-suggestions" />
+                  <datalist id="contact-school-suggestions">
+                    {schoolsList.map(s => <option key={s.school_id} value={s.school_name} />)}
+                  </datalist>
+                  {contactForm.company && schoolsList.some(s => s.school_name.toLowerCase() === contactForm.company.toLowerCase()) && (
+                    <p className="text-[10px] text-green-500 mt-0.5 flex items-center gap-1">
+                      <CheckCircle className="h-3 w-3" /> Linked to school database
+                    </p>
+                  )}
+                </div>
                 <div><Label className={`${textSec} text-xs`}>Role / Designation</Label>
                   <select value={contactForm.contact_role_id || ''} onChange={e => { const role = rolesList.find(r => r.role_id === e.target.value); setContactForm({...contactForm, contact_role_id: e.target.value, designation: role?.name || contactForm.designation}); }} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`} data-testid="contact-role-select">
                     <option value="">{rolesList.length ? 'Select role' : 'Loading...'}</option>
