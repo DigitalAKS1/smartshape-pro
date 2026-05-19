@@ -809,48 +809,63 @@ async def _generate_pdf_bytes(quot: dict, company: dict) -> bytes:
         quot.get("font_size_mode") or "medium", 1.0)
     def sz(n): return max(5, round(n * font_scale))
 
-    SYM = quot.get("currency_symbol", "₹")
-    # Built-in PDF fonts (Helvetica) lack U+20B9; substitute for PDF only
-    PDF_SYM = "Rs." if SYM == "₹" else SYM
+    SYM = quot.get("currency_symbol", "₹")  # used as-is — Unicode font handles all symbols
+
+    # ── Register Unicode fonts (DejaVu covers ₹ $ € £ ¥ ₩ and all others) ──────
+    try:
+        from reportlab.pdfbase import pdfmetrics
+        from reportlab.pdfbase.ttfonts import TTFont
+        _DEJAVU_PATHS = [
+            ('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',     'DejaVuSans'),
+            ('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf','DejaVuSans-Bold'),
+        ]
+        for _path, _name in _DEJAVU_PATHS:
+            if _name not in pdfmetrics.getRegisteredFontNames():
+                pdfmetrics.registerFont(TTFont(_name, _path))
+        _FONT  = 'DejaVuSans'
+        _FONTB = 'DejaVuSans-Bold'
+    except Exception:
+        _FONT  = 'Helvetica'
+        _FONTB = 'Helvetica-Bold'
 
     S = getSampleStyleSheet()
     def ps(name, **kw):
         if name not in S:
             S.add(ParagraphStyle(name=name, **kw))
 
-    ps('CoName',  fontSize=sz(14), leading=sz(18), fontName='Helvetica-Bold', textColor=NAVY)
-    ps('CoSub',   fontSize=sz(7.5),leading=sz(10.5), textColor=GRAY)
-    ps('QTitle',  fontSize=sz(22), leading=sz(26), fontName='Helvetica-Bold', textColor=BRAND, alignment=TA_RIGHT)
-    ps('QNum',    fontSize=sz(9.5),leading=sz(12.5),fontName='Helvetica-Bold', textColor=NAVY, alignment=TA_RIGHT)
-    ps('QDate',   fontSize=sz(7.5),leading=sz(10), textColor=GRAY, alignment=TA_RIGHT)
-    ps('SectLbl', fontSize=sz(6.5),leading=sz(8.5),fontName='Helvetica-Bold', textColor=BRAND, spaceAfter=1)
-    ps('InfoKey', fontSize=sz(7),  leading=sz(9.5), textColor=GRAY)
-    ps('InfoVal', fontSize=sz(8.5),leading=sz(11), fontName='Helvetica-Bold', textColor=NAVY)
-    ps('BillBig', fontSize=sz(11), leading=sz(14), fontName='Helvetica-Bold', textColor=NAVY)
-    ps('BillMed', fontSize=sz(8.5),leading=sz(11), textColor=NAVY)
-    ps('BillSub', fontSize=sz(7.5),leading=sz(10), textColor=GRAY)
-    ps('TblHdrC', fontSize=sz(7.5),leading=sz(9.5),fontName='Helvetica-Bold', textColor=WHITE, alignment=TA_CENTER)
-    ps('TblHdrR', fontSize=sz(7.5),leading=sz(9.5),fontName='Helvetica-Bold', textColor=WHITE, alignment=TA_RIGHT)
-    ps('TblHdrL', fontSize=sz(7.5),leading=sz(9.5),fontName='Helvetica-Bold', textColor=WHITE)
-    ps('TblL',    fontSize=sz(8.5),leading=sz(10.5),textColor=NAVY)
-    ps('TblC',    fontSize=sz(8.5),leading=sz(10.5),textColor=NAVY, alignment=TA_CENTER)
-    ps('TblR',    fontSize=sz(8.5),leading=sz(10.5),textColor=NAVY, alignment=TA_RIGHT)
-    ps('TblRB',   fontSize=sz(9),  leading=sz(11), fontName='Helvetica-Bold', textColor=NAVY, alignment=TA_RIGHT)
-    ps('TblGst',  fontSize=sz(8),  leading=sz(10), textColor=GRAY, alignment=TA_CENTER)
-    ps('SumLbl',  fontSize=sz(8.5),leading=sz(11), textColor=GRAY)
-    ps('SumVal',  fontSize=sz(8.5),leading=sz(11), fontName='Helvetica-Bold', textColor=NAVY, alignment=TA_RIGHT)
-    ps('SumGrn',  fontSize=sz(8.5),leading=sz(11), textColor=GREEN, alignment=TA_RIGHT)
-    ps('SubLbl',  fontSize=sz(9),  leading=sz(12), fontName='Helvetica-Bold', textColor=NAVY)
-    ps('SubVal',  fontSize=sz(9),  leading=sz(12), fontName='Helvetica-Bold', textColor=NAVY, alignment=TA_RIGHT)
-    ps('GstLbl',  fontSize=sz(8.5),leading=sz(11), textColor=DKGRAY)
-    ps('GstVal',  fontSize=sz(8.5),leading=sz(11), textColor=DKGRAY, alignment=TA_RIGHT)
-    ps('GrandL',  fontSize=sz(11), leading=sz(14), fontName='Helvetica-Bold', textColor=WHITE)
-    ps('GrandR',  fontSize=sz(13.5),leading=sz(17),fontName='Helvetica-Bold', textColor=WHITE, alignment=TA_RIGHT)
-    ps('Bold8',   fontSize=sz(8.5),leading=sz(11), fontName='Helvetica-Bold', textColor=NAVY)
-    ps('Tiny',    fontSize=sz(7),  leading=sz(9.5),textColor=GRAY)
-    ps('SigLbl',  fontSize=sz(7.5),leading=sz(10), textColor=GRAY, alignment=TA_RIGHT)
-    ps('SigCo',   fontSize=sz(9),  leading=sz(12), fontName='Helvetica-Bold', textColor=NAVY, alignment=TA_RIGHT)
-    ps('FootNote',fontSize=sz(7),  leading=sz(9),  textColor=GRAY, alignment=TA_CENTER)
+    ps('CoName',  fontSize=sz(14), leading=sz(18), fontName=_FONTB, textColor=NAVY)
+    ps('CoSub',   fontSize=sz(7.5),leading=sz(10.5),fontName=_FONT,  textColor=GRAY)
+    ps('QTitle',  fontSize=sz(22), leading=sz(26), fontName=_FONTB, textColor=BRAND, alignment=TA_RIGHT)
+    ps('QNum',    fontSize=sz(9.5),leading=sz(12.5),fontName=_FONTB, textColor=NAVY, alignment=TA_RIGHT)
+    ps('QDate',   fontSize=sz(7.5),leading=sz(10),  fontName=_FONT,  textColor=GRAY, alignment=TA_RIGHT)
+    ps('SectLbl', fontSize=sz(6.5),leading=sz(8.5), fontName=_FONTB, textColor=BRAND, spaceAfter=1)
+    ps('InfoKey', fontSize=sz(7),  leading=sz(9.5), fontName=_FONT,  textColor=GRAY)
+    ps('InfoVal', fontSize=sz(8.5),leading=sz(11),  fontName=_FONTB, textColor=NAVY)
+    ps('BillBig', fontSize=sz(11), leading=sz(14),  fontName=_FONTB, textColor=NAVY)
+    ps('BillMed', fontSize=sz(8.5),leading=sz(11),  fontName=_FONT,  textColor=NAVY)
+    ps('BillSub', fontSize=sz(7.5),leading=sz(10),  fontName=_FONT,  textColor=GRAY)
+    ps('TblHdrC', fontSize=sz(7.5),leading=sz(9.5), fontName=_FONTB, textColor=WHITE, alignment=TA_CENTER)
+    ps('TblHdrR', fontSize=sz(7.5),leading=sz(9.5), fontName=_FONTB, textColor=WHITE, alignment=TA_RIGHT)
+    ps('TblHdrL', fontSize=sz(7.5),leading=sz(9.5), fontName=_FONTB, textColor=WHITE)
+    ps('TblL',    fontSize=sz(8.5),leading=sz(10.5),fontName=_FONT,  textColor=NAVY)
+    ps('TblC',    fontSize=sz(8.5),leading=sz(10.5),fontName=_FONT,  textColor=NAVY, alignment=TA_CENTER)
+    ps('TblR',    fontSize=sz(8.5),leading=sz(10.5),fontName=_FONT,  textColor=NAVY, alignment=TA_RIGHT)
+    ps('TblRB',   fontSize=sz(9),  leading=sz(11),  fontName=_FONTB, textColor=NAVY, alignment=TA_RIGHT)
+    ps('TblGst',  fontSize=sz(8),  leading=sz(10),  fontName=_FONT,  textColor=GRAY, alignment=TA_CENTER)
+    ps('SumLbl',  fontSize=sz(8.5),leading=sz(11),  fontName=_FONT,  textColor=GRAY)
+    ps('SumVal',  fontSize=sz(8.5),leading=sz(11),  fontName=_FONTB, textColor=NAVY, alignment=TA_RIGHT)
+    ps('SumGrn',  fontSize=sz(8.5),leading=sz(11),  fontName=_FONT,  textColor=GREEN, alignment=TA_RIGHT)
+    ps('SubLbl',  fontSize=sz(9),  leading=sz(12),  fontName=_FONTB, textColor=NAVY)
+    ps('SubVal',  fontSize=sz(9),  leading=sz(12),  fontName=_FONTB, textColor=NAVY, alignment=TA_RIGHT)
+    ps('GstLbl',  fontSize=sz(8.5),leading=sz(11),  fontName=_FONT,  textColor=DKGRAY)
+    ps('GstVal',  fontSize=sz(8.5),leading=sz(11),  fontName=_FONT,  textColor=DKGRAY, alignment=TA_RIGHT)
+    ps('GrandL',  fontSize=sz(11), leading=sz(14),  fontName=_FONTB, textColor=WHITE)
+    ps('GrandR',  fontSize=sz(13.5),leading=sz(17), fontName=_FONTB, textColor=WHITE, alignment=TA_RIGHT)
+    ps('Bold8',   fontSize=sz(8.5),leading=sz(11),  fontName=_FONTB, textColor=NAVY)
+    ps('Tiny',    fontSize=sz(7),  leading=sz(9.5), fontName=_FONT,  textColor=GRAY)
+    ps('SigLbl',  fontSize=sz(7.5),leading=sz(10),  fontName=_FONT,  textColor=GRAY, alignment=TA_RIGHT)
+    ps('SigCo',   fontSize=sz(9),  leading=sz(12),  fontName=_FONTB, textColor=NAVY, alignment=TA_RIGHT)
+    ps('FootNote',fontSize=sz(7),  leading=sz(9),   fontName=_FONT,  textColor=GRAY, alignment=TA_CENTER)
 
     elements = []
 
@@ -1017,8 +1032,8 @@ async def _generate_pdf_bytes(quot: dict, company: dict) -> bytes:
     lines = quot.get("lines", [])
     cw = [8*mm, 85*mm, 12*mm, 28*mm, 15*mm, 34*mm]
 
-    rate_hdr  = f"RATE ({PDF_SYM})"
-    amt_hdr   = f"AMOUNT ({PDF_SYM})"
+    rate_hdr  = f"RATE ({SYM})"
+    amt_hdr   = f"AMOUNT ({SYM})"
 
     tbl_data = [[
         Paragraph("SR",          S['TblHdrC']),
@@ -1106,7 +1121,7 @@ async def _generate_pdf_bytes(quot: dict, company: dict) -> bytes:
 
     grand_row = [[
         Paragraph("TOTAL PAYABLE", S['GrandL']),
-        Paragraph(f"{PDF_SYM} {fc(gt)}", S['GrandR']),
+        Paragraph(f"{SYM} {fc(gt)}", S['GrandR']),
     ]]
     grand_tbl = Table(grand_row, colWidths=[40*mm, 54*mm])
     grand_tbl.setStyle(TableStyle([
