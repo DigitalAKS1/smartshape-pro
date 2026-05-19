@@ -88,9 +88,13 @@ export default function SalesLayout({ children, title, showBack }) {
         {children}
       </main>
 
-      {/* Bottom Navigation — items filtered by role permissions */}
-      <nav className="fixed bottom-0 left-0 right-0 z-50 bg-[var(--bg-card)] border-t border-[var(--border-color)] safe-area-bottom" data-testid="sales-bottom-nav">
-        <div className="flex items-center justify-around h-16 max-w-lg mx-auto">
+      {/* Bottom Navigation */}
+      <nav
+        className="fixed bottom-0 left-0 right-0 z-50 bg-[var(--bg-card)] border-t border-[var(--border-color)]"
+        style={{ paddingBottom: 'env(safe-area-inset-bottom)', boxShadow: 'var(--shadow-up)' }}
+        data-testid="sales-bottom-nav"
+      >
+        <div className="flex items-stretch h-[62px] max-w-lg mx-auto">
           {navItems.map((item) => {
             const Icon = item.icon;
             const isActive = location.pathname === item.path;
@@ -98,13 +102,23 @@ export default function SalesLayout({ children, title, showBack }) {
               <Link
                 key={item.path}
                 to={item.path}
-                className={`flex flex-col items-center justify-center flex-1 h-full space-y-0.5 transition-colors ${
-                  isActive ? 'text-[#e94560]' : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'
-                }`}
+                className="relative flex-1 flex flex-col items-center justify-center pt-1 pb-0.5 transition-colors active:opacity-70"
                 data-testid={`sales-nav-${item.label.toLowerCase()}-link`}
               >
-                <Icon className={`h-5 w-5 ${isActive ? 'stroke-[2]' : ''}`} strokeWidth={1.5} />
-                <span className={`text-[10px] font-medium ${isActive ? 'font-semibold' : ''}`}>{item.label}</span>
+                <div
+                  className={`absolute top-0 inset-x-3 h-[2.5px] rounded-b-full transition-all ${
+                    isActive ? 'bg-[var(--accent)] opacity-100' : 'opacity-0'
+                  }`}
+                />
+                <Icon
+                  className={`h-[20px] w-[20px] mb-1 transition-colors ${
+                    isActive ? 'text-[var(--accent)]' : 'text-[var(--text-muted)]'
+                  }`}
+                  strokeWidth={isActive ? 2.2 : 1.6}
+                />
+                <span className={`text-[10px] font-semibold leading-none ${
+                  isActive ? 'text-[var(--accent)]' : 'text-[var(--text-muted)]'
+                }`}>{item.label}</span>
               </Link>
             );
           })}
