@@ -809,7 +809,9 @@ async def _generate_pdf_bytes(quot: dict, company: dict) -> bytes:
         quot.get("font_size_mode") or "medium", 1.0)
     def sz(n): return max(5, round(n * font_scale))
 
-    SYM = quot.get("currency_symbol", "₹")  # default ₹
+    SYM = quot.get("currency_symbol", "₹")
+    # Built-in PDF fonts (Helvetica) lack U+20B9; substitute for PDF only
+    PDF_SYM = "Rs." if SYM == "₹" else SYM
 
     S = getSampleStyleSheet()
     def ps(name, **kw):
@@ -928,8 +930,8 @@ async def _generate_pdf_bytes(quot: dict, company: dict) -> bytes:
         Paragraph(date_str, S['QDate']),
     ]
 
-    col_logo = 44 * mm if logo_image else 0
-    col_left = (182 - col_logo) * mm - 52 * mm
+    col_logo = 44 * mm if logo_image else 0   # already in points
+    col_left = 182 * mm - col_logo - 52 * mm  # all in points — avoids unit mismatch
     if logo_image:
         hdr = Table([[logo_image, left_co, right_co]],
                     colWidths=[col_logo, col_left, 52*mm])
@@ -1015,8 +1017,8 @@ async def _generate_pdf_bytes(quot: dict, company: dict) -> bytes:
     lines = quot.get("lines", [])
     cw = [8*mm, 85*mm, 12*mm, 28*mm, 15*mm, 34*mm]
 
-    rate_hdr  = f"RATE ({SYM})"
-    amt_hdr   = f"AMOUNT ({SYM})"
+    rate_hdr  = f"RATE ({PDF_SYM})"
+    amt_hdr   = f"AMOUNT ({PDF_SYM})"
 
     tbl_data = [[
         Paragraph("SR",          S['TblHdrC']),
@@ -1104,7 +1106,7 @@ async def _generate_pdf_bytes(quot: dict, company: dict) -> bytes:
 
     grand_row = [[
         Paragraph("TOTAL PAYABLE", S['GrandL']),
-        Paragraph(f"{SYM} {fc(gt)}", S['GrandR']),
+        Paragraph(f"{PDF_SYM} {fc(gt)}", S['GrandR']),
     ]]
     grand_tbl = Table(grand_row, colWidths=[40*mm, 54*mm])
     grand_tbl.setStyle(TableStyle([
