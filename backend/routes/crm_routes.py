@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 import uuid
 import csv
 import io
+import re
+import requests as http_requests
 
 from database import db
 from auth_utils import get_current_user
@@ -1329,3 +1331,34 @@ async def delete_task(task_id: str, request: Request):
     await get_current_user(request)
     await db.tasks.delete_one({"task_id": task_id})
     return {"message": "Task deleted"}
+
+
+# ── Google Maps URL resolver ──────────────────────────────────────────────────
+@router.get("/resolve-maps-url")
+async def resolve_maps_url(url: str, request: Request):
+    """Follow redirects on Google Share / short URLs and extract coordinates."""
+    await get_current_user(request)
+    try:
+        resp = http_requests.get(
+            url,
+            allow_redirects=True,
+            timeout=10,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; SmartShapePro/1.0)"},
+        )
+        final_url = resp.url
+
+        # Try all known coordinate patterns in the final URL
+        patterns = [
+            r'@(-?\d+\.\d+),(-?\d+\.\d+)',
+            r'[?&]q=(-?\d+\.\d+),(-?\d+\.\d+)',
+            r'/place/[^/]+/@(-?\d+\.\d+),(-?\d+\.\d+)',
+            r'[?&]ll=(-?\d+\.\d+),(-?\d+\.\d+)',
+        ]
+        for pat in patterns:
+            m = re.search(pat, final_url)
+            if m:
+                return {"lat": float(m.group(1)), "lng": float(m.group(2)), "final_url": final_url}
+
+        return {"lat": None, "lng": None, "final_url": final_url}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Could not resolve URL: {e}")

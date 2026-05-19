@@ -64,7 +64,11 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  event.respondWith(fetch(req).catch(() => caches.match(req)));
+  event.respondWith(
+    fetch(req).catch(() =>
+      caches.match(req).then((r) => r || new Response('', { status: 503, statusText: 'Offline' }))
+    )
+  );
 });
 
 // ── Background Sync ───────────────────────────────────────────────────────────
@@ -102,6 +106,6 @@ async function staleWhileRevalidate(req) {
   const networkPromise = fetch(req).then((res) => {
     if (res && res.ok) cache.put(req, res.clone()).catch(() => {});
     return res;
-  }).catch(() => cached);
+  }).catch(() => cached || new Response('', { status: 503, statusText: 'Offline' }));
   return cached || networkPromise;
 }

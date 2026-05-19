@@ -97,6 +97,7 @@ export const visitPlans = {
   checkOut: (id, data) => API.post(`/visit-plans/${id}/check-out`, data),
   distance: (id, lat, lng) => API.get(`/visit-plans/${id}/distance`, { params: { lat, lng } }),
   reschedule: (id, data) => API.post(`/visit-plans/${id}/reschedule`, data),
+  resolveMapsUrl: (url) => API.get('/resolve-maps-url', { params: { url } }),
 };
 
 // Office Location & Geofence
