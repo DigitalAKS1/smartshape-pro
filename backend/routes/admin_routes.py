@@ -930,7 +930,7 @@ async def export_contacts(request: Request):
 
 @router.post("/ai/insights")
 async def get_ai_insights(query: str, request: Request):
-    from emergentintegrations.llm.chat import LlmChat, UserMessage
+    import anthropic
     import os as _os
     user = await get_current_user(request)
 
@@ -944,16 +944,18 @@ Pending alerts: {len(alerts)}
 
 User query: {query}"""
 
-    chat = LlmChat(
-        api_key=_os.environ.get("EMERGENT_LLM_KEY"),
-        session_id=f"insights_{user['user_id']}",
-        system_message="You are a business analytics assistant for SmartShape Pro inventory and sales management. Provide concise, actionable insights.",
-    ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+    api_key = _os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=503, detail="AI insights not configured")
 
-    message = UserMessage(text=context)
-    response = await chat.send_message(message)
-
-    return {"insight": response}
+    client = anthropic.Anthropic(api_key=api_key)
+    msg = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=1024,
+        system="You are a business analytics assistant for SmartShape Pro inventory and sales management. Provide concise, actionable insights.",
+        messages=[{"role": "user", "content": context}],
+    )
+    return {"insight": msg.content[0].text}
 
 
 # ==================== AUTO-REMINDER BACKGROUND TASK ====================
