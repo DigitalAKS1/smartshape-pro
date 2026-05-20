@@ -13,7 +13,7 @@ from rbac import get_team, require_teams
 
 router = APIRouter()
 
-STORAGE_URL = "https://integrations.emergentagent.com/objstore/api/v1/storage"
+UPLOADS_DIR = os.environ.get("UPLOADS_DIR", "/app/uploads")
 
 
 def _compute_totals(lines: list, d1: float, d2: float, fr: float) -> dict:
@@ -52,18 +52,6 @@ def _compute_totals(lines: list, d1: float, d2: float, fr: float) -> dict:
         total_with_gst      = after_disc + total_gst,
         grand_total         = grand_total,
     )
-EMERGENT_KEY = os.environ.get("EMERGENT_LLM_KEY")
-_storage_key = None
-
-
-def _init_storage():
-    global _storage_key
-    if _storage_key:
-        return _storage_key
-    resp = requests.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_KEY}, timeout=30)
-    resp.raise_for_status()
-    _storage_key = resp.json()["storage_key"]
-    return _storage_key
 
 
 async def touch_last_activity(entity_type: str, entity_id: str):
@@ -1048,11 +1036,11 @@ async def _generate_pdf_bytes(quot: dict, company: dict) -> bytes:
             import io as _io
             img_bytes = None
             if logo_url.startswith("/api/files/"):
-                key = _init_storage()
-                obj_path = logo_url.replace("/api/files/", "", 1)
-                r = requests.get(f"{STORAGE_URL}/objects/{obj_path}",
-                                 headers={"X-Storage-Key": key}, timeout=15)
-                if r.ok: img_bytes = r.content
+                rel_path = logo_url.replace("/api/files/", "", 1)
+                local_path = os.path.join(UPLOADS_DIR, rel_path)
+                if os.path.isfile(local_path):
+                    with open(local_path, "rb") as _f:
+                        img_bytes = _f.read()
             elif logo_url.startswith("http://") or logo_url.startswith("https://"):
                 r = requests.get(logo_url, timeout=15)
                 if r.ok: img_bytes = r.content

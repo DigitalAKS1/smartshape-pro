@@ -1,12 +1,12 @@
 from fastapi import APIRouter, HTTPException, Request, UploadFile, File
-from fastapi.responses import Response as FastAPIResponse
+from fastapi.responses import Response as FastAPIResponse, FileResponse
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 import uuid
 import csv
 import io
-import requests
 import os
+import mimetypes
 
 from database import db
 from auth_utils import get_current_user
@@ -14,32 +14,16 @@ from rbac import get_team, require_teams
 
 router = APIRouter()
 
-STORAGE_URL = "https://integrations.emergentagent.com/objstore/api/v1/storage"
-EMERGENT_KEY = os.environ.get("EMERGENT_LLM_KEY")
-APP_NAME = "smartshape"
-storage_key = None
+UPLOADS_DIR = os.environ.get("UPLOADS_DIR", "/app/uploads")
 
 
-def init_storage():
-    global storage_key
-    if storage_key:
-        return storage_key
-    resp = requests.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_KEY}, timeout=30)
-    resp.raise_for_status()
-    storage_key = resp.json()["storage_key"]
-    return storage_key
-
-
-def put_object(path: str, data: bytes, content_type: str) -> dict:
-    key = init_storage()
-    resp = requests.put(
-        f"{STORAGE_URL}/objects/{path}",
-        headers={"X-Storage-Key": key, "Content-Type": content_type},
-        data=data,
-        timeout=120,
-    )
-    resp.raise_for_status()
-    return resp.json()
+def save_file(path: str, data: bytes) -> str:
+    """Save bytes to local uploads directory, return relative path."""
+    full_path = os.path.join(UPLOADS_DIR, path)
+    os.makedirs(os.path.dirname(full_path), exist_ok=True)
+    with open(full_path, "wb") as f:
+        f.write(data)
+    return path
 
 
 # ==================== MODELS ====================
@@ -132,11 +116,11 @@ async def upload_die_image(die_id: str, file: UploadFile = File(...), request: R
         raise HTTPException(status_code=404, detail="Die not found")
 
     ext = file.filename.split(".")[-1] if "." in file.filename else "bin"
-    path = f"{APP_NAME}/dies/{die_id}/{uuid.uuid4()}.{ext}"
+    path = f"dies/{die_id}/{uuid.uuid4()}.{ext}"
     data = await file.read()
-    result = put_object(path, data, file.content_type or "application/octet-stream")
+    save_file(path, data)
 
-    image_url = f"/api/files/{result['path']}"
+    image_url = f"/api/files/{path}"
     await db.dies.update_one({"die_id": die_id}, {"$set": {"image_url": image_url}})
     return {"image_url": image_url}
 
@@ -196,31 +180,19 @@ async def import_dies_csv(file: UploadFile = File(...), request: Request = None)
 @router.post("/upload")
 async def upload_file(file: UploadFile = File(...), request: Request = None):
     ext = file.filename.split(".")[-1] if "." in file.filename else "bin"
-    path = f"{APP_NAME}/uploads/{uuid.uuid4()}.{ext}"
+    path = f"uploads/{uuid.uuid4()}.{ext}"
     data = await file.read()
-    result = put_object(path, data, file.content_type or "application/octet-stream")
-    return {"url": f"/api/files/{result['path']}"}
+    save_file(path, data)
+    return {"url": f"/api/files/{path}"}
 
 
 @router.get("/files/{path:path}")
 async def get_file(path: str):
-    try:
-        key = init_storage()
-        resp = requests.get(
-            f"{STORAGE_URL}/objects/{path}",
-            headers={"X-Storage-Key": key},
-            timeout=30,
-        )
-        if resp.status_code == 200:
-            return FastAPIResponse(
-                content=resp.content,
-                media_type=resp.headers.get("content-type", "application/octet-stream"),
-            )
+    full_path = os.path.join(UPLOADS_DIR, path)
+    if not os.path.isfile(full_path):
         raise HTTPException(status_code=404, detail="File not found")
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    media_type, _ = mimetypes.guess_type(full_path)
+    return FileResponse(full_path, media_type=media_type or "application/octet-stream")
 
 
 # ==================== PACKAGE ENDPOINTS ====================

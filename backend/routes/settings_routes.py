@@ -14,34 +14,14 @@ from rbac import get_team
 
 router = APIRouter()
 
-# Storage helpers
-STORAGE_URL = "https://integrations.emergentagent.com/objstore/api/v1/storage"
-EMERGENT_KEY = os.environ.get("EMERGENT_LLM_KEY")
-APP_NAME = "smartshape"
-storage_key = None
+UPLOADS_DIR = os.environ.get("UPLOADS_DIR", "/app/uploads")
 
 
-def _init_storage():
-    global storage_key
-    if storage_key:
-        return storage_key
-    import requests
-    resp = requests.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_KEY}, timeout=30)
-    resp.raise_for_status()
-    storage_key = resp.json()["storage_key"]
-    return storage_key
-
-
-def _put_object(path: str, data: bytes, content_type: str) -> dict:
-    import requests
-    key = _init_storage()
-    resp = requests.put(
-        f"{STORAGE_URL}/objects/{path}",
-        headers={"X-Storage-Key": key, "Content-Type": content_type},
-        data=data, timeout=120
-    )
-    resp.raise_for_status()
-    return resp.json()
+def _save_file(path: str, data: bytes) -> None:
+    full_path = os.path.join(UPLOADS_DIR, path)
+    os.makedirs(os.path.dirname(full_path), exist_ok=True)
+    with open(full_path, "wb") as f:
+        f.write(data)
 
 
 # ==================== COMPANY SETTINGS ====================
@@ -82,10 +62,10 @@ async def upload_company_logo(file: UploadFile = File(...), request: Request = N
         if user.get("role") != "admin":
             raise HTTPException(status_code=403, detail="Admin access required")
     ext = file.filename.split(".")[-1] if "." in file.filename else "png"
-    path = f"{APP_NAME}/company/logo_{uuid.uuid4().hex[:8]}.{ext}"
+    path = f"company/logo_{uuid.uuid4().hex[:8]}.{ext}"
     data = await file.read()
-    result = _put_object(path, data, file.content_type or "image/png")
-    logo_url = f"/api/files/{result['path']}"
+    _save_file(path, data)
+    logo_url = f"/api/files/{path}"
     await db.settings.update_one({"type": "company"}, {"$set": {"logo_url": logo_url}}, upsert=True)
     return {"logo_url": logo_url}
 
