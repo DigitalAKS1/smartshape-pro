@@ -47,6 +47,7 @@ const MODULE_ROUTE_MAP = {
     { path: '/crm-masters', icon: Layers, label: 'CRM Masters' },
     { path: '/dispatch-tracking', icon: Package, label: 'Dispatch Tracking' },
     { path: '/customer-engagement', icon: Megaphone, label: 'Customer Engagement' },
+    { path: '/marketing', icon: Megaphone, label: 'Marketing & WhatsApp' },
   ],
   sales_portal: { path: '/sales', icon: Smartphone, label: 'Sales Portal' },
   user_management: [
@@ -79,6 +80,7 @@ function getPageTitle(pathname) {
   const exact = allRoutes.find(r => r?.path === pathname);
   if (exact) return exact.label;
   if (pathname.startsWith('/school-profile/')) return 'School Profile';
+  if (pathname === '/marketing') return 'Marketing & WhatsApp';
   if (pathname.startsWith('/view-quotation/'))  return 'View Quotation';
   if (pathname.startsWith('/edit-quotation/'))  return 'Edit Quotation';
   if (pathname.startsWith('/catalogue/'))       return 'Catalogue';

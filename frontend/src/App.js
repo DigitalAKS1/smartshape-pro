@@ -45,6 +45,7 @@ import ImportCenter from './pages/admin/ImportCenter';
 import ActivityLogsPage from './pages/admin/ActivityLogs';
 import DispatchTracking from './pages/admin/DispatchTracking';
 import SchoolProfile from './pages/admin/SchoolProfile';
+import MarketingHub from './pages/admin/MarketingHub';
 
 // Sales pages
 import SalesHome from './pages/sales/SalesHome';
@@ -169,6 +170,7 @@ function AppRouter() {
       <Route path="/dispatch-tracking" element={<ProtectedRoute><DispatchTracking /></ProtectedRoute>} />
       <Route path="/customer-engagement" element={<ProtectedRoute><CustomerEngagement /></ProtectedRoute>} />
       <Route path="/school-profile/:school_id" element={<ProtectedRoute><SchoolProfile /></ProtectedRoute>} />
+      <Route path="/marketing" element={<ProtectedRoute><MarketingHub /></ProtectedRoute>} />
       
       {/* Protected Routes - Sales */}
       <Route path="/sales" element={<ProtectedRoute><SalesHome /></ProtectedRoute>} />
