@@ -270,11 +270,15 @@ function CampaignsTab({ tk, campaigns, setCampaigns, roles, contacts }) {
   const [step, setStep] = useState(1);
   const [form, setForm] = useState({ name: '', audience: 'all', role_id: '', template: '', schedule: 'draft', schedule_at: '' });
 
-  // Live audience count based on selection
+  // Live audience count — matches by contact_role_id OR designation text fallback
   const audienceCount = (() => {
     if (form.audience === 'all') return contacts.length;
     if (form.audience === 'role' && form.role_id) {
-      return contacts.filter(c => c.contact_role_id === form.role_id).length;
+      const rName = (roles.find(r => r.role_id === form.role_id)?.name || '').toLowerCase();
+      return contacts.filter(c =>
+        c.contact_role_id === form.role_id ||
+        (rName && (c.designation || '').toLowerCase() === rName)
+      ).length;
     }
     return 0;
   })();
@@ -476,7 +480,11 @@ function CampaignsTab({ tk, campaigns, setCampaigns, roles, contacts }) {
                         {opt.key === 'role' && form.audience === 'role' && roles.length > 0 && (
                           <div className="mt-2 ml-7 flex flex-wrap gap-1.5">
                             {roles.map(r => {
-                              const cnt = contacts.filter(c => c.contact_role_id === r.role_id).length;
+                              const rLow = r.name.toLowerCase();
+                              const cnt = contacts.filter(c =>
+                                c.contact_role_id === r.role_id ||
+                                (c.designation || '').toLowerCase() === rLow
+                              ).length;
                               if (cnt === 0) return null;
                               return (
                                 <button key={r.role_id}
