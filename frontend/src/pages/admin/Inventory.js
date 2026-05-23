@@ -52,7 +52,12 @@ export default function Inventory() {
   const [editForm, setEditForm] = useState(BLANK_DIE);
 
   const [uploading, setUploading] = useState(null);
+  const [saving, setSaving] = useState(false);
   const importRef = useRef(null);
+
+  // Edit image
+  const [editImage, setEditImage] = useState(null);
+  const [editImagePreview, setEditImagePreview] = useState('');
 
   const card = 'bg-[var(--bg-card)] border-[var(--border-color)]';
   const inputCls = 'bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]';
@@ -60,7 +65,7 @@ export default function Inventory() {
   const textSec = 'text-[var(--text-secondary)]';
   const textMuted = 'text-[var(--text-muted)]';
   const dlgCls = 'bg-[var(--bg-card)] border-[var(--border-color)] text-[var(--text-primary)]';
-  const backendUrl = process.env.REACT_APP_BACKEND_URL;
+  const backendUrl = process.env.REACT_APP_BACKEND_URL || '';
 
   useEffect(() => { fetchDies(); }, [showArchived]); // eslint-disable-line
   const fetchDies = async () => {
@@ -81,30 +86,43 @@ export default function Inventory() {
   const handleCreateDie = async (e) => {
     e.preventDefault();
     if (!newDie.code || !newDie.name) { toast.error('Code and Name required'); return; }
+    setSaving(true);
     try {
       const res = await diesApi.create(newDie);
-      if (newDieImage && res.data.die_id) { try { await diesApi.uploadImage(res.data.die_id, newDieImage); } catch {} }
+      if (newDieImage && res.data.die_id) {
+        try { await diesApi.uploadImage(res.data.die_id, newDieImage); }
+        catch { toast.error('Die saved but photo upload failed — try re-uploading from the card.'); }
+      }
       toast.success('Die created');
       setCreateOpen(false);
       setNewDie(BLANK_DIE); setNewDieImage(null); setNewDieImagePreview('');
       fetchDies();
     } catch (err) { toast.error(err.response?.data?.detail || 'Failed to create die'); }
+    finally { setSaving(false); }
   };
 
   // ── Edit ──
   const openEdit = (die) => {
     setEditTarget(die);
     setEditForm({ code: die.code, name: die.name, type: die.type || 'standard', category: die.category || 'decorative', min_level: die.min_level ?? 5, description: die.description || '' });
+    setEditImage(null);
+    setEditImagePreview('');
     setEditOpen(true);
   };
   const handleSaveEdit = async () => {
     if (!editForm.code || !editForm.name) { toast.error('Code and Name required'); return; }
+    setSaving(true);
     try {
       await diesApi.update(editTarget.die_id, editForm);
+      if (editImage) {
+        try { await diesApi.uploadImage(editTarget.die_id, editImage); }
+        catch { toast.error('Saved but photo upload failed — try again from the card.'); }
+      }
       toast.success('Die updated');
-      setEditOpen(false); setEditTarget(null);
+      setEditOpen(false); setEditTarget(null); setEditImage(null); setEditImagePreview('');
       fetchDies();
     } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
+    finally { setSaving(false); }
   };
 
   // ── Image upload ──
@@ -412,16 +430,39 @@ export default function Inventory() {
                 </div>
               </div>
               <div><Label className={`${textSec} text-xs`}>Description</Label><Input value={newDie.description} onChange={e => setNewDie({...newDie, description: e.target.value})} className={inputCls} placeholder="Optional notes" /></div>
-              <Button type="submit" className="w-full bg-[#e94560] hover:bg-[#f05c75] text-white" data-testid="create-die-submit">Add Die</Button>
+              <Button type="submit" disabled={saving} className="w-full bg-[#e94560] hover:bg-[#f05c75] text-white disabled:opacity-60" data-testid="create-die-submit">
+                {saving ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2 inline-block" />Saving…</> : 'Add Die'}
+              </Button>
             </form>
           </DialogContent>
         </Dialog>
 
         {/* ══ EDIT DIE DIALOG ══ */}
-        <Dialog open={editOpen} onOpenChange={setEditOpen}>
-          <DialogContent className={`${dlgCls} w-[calc(100vw-1rem)] sm:max-w-md`}>
+        <Dialog open={editOpen} onOpenChange={open => { if (!saving) setEditOpen(open); }}>
+          <DialogContent className={`${dlgCls} w-[calc(100vw-1rem)] sm:max-w-md max-h-[88dvh] overflow-y-auto`}>
             <DialogHeader><DialogTitle className={textPri}>Edit Die — {editTarget?.code}</DialogTitle></DialogHeader>
             <div className="space-y-3 py-1">
+              {/* Image */}
+              <div>
+                <Label className={`${textSec} text-xs`}>Photo</Label>
+                <div className={`bg-[var(--bg-primary)] border-[var(--border-color)] border-2 border-dashed rounded-md p-3 text-center cursor-pointer`}
+                  onClick={() => document.getElementById('edit-die-image')?.click()}>
+                  {editImagePreview
+                    ? <div className="relative inline-block">
+                        <img src={editImagePreview} alt="Preview" className="h-24 mx-auto object-contain rounded" />
+                        <button type="button" onClick={e => { e.stopPropagation(); setEditImage(null); setEditImagePreview(''); }}
+                          className="absolute top-0 right-0 p-1 bg-red-500 rounded-full"><X className="h-3 w-3 text-white" /></button>
+                      </div>
+                    : editTarget?.image_url
+                    ? <div className="relative inline-block">
+                        <img src={`${backendUrl}${editTarget.image_url}`} alt="Current" className="h-24 mx-auto object-contain rounded opacity-60" />
+                        <p className={`text-[10px] ${textMuted} mt-1`}>Click to replace</p>
+                      </div>
+                    : <><Camera className={`h-6 w-6 mx-auto mb-1 ${textMuted}`} /><p className={`text-xs ${textMuted}`}>Click to add photo</p></>}
+                  <input id="edit-die-image" type="file" accept="image/*" className="hidden"
+                    onChange={e => { const f = e.target.files?.[0]; if (!f) return; setEditImage(f); const r = new FileReader(); r.onload = ev => setEditImagePreview(ev.target.result); r.readAsDataURL(f); e.target.value = ''; }} />
+                </div>
+              </div>
               <div className="grid grid-cols-2 gap-3">
                 <div><Label className={`${textSec} text-xs`}>Code *</Label><Input value={editForm.code} onChange={e => setEditForm({...editForm, code: e.target.value})} className={inputCls} /></div>
                 <div><Label className={`${textSec} text-xs`}>Name *</Label><Input value={editForm.name} onChange={e => setEditForm({...editForm, name: e.target.value})} className={inputCls} /></div>
@@ -444,8 +485,10 @@ export default function Inventory() {
               </div>
             </div>
             <DialogFooter>
-              <Button variant="outline" onClick={() => setEditOpen(false)} className={`border-[var(--border-color)] ${textSec}`}>Cancel</Button>
-              <Button onClick={handleSaveEdit} className="bg-[#e94560] hover:bg-[#f05c75] text-white">Save Changes</Button>
+              <Button variant="outline" onClick={() => setEditOpen(false)} disabled={saving} className={`border-[var(--border-color)] ${textSec}`}>Cancel</Button>
+              <Button onClick={handleSaveEdit} disabled={saving} className="bg-[#e94560] hover:bg-[#f05c75] text-white disabled:opacity-60">
+                {saving ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2 inline-block" />Saving…</> : 'Save Changes'}
+              </Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
