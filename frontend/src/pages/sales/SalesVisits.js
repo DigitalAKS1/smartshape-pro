@@ -59,7 +59,7 @@ function BottomSheet({ open, onClose, title, children, footer }) {
   }, [open]);
   if (!open) return null;
   return (
-    <div className="fixed inset-0 z-50 flex flex-col justify-end">
+    <div className="fixed inset-0 z-[60] flex flex-col justify-end">
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
       <div className="relative bg-[var(--bg-card)] rounded-t-2xl flex flex-col max-h-[92dvh]">
         {/* Drag handle + header */}
@@ -74,7 +74,8 @@ function BottomSheet({ open, onClose, title, children, footer }) {
         <div className="overflow-y-auto flex-1">{children}</div>
         {/* Sticky footer (always visible) */}
         {footer && (
-          <div className="shrink-0 px-4 pt-3 pb-6 bg-[var(--bg-card)] border-t border-[var(--border-color)]">
+          <div className="shrink-0 px-4 pt-3 bg-[var(--bg-card)] border-t border-[var(--border-color)]"
+            style={{ paddingBottom: 'max(24px, env(safe-area-inset-bottom))' }}>
             {footer}
           </div>
         )}
