@@ -1112,11 +1112,74 @@ async def run_auto_reminders():
                     "sent_at": now_iso_full,
                 })
 
+            # ── Drip sequence step advancement ───────────────────────────
+            drip_now = datetime.now(timezone.utc).isoformat()
+            due_enrs = await db.drip_enrollments.find(
+                {"status": "active", "next_step_at": {"$lte": drip_now}},
+                {"_id": 0}
+            ).to_list(200)
+
+            drip_fired = 0
+            for enr in due_enrs:
+                seq = await db.drip_sequences.find_one(
+                    {"sequence_id": enr["sequence_id"]}, {"_id": 0}
+                )
+                if not seq or not seq.get("is_active"):
+                    continue
+                steps = seq.get("steps", [])
+                step_idx = enr.get("current_step", 0)
+                if step_idx >= len(steps):
+                    await db.drip_enrollments.update_one(
+                        {"enrollment_id": enr["enrollment_id"]},
+                        {"$set": {"status": "completed", "completed_at": drip_now}},
+                    )
+                    continue
+                step = steps[step_idx]
+                lead = await db.leads.find_one({"lead_id": enr["lead_id"]}, {"_id": 0})
+                if lead:
+                    note = f"[Drip] {seq['name']} — Step {step['step_number']}: {step.get('message_template', '')[:120]}"
+                    await db.call_notes.insert_one({
+                        "note_id": f"drip_{uuid.uuid4().hex[:8]}",
+                        "lead_id": lead["lead_id"],
+                        "call_date": drip_now[:10],
+                        "note": note,
+                        "created_by": "system",
+                        "created_at": drip_now,
+                    })
+                    if step.get("message_type") == "whatsapp" and lead.get("contact_phone"):
+                        await db.whatsapp_logs.insert_one({
+                            "log_id": f"drip_{uuid.uuid4().hex[:8]}",
+                            "phone": lead["contact_phone"],
+                            "body": step.get("message_template", ""),
+                            "lead_id": lead["lead_id"],
+                            "sequence_id": seq["sequence_id"],
+                            "step_number": step["step_number"],
+                            "send_mode": "drip",
+                            "status": "queued",
+                            "sent_by": "system",
+                            "sent_at": drip_now,
+                        })
+                next_idx = step_idx + 1
+                if next_idx < len(steps):
+                    next_delay = max(steps[next_idx].get("delay_days", 1), 1)
+                    next_at = (datetime.now(timezone.utc) + timedelta(days=next_delay)).isoformat()
+                    await db.drip_enrollments.update_one(
+                        {"enrollment_id": enr["enrollment_id"]},
+                        {"$set": {"current_step": next_idx, "next_step_at": next_at, "last_step_at": drip_now}},
+                    )
+                else:
+                    await db.drip_enrollments.update_one(
+                        {"enrollment_id": enr["enrollment_id"]},
+                        {"$set": {"status": "completed", "completed_at": drip_now, "last_step_at": drip_now}},
+                    )
+                drip_fired += 1
+
             import logging
             logging.info(
                 f"Auto-reminder: {len(overdue_tasks)} overdue, {len(stale_leads)} stale, "
                 f"{len(pending_quots)} pending quots, {len(birthday_contacts)} birthdays, "
-                f"{len(anniversary_schools)} anniversaries, {len(due_scheduled)} scheduled WA fired"
+                f"{len(anniversary_schools)} anniversaries, {len(due_scheduled)} scheduled WA fired, "
+                f"{drip_fired} drip steps fired"
             )
         except Exception as e:
             import logging

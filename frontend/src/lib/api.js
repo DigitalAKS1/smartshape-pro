@@ -217,6 +217,17 @@ export const contactRoles = {
   delete: (id) => API.delete(`/contact-roles/${id}`),
 };
 
+// Drip Sequences
+export const dripSequences = {
+  getAll: () => API.get('/drip/sequences'),
+  create: (data) => API.post('/drip/sequences', data),
+  update: (id, data) => API.put(`/drip/sequences/${id}`, data),
+  delete: (id) => API.delete(`/drip/sequences/${id}`),
+  enroll: (data) => API.post('/drip/enroll', data),
+  enrollments: (params) => API.get('/drip/enrollments', { params }),
+  cancelEnrollment: (id) => API.put(`/drip/enrollments/${id}/cancel`),
+};
+
 // Tags
 export const tags = {
   getAll: () => API.get('/tags'),

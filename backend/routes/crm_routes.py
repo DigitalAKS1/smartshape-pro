@@ -1,10 +1,11 @@
 from fastapi import APIRouter, HTTPException, Request, UploadFile, File
 from typing import Optional
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import uuid
 import csv
 import io
 import re
+import asyncio
 import requests as http_requests
 
 from database import db
@@ -29,6 +30,52 @@ async def touch_last_activity(entity_type: str, entity_id: str):
         return
     coll, key = pair
     await db[coll].update_one({key: entity_id}, {"$set": {"last_activity_date": now_iso}})
+
+
+async def _auto_enroll_lead(lead_doc: dict):
+    """Background task: auto-enroll a new lead into matching drip sequences."""
+    try:
+        lead_des = (lead_doc.get("designation") or "").strip().lower()
+        role_name = ""
+        if lead_doc.get("contact_role_id"):
+            role = await db.contact_roles.find_one(
+                {"role_id": lead_doc["contact_role_id"]}, {"_id": 0, "name": 1}
+            )
+            if role:
+                role_name = role.get("name", "").lower()
+
+        seqs = await db.drip_sequences.find(
+            {"trigger": "lead_created", "is_active": True}, {"_id": 0}
+        ).to_list(50)
+
+        now = datetime.now(timezone.utc)
+        for seq in seqs:
+            filt = (seq.get("filter_designation") or "").strip().lower()
+            if filt and lead_des != filt and role_name != filt:
+                continue
+            if not seq.get("steps"):
+                continue
+            existing = await db.drip_enrollments.find_one(
+                {"sequence_id": seq["sequence_id"], "lead_id": lead_doc["lead_id"], "status": "active"}
+            )
+            if existing:
+                continue
+            first_delay = seq["steps"][0].get("delay_days", 0)
+            await db.drip_enrollments.insert_one({
+                "enrollment_id": f"denr_{uuid.uuid4().hex[:10]}",
+                "sequence_id": seq["sequence_id"],
+                "lead_id": lead_doc["lead_id"],
+                "current_step": 0,
+                "status": "active",
+                "enrolled_at": now.isoformat(),
+                "next_step_at": (now + timedelta(days=first_delay)).isoformat(),
+                "last_step_at": None,
+                "completed_at": None,
+                "enrolled_by": "system",
+            })
+    except Exception as exc:
+        import logging as _log
+        _log.error(f"_auto_enroll_lead error: {exc}")
 
 
 async def log_activity(user_email: str, action: str, entity_type: str, entity_id: str, details: str = ""):
@@ -857,6 +904,7 @@ async def create_lead(request: Request):
         "updated_at": now_iso,
     }
     await db.leads.insert_one(lead_doc)
+    asyncio.create_task(_auto_enroll_lead(lead_doc))
     if school_id:
         await touch_last_activity("school", school_id)
     return await db.leads.find_one({"lead_id": lead_id}, {"_id": 0})

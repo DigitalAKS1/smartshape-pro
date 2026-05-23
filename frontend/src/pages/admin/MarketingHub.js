@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import AdminLayout from '../../components/layouts/AdminLayout';
 import { useTheme } from '../../contexts/ThemeContext';
-import { contactRoles as contactRolesApi, contacts as contactsApi } from '../../lib/api';
+import { contactRoles as contactRolesApi, contacts as contactsApi, dripSequences as dripApi } from '../../lib/api';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
@@ -111,6 +111,35 @@ const STATUS_CHIP = {
 };
 
 function pct(num, den) { return den > 0 ? Math.round((num / den) * 100) : null; }
+
+// ── API → display shape mapper ────────────────────────────────────────────────
+const TRIGGER_LABELS = { lead_created: 'Lead Created', quotation_sent: 'Quotation Sent', manual: 'Manual' };
+
+function mapSeq(s) {
+  const tLabel = TRIGGER_LABELS[s.trigger] || s.trigger;
+  const fLabel = s.filter_designation ? ` · ${s.filter_designation}` : '';
+  return {
+    id: s.sequence_id,
+    name: s.name,
+    description: s.description || '',
+    trigger: `${tLabel}${fLabel}`,
+    filter_designation: s.filter_designation || '',
+    sequence_id: s.sequence_id,
+    steps: (s.steps || []).map(st => ({
+      n: st.step_number,
+      delay: st.delay_days === 0 ? 'Immediately' : `Day ${st.delay_days}`,
+      label: st.message_template
+        ? st.message_template.substring(0, 80) + (st.message_template.length > 80 ? '…' : '')
+        : `Step ${st.step_number}`,
+      delay_days: st.delay_days,
+      message_template: st.message_template,
+      message_type: st.message_type,
+    })),
+    enrolled: s.enrollment_count || 0,
+    completed: s.completed_count || 0,
+    active: s.is_active,
+  };
+}
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Tab 1 — Overview
@@ -757,32 +786,60 @@ function GreetingsTab({ tk, greetings, setGreetings }) {
 // ══════════════════════════════════════════════════════════════════════════════
 // Tab 4 — Drip Sequences
 // ══════════════════════════════════════════════════════════════════════════════
+const BLANK_FORM = { name: '', description: '', trigger: 'lead_created', filter_designation: '', steps: [{ message_template: '', delay_days: 0 }] };
+
 function DripsTab({ tk, drips, setDrips }) {
   const [expanded, setExpanded] = useState(null);
   const [showCreate, setShowCreate] = useState(false);
-  const [form, setForm] = useState({ name: '', trigger: 'lead_created', steps: [{ label: '', delay: 'Immediately' }] });
+  const [form, setForm] = useState(BLANK_FORM);
+  const [saving, setSaving] = useState(false);
 
-  function toggle(id) { setDrips(prev => prev.map(d => d.id === id ? { ...d, active: !d.active } : d)); }
+  async function toggle(d) {
+    try {
+      await dripApi.update(d.sequence_id, { is_active: !d.active });
+      setDrips(prev => prev.map(x => x.id === d.id ? { ...x, active: !x.active } : x));
+    } catch {
+      toast.error('Failed to update sequence');
+    }
+  }
 
   function addStep() {
-    setForm(p => ({ ...p, steps: [...p.steps, { label: '', delay: `Day ${p.steps.length + 1}` }] }));
+    const nextDay = form.steps.length === 0 ? 0 : form.steps[form.steps.length - 1].delay_days + 3;
+    setForm(p => ({ ...p, steps: [...p.steps, { message_template: '', delay_days: nextDay }] }));
   }
 
   function removeStep(i) {
     setForm(p => ({ ...p, steps: p.steps.filter((_, ii) => ii !== i) }));
   }
 
-  function create() {
-    setDrips(prev => [{
-      id: Date.now().toString(),
-      name: form.name || 'Untitled Sequence',
-      trigger: { lead_created: 'Lead Created', quotation_sent: 'Quotation Sent', manual: 'Manual' }[form.trigger],
-      steps: form.steps.map((s, i) => ({ n: i + 1, delay: s.delay, label: s.label || `Step ${i + 1}` })),
-      enrolled: 0, completed: 0, active: true,
-    }, ...prev]);
-    setShowCreate(false);
-    setForm({ name: '', trigger: 'lead_created', steps: [{ label: '', delay: 'Immediately' }] });
-    toast.success('Drip sequence created');
+  async function create() {
+    if (!form.name.trim()) { toast.error('Sequence name is required'); return; }
+    if (form.steps.length === 0) { toast.error('Add at least one step'); return; }
+    setSaving(true);
+    try {
+      const payload = {
+        name: form.name.trim(),
+        description: form.description.trim(),
+        trigger: form.trigger,
+        filter_designation: form.filter_designation.trim() || null,
+        is_active: true,
+        steps: form.steps.map((s, i) => ({
+          step_number: i + 1,
+          delay_days: parseInt(s.delay_days) || 0,
+          message_type: 'whatsapp',
+          message_template: s.message_template.trim() || `Step ${i + 1}`,
+        })),
+      };
+      const res = await dripApi.create(payload);
+      setDrips(prev => [mapSeq(res.data), ...prev]);
+      setShowCreate(false);
+      setForm(BLANK_FORM);
+      toast.success('Drip sequence created');
+    } catch {
+      toast.error('Failed to create sequence');
+    } finally {
+      setSaving(false);
+    }
   }
 
   const TRIGGERS = [
@@ -831,7 +888,7 @@ function DripsTab({ tk, drips, setDrips }) {
                   <p className={`text-xs font-semibold ${tk.t1}`}>{d.completed}</p>
                   <p className={`text-[10px] ${tk.tm}`}>done</p>
                 </div>
-                <Switch checked={d.active} onCheckedChange={() => toggle(d.id)} />
+                <Switch checked={d.active} onCheckedChange={() => toggle(d)} />
                 <button onClick={() => setExpanded(expanded === d.id ? null : d.id)}
                   className={`h-7 w-7 rounded-lg ${tk.hov} flex items-center justify-center`}>
                   <ChevronDown className={`h-4 w-4 ${tk.tm} transition-transform duration-200 ${expanded === d.id ? 'rotate-180' : ''}`} />
@@ -876,11 +933,11 @@ function DripsTab({ tk, drips, setDrips }) {
           <div className="space-y-4 max-h-[60vh] overflow-y-auto py-1 pr-1">
             <div>
               <Label className={`${tk.t2} text-xs mb-1.5 block`}>Sequence Name</Label>
-              <Input className={`h-10 ${tk.inp}`} placeholder="e.g. New Lead Welcome Series"
+              <Input className={`h-10 ${tk.inp}`} placeholder="e.g. Teacher Welcome Series"
                 value={form.name} onChange={e => setForm(p => ({ ...p, name: e.target.value }))} />
             </div>
             <div>
-              <Label className={`${tk.t2} text-xs mb-2 block`}>Trigger</Label>
+              <Label className={`${tk.t2} text-xs mb-1.5 block`}>Trigger</Label>
               <div className="space-y-2">
                 {TRIGGERS.map(t => (
                   <button key={t.k} onClick={() => setForm(p => ({ ...p, trigger: t.k }))}
@@ -900,6 +957,15 @@ function DripsTab({ tk, drips, setDrips }) {
                 ))}
               </div>
             </div>
+            {form.trigger === 'lead_created' && (
+              <div>
+                <Label className={`${tk.t2} text-xs mb-1.5 block`}>Filter by Designation <span className={`${tk.tm} font-normal`}>(optional)</span></Label>
+                <Input className={`h-10 ${tk.inp}`} placeholder="e.g. Teacher, Principal — leave blank for all"
+                  value={form.filter_designation}
+                  onChange={e => setForm(p => ({ ...p, filter_designation: e.target.value }))} />
+                <p className={`text-[11px] ${tk.tm} mt-1`}>Only enroll leads whose designation matches (case-insensitive)</p>
+              </div>
+            )}
             <div>
               <div className="flex items-center justify-between mb-2">
                 <Label className={`${tk.t2} text-xs`}>Steps ({form.steps.length})</Label>
@@ -907,24 +973,34 @@ function DripsTab({ tk, drips, setDrips }) {
                   <Plus className="h-3 w-3" /> Add step
                 </button>
               </div>
-              <div className="space-y-2">
+              <div className="space-y-3">
                 {form.steps.map((s, i) => (
-                  <div key={i} className="flex items-center gap-2">
-                    <div className="w-6 h-6 rounded-full bg-[var(--accent)]/15 flex items-center justify-center flex-shrink-0">
-                      <span className="text-[10px] font-bold text-[var(--accent)]">{i + 1}</span>
+                  <div key={i} className="space-y-1.5">
+                    <div className="flex items-center gap-2">
+                      <div className="w-6 h-6 rounded-full bg-[var(--accent)]/15 flex items-center justify-center flex-shrink-0">
+                        <span className="text-[10px] font-bold text-[var(--accent)]">{i + 1}</span>
+                      </div>
+                      <span className={`text-xs ${tk.t2} flex-1`}>
+                        {i === 0 ? 'Send immediately (Day 0)' : (
+                          <span className="flex items-center gap-1.5">
+                            Send on day
+                            <input type="number" min="1" className={`h-6 w-14 rounded-md border px-2 text-xs ${tk.inp}`}
+                              value={s.delay_days}
+                              onChange={e => setForm(p => ({ ...p, steps: p.steps.map((ss, ii) => ii === i ? { ...ss, delay_days: e.target.value } : ss) }))} />
+                            after enrollment
+                          </span>
+                        )}
+                      </span>
+                      {i > 0 && (
+                        <button onClick={() => removeStep(i)}
+                          className={`h-6 w-6 rounded-lg ${tk.hov} flex items-center justify-center flex-shrink-0`}>
+                          <Trash2 className="h-3 w-3 text-red-400" />
+                        </button>
+                      )}
                     </div>
-                    <Input className={`h-8 flex-1 text-xs ${tk.inp}`} placeholder="Message description"
-                      value={s.label}
-                      onChange={e => setForm(p => ({ ...p, steps: p.steps.map((ss, ii) => ii === i ? { ...ss, label: e.target.value } : ss) }))} />
-                    <Input className={`h-8 w-24 text-xs ${tk.inp}`} placeholder="Delay"
-                      value={s.delay}
-                      onChange={e => setForm(p => ({ ...p, steps: p.steps.map((ss, ii) => ii === i ? { ...ss, delay: e.target.value } : ss) }))} />
-                    {i > 0 && (
-                      <button onClick={() => removeStep(i)}
-                        className={`h-7 w-7 rounded-lg ${tk.hov} flex items-center justify-center flex-shrink-0`}>
-                        <Trash2 className="h-3.5 w-3.5 text-red-400" />
-                      </button>
-                    )}
+                    <Input className={`h-8 text-xs ${tk.inp}`} placeholder="WhatsApp message template text…"
+                      value={s.message_template}
+                      onChange={e => setForm(p => ({ ...p, steps: p.steps.map((ss, ii) => ii === i ? { ...ss, message_template: e.target.value } : ss) }))} />
                   </div>
                 ))}
               </div>
@@ -934,7 +1010,7 @@ function DripsTab({ tk, drips, setDrips }) {
             <Button variant="outline" size="sm" className={`border-[var(--border-color)] ${tk.t2}`}
               onClick={() => setShowCreate(false)}>Cancel</Button>
             <Button size="sm" className="bg-[var(--accent)] hover:bg-[var(--accent)]/90 text-white"
-              onClick={create}>Create Sequence</Button>
+              onClick={create} disabled={saving}>{saving ? 'Creating…' : 'Create Sequence'}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -1111,13 +1187,14 @@ export default function MarketingHub() {
   const [waConnected, setWaConnected] = useState(false);
   const [campaigns, setCampaigns] = useState(INIT_CAMPAIGNS);
   const [greetings, setGreetings] = useState(INIT_GREETINGS);
-  const [drips, setDrips] = useState(INIT_DRIPS);
+  const [drips, setDrips] = useState([]);
   const [roles, setRoles] = useState([]);
   const [contacts, setContacts] = useState([]);
 
   useEffect(() => {
     contactRolesApi.getAll().then(r => setRoles(r.data || [])).catch(() => {});
     contactsApi.getAll().then(r => setContacts(r.data || [])).catch(() => {});
+    dripApi.getAll().then(r => setDrips((r.data || []).map(mapSeq))).catch(() => {});
   }, []);
 
   return (
