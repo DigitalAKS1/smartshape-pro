@@ -292,7 +292,7 @@ export default function Inventory() {
             </select>
           </div>
           {/* Category chips — horizontal scroll */}
-          <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none -mx-4 px-4 sm:mx-0 sm:px-0">
+          <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar -mx-4 px-4 sm:mx-0 sm:px-0">
             {['all', ...CATEGORIES].map(c => (
               <button key={c} onClick={() => setCategoryFilter(c)}
                 className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-medium transition-colors border whitespace-nowrap
@@ -707,7 +707,7 @@ function CatalogueCard({ die, uploading, onUpload, onArchive, onEdit, onDeleteRe
   const dlgCls = 'bg-[var(--bg-card)] border-[var(--border-color)] text-[var(--text-primary)]';
 
   return (
-    <div className={`${card} border rounded-xl overflow-hidden flex flex-col ${isArchived ? 'opacity-50' : ''}`}>
+    <div className={`${card} border rounded-xl overflow-hidden flex flex-col group ${isArchived ? 'opacity-50' : ''}`}>
 
       {/* Image area */}
       <div className="relative aspect-square bg-[var(--bg-primary)] overflow-hidden">
@@ -743,36 +743,40 @@ function CatalogueCard({ die, uploading, onUpload, onArchive, onEdit, onDeleteRe
       </div>
 
       {/* Info */}
-      <div className="p-2 flex-1">
-        <p className="font-mono text-[10px] text-[#e94560] font-medium leading-none">{die.code}</p>
-        <h3 className={`text-xs font-semibold ${textPri} leading-tight mt-0.5 line-clamp-2`} title={die.name}>{die.name}</h3>
-        <div className="flex items-center justify-between mt-1">
-          <span className={`text-[10px] ${textMuted} capitalize`}>{die.type}</span>
-          <span className={`font-mono text-sm font-bold ${die.stock_qty === 0 ? 'text-red-500' : die.stock_qty <= die.min_level ? 'text-yellow-500' : textPri}`}>{die.stock_qty}</span>
+      <div className="px-2.5 pt-2 pb-1.5 flex-1">
+        <div className="flex items-start justify-between gap-1">
+          <div className="min-w-0 flex-1">
+            <p className="font-mono text-[10px] text-[#e94560] font-semibold leading-none truncate">{die.code}</p>
+            <h3 className={`text-[11px] font-semibold ${textPri} leading-tight mt-0.5 line-clamp-2`} title={die.name}>{die.name}</h3>
+          </div>
+          <span className={`font-mono text-sm font-bold shrink-0 ml-1 ${die.stock_qty === 0 ? 'text-red-500' : die.stock_qty <= die.min_level ? 'text-yellow-500' : textPri}`}>{die.stock_qty}</span>
         </div>
       </div>
 
-      {/* Action strip — always visible */}
+      {/* Action strip — always visible, touch-friendly */}
       {!isArchived && canWrite && (
         <div className="flex border-t border-[var(--border-color)]">
           <button onClick={() => onStockIn(die)}
-            className="flex-1 flex items-center justify-center gap-1 py-2 text-green-500 hover:bg-green-500/10 active:bg-green-500/20 transition-colors text-[11px] font-medium">
-            <TrendingUp className="h-3 w-3" /><span className="hidden sm:inline">In</span>
+            className="flex-1 flex flex-col items-center justify-center gap-0.5 py-2.5 text-green-500 hover:bg-green-500/10 active:bg-green-500/20 transition-colors min-h-[44px]">
+            <TrendingUp className="h-3.5 w-3.5" />
+            <span className="text-[9px] font-semibold">IN</span>
           </button>
           <div className="w-px bg-[var(--border-color)]" />
           <button onClick={() => onStockOut(die)}
-            className="flex-1 flex items-center justify-center gap-1 py-2 text-red-400 hover:bg-red-500/10 active:bg-red-500/20 transition-colors text-[11px] font-medium">
-            <TrendingDown className="h-3 w-3" /><span className="hidden sm:inline">Out</span>
+            className="flex-1 flex flex-col items-center justify-center gap-0.5 py-2.5 text-red-400 hover:bg-red-500/10 active:bg-red-500/20 transition-colors min-h-[44px]">
+            <TrendingDown className="h-3.5 w-3.5" />
+            <span className="text-[9px] font-semibold">OUT</span>
           </button>
           <div className="w-px bg-[var(--border-color)]" />
           <button onClick={() => onEdit(die)}
-            className={`flex-1 flex items-center justify-center gap-1 py-2 ${textSec} hover:bg-[var(--bg-hover)] active:bg-[var(--bg-hover)] transition-colors text-[11px] font-medium`}>
-            <Edit2 className="h-3 w-3" /><span className="hidden sm:inline">Edit</span>
+            className={`flex-1 flex flex-col items-center justify-center gap-0.5 py-2.5 ${textSec} hover:bg-[var(--bg-hover)] active:bg-[var(--bg-hover)] transition-colors min-h-[44px]`}>
+            <Edit2 className="h-3.5 w-3.5" />
+            <span className="text-[9px] font-semibold">EDIT</span>
           </button>
           <div className="w-px bg-[var(--border-color)]" />
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <button className={`px-2 py-2 ${textMuted} hover:bg-[var(--bg-hover)] transition-colors`}>
+              <button className={`flex flex-col items-center justify-center px-3 py-2.5 ${textMuted} hover:bg-[var(--bg-hover)] transition-colors min-h-[44px]`}>
                 <MoreVertical className="h-3.5 w-3.5" />
               </button>
             </DropdownMenuTrigger>
