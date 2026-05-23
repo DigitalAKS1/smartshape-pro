@@ -83,6 +83,7 @@ export default function LeadsCRM() {
   const [convertNewSchool, setConvertNewSchool] = useState({ school_name: '', school_type: 'CBSE', city: '', phone: '', school_strength: 0 });
   const [contactImportOpen, setContactImportOpen] = useState(false);
   const contactFileRef = useRef(null);
+  const [filterRole, setFilterRole] = useState('');
   // Sorting
   const [sortConfig, setSortConfig] = useState({ key: '', dir: 'asc' });
   // Pagination
@@ -136,6 +137,27 @@ export default function LeadsCRM() {
       }
     }
   }, [loading, leadsList, searchParams]); // eslint-disable-line
+
+  // Role badge colours
+  const ROLE_COLORS = {
+    'Principal':      'bg-purple-500/15 text-purple-500',
+    'Vice Principal': 'bg-indigo-500/15 text-indigo-500',
+    'Teacher':        'bg-green-500/15 text-green-500',
+    'Purchase Head':  'bg-orange-500/15 text-orange-500',
+    'Admin Head':     'bg-blue-500/15 text-blue-500',
+    'Director':       'bg-rose-500/15 text-rose-500',
+    'Coordinator':    'bg-teal-500/15 text-teal-500',
+    'Manager':        'bg-cyan-500/15 text-cyan-500',
+    'Owner':          'bg-amber-500/15 text-amber-600',
+  };
+  const getRoleColor = (name) => ROLE_COLORS[name] || 'bg-gray-500/15 text-gray-400';
+  const getRoleName = (contact) => {
+    if (contact.contact_role_id && rolesList.length) {
+      const r = rolesList.find(r => r.role_id === contact.contact_role_id);
+      if (r) return r.name;
+    }
+    return contact.designation || null;
+  };
 
   // Theme colors
   const card = isDark ? 'bg-[var(--bg-card)] border-[var(--border-color)]' : 'bg-white border-[var(--border-color)]';
@@ -578,7 +600,16 @@ export default function LeadsCRM() {
 
         {/* CONTACTS VIEW */}
         {activeTab === 'contacts' && (() => {
+          // Role counts for filter chips
+          const roleCounts = {};
+          contactsList.forEach(c => {
+            const rn = getRoleName(c);
+            if (rn) roleCounts[rn] = (roleCounts[rn] || 0) + 1;
+          });
+          const topRoles = Object.entries(roleCounts).sort((a, b) => b[1] - a[1]);
+
           let cFiltered = contactsList.filter(c => {
+            if (filterRole && getRoleName(c) !== filterRole) return false;
             if (searchTerm) {
               const s = searchTerm.toLowerCase();
               return (c.name || '').toLowerCase().includes(s) || (c.phone || '').includes(s) || (c.company || '').toLowerCase().includes(s) || (c.email || '').toLowerCase().includes(s);
@@ -591,6 +622,38 @@ export default function LeadsCRM() {
           const paginated = cFiltered.slice((safePage - 1) * contactsPerPage, safePage * contactsPerPage);
           return (
           <div className="space-y-3" data-testid="contacts-list">
+            {/* Role filter chips */}
+            {topRoles.length > 0 && (
+              <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
+                <button
+                  onClick={() => { setFilterRole(''); setContactPage(1); }}
+                  className={`flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full whitespace-nowrap border transition-all ${
+                    filterRole === ''
+                      ? 'bg-[var(--accent)] border-[var(--accent)] text-white'
+                      : 'border-[var(--border-color)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]'
+                  }`}>
+                  All
+                  <span className={`text-[10px] font-bold px-1.5 rounded-full ${filterRole === '' ? 'bg-white/20 text-white' : 'bg-[var(--bg-primary)]'}`}>
+                    {contactsList.length}
+                  </span>
+                </button>
+                {topRoles.map(([role, count]) => (
+                  <button key={role}
+                    onClick={() => { setFilterRole(role); setContactPage(1); }}
+                    className={`flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full whitespace-nowrap border transition-all ${
+                      filterRole === role
+                        ? `${getRoleColor(role)} border-current`
+                        : 'border-[var(--border-color)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]'
+                    }`}>
+                    {role}
+                    <span className={`text-[10px] font-bold px-1.5 rounded-full ${filterRole === role ? 'bg-current/10' : 'bg-[var(--bg-primary)]'}`}>
+                      {count}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+
             {/* Contacts action bar */}
             <div className="flex flex-wrap items-center gap-2">
               <Button onClick={handleContactExport} variant="outline" size="sm" className="border-[var(--border-color)] text-[var(--text-secondary)]" data-testid="export-contacts-btn">
@@ -599,7 +662,7 @@ export default function LeadsCRM() {
               <Button onClick={() => setContactImportOpen(true)} variant="outline" size="sm" className="border-[var(--border-color)] text-[var(--text-secondary)]" data-testid="import-contacts-btn">
                 <Upload className="mr-1 h-3 w-3" /> Import CSV
               </Button>
-              <span className={`text-xs ${textMuted} ml-auto`}>{cFiltered.length} contacts{searchTerm ? ' (filtered)' : ''} • {contactsList.filter(c => c.converted_to_lead).length} converted</span>
+              <span className={`text-xs ${textMuted} ml-auto`}>{cFiltered.length} contacts{searchTerm || filterRole ? ' (filtered)' : ''} • {contactsList.filter(c => c.converted_to_lead).length} converted</span>
             </div>
 
             {cFiltered.length === 0 ? (
@@ -616,7 +679,14 @@ export default function LeadsCRM() {
                     <div key={contact.contact_id} className={`${card} border rounded-md p-3 flex items-start justify-between gap-2 ${contact.converted_to_lead ? 'opacity-60' : ''}`}>
                       <div className="flex-1 min-w-0">
                         <p className={`${textPri} font-medium text-sm truncate`}>{contact.name}</p>
-                        <p className={`text-xs ${textMuted}`}>{contact.designation || contact.company || '—'}</p>
+                        <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                          {getRoleName(contact) && (
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${getRoleColor(getRoleName(contact))}`}>
+                              {getRoleName(contact)}
+                            </span>
+                          )}
+                          {contact.company && <span className={`text-xs ${textMuted} truncate`}>{contact.company}</span>}
+                        </div>
                         <div className="flex items-center gap-3 mt-1.5 flex-wrap">
                           <a href={`tel:${contact.phone}`} className={`text-xs ${textSec} flex items-center gap-1`}><Phone className="h-3 w-3" />{contact.phone}</a>
                           {contact.email && <a href={`mailto:${contact.email}`} className={`text-xs ${textSec} flex items-center gap-1 max-w-[160px] truncate`}><Mail className="h-3 w-3" />{contact.email}</a>}
@@ -653,7 +723,13 @@ export default function LeadsCRM() {
                           <tr key={contact.contact_id} className={`border-t border-[var(--border-color)] hover:bg-[var(--bg-hover)] ${contact.converted_to_lead ? 'opacity-55' : ''}`} data-testid={`contact-row-${contact.contact_id}`}>
                             <td className="py-2.5 px-3">
                               <p className={`${textPri} font-medium text-sm`}>{contact.name}</p>
-                              {contact.designation && <p className={`text-xs ${textMuted}`}>{contact.designation}</p>}
+                              <div className="flex items-center gap-1.5 mt-0.5">
+                                {getRoleName(contact) && (
+                                  <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${getRoleColor(getRoleName(contact))}`}>
+                                    {getRoleName(contact)}
+                                  </span>
+                                )}
+                              </div>
                             </td>
                             <td className="py-2.5 px-3">
                               <a href={`tel:${contact.phone}`} className={`text-sm ${textSec} hover:text-[#e94560]`}>{contact.phone}</a>

@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import AdminLayout from '../../components/layouts/AdminLayout';
 import { useTheme } from '../../contexts/ThemeContext';
+import { contactRoles as contactRolesApi, contacts as contactsApi } from '../../lib/api';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
@@ -263,11 +264,20 @@ function OverviewTab({ tk, campaigns, greetings, drips, waConnected, setTab }) {
 // ══════════════════════════════════════════════════════════════════════════════
 // Tab 2 — Campaigns
 // ══════════════════════════════════════════════════════════════════════════════
-function CampaignsTab({ tk, campaigns, setCampaigns }) {
+function CampaignsTab({ tk, campaigns, setCampaigns, roles, contacts }) {
   const [filter, setFilter] = useState('all');
   const [showCreate, setShowCreate] = useState(false);
   const [step, setStep] = useState(1);
-  const [form, setForm] = useState({ name: '', audience: 'all', template: '', schedule: 'draft', schedule_at: '' });
+  const [form, setForm] = useState({ name: '', audience: 'all', role_id: '', template: '', schedule: 'draft', schedule_at: '' });
+
+  // Live audience count based on selection
+  const audienceCount = (() => {
+    if (form.audience === 'all') return contacts.length;
+    if (form.audience === 'role' && form.role_id) {
+      return contacts.filter(c => c.contact_role_id === form.role_id).length;
+    }
+    return 0;
+  })();
 
   const FILTERS = [
     { key: 'all',       label: 'All',       count: campaigns.length },
@@ -279,15 +289,18 @@ function CampaignsTab({ tk, campaigns, setCampaigns }) {
 
   const filtered = filter === 'all' ? campaigns : campaigns.filter(c => c.status === filter);
 
-  function closeCreate() { setShowCreate(false); setStep(1); setForm({ name: '', audience: 'all', template: '', schedule: 'draft', schedule_at: '' }); }
+  function closeCreate() { setShowCreate(false); setStep(1); setForm({ name: '', audience: 'all', role_id: '', template: '', schedule: 'draft', schedule_at: '' }); }
 
   function createCampaign() {
+    const roleLabel = form.audience === 'role' && form.role_id
+      ? roles.find(r => r.role_id === form.role_id)?.name || 'By Role'
+      : form.audience === 'all' ? 'All Contacts' : form.audience;
     setCampaigns(prev => [{
       id: Date.now().toString(),
       name: form.name || 'Untitled Campaign',
       status: form.schedule === 'schedule' ? 'scheduled' : 'draft',
-      audience_label: form.audience === 'all' ? 'All Contacts' : form.audience === 'label' ? 'By Label' : form.audience,
-      audience_count: 0,
+      audience_label: roleLabel,
+      audience_count: audienceCount,
       stats: { sent: 0, delivered: 0, read: 0, failed: 0 },
       created_at: new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
       scheduled_at: form.schedule_at || null,
@@ -297,10 +310,10 @@ function CampaignsTab({ tk, campaigns, setCampaigns }) {
   }
 
   const AUDIENCE_OPTS = [
-    { key: 'all',   label: 'All Contacts',    desc: '~412 contacts in your database' },
-    { key: 'label', label: 'By Contact Label', desc: 'School Principals, Hot Leads, etc.' },
-    { key: 'city',  label: 'By City',          desc: 'Target contacts in specific cities' },
-    { key: 'board', label: 'By School Board',  desc: 'CBSE, ICSE, State Board, etc.' },
+    { key: 'all',  label: 'All Contacts',      desc: `${contacts.length} contacts in your database` },
+    { key: 'role', label: 'By Designation',    desc: 'Principal, Teacher, Purchase Head, etc.' },
+    { key: 'city', label: 'By City',           desc: 'Target contacts in specific cities' },
+    { key: 'board',label: 'By School Board',   desc: 'CBSE, ICSE, State Board, etc.' },
   ];
 
   return (
@@ -432,25 +445,57 @@ function CampaignsTab({ tk, campaigns, setCampaigns }) {
                     value={form.name} onChange={e => setForm(p => ({ ...p, name: e.target.value }))} />
                 </div>
                 <div>
-                  <Label className={`${tk.t2} text-xs mb-2 block`}>Who do you want to reach?</Label>
+                  <div className="flex items-center justify-between mb-2">
+                    <Label className={`${tk.t2} text-xs`}>Who do you want to reach?</Label>
+                    {audienceCount > 0 && (
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-[var(--accent)]/10 text-[var(--accent)] font-semibold">
+                        ~{audienceCount} contacts
+                      </span>
+                    )}
+                  </div>
                   <div className="space-y-2">
                     {AUDIENCE_OPTS.map(opt => (
-                      <button key={opt.key} onClick={() => setForm(p => ({ ...p, audience: opt.key }))}
-                        className={`w-full flex items-center gap-3 p-3 rounded-xl border-2 text-left transition-colors ${
-                          form.audience === opt.key
-                            ? 'border-[var(--accent)] bg-[var(--accent)]/5'
-                            : `border-[var(--border-color)] ${tk.hov}`
-                        }`}>
-                        <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center flex-shrink-0 ${
-                          form.audience === opt.key ? 'border-[var(--accent)]' : 'border-[var(--text-muted)]'
-                        }`}>
-                          {form.audience === opt.key && <div className="w-2 h-2 rounded-full bg-[var(--accent)]" />}
-                        </div>
-                        <div>
-                          <p className={`text-sm font-medium ${tk.t1}`}>{opt.label}</p>
-                          <p className={`text-[11px] ${tk.tm}`}>{opt.desc}</p>
-                        </div>
-                      </button>
+                      <div key={opt.key}>
+                        <button onClick={() => setForm(p => ({ ...p, audience: opt.key, role_id: '' }))}
+                          className={`w-full flex items-center gap-3 p-3 rounded-xl border-2 text-left transition-colors ${
+                            form.audience === opt.key
+                              ? 'border-[var(--accent)] bg-[var(--accent)]/5'
+                              : `border-[var(--border-color)] ${tk.hov}`
+                          }`}>
+                          <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center flex-shrink-0 ${
+                            form.audience === opt.key ? 'border-[var(--accent)]' : 'border-[var(--text-muted)]'
+                          }`}>
+                            {form.audience === opt.key && <div className="w-2 h-2 rounded-full bg-[var(--accent)]" />}
+                          </div>
+                          <div>
+                            <p className={`text-sm font-medium ${tk.t1}`}>{opt.label}</p>
+                            <p className={`text-[11px] ${tk.tm}`}>{opt.desc}</p>
+                          </div>
+                        </button>
+                        {/* Role sub-selector */}
+                        {opt.key === 'role' && form.audience === 'role' && roles.length > 0 && (
+                          <div className="mt-2 ml-7 flex flex-wrap gap-1.5">
+                            {roles.map(r => {
+                              const cnt = contacts.filter(c => c.contact_role_id === r.role_id).length;
+                              if (cnt === 0) return null;
+                              return (
+                                <button key={r.role_id}
+                                  onClick={() => setForm(p => ({ ...p, role_id: r.role_id }))}
+                                  className={`flex items-center gap-1 text-xs px-2.5 py-1 rounded-full border transition-all ${
+                                    form.role_id === r.role_id
+                                      ? 'bg-[var(--accent)] border-[var(--accent)] text-white'
+                                      : `border-[var(--border-color)] ${tk.t2} ${tk.hov}`
+                                  }`}>
+                                  {r.name}
+                                  <span className={`font-bold text-[10px] ${form.role_id === r.role_id ? 'text-white/80' : tk.tm}`}>
+                                    {cnt}
+                                  </span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
                     ))}
                   </div>
                 </div>
@@ -525,7 +570,7 @@ function CampaignsTab({ tk, campaigns, setCampaigns }) {
                   <p className={`text-[10px] font-bold uppercase tracking-widest ${tk.tm} mb-2`}>Review</p>
                   {[
                     { label: 'Campaign',  value: form.name || 'Untitled' },
-                    { label: 'Audience',  value: AUDIENCE_OPTS.find(a => a.key === form.audience)?.label || form.audience },
+                    { label: 'Audience',  value: `${AUDIENCE_OPTS.find(a => a.key === form.audience)?.label || form.audience}${form.audience === 'role' && form.role_id ? ` — ${roles.find(r => r.role_id === form.role_id)?.name || ''}` : ''} (~${audienceCount})` },
                     { label: 'Template',  value: form.template || 'Not selected' },
                     { label: 'Schedule',  value: form.schedule === 'draft' ? 'Save as Draft' : (form.schedule_at || 'Not set') },
                   ].map(r => (
@@ -1059,6 +1104,13 @@ export default function MarketingHub() {
   const [campaigns, setCampaigns] = useState(INIT_CAMPAIGNS);
   const [greetings, setGreetings] = useState(INIT_GREETINGS);
   const [drips, setDrips] = useState(INIT_DRIPS);
+  const [roles, setRoles] = useState([]);
+  const [contacts, setContacts] = useState([]);
+
+  useEffect(() => {
+    contactRolesApi.getAll().then(r => setRoles(r.data || [])).catch(() => {});
+    contactsApi.getAll().then(r => setContacts(r.data || [])).catch(() => {});
+  }, []);
 
   return (
     <AdminLayout>
@@ -1096,7 +1148,7 @@ export default function MarketingHub() {
 
           {/* Content */}
           {tab === 'overview'  && <OverviewTab  tk={tk} campaigns={campaigns} greetings={greetings} drips={drips} waConnected={waConnected} setTab={setTab} />}
-          {tab === 'campaigns' && <CampaignsTab tk={tk} campaigns={campaigns} setCampaigns={setCampaigns} />}
+          {tab === 'campaigns' && <CampaignsTab tk={tk} campaigns={campaigns} setCampaigns={setCampaigns} roles={roles} contacts={contacts} />}
           {tab === 'greetings' && <GreetingsTab tk={tk} greetings={greetings} setGreetings={setGreetings} />}
           {tab === 'drips'     && <DripsTab     tk={tk} drips={drips} setDrips={setDrips} />}
           {tab === 'setup'     && <WhatsAppSetupTab tk={tk} waConnected={waConnected} setWaConnected={setWaConnected} />}
