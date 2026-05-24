@@ -809,8 +809,9 @@ async def wa_list_attachments(request: Request):
 
 # ── Evolution API webhook (no auth — called by Evolution API server) ───────────
 
+@router.post("/webhooks/whatsapp/{event_name:path}")
 @router.post("/webhooks/whatsapp")
-async def wa_webhook(request: Request):
+async def wa_webhook(request: Request, event_name: str = ""):
     """
     Receives delivery/connection events from Evolution API.
     Silently accepts all payloads and updates message statuses.
