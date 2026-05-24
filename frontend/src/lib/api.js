@@ -254,10 +254,19 @@ export const whatsApp = {
   getProvider:    ()       => API.get('/whatsapp/provider'),
   saveProvider:   (data)   => API.post('/whatsapp/provider', data),
   // ── Evolution API — WhatsApp instance management ──────────────────────────
-  instanceConnect: ()      => API.post('/whatsapp/instance/create'),
-  instanceStatus:  ()      => API.get('/whatsapp/instance/status'),
-  instanceQR:      ()      => API.get('/whatsapp/instance/qr'),
-  instanceLogout:  ()      => API.delete('/whatsapp/instance/logout'),
+  instanceConnect: ()           => API.post('/whatsapp/instance/create'),
+  instanceStatus:  ()           => API.get('/whatsapp/instance/status'),
+  instanceQR:      ()           => API.get('/whatsapp/instance/qr'),
+  instanceLogout:  ()           => API.delete('/whatsapp/instance/logout'),
+  // ── Multi-instance management ─────────────────────────────────────────────
+  listInstances:   ()           => API.get('/whatsapp/instances'),
+  createInstance:  (name)       => API.post(`/whatsapp/instances/${name}`),
+  deleteInstance:  (name)       => API.delete(`/whatsapp/instances/${name}`),
+  instanceQRFor:   (name)       => API.get(`/whatsapp/instances/${name}/qr`),
+  instanceStatusFor: (name)     => API.get(`/whatsapp/instances/${name}/status`),
+  // ── Proxy configuration ───────────────────────────────────────────────────
+  getProxy:        (name)       => API.get(`/whatsapp/proxy/${name}`),
+  setProxy:        (name, data) => API.post(`/whatsapp/proxy/${name}`, data),
   // ── Attachments ───────────────────────────────────────────────────────────
   uploadAttachment: (file) => {
     const fd = new FormData();

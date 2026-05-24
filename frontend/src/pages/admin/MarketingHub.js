@@ -1943,7 +1943,7 @@ function AnalyticsTab({ tk, analytics, campaigns }) {
 // ══════════════════════════════════════════════════════════════════════════════
 // Tab 7 — WhatsApp Setup
 // ══════════════════════════════════════════════════════════════════════════════
-function WhatsAppSetupTab({ tk, waConnected, setWaConnected }) {
+function WhatsAppSetupTab({ tk, waConnected, setWaConnected, evolutionState, openQrDialog }) {
   const PROVIDER_OPTS = [
     { value: 'none',      label: 'Not Connected',      desc: 'Campaigns queue but are not sent' },
     { value: 'meta',      label: 'Meta Cloud API',      desc: 'Official WABA — requires Facebook Business approval' },
@@ -1954,6 +1954,12 @@ function WhatsAppSetupTab({ tk, waConnected, setWaConnected }) {
   const [form, setForm] = useState({ provider: 'none', api_key: '', from_number: '', phone_number_id: '', app_name: 'SmartShape' });
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [instances, setInstances] = useState([]);
+  const [newInstName, setNewInstName] = useState('');
+  const [addingInst, setAddingInst] = useState(false);
+  const [proxy, setProxy] = useState({ host: '', port: '1080', protocol: 'socks5', username: '', password: '' });
+  const [proxyLoading, setProxyLoading] = useState(false);
+  const [savingProxy, setSavingProxy] = useState(false);
 
   useEffect(() => {
     waApi.getProvider().then(r => {
@@ -1961,7 +1967,56 @@ function WhatsAppSetupTab({ tk, waConnected, setWaConnected }) {
       setForm({ provider: d.provider || 'none', api_key: '', from_number: d.from_number || '', phone_number_id: d.phone_number_id || '', app_name: d.app_name || 'SmartShape' });
       setWaConnected(d.connected || false);
     }).catch(() => {}).finally(() => setLoading(false));
+    // Load Evolution API instances
+    waApi.listInstances().then(r => setInstances(r.data || [])).catch(() => {});
+    // Load proxy for default instance
+    setProxyLoading(true);
+    waApi.getProxy('smartshape').then(r => {
+      const d = r.data || {};
+      if (d.host) setProxy({ host: d.host || '', port: d.port || '1080', protocol: d.protocol || 'socks5', username: d.username || '', password: d.password || '' });
+    }).catch(() => {}).finally(() => setProxyLoading(false));
   }, []); // eslint-disable-line
+
+  async function addInstance() {
+    if (!newInstName.trim()) return;
+    setAddingInst(true);
+    try {
+      await waApi.createInstance(newInstName.trim().toLowerCase().replace(/\s+/g, '-'));
+      const r = await waApi.listInstances();
+      setInstances(r.data || []);
+      setNewInstName('');
+      toast.success('Instance created — scan QR to connect');
+    } catch { toast.error('Failed to create instance'); }
+    finally { setAddingInst(false); }
+  }
+
+  async function removeInstance(name) {
+    if (!window.confirm(`Delete WhatsApp instance "${name}"?`)) return;
+    try {
+      await waApi.deleteInstance(name);
+      setInstances(p => p.filter(x => x.name !== name));
+      toast.success('Instance deleted');
+    } catch { toast.error('Failed to delete'); }
+  }
+
+  async function saveProxy() {
+    setSavingProxy(true);
+    try {
+      await waApi.setProxy('smartshape', { ...proxy, enabled: true });
+      toast.success('Proxy saved — restart the instance to apply');
+    } catch (e) { toast.error('Proxy save failed: ' + (e?.response?.data?.detail || e.message)); }
+    finally { setSavingProxy(false); }
+  }
+
+  async function clearProxy() {
+    setSavingProxy(true);
+    try {
+      await waApi.setProxy('smartshape', { host: '', port: '1080', protocol: 'socks5', username: '', password: '', enabled: false });
+      setProxy({ host: '', port: '1080', protocol: 'socks5', username: '', password: '' });
+      toast.success('Proxy cleared');
+    } catch { toast.error('Failed to clear proxy'); }
+    finally { setSavingProxy(false); }
+  }
 
   async function save() {
     if (form.provider !== 'none' && !form.api_key) { toast.error('API key is required'); return; }
@@ -2102,6 +2157,101 @@ function WhatsAppSetupTab({ tk, waConnected, setWaConnected }) {
           </div>
         </div>
       </div>}
+
+      {/* ── Evolution API: Multiple Instances ── */}
+      <div className={`${tk.card} border ${tk.bdr} rounded-xl p-4`}>
+        <div className="flex items-center gap-2 mb-3">
+          <PhoneIcon className={`h-4 w-4 ${tk.tm}`} />
+          <h3 className={`text-sm font-semibold ${tk.t1}`}>WhatsApp Numbers (Evolution API)</h3>
+          <span className={`ml-auto text-[10px] px-2 py-0.5 rounded-full ${evolutionState === 'open' ? 'bg-green-500/15 text-green-500' : 'bg-gray-500/15 text-gray-400'}`}>
+            {evolutionState === 'open' ? '● Connected' : '● Not linked'}
+          </span>
+        </div>
+        <p className={`text-[11px] ${tk.tm} mb-3`}>Each instance is one WhatsApp number. Add numbers for different teams (Sales, Support, etc.).</p>
+
+        {/* Existing instances */}
+        <div className="space-y-2 mb-3">
+          {instances.length === 0
+            ? <p className={`text-[11px] ${tk.tm} italic`}>No instances yet — add one below</p>
+            : instances.map(inst => (
+              <div key={inst.id || inst.name} className={`flex items-center gap-3 px-3 py-2 rounded-lg border ${tk.bdr} ${tk.hov}`}>
+                <span className={`w-2 h-2 rounded-full flex-shrink-0 ${inst.connectionStatus === 'open' ? 'bg-green-500' : inst.connectionStatus === 'connecting' ? 'bg-amber-500 animate-pulse' : 'bg-gray-400'}`} />
+                <div className="flex-1 min-w-0">
+                  <p className={`text-xs font-semibold ${tk.t1}`}>{inst.name}</p>
+                  <p className={`text-[10px] ${tk.tm}`}>{inst.number || 'Not linked'} · {inst.connectionStatus || 'close'}</p>
+                </div>
+                <button onClick={() => openQrDialog && openQrDialog(inst.name)}
+                  className="text-[10px] px-2 py-1 rounded bg-[var(--accent)]/10 text-[var(--accent)] hover:bg-[var(--accent)]/20">
+                  {inst.connectionStatus === 'open' ? 'Reconnect' : 'Connect'}
+                </button>
+                <button onClick={() => removeInstance(inst.name)}
+                  className={`text-[10px] px-2 py-1 rounded bg-red-500/10 text-red-400 hover:bg-red-500/20`}>
+                  Delete
+                </button>
+              </div>
+            ))
+          }
+        </div>
+
+        {/* Add new instance */}
+        <div className="flex gap-2">
+          <Input className={`h-9 flex-1 text-xs ${tk.inp}`} placeholder="e.g. sales, support, orders"
+            value={newInstName} onChange={e => setNewInstName(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && addInstance()} />
+          <Button className="h-9 bg-[var(--accent)] hover:bg-[var(--accent)]/90 text-white text-xs px-4"
+            onClick={addInstance} disabled={addingInst || !newInstName.trim()}>
+            {addingInst ? 'Adding…' : '+ Add'}
+          </Button>
+        </div>
+      </div>
+
+      {/* ── SOCKS5 Proxy (fixes VPS IP ban) ── */}
+      <div className={`${tk.card} border border-amber-500/30 rounded-xl p-4`}>
+        <div className="flex items-center gap-2 mb-1">
+          <Globe className={`h-4 w-4 text-amber-500`} />
+          <h3 className={`text-sm font-semibold ${tk.t1}`}>Residential Proxy</h3>
+          <span className="ml-auto text-[10px] px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-600">Required for QR</span>
+        </div>
+        <p className={`text-[11px] ${tk.tm} mb-3 leading-relaxed`}>
+          WhatsApp blocks datacenter IPs. A residential SOCKS5 proxy routes Baileys through a real home IP so the QR code generates. Recommended: <span className="text-[var(--accent)]">SmartProxy</span>, ProxyScrape, or BrightData (~₹600/mo).
+        </p>
+        {proxyLoading ? <p className={`text-xs ${tk.tm}`}>Loading…</p> : (
+          <div className="grid grid-cols-2 gap-3">
+            <div className="col-span-2 sm:col-span-1">
+              <label className={`text-[11px] ${tk.t2} mb-1 block`}>Proxy Host</label>
+              <Input className={`h-9 text-xs ${tk.inp}`} placeholder="proxy.smartproxy.com"
+                value={proxy.host} onChange={e => setProxy(p => ({ ...p, host: e.target.value }))} />
+            </div>
+            <div>
+              <label className={`text-[11px] ${tk.t2} mb-1 block`}>Port</label>
+              <Input className={`h-9 text-xs ${tk.inp}`} placeholder="1080"
+                value={proxy.port} onChange={e => setProxy(p => ({ ...p, port: e.target.value }))} />
+            </div>
+            <div>
+              <label className={`text-[11px] ${tk.t2} mb-1 block`}>Username</label>
+              <Input className={`h-9 text-xs ${tk.inp}`} placeholder="Optional"
+                value={proxy.username} onChange={e => setProxy(p => ({ ...p, username: e.target.value }))} />
+            </div>
+            <div>
+              <label className={`text-[11px] ${tk.t2} mb-1 block`}>Password</label>
+              <Input type="password" className={`h-9 text-xs ${tk.inp}`} placeholder="Optional"
+                value={proxy.password} onChange={e => setProxy(p => ({ ...p, password: e.target.value }))} />
+            </div>
+            <div className="col-span-2 flex gap-2">
+              <Button className="flex-1 h-9 bg-amber-500 hover:bg-amber-600 text-white text-xs"
+                onClick={saveProxy} disabled={savingProxy || !proxy.host}>
+                {savingProxy ? 'Saving…' : 'Save Proxy & Reconnect'}
+              </Button>
+              {proxy.host && (
+                <Button variant="outline" className={`h-9 text-xs border-[var(--border-color)] ${tk.t2}`}
+                  onClick={clearProxy} disabled={savingProxy}>
+                  Clear
+                </Button>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* Expert marketing plan summary */}
       <div className={`${tk.card} border ${tk.bdr} rounded-xl p-4`}>
@@ -3064,7 +3214,14 @@ export default function MarketingHub() {
       await waApi.instanceConnect().catch(() => {});
       const r = await waApi.instanceQR();
       setQrData(r.data);
-    } catch { toast.error('Could not fetch QR — is Evolution API running?'); }
+    } catch (err) {
+      const msg = err?.response?.data?.detail || '';
+      if (msg.includes('QR') || msg.includes('502')) {
+        toast.error('QR blocked — VPS IP is flagged by WhatsApp. Configure a residential SOCKS5 proxy in WhatsApp Setup.');
+      } else {
+        toast.error('Could not fetch QR — is Evolution API running?');
+      }
+    }
     finally { setQrLoading(false); }
   }
 
@@ -3207,9 +3364,15 @@ export default function MarketingHub() {
               ) : qrData?.base64 ? (
                 <img src={qrData.base64} alt="WhatsApp QR" className="w-48 h-48 rounded-xl" />
               ) : (
-                <div className="flex flex-col items-center gap-3 text-center">
-                  <PhoneIcon className="h-10 w-10 text-gray-400" />
-                  <p className={`text-xs ${tk.tm}`}>QR not available — make sure Evolution API is running</p>
+                <div className="flex flex-col items-center gap-3 text-center max-w-xs">
+                  <PhoneIcon className="h-10 w-10 text-amber-400" />
+                  <p className={`text-sm font-semibold ${tk.t1}`}>QR Generation Blocked</p>
+                  <p className={`text-[11px] ${tk.tm} leading-relaxed`}>
+                    WhatsApp rejects connections from datacenter IPs. To fix this, configure a <strong>residential SOCKS5 proxy</strong> in the WhatsApp Setup tab, then try again.
+                  </p>
+                  <p className={`text-[10px] text-amber-600 bg-amber-500/10 px-3 py-1.5 rounded-lg`}>
+                    Proxy providers: SmartProxy · ProxyScrape · BrightData
+                  </p>
                 </div>
               )}
             </div>
