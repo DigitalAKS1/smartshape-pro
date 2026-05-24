@@ -265,13 +265,13 @@ async def startup():
         {"module_id": "mod_payroll", "name": "payroll", "display_name": "Payroll", "category": "hr", "sort_order": 9, "is_active": True},
         {"module_id": "mod_accounts", "name": "accounts", "display_name": "Accounts", "category": "accounts", "sort_order": 10, "is_active": True},
         {"module_id": "mod_hr", "name": "hr", "display_name": "HR", "category": "hr", "sort_order": 11, "is_active": True},
-        {"module_id": "mod_leave", "name": "leave_management", "display_name": "Leave Management", "category": "hr", "sort_order": 12, "is_active": True},
         {"module_id": "mod_store", "name": "store", "display_name": "Store", "category": "store", "sort_order": 12, "is_active": True},
-        {"module_id": "mod_settings", "name": "settings", "display_name": "Settings", "category": "admin", "sort_order": 13, "is_active": True},
-        {"module_id": "mod_user_mgmt", "name": "user_management", "display_name": "User Management", "category": "admin", "sort_order": 14, "is_active": True},
-        {"module_id": "mod_field_sales", "name": "field_sales", "display_name": "Field Sales", "category": "sales", "sort_order": 15, "is_active": True},
-        {"module_id": "mod_leads", "name": "leads", "display_name": "Leads & CRM", "category": "sales", "sort_order": 16, "is_active": True},
-        {"module_id": "mod_sales", "name": "sales_portal", "display_name": "Sales Portal", "category": "sales", "sort_order": 17, "is_active": True},
+        {"module_id": "mod_leave", "name": "leave_management", "display_name": "Leave Management", "category": "hr", "sort_order": 13, "is_active": True},
+        {"module_id": "mod_settings", "name": "settings", "display_name": "Settings", "category": "admin", "sort_order": 14, "is_active": True},
+        {"module_id": "mod_user_mgmt", "name": "user_management", "display_name": "User Management", "category": "admin", "sort_order": 15, "is_active": True},
+        {"module_id": "mod_field_sales", "name": "field_sales", "display_name": "Field Sales", "category": "sales", "sort_order": 16, "is_active": True},
+        {"module_id": "mod_leads", "name": "leads", "display_name": "Leads & CRM", "category": "sales", "sort_order": 17, "is_active": True},
+        {"module_id": "mod_sales", "name": "sales_portal", "display_name": "Sales Portal", "category": "sales", "sort_order": 18, "is_active": True},
     ]
     for mod in default_modules:
         existing_mod = await db.modules.find_one({"module_id": mod["module_id"]})

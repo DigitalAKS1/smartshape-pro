@@ -98,13 +98,21 @@ function SmartRedirect() {
   if (userModules.includes('sales_portal')) {
     return <Navigate to="/sales" replace />;
   }
+  if (userModules.includes('payroll') || userModules.includes('hr') || userModules.includes('accounts')) {
+    const dest = userModules.includes('accounts') ? '/accounts' : userModules.includes('payroll') ? '/payroll' : '/hr';
+    return <Navigate to={dest} replace />;
+  }
+  if (userModules.includes('leave_management')) {
+    return <Navigate to="/leave-management" replace />;
+  }
   // Find any assigned module's route
   const ROUTE_FOR_MODULE = {
     dashboard: '/dashboard', quotations: '/quotations', inventory: '/inventory',
     stock_management: '/stock-management', purchase_alerts: '/purchase-alerts',
     package_master: '/package-master', physical_count: '/physical-count',
     analytics: '/analytics', payroll: '/payroll', accounts: '/accounts',
-    hr: '/hr', store: '/store', field_sales: '/field-sales', leads: '/leads', settings: '/settings',
+    hr: '/hr', store: '/store', leave_management: '/leave-management',
+    field_sales: '/field-sales', leads: '/leads', settings: '/settings',
     user_management: '/user-management', sales_portal: '/sales',
   };
   for (const mod of userModules) {
