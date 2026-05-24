@@ -11,7 +11,6 @@ Import:
 import os
 import logging
 import asyncio
-from functools import lru_cache
 
 logger = logging.getLogger(__name__)
 
@@ -38,16 +37,22 @@ _STAGE_NUDGES = {
 }
 
 
-@lru_cache(maxsize=1)
+_anthropic_client = None
+
+
 def _get_client():
-    """Lazy-load Anthropic client — cached after first call."""
+    """Lazy-load Anthropic client — cached once successfully initialized."""
+    global _anthropic_client
+    if _anthropic_client is not None:
+        return _anthropic_client
     key = os.getenv("ANTHROPIC_API_KEY", "")
     if not key:
         logger.warning("ANTHROPIC_API_KEY not set — AI personalisation disabled, using template fallback")
         return None
     try:
         import anthropic
-        return anthropic.Anthropic(api_key=key)
+        _anthropic_client = anthropic.Anthropic(api_key=key)
+        return _anthropic_client
     except ImportError:
         logger.error("anthropic package not installed")
         return None

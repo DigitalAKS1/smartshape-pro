@@ -9,7 +9,7 @@ import { Switch } from '../../components/ui/switch';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '../../components/ui/dialog';
 import { toast } from 'sonner';
 import {
-  Megaphone, MessageSquare, Zap, CalendarDays, Smartphone,
+  Megaphone, MessageSquare, Zap, CalendarDays,
   Send, Users, Plus, TrendingUp, CheckCircle, Clock,
   AlertCircle, WifiOff, BarChart2, Star, Gift,
   RefreshCw, MoreVertical, ArrowRight, Activity,
@@ -17,7 +17,7 @@ import {
   Check, Wifi, Calendar, Key, Globe, Copy,
   Flag, BookOpen, Heart, School, Cake, FileText,
   PieChart, Target, Inbox, X, Mail, AtSign,
-  Paperclip, Brain, Upload, Smartphone as PhoneIcon, QrCode, Link2, Loader2,
+  Paperclip, Brain, Upload, Smartphone as PhoneIcon, QrCode, Loader2,
 } from 'lucide-react';
 
 // ── Design tokens ─────────────────────────────────────────────────────────────

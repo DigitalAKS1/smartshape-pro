@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException, Request, UploadFile, File, BackgroundTasks
 from fastapi.responses import JSONResponse
+from typing import Optional
 from datetime import datetime, timezone
 import uuid
 import os
@@ -481,6 +482,13 @@ async def launch_campaign(campaign_id: str, request: Request, background_tasks: 
     contacts = await _resolve_audience(camp.get("audience_filter", {}))
     now = datetime.now(timezone.utc).isoformat()
 
+    # Batch-fetch lead stages so AI personalizer gets the correct pipeline nudge
+    lead_ids = list({c.get("lead_id") for c in contacts if c.get("lead_id")})
+    lead_stage_map: dict = {}
+    if lead_ids:
+        async for ld in db.leads.find({"lead_id": {"$in": lead_ids}}, {"_id": 0, "lead_id": 1, "stage": 1}):
+            lead_stage_map[ld["lead_id"]] = ld.get("stage", "")
+
     # Create pending records synchronously (fast) — background task does actual sending
     queued = 0
     sched_ids = []
@@ -508,7 +516,7 @@ async def launch_campaign(campaign_id: str, request: Request, background_tasks: 
                 "company": contact.get("company", ""),
                 "designation": contact.get("designation", ""),
                 "city": contact.get("city", ""),
-                "stage": contact.get("stage", ""),
+                "stage": lead_stage_map.get(contact.get("lead_id", ""), ""),
             },
         })
         queued += 1
@@ -550,7 +558,7 @@ async def _send_campaign_background(
     campaign_id: str,
     sched_ids: list,
     template: str,
-    attachment_doc: dict | None,
+    attachment_doc: Optional[dict],
     ai_enabled: bool,
     send_delay: float,
 ):

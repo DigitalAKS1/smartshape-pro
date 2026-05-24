@@ -4,6 +4,7 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone
 import uuid
 import os
+import re
 import requests
 import logging
 
@@ -100,7 +101,7 @@ async def _auto_register_from_quotation(quot: dict, created_by_email: str):
     # ── 1. School ──────────────────────────────────────────────────────────────
     if sname:
         existing_school = await db.schools.find_one(
-            {"school_name": {"$regex": f"^{sname}$", "$options": "i"}},
+            {"school_name": {"$regex": f"^{re.escape(sname)}$", "$options": "i"}},
             {"_id": 0, "school_id": 1}
         )
         if existing_school:
@@ -225,7 +226,7 @@ async def _crm_hook_quotation(quot_doc: dict):
         return
     # Find matching school by name (case-insensitive)
     school = await db.schools.find_one(
-        {"school_name": {"$regex": f"^{school_name}$", "$options": "i"}}, {"_id": 0, "school_id": 1}
+        {"school_name": {"$regex": f"^{re.escape(school_name)}$", "$options": "i"}}, {"_id": 0, "school_id": 1}
     )
     school_id = school["school_id"] if school else None
 
