@@ -5,7 +5,12 @@ version: '3.8'
 # Usage:
 #   1. Copy .env.evolution.example → .env.evolution and fill in values
 #   2. docker compose -f docker-compose.evolution.yml up -d
-#   3. Open SmartShape → Marketing → WhatsApp → Connect → scan QR
+#   3. (First time only) bash setup_tor_proxy.sh   ← routes Evolution
+#      traffic through Tor so WhatsApp accepts the VPS connection
+#   4. Open SmartShape → Marketing → WhatsApp → Connect → scan QR
+#
+# If QR still fails after step 3:
+#   docker compose -f docker-compose.evolution.yml restart evolution-api
 # ────────────────────────────────────────────────────────────────────
 
 services:

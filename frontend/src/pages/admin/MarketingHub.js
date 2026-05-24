@@ -3390,7 +3390,7 @@ export default function MarketingHub() {
               }`} />
               <span className="font-medium">
                 {evolutionState === 'open' ? 'Connected — closing dialog…' :
-                 evolutionState === 'connecting' ? 'Scanning detected — waiting for confirmation…' :
+                 evolutionState === 'connecting' ? 'Connecting to WhatsApp…' :
                  'Waiting for QR scan…'}
               </span>
             </div>
