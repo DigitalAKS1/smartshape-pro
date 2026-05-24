@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { todayActions } from '../lib/api';
+import { useAuth } from '../contexts/AuthContext';
 import { toast } from 'sonner';
 import { Phone, MessageSquare, CheckCircle2, Calendar, Flame, Clock, MapPin, User, AlertTriangle, Loader2, X, RefreshCw } from 'lucide-react';
 import { Button } from '../components/ui/button';
@@ -25,6 +26,8 @@ const STAGE_COLORS = {
 
 export default function TodayDashboard() {
   const nav = useNavigate();
+  const { user } = useAuth();
+  const isSales = user?.role === 'sales';
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -163,21 +166,21 @@ export default function TodayDashboard() {
         {/* Overdue */}
         {overdue.length > 0 && (
           <Section title="Overdue" count={overdue.length} icon={AlertTriangle} accent="text-red-400" testid="section-overdue">
-            {overdue.map((c, i) => <ActionCard key={c.plan_id || c.lead_id} card={c} isOverdue onWa={openWa} onMarkDone={openMarkDone} showSwipeHint={i === 0} onView={() => nav(c.kind.includes('visit') ? '/visit-planning' : `/leads?lead=${c.lead_id}`)} />)}
+            {overdue.map((c, i) => <ActionCard key={c.plan_id || c.lead_id} card={c} isOverdue onWa={openWa} onMarkDone={openMarkDone} showSwipeHint={i === 0} onView={() => nav(c.kind.includes('visit') ? (isSales ? '/sales/visits' : '/visit-planning') : (isSales ? '/sales/leads' : `/leads?lead=${c.lead_id}`))} />)}
           </Section>
         )}
 
         {/* Calls Today */}
         {calls_today.length > 0 && (
           <Section title="Calls Due Today" count={calls_today.length} icon={Phone} accent="text-yellow-400" testid="section-calls">
-            {calls_today.map((c, i) => <ActionCard key={c.lead_id} card={c} onWa={openWa} onMarkDone={openMarkDone} showSwipeHint={overdue.length === 0 && i === 0} onView={() => nav(`/leads?lead=${c.lead_id}`)} />)}
+            {calls_today.map((c, i) => <ActionCard key={c.lead_id} card={c} onWa={openWa} onMarkDone={openMarkDone} showSwipeHint={overdue.length === 0 && i === 0} onView={() => nav(isSales ? '/sales/leads' : `/leads?lead=${c.lead_id}`)} />)}
           </Section>
         )}
 
         {/* Visits Today */}
         {visits_today.length > 0 && (
           <Section title="Visits Today" count={visits_today.length} icon={MapPin} accent="text-blue-400" testid="section-visits">
-            {visits_today.map((c, i) => <ActionCard key={c.plan_id} card={c} onWa={openWa} onMarkDone={openMarkDone} showSwipeHint={overdue.length === 0 && calls_today.length === 0 && i === 0} onView={() => nav('/visit-planning')} />)}
+            {visits_today.map((c, i) => <ActionCard key={c.plan_id} card={c} onWa={openWa} onMarkDone={openMarkDone} showSwipeHint={overdue.length === 0 && calls_today.length === 0 && i === 0} onView={() => nav(isSales ? '/sales/visits' : '/visit-planning')} />)}
           </Section>
         )}
       </div>

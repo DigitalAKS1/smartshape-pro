@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { Home, Target, MapPin, Package, User, Wifi, WifiOff, Download } from 'lucide-react';
+import { Home, Target, MapPin, Package, FileText, CalendarDays, Megaphone, Wifi, WifiOff, Download } from 'lucide-react';
 import AdminLayout from './AdminLayout';
 import SalesLayout from './SalesLayout';
 import { useAuth } from '../../contexts/AuthContext';
@@ -53,13 +53,20 @@ export default function AppShell({ children }) {
     return <Layout>{children}</Layout>;
   }
 
-  // Mobile shell
-  const tabs = [
-    { path: '/today', icon: Home, label: 'Today' },
-    { path: '/leads', icon: Target, label: 'Leads' },
-    { path: '/visit-planning', icon: MapPin, label: 'Visits' },
-    { path: '/orders', icon: Package, label: 'Orders' },
-    { path: '/profile', icon: User, label: 'Profile' },
+  // Mobile shell — role-aware tabs
+  const isSalesUser = user?.role === 'sales';
+  const tabs = isSalesUser ? [
+    { path: '/today',               icon: Home,         label: 'Today'  },
+    { path: '/sales/leads',         icon: Target,       label: 'Leads'  },
+    { path: '/sales/visits',        icon: MapPin,       label: 'Visits' },
+    { path: '/sales/quotations',    icon: FileText,     label: 'Quotes' },
+    { path: '/leave-management',    icon: CalendarDays, label: 'Leave'  },
+  ] : [
+    { path: '/today',           icon: Home,    label: 'Today'   },
+    { path: '/leads',           icon: Target,  label: 'CRM'     },
+    { path: '/visit-planning',  icon: MapPin,  label: 'Visits'  },
+    { path: '/orders',          icon: Package, label: 'Orders'  },
+    { path: '/marketing',       icon: Megaphone, label: 'Mktg'  },
   ];
 
   return (

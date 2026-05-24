@@ -157,6 +157,7 @@ function mapSeq(s) {
 function OverviewTab({ tk, campaigns, greetings, drips, waConnected, setTab, analytics, loadDemo, clearDemo }) {
   const [demoLoading, setDemoLoading] = useState(false);
   const [clearLoading, setClearLoading] = useState(false);
+  const [demoExpanded, setDemoExpanded] = useState(false);
   const hasDemo = campaigns.some(c => c.name?.includes('[DEMO]'));
 
   async function handleLoadDemo() {
@@ -173,97 +174,88 @@ function OverviewTab({ tk, campaigns, greetings, drips, waConnected, setTab, ana
   const dripActive   = analytics?.drips?.active   ?? drips.filter(d => d.active).length;
   const greetSent    = analytics?.greetings?.total_sent ?? 0;
 
+  const activeGreets = greetings.filter(g => g.active).length;
   const kpis = [
-    { label: 'Campaigns',         value: campaigns.length,                                       icon: Megaphone,  col: 'text-purple-500',  bg: 'bg-purple-500/10' },
-    { label: 'Messages Sent',     value: msgSent ? msgSent.toLocaleString('en-IN') : '—',        icon: Send,       col: 'text-blue-500',    bg: 'bg-blue-500/10' },
-    { label: 'Messages Pending',  value: msgPending || '—',                                      icon: Inbox,      col: 'text-orange-500',  bg: 'bg-orange-500/10' },
-    { label: 'Active Drips',      value: dripActive,                                             icon: Zap,        col: 'text-yellow-500',  bg: 'bg-yellow-500/10' },
-    { label: 'Greetings Sent',    value: greetSent ? greetSent.toLocaleString('en-IN') : greetings.filter(g => g.active).length + ' active', icon: Gift, col: 'text-pink-500', bg: 'bg-pink-500/10' },
-    { label: 'WhatsApp',          value: waConnected ? 'Connected' : 'Not Set Up',               icon: waConnected ? Wifi : WifiOff, col: waConnected ? 'text-green-500' : 'text-red-500', bg: waConnected ? 'bg-green-500/10' : 'bg-red-500/10' },
+    { label: 'Campaigns',        value: campaigns.length,                                 icon: Megaphone,                   col: 'text-purple-500', bg: 'bg-purple-500/10' },
+    { label: 'Messages Sent',    value: msgSent ? msgSent.toLocaleString('en-IN') : '—', icon: Send,                        col: 'text-blue-500',   bg: 'bg-blue-500/10' },
+    { label: 'Messages Pending', value: msgPending || '—',                               icon: Inbox,                       col: 'text-orange-500', bg: 'bg-orange-500/10' },
+    { label: 'Active Drips',     value: dripActive,                                      icon: Zap,                         col: 'text-yellow-500', bg: 'bg-yellow-500/10' },
+    { label: 'Greetings',        value: greetSent || activeGreets,                       sub: greetSent ? 'total sent' : 'active rules', icon: Gift, col: 'text-pink-500', bg: 'bg-pink-500/10' },
+    { label: 'WhatsApp',         value: waConnected ? 'On' : 'Off',                      sub: waConnected ? 'Connected' : 'Not set up', icon: waConnected ? Wifi : WifiOff, col: waConnected ? 'text-green-500' : 'text-red-500', bg: waConnected ? 'bg-green-500/10' : 'bg-red-500/10' },
   ];
 
   return (
     <div className="space-y-5">
 
-      {/* ── Demo banner ────────────────────────────────────────────────────── */}
-      <div className={`${tk.card} border ${tk.bdr} rounded-xl p-4`}>
-        <div className="flex items-start sm:items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-[var(--accent)]/10 flex items-center justify-center flex-shrink-0">
-            <Zap className="h-5 w-5 text-[var(--accent)]" />
+      {/* ── Demo banner (collapsible) ──────────────────────────────────────── */}
+      <div className={`${tk.card} border ${tk.bdr} rounded-xl overflow-hidden`}>
+        <div className="flex items-center gap-3 px-4 py-2.5 cursor-pointer select-none"
+          onClick={() => setDemoExpanded(p => !p)}>
+          <div className="w-7 h-7 rounded-lg bg-[var(--accent)]/10 flex items-center justify-center flex-shrink-0">
+            <Zap className="h-3.5 w-3.5 text-[var(--accent)]" />
           </div>
           <div className="flex-1 min-w-0">
             <p className={`text-sm font-semibold ${tk.t1}`}>Try the Demo</p>
-            <p className={`text-xs ${tk.tm} mt-0.5 leading-relaxed`}>
+            {!demoExpanded && <p className={`text-[11px] ${tk.tm}`}>Load sample data to explore all features</p>}
+          </div>
+          <div className="flex items-center gap-2 flex-shrink-0" onClick={e => e.stopPropagation()}>
+            {hasDemo && (
+              <Button size="sm" variant="outline"
+                className="h-7 gap-1 text-xs border-red-400/40 text-red-400 hover:bg-red-400/10"
+                disabled={clearLoading} onClick={handleClearDemo}>
+                {clearLoading ? <RefreshCw className="h-3 w-3 animate-spin" /> : <X className="h-3 w-3" />}
+                Clear
+              </Button>
+            )}
+            <Button size="sm"
+              className="h-7 gap-1 text-xs bg-[var(--accent)] hover:bg-[var(--accent)]/90 text-white"
+              disabled={demoLoading} onClick={handleLoadDemo}>
+              {demoLoading ? <RefreshCw className="h-3 w-3 animate-spin" /> : <Play className="h-3 w-3" />}
+              {hasDemo ? 'Re-seed' : 'Demo'}
+            </Button>
+            <ChevronDown className={`h-4 w-4 ${tk.tm} transition-transform flex-shrink-0 ${demoExpanded ? 'rotate-180' : ''}`} />
+          </div>
+        </div>
+
+        {demoExpanded && (
+          <div className={`border-t ${tk.bdr} px-4 pb-4 pt-3`}>
+            <p className={`text-xs ${tk.tm} leading-relaxed mb-4`}>
               Load 5 sample school contacts (Ramesh · Priya · Rajesh · Anita · Suresh), 3 campaigns
               (Diwali completed · New Year queued · Year-End draft), drip enrollments &amp; greeting logs —
               to see every tab populated with realistic data.
             </p>
-          </div>
-          <div className="flex items-center gap-2 flex-shrink-0">
             {hasDemo && (
-              <Button size="sm" variant="outline"
-                className={`h-8 gap-1 text-xs border-red-400/40 text-red-400 hover:bg-red-400/10`}
-                disabled={clearLoading} onClick={handleClearDemo}>
-                {clearLoading ? <RefreshCw className="h-3 w-3 animate-spin" /> : <X className="h-3 w-3" />}
-                Clear Demo
-              </Button>
-            )}
-            <Button size="sm"
-              className="h-8 gap-1 text-xs bg-[var(--accent)] hover:bg-[var(--accent)]/90 text-white"
-              disabled={demoLoading} onClick={handleLoadDemo}>
-              {demoLoading ? <RefreshCw className="h-3 w-3 animate-spin" /> : <Play className="h-3 w-3" />}
-              {hasDemo ? 'Re-seed Demo' : 'Load Demo Data'}
-            </Button>
-          </div>
-        </div>
-
-        {/* Step-by-step story */}
-        {hasDemo && (
-          <div className={`mt-4 pt-4 border-t ${tk.bdr}`}>
-            <p className={`text-[10px] font-bold uppercase tracking-widest ${tk.tm} mb-3`}>Demo Story — What was seeded</p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
-              {[
-                {
-                  step: '1. Contacts added',
-                  detail: '5 school personas: Ramesh (Principal, DPS), Priya (Teacher, St. Mary\'s), Rajesh (Purchase, Navyug), Anita (Principal, Ryan), Suresh (Teacher, DAV)',
-                  col: 'text-blue-500', bg: 'bg-blue-500/10',
-                },
-                {
-                  step: '2. Campaigns created',
-                  detail: 'Diwali Offer (completed, 5 sent) · New Academic Year (queued, 2 pending to principals) · Year End Clearance (draft — click Launch to send!)',
-                  col: 'text-purple-500', bg: 'bg-purple-500/10',
-                },
-                {
-                  step: '3. Drip sequence flow',
-                  detail: 'Ramesh got Day-0 intro + Day-3 catalogue (sent). Day-7 offer is PENDING. Priya got Day-0 intro (sent). Day-3 showcase is PENDING.',
-                  col: 'text-yellow-500', bg: 'bg-yellow-500/10',
-                },
-                {
-                  step: '4. Auto-greetings sent',
-                  detail: 'Teachers\' Day sent to Ramesh & Priya (Sep 5, 2025). New Year sent to Ramesh, Anita & Suresh (Jan 1, 2026). Check Analytics tab!',
-                  col: 'text-pink-500', bg: 'bg-pink-500/10',
-                },
-              ].map(s => (
-                <div key={s.step} className={`${s.bg} rounded-xl p-3`}>
-                  <p className={`text-[11px] font-bold ${s.col} mb-1`}>{s.step}</p>
-                  <p className={`text-[10px] ${tk.tm} leading-relaxed`}>{s.detail}</p>
+              <>
+                <p className={`text-[10px] font-bold uppercase tracking-widest ${tk.tm} mb-3`}>Demo Story — What was seeded</p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+                  {[
+                    { step: '1. Contacts added', detail: '5 school personas: Ramesh (Principal, DPS), Priya (Teacher, St. Mary\'s), Rajesh (Purchase, Navyug), Anita (Principal, Ryan), Suresh (Teacher, DAV)', col: 'text-blue-500', bg: 'bg-blue-500/10' },
+                    { step: '2. Campaigns created', detail: 'Diwali Offer (completed, 5 sent) · New Academic Year (queued, 2 pending to principals) · Year End Clearance (draft — click Launch to send!)', col: 'text-purple-500', bg: 'bg-purple-500/10' },
+                    { step: '3. Drip sequence flow', detail: 'Ramesh got Day-0 intro + Day-3 catalogue (sent). Day-7 offer is PENDING. Priya got Day-0 intro (sent). Day-3 showcase is PENDING.', col: 'text-yellow-500', bg: 'bg-yellow-500/10' },
+                    { step: '4. Auto-greetings sent', detail: 'Teachers\' Day sent to Ramesh & Priya (Sep 5, 2025). New Year sent to Ramesh, Anita & Suresh (Jan 1, 2026). Check Analytics tab!', col: 'text-pink-500', bg: 'bg-pink-500/10' },
+                  ].map(s => (
+                    <div key={s.step} className={`${s.bg} rounded-xl p-3`}>
+                      <p className={`text-[11px] font-bold ${s.col} mb-1`}>{s.step}</p>
+                      <p className={`text-[10px] ${tk.tm} leading-relaxed`}>{s.detail}</p>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-            <div className={`mt-3 flex flex-wrap gap-2`}>
-              {[
-                { label: '→ Campaigns tab', tab: 'campaigns', hint: 'See 3 campaigns · Launch the draft!' },
-                { label: '→ Analytics tab', tab: 'analytics', hint: 'See message breakdown chart' },
-                { label: '→ Templates tab', tab: 'templates', hint: 'Browse 15 expert templates' },
-                { label: '→ Greetings tab', tab: 'greetings', hint: 'See 54 rules · toggle active' },
-              ].map(l => (
-                <button key={l.tab} onClick={() => setTab(l.tab)}
-                  className={`flex items-center gap-1.5 text-[11px] px-2.5 py-1.5 rounded-lg border ${tk.bdr} ${tk.hov} ${tk.t2} transition-colors`}>
-                  <span>{l.label}</span>
-                  <span className={`${tk.tm}`}>— {l.hint}</span>
-                </button>
-              ))}
-            </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {[
+                    { label: '→ Campaigns tab', tab: 'campaigns', hint: 'See 3 campaigns · Launch the draft!' },
+                    { label: '→ Analytics tab', tab: 'analytics', hint: 'See message breakdown chart' },
+                    { label: '→ Templates tab', tab: 'templates', hint: 'Browse 15 expert templates' },
+                    { label: '→ Greetings tab', tab: 'greetings', hint: 'See 54 rules · toggle active' },
+                  ].map(l => (
+                    <button key={l.tab} onClick={() => setTab(l.tab)}
+                      className={`flex items-center gap-1.5 text-[11px] px-2.5 py-1.5 rounded-lg border ${tk.bdr} ${tk.hov} ${tk.t2} transition-colors`}>
+                      <span>{l.label}</span>
+                      <span className={`${tk.tm}`}>— {l.hint}</span>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
           </div>
         )}
       </div>
@@ -297,7 +289,10 @@ function OverviewTab({ tk, campaigns, greetings, drips, waConnected, setTab, ana
                 <KIcon className={`h-4 w-4 ${k.col}`} />
               </div>
               <p className={`text-[11px] font-semibold uppercase tracking-widest ${tk.tm} mb-2`}>{k.label}</p>
-              <p className={`text-2xl font-bold ${tk.t1} leading-none tracking-tight`}>{k.value}</p>
+              <p className={`font-bold ${tk.t1} leading-none tracking-tight ${
+                String(k.value).length > 7 ? 'text-base' : String(k.value).length > 4 ? 'text-xl' : 'text-2xl'
+              }`}>{k.value}</p>
+              {k.sub && <p className={`text-[10px] ${tk.tm} mt-1.5`}>{k.sub}</p>}
             </div>
           );
         })}
@@ -314,7 +309,7 @@ function OverviewTab({ tk, campaigns, greetings, drips, waConnected, setTab, ana
               <span className={`text-sm font-bold ${tk.t1}`}>Recent Campaigns</span>
             </div>
             <button onClick={() => setTab('campaigns')}
-              className="text-[11px] text-indigo-500 hover:text-indigo-700 flex items-center gap-0.5 font-semibold transition-colors">
+              className="text-[11px] text-[var(--accent)] hover:text-[var(--accent)]/80 flex items-center gap-0.5 font-semibold transition-colors">
               View all <ChevronRight className="h-3 w-3" />
             </button>
           </div>
@@ -360,7 +355,7 @@ function OverviewTab({ tk, campaigns, greetings, drips, waConnected, setTab, ana
               </span>
             </div>
             <button onClick={() => setTab('greetings')}
-              className="text-[11px] text-indigo-500 hover:text-indigo-700 flex items-center gap-0.5 font-semibold transition-colors">
+              className="text-[11px] text-[var(--accent)] hover:text-[var(--accent)]/80 flex items-center gap-0.5 font-semibold transition-colors">
               Manage <ChevronRight className="h-3 w-3" />
             </button>
           </div>
@@ -395,7 +390,7 @@ function OverviewTab({ tk, campaigns, greetings, drips, waConnected, setTab, ana
             <span className={`text-sm font-bold ${tk.t1}`}>Active Drip Sequences</span>
           </div>
           <button onClick={() => setTab('drips')}
-            className="text-[11px] text-indigo-500 hover:text-indigo-700 flex items-center gap-0.5 font-semibold transition-colors">
+            className="text-[11px] text-[var(--accent)] hover:text-[var(--accent)]/80 flex items-center gap-0.5 font-semibold transition-colors">
             View all <ChevronRight className="h-3 w-3" />
           </button>
         </div>
@@ -2821,7 +2816,7 @@ export default function MarketingHub() {
                 <button key={key} onClick={() => setTab(key)}
                   className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-semibold transition-all whitespace-nowrap border-b-2 -mb-px ${
                     tab === key
-                      ? 'border-indigo-500 text-indigo-600'
+                      ? 'border-[var(--accent)] text-[var(--accent)]'
                       : `border-transparent ${tk.tm} hover:text-[var(--text-secondary)] hover:border-[var(--border-color)]`
                   }`}>
                   <Icon className="h-3.5 w-3.5 flex-shrink-0" />

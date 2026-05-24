@@ -7,7 +7,7 @@ import {
   Warehouse, ClipboardList, DollarSign, Users, LogOut, Menu, X,
   Smartphone, Layers, IndianRupee, UserCog, Store, MapPin, Target,
   Sun, Moon, CalendarDays, Calendar, ShoppingCart, Upload, Activity,
-  Home, MoreHorizontal, Megaphone, ChevronRight,
+  Home, MoreHorizontal, Megaphone, ChevronRight, Zap, Heart,
 } from 'lucide-react';
 import HelpButton from '../HelpButton';
 import GuidedTour from '../GuidedTour';
@@ -46,8 +46,8 @@ const MODULE_ROUTE_MAP = {
     { path: '/leads', icon: Target, label: 'Leads & CRM' },
     { path: '/crm-masters', icon: Layers, label: 'CRM Masters' },
     { path: '/dispatch-tracking', icon: Package, label: 'Dispatch Tracking' },
-    { path: '/customer-engagement', icon: Megaphone, label: 'Customer Engagement' },
-    { path: '/marketing', icon: Megaphone, label: 'Marketing & WhatsApp' },
+    { path: '/customer-engagement', icon: Heart, label: 'Customer Engagement' },
+    { path: '/marketing', icon: Zap, label: 'Marketing & WhatsApp' },
   ],
   sales_portal: { path: '/sales', icon: Smartphone, label: 'Sales Portal' },
   user_management: [
@@ -170,7 +170,8 @@ export default function AdminLayout({ children }) {
             <div className="space-y-px">
               {group.items.map((item) => {
                 const Icon = item.icon;
-                const isActive = location.pathname === item.path;
+                const isActive = location.pathname === item.path
+                  || (item.path !== '/today' && item.path !== '/dashboard' && location.pathname.startsWith(item.path + '/'));
                 return (
                   <Link
                     key={item.path}
@@ -226,13 +227,20 @@ export default function AdminLayout({ children }) {
 
   // ── Bottom nav items ────────────────────────────────────────────────
   const bottomItems = [
-    { path: '/today',       icon: Home,        label: 'Home',   module: 'dashboard' },
-    { path: '/leads',       icon: Target,      label: 'CRM',    module: 'leads' },
-    { path: '/field-sales', icon: MapPin,      label: 'Field',  module: 'field_sales' },
-    { path: '/sales',       icon: Smartphone,  label: 'Sales',  module: 'sales_portal' },
+    { path: '/today',       icon: Home,        label: 'Home',   module: 'dashboard',   related: ['/dashboard'] },
+    { path: '/leads',       icon: Target,      label: 'CRM',    module: 'leads',       related: ['/school-profile', '/crm-masters', '/dispatch-tracking', '/customer-engagement', '/marketing'] },
+    { path: '/field-sales', icon: MapPin,      label: 'Field',  module: 'field_sales', related: ['/visit-planning', '/visit-calendar'] },
+    { path: '/sales',       icon: Smartphone,  label: 'Sales',  module: 'sales_portal',related: ['/quotations', '/create-quotation', '/view-quotation', '/edit-quotation', '/orders'] },
   ].filter(item => isAdmin || userModules.includes(item.module));
 
   const allBottomItems = [...bottomItems, { path: '__more__', icon: MoreHorizontal, label: 'More' }];
+
+  function isBottomActive(item) {
+    const p = location.pathname;
+    if (p === item.path) return true;
+    if (item.related?.some(r => p === r || p.startsWith(r + '/') || p.startsWith(r + '?'))) return true;
+    return false;
+  }
 
   return (
     <div className="min-h-screen bg-[var(--bg-primary)] flex">
@@ -321,9 +329,7 @@ export default function AdminLayout({ children }) {
           {allBottomItems.map((item) => {
             const Icon = item.icon;
             const isMore = item.path === '__more__';
-            const isActive = isMore
-              ? sidebarOpen
-              : location.pathname === item.path || location.pathname.startsWith(item.path + '/');
+            const isActive = isMore ? sidebarOpen : isBottomActive(item);
 
             const tabContent = (
               <>

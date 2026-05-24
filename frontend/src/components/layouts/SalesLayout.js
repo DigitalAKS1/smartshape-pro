@@ -27,6 +27,11 @@ export default function SalesLayout({ children, title, showBack }) {
 
   const navItems = ALL_NAV.filter(item => !item.perm || perms[item.perm]);
 
+  function isNavActive(path) {
+    if (path === '/sales') return location.pathname === '/sales';
+    return location.pathname === path || location.pathname.startsWith(path + '/') || location.pathname.startsWith(path + '?');
+  }
+
   const handleLogout = async () => {
     await logout();
     navigate('/login');
@@ -35,50 +40,54 @@ export default function SalesLayout({ children, title, showBack }) {
   return (
     <div className="min-h-screen bg-[var(--bg-primary)] pb-20">
       {/* Header */}
-      <div className="sticky top-0 z-40 bg-[var(--bg-card)] border-b border-[var(--border-color)] px-4 py-3" data-testid="sales-header">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            {showBack && (
-              <button onClick={() => navigate(-1)} className="p-1.5 rounded-md hover:bg-[var(--bg-hover)] text-[var(--text-secondary)]" data-testid="sales-back-button">
-                <ArrowLeft className="h-5 w-5" />
-              </button>
-            )}
-            <div>
-              <h1 className="text-lg font-bold text-[var(--text-primary)]" data-testid="sales-header-title">
-                {title || 'SmartShape Field'}
-              </h1>
-              <div className="flex items-center gap-1.5">
-                <User className="h-3 w-3 text-[var(--text-muted)]" />
-                <p className="text-xs text-[var(--text-secondary)]">{user?.name}</p>
-                {salesRoleDef && (
-                  <span className={`text-[9px] px-1.5 py-0.5 rounded font-semibold border ${salesRoleDef.cls}`}>
-                    {salesRoleDef.label}
-                  </span>
-                )}
-              </div>
+      <div className="sticky top-0 z-40 bg-[var(--bg-card)] border-b border-[var(--border-color)] px-4"
+        style={{ paddingTop: 'calc(env(safe-area-inset-top) + 10px)', paddingBottom: '10px' }}
+        data-testid="sales-header">
+        <div className="flex items-center gap-3">
+          {showBack && (
+            <button onClick={() => navigate(-1)}
+              className="w-8 h-8 flex items-center justify-center rounded-xl hover:bg-[var(--bg-hover)] text-[var(--text-secondary)] flex-shrink-0"
+              data-testid="sales-back-button">
+              <ArrowLeft className="h-4 w-4" />
+            </button>
+          )}
+
+          {/* Title + user row */}
+          <div className="flex-1 min-w-0">
+            <h1 className="text-[15px] font-bold text-[var(--text-primary)] leading-tight truncate"
+              data-testid="sales-header-title">
+              {title || 'SmartShape Field'}
+            </h1>
+            <div className="flex items-center gap-1.5 mt-0.5">
+              <p className="text-[11px] text-[var(--text-secondary)] truncate">{user?.name}</p>
+              {salesRoleDef && (
+                <span className={`text-[9px] px-1.5 py-0.5 rounded font-semibold border flex-shrink-0 ${salesRoleDef.cls}`}>
+                  {salesRoleDef.label}
+                </span>
+              )}
             </div>
           </div>
-          <div className="flex items-center gap-1">
-            <button onClick={toggleTheme} className="p-2 rounded-md hover:bg-[var(--bg-hover)] text-[var(--text-secondary)]" data-testid="sales-theme-toggle">
+
+          {/* Right actions */}
+          <div className="flex items-center gap-0.5 flex-shrink-0">
+            <button onClick={toggleTheme}
+              className="w-8 h-8 flex items-center justify-center rounded-xl hover:bg-[var(--bg-hover)] text-[var(--text-muted)] transition-colors"
+              data-testid="sales-theme-toggle">
               {isDark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
             </button>
             <Link
               to={isAdmin ? '/dashboard' : '/today'}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-semibold bg-[#e94560] text-white hover:bg-[#f05c75] transition-colors shadow-sm"
-              data-testid="sales-back-to-dashboard"
-            >
-              <ArrowLeft className="h-3.5 w-3.5" />
-              Dashboard
+              className="w-8 h-8 flex items-center justify-center rounded-xl hover:bg-[var(--bg-hover)] text-[var(--text-muted)] hover:text-[#e94560] transition-colors"
+              title="Back to dashboard"
+              data-testid="sales-back-to-dashboard">
+              <User className="h-4 w-4" />
             </Link>
-            <Button
-              onClick={handleLogout}
-              variant="ghost"
-              size="sm"
-              className="text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
-              data-testid="sales-logout-button"
-            >
+            <button onClick={handleLogout}
+              className="w-8 h-8 flex items-center justify-center rounded-xl hover:bg-red-50 text-[var(--text-muted)] hover:text-red-500 transition-colors"
+              title="Logout"
+              data-testid="sales-logout-button">
               <LogOut className="h-4 w-4" />
-            </Button>
+            </button>
           </div>
         </div>
       </div>
@@ -97,7 +106,7 @@ export default function SalesLayout({ children, title, showBack }) {
         <div className="flex items-stretch h-[62px] max-w-lg mx-auto">
           {navItems.map((item) => {
             const Icon = item.icon;
-            const isActive = location.pathname === item.path;
+            const isActive = isNavActive(item.path);
             return (
               <Link
                 key={item.path}

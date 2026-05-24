@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import AdminLayout from '../../components/layouts/AdminLayout';
-import { visitPlans, leads as leadsApi, salesPersons } from '../../lib/api';
+import { visitPlans, leads as leadsApi, salesPersons, schools as schoolsApi, contacts as contactsApi } from '../../lib/api';
 import { useAuth } from '../../contexts/AuthContext';
 import { useTheme } from '../../contexts/ThemeContext';
 import { Button } from '../../components/ui/button';
@@ -14,7 +14,7 @@ import { toast } from 'sonner';
 import {
   Plus, MapPin, Calendar, CheckCircle, Clock, AlertTriangle,
   Trash2, RotateCcw, History, Navigation, Link as LinkIcon,
-  MessageSquare, Loader2, CheckCheck,
+  MessageSquare, Loader2, CheckCheck, Search, X, UserPlus, Building2,
 } from 'lucide-react';
 import WhatsAppSendDialog from '../../components/WhatsAppSendDialog';
 
@@ -116,6 +116,21 @@ export default function VisitPlanning() {
   // Filter
   const [filter, setFilter] = useState('all');
 
+  // School / contact pickers
+  const [schoolsList,      setSchoolsList]      = useState([]);
+  const [contactsList,     setContactsList]     = useState([]);
+  const [schoolQuery,      setSchoolQuery]      = useState('');
+  const [showSchoolDrop,   setShowSchoolDrop]   = useState(false);
+  const [createSchoolMode, setCreateSchoolMode] = useState(false);
+  const [newSchool,        setNewSchool]        = useState({ school_name: '', city: '', board: '' });
+  const [schoolSaving,     setSchoolSaving]     = useState(false);
+  const [contactQuery,     setContactQuery]     = useState('');
+  const [showContactDrop,  setShowContactDrop]  = useState(false);
+  const [selectedContact,  setSelectedContact]  = useState(null);
+  const [createContactMode,setCreateContactMode]= useState(false);
+  const [newContact,       setNewContact]       = useState({ first_name: '', last_name: '', phone: '', designation: '' });
+  const [contactSaving,    setContactSaving]    = useState(false);
+
   // Design tokens
   const tk = isDark ? {
     page:   'bg-[var(--bg-primary)]',
@@ -142,10 +157,12 @@ export default function VisitPlanning() {
   // ── Data ──────────────────────────────────────────────────────────────────
   const fetchData = async () => {
     try {
-      const [pr, lr, spr] = await Promise.all([
+      const [pr, lr, spr, schr, conr] = await Promise.all([
         visitPlans.getAll(), leadsApi.getAll(), salesPersons.getAll(),
+        schoolsApi.getAll(), contactsApi.getAll(),
       ]);
       setPlans(pr.data); setLeadsList(lr.data); setSpList(spr.data);
+      setSchoolsList(schr.data || []); setContactsList(conr.data || []);
     } catch { toast.error('Failed to load data'); }
     finally { setLoading(false); }
   };
@@ -217,6 +234,11 @@ export default function VisitPlanning() {
       planned_address: '', planned_lat: null, planned_lng: null,
     });
     setMapsInput('');
+    setSchoolQuery(''); setShowSchoolDrop(false); setCreateSchoolMode(false);
+    setNewSchool({ school_name: '', city: '', board: '' });
+    setContactQuery(''); setShowContactDrop(false); setSelectedContact(null);
+    setCreateContactMode(false);
+    setNewContact({ first_name: '', last_name: '', phone: '', designation: '' });
     setDialogOpen(true);
   };
 
@@ -337,6 +359,77 @@ export default function VisitPlanning() {
     await visitPlans.delete(planId);
     toast.success('Visit deleted');
     fetchData();
+  };
+
+  // ── School / contact picker logic ─────────────────────────────────────────
+  const filteredSchools = (() => {
+    const q = schoolQuery.toLowerCase();
+    if (!q) return schoolsList.slice(0, 8);
+    return schoolsList.filter(s =>
+      (s.school_name || '').toLowerCase().includes(q) ||
+      (s.city || '').toLowerCase().includes(q)
+    ).slice(0, 8);
+  })();
+
+  const filteredContacts = (() => {
+    const q = contactQuery.toLowerCase();
+    return contactsList.filter(c => {
+      const name = `${c.first_name || ''} ${c.last_name || ''}`.toLowerCase();
+      return !q || name.includes(q) || (c.phone || '').includes(q);
+    }).slice(0, 10);
+  })();
+
+  const handleSelectSchool = (s) => {
+    setForm(f => ({ ...f, school_name: s.school_name, school_id: s.school_id }));
+    setSchoolQuery(s.school_name); setShowSchoolDrop(false);
+  };
+
+  const clearSchool = () => {
+    setForm(f => ({ ...f, school_name: '', school_id: '' }));
+    setSchoolQuery(''); setSelectedContact(null); setContactQuery('');
+  };
+
+  const handleCreateSchool = async () => {
+    if (!newSchool.school_name.trim()) return;
+    setSchoolSaving(true);
+    try {
+      const r = await schoolsApi.create({ ...newSchool });
+      const created = r.data;
+      setSchoolsList(prev => [created, ...prev]);
+      setForm(f => ({ ...f, school_name: created.school_name, school_id: created.school_id }));
+      setSchoolQuery(created.school_name); setCreateSchoolMode(false);
+      setNewSchool({ school_name: '', city: '', board: '' });
+      toast.success('School created');
+    } catch { toast.error('Failed to create school'); }
+    finally { setSchoolSaving(false); }
+  };
+
+  const handleSelectContact = (c) => {
+    setSelectedContact(c);
+    const fullName = [c.first_name, c.last_name].filter(Boolean).join(' ');
+    setForm(f => ({ ...f, lead_name: fullName }));
+    setContactQuery(fullName); setShowContactDrop(false);
+  };
+
+  const clearContact = () => {
+    setSelectedContact(null); setContactQuery('');
+    setForm(f => ({ ...f, lead_name: '' }));
+  };
+
+  const handleCreateContact = async () => {
+    if (!newContact.first_name.trim()) return;
+    setContactSaving(true);
+    try {
+      const fullName = [newContact.first_name, newContact.last_name].filter(Boolean).join(' ');
+      const r = await contactsApi.create({ ...newContact, company: form.school_name || '', name: fullName });
+      const created = r.data;
+      setContactsList(prev => [created, ...prev]);
+      handleSelectContact(created);
+      setCreateContactMode(false);
+      setNewContact({ first_name: '', last_name: '', phone: '', designation: '' });
+      toast.success('Contact created');
+    } catch { toast.error('Failed to create contact'); }
+    finally { setContactSaving(false); }
   };
 
   // ── Computed ──────────────────────────────────────────────────────────────
@@ -471,25 +564,154 @@ export default function VisitPlanning() {
           </DialogHeader>
           <div className="space-y-3.5 py-1">
 
-            {/* Lead select */}
+            {/* ── School picker ─────────────────────────────────────────── */}
+            <div>
+              <Label className={`text-xs ${tk.tm} mb-1.5 block`}>School</Label>
+              {form.school_name && !createSchoolMode ? (
+                <div className={`flex items-center gap-2 rounded-lg px-3 py-2 border ${isDark ? 'bg-[var(--bg-hover)] border-[var(--border-color)]' : 'bg-[#f1f5f9] border-[#e2e8f0]'}`}>
+                  <Building2 className="h-3.5 w-3.5 text-[#e94560] flex-shrink-0" />
+                  <span className={`flex-1 text-sm font-medium ${tk.t1}`}>{form.school_name}</span>
+                  <button type="button" onClick={clearSchool} className={`${tk.tm} hover:text-red-400 p-0.5`}><X className="h-3.5 w-3.5" /></button>
+                </div>
+              ) : !createSchoolMode ? (
+                <div className="relative">
+                  <Search className={`absolute left-2.5 top-2.5 h-3.5 w-3.5 ${tk.tm} pointer-events-none`} />
+                  <Input
+                    value={schoolQuery}
+                    onChange={e => { setSchoolQuery(e.target.value); setShowSchoolDrop(true); }}
+                    onFocus={() => setShowSchoolDrop(true)}
+                    onBlur={() => setTimeout(() => setShowSchoolDrop(false), 150)}
+                    className={`${tk.input} h-10 pl-8 text-sm rounded-lg`}
+                    placeholder="Search school…"
+                  />
+                  {showSchoolDrop && (
+                    <div className={`absolute z-50 mt-1 w-full rounded-xl border shadow-lg max-h-44 overflow-y-auto ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-color)]' : 'bg-white border-[#e2e8f0]'}`}>
+                      {filteredSchools.map(s => (
+                        <button key={s.school_id} type="button" onMouseDown={() => handleSelectSchool(s)}
+                          className={`w-full text-left px-3 py-2 hover:bg-[var(--bg-hover)] transition-colors`}>
+                          <p className={`text-sm font-medium ${tk.t1}`}>{s.school_name}</p>
+                          {(s.city || s.board) && <p className={`text-xs ${tk.tm}`}>{[s.city, s.board].filter(Boolean).join(' · ')}</p>}
+                        </button>
+                      ))}
+                      <button type="button" onMouseDown={() => { setCreateSchoolMode(true); setShowSchoolDrop(false); setNewSchool(n => ({ ...n, school_name: schoolQuery })); }}
+                        className={`w-full text-left px-3 py-2.5 border-t ${isDark ? 'border-[var(--border-color)]' : 'border-[#f1f5f9]'} flex items-center gap-2 text-[#e94560] hover:bg-[var(--bg-hover)] transition-colors`}>
+                        <Plus className="h-3.5 w-3.5" />
+                        <span className="text-xs font-semibold">{schoolQuery ? `Create "${schoolQuery}"` : 'Create new school'}</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ) : null}
+              {createSchoolMode && (
+                <div className={`rounded-xl border p-3 space-y-2 ${isDark ? 'bg-[var(--bg-hover)] border-[var(--border-color)]' : 'bg-[#f8fafc] border-[#e2e8f0]'}`}>
+                  <p className={`text-xs font-semibold ${tk.t2}`}>New School</p>
+                  <Input value={newSchool.school_name} onChange={e => setNewSchool(s => ({ ...s, school_name: e.target.value }))}
+                    className={`h-9 text-sm rounded-lg ${tk.input}`} placeholder="School name *" autoFocus />
+                  <div className="grid grid-cols-2 gap-2">
+                    <Input value={newSchool.city} onChange={e => setNewSchool(s => ({ ...s, city: e.target.value }))}
+                      className={`h-9 text-sm rounded-lg ${tk.input}`} placeholder="City" />
+                    <Input value={newSchool.board} onChange={e => setNewSchool(s => ({ ...s, board: e.target.value }))}
+                      className={`h-9 text-sm rounded-lg ${tk.input}`} placeholder="CBSE / ICSE…" />
+                  </div>
+                  <div className="flex gap-2 justify-end">
+                    <Button type="button" size="sm" variant="ghost" onClick={() => setCreateSchoolMode(false)} className={`h-8 text-xs ${tk.tm}`}>Cancel</Button>
+                    <Button type="button" size="sm" onClick={handleCreateSchool} disabled={schoolSaving || !newSchool.school_name.trim()}
+                      className="h-8 text-xs bg-[#e94560] hover:bg-[#f05c75] text-white px-3 rounded-lg">
+                      {schoolSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : 'Create'}
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* ── Contact picker ────────────────────────────────────────── */}
+            <div>
+              <Label className={`text-xs ${tk.tm} mb-1.5 block`}>Contact Person</Label>
+              {selectedContact && !createContactMode ? (
+                <div className={`flex items-center gap-2 rounded-lg px-3 py-2 border ${isDark ? 'bg-[var(--bg-hover)] border-[var(--border-color)]' : 'bg-[#f1f5f9] border-[#e2e8f0]'}`}>
+                  <UserPlus className="h-3.5 w-3.5 text-blue-500 flex-shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <p className={`text-sm font-medium ${tk.t1}`}>{selectedContact.first_name} {selectedContact.last_name}</p>
+                    {(selectedContact.phone || selectedContact.designation) && (
+                      <p className={`text-xs ${tk.tm}`}>{[selectedContact.designation, selectedContact.phone].filter(Boolean).join(' · ')}</p>
+                    )}
+                  </div>
+                  <button type="button" onClick={clearContact} className={`${tk.tm} hover:text-red-400 p-0.5`}><X className="h-3.5 w-3.5" /></button>
+                </div>
+              ) : !createContactMode ? (
+                <div className="relative">
+                  <Search className={`absolute left-2.5 top-2.5 h-3.5 w-3.5 ${tk.tm} pointer-events-none`} />
+                  <Input
+                    value={contactQuery}
+                    onChange={e => { setContactQuery(e.target.value); setShowContactDrop(true); }}
+                    onFocus={() => setShowContactDrop(true)}
+                    onBlur={() => setTimeout(() => setShowContactDrop(false), 150)}
+                    className={`${tk.input} h-10 pl-8 text-sm rounded-lg`}
+                    placeholder="Search contact name or phone…"
+                  />
+                  {showContactDrop && (
+                    <div className={`absolute z-50 mt-1 w-full rounded-xl border shadow-lg max-h-44 overflow-y-auto ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-color)]' : 'bg-white border-[#e2e8f0]'}`}>
+                      {filteredContacts.map(c => (
+                        <button key={c.contact_id} type="button" onMouseDown={() => handleSelectContact(c)}
+                          className={`w-full text-left px-3 py-2 hover:bg-[var(--bg-hover)] transition-colors`}>
+                          <p className={`text-sm font-medium ${tk.t1}`}>{c.first_name} {c.last_name}</p>
+                          <p className={`text-xs ${tk.tm}`}>{[c.company, c.designation, c.phone].filter(Boolean).join(' · ')}</p>
+                        </button>
+                      ))}
+                      {filteredContacts.length === 0 && contactQuery && (
+                        <div className={`px-3 py-2 text-xs ${tk.tm}`}>No contact found</div>
+                      )}
+                      <button type="button" onMouseDown={() => { setCreateContactMode(true); setShowContactDrop(false); }}
+                        className={`w-full text-left px-3 py-2.5 border-t ${isDark ? 'border-[var(--border-color)]' : 'border-[#f1f5f9]'} flex items-center gap-2 text-blue-500 hover:bg-[var(--bg-hover)] transition-colors`}>
+                        <UserPlus className="h-3.5 w-3.5" />
+                        <span className="text-xs font-semibold">Create new contact</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ) : null}
+              {createContactMode && (
+                <div className={`rounded-xl border p-3 space-y-2 ${isDark ? 'bg-[var(--bg-hover)] border-[var(--border-color)]' : 'bg-[#f8fafc] border-[#e2e8f0]'}`}>
+                  <p className={`text-xs font-semibold ${tk.t2}`}>
+                    New Contact{form.school_name ? ` — ${form.school_name}` : ''}
+                  </p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <Input value={newContact.first_name} onChange={e => setNewContact(c => ({ ...c, first_name: e.target.value }))}
+                      className={`h-9 text-sm rounded-lg ${tk.input}`} placeholder="First name *" autoFocus />
+                    <Input value={newContact.last_name} onChange={e => setNewContact(c => ({ ...c, last_name: e.target.value }))}
+                      className={`h-9 text-sm rounded-lg ${tk.input}`} placeholder="Last name" />
+                  </div>
+                  <Input value={newContact.phone} onChange={e => setNewContact(c => ({ ...c, phone: e.target.value }))}
+                    className={`h-9 text-sm rounded-lg ${tk.input}`} placeholder="Phone" />
+                  <Input value={newContact.designation} onChange={e => setNewContact(c => ({ ...c, designation: e.target.value }))}
+                    className={`h-9 text-sm rounded-lg ${tk.input}`} placeholder="Designation (Principal, VP…)" />
+                  <div className="flex gap-2 justify-end">
+                    <Button type="button" size="sm" variant="ghost" onClick={() => setCreateContactMode(false)} className={`h-8 text-xs ${tk.tm}`}>Cancel</Button>
+                    <Button type="button" size="sm" onClick={handleCreateContact} disabled={contactSaving || !newContact.first_name.trim()}
+                      className="h-8 text-xs bg-blue-600 hover:bg-blue-700 text-white px-3 rounded-lg">
+                      {contactSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : 'Create'}
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* ── Lead link (optional) ─────────────────────────────────── */}
             <div>
               <Label className={`text-xs ${tk.tm} mb-1.5 block`}>Link to Lead (optional)</Label>
               <select value={form.lead_id} onChange={e => {
                 const lead = leadsList.find(l => l.lead_id === e.target.value);
-                setForm({ ...form, lead_id: e.target.value, lead_name: lead?.company_name || '', school_name: lead?.company_name || '', school_id: lead?.school_id || '' });
+                if (lead) {
+                  setForm(f => ({ ...f, lead_id: e.target.value, lead_name: lead.company_name || '', school_name: lead.company_name || '', school_id: lead.school_id || '' }));
+                  setSchoolQuery(lead.company_name || ''); setSelectedContact(null); setContactQuery('');
+                } else {
+                  setForm(f => ({ ...f, lead_id: '' }));
+                }
               }} className={`w-full h-10 px-3 rounded-lg text-sm border ${tk.sel}`}>
                 <option value="">— no lead —</option>
                 {leadsList.map(l => <option key={l.lead_id} value={l.lead_id}>{l.company_name || l.contact_name} ({l.stage})</option>)}
               </select>
             </div>
-
-            {!form.lead_id && (
-              <div>
-                <Label className={`text-xs ${tk.tm} mb-1.5 block`}>School / Location Name</Label>
-                <Input value={form.school_name} onChange={e => setForm({ ...form, school_name: e.target.value })}
-                  className={`h-10 text-sm rounded-lg ${tk.input}`} placeholder="Enter school or place name" />
-              </div>
-            )}
 
             {/* Location input */}
             <div>
