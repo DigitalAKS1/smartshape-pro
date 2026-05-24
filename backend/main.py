@@ -7,6 +7,8 @@ load_dotenv(ROOT_DIR / '.env')
 import asyncio
 import logging
 import os
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s: %(message)s")
 import uuid
 from datetime import datetime, timezone
 from typing import Set
