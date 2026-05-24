@@ -317,22 +317,390 @@ _DEFAULT_RULES = [
         ),
         "is_active": True, "sent_total": 0,
     },
+
+    # ── School Subject & Academic Days ─────────────────────────────────────────
+    {
+        "name": "World Hindi Day",
+        "type": "festival", "category": "School",
+        "trigger": "fixed_date", "fixed_date": "01-10", "is_date_fixed": True,
+        "audience": "all_contacts",
+        "template_body": (
+            "Happy World Hindi Day {name}! 📖 Hindi is not just a language — it is the "
+            "heartbeat of India's culture and identity. Celebrate this beautiful language "
+            "with your students today. Jai Hindi! 🇮🇳 — SmartShape Team"
+        ),
+        "is_active": True, "sent_total": 0,
+    },
+    {
+        "name": "World Mother Language Day",
+        "type": "festival", "category": "School",
+        "trigger": "fixed_date", "fixed_date": "02-21", "is_date_fixed": True,
+        "audience": "all_contacts",
+        "template_body": (
+            "Happy International Mother Language Day {name}! 🗣️ A child learns best in "
+            "their mother tongue. Today, let us celebrate the beautiful diversity of India's "
+            "languages and the rich cultural heritage our schools preserve every day. "
+            "🌺 — SmartShape Team"
+        ),
+        "is_active": True, "sent_total": 0,
+    },
+    {
+        "name": "National Science Day",
+        "type": "festival", "category": "School",
+        "trigger": "fixed_date", "fixed_date": "02-28", "is_date_fixed": True,
+        "audience": "all_contacts",
+        "template_body": (
+            "Happy National Science Day {name}! 🔬 On this day in 1928, Sir C.V. Raman "
+            "discovered the Raman Effect — a proud moment for Indian science. Let us inspire "
+            "today's students to become tomorrow's scientists and innovators! "
+            "🚀 — SmartShape Team"
+        ),
+        "is_active": True, "sent_total": 0,
+    },
+    {
+        "name": "Pi Day (International Mathematics Day)",
+        "type": "festival", "category": "School",
+        "trigger": "fixed_date", "fixed_date": "03-14", "is_date_fixed": True,
+        "audience": "all_contacts",
+        "template_body": (
+            "Happy Pi Day & International Mathematics Day {name}! 🔢 3.14159… Mathematics "
+            "is the language of the universe and the foundation of every great mind. "
+            "SmartShape celebrates every math teacher who makes numbers exciting for students! "
+            "🧮 — SmartShape Team"
+        ),
+        "is_active": True, "sent_total": 0,
+    },
+    {
+        "name": "World Craft Day",
+        "type": "festival", "category": "School",
+        "trigger": "fixed_date", "fixed_date": "03-17", "is_date_fixed": True,
+        "audience": "all_contacts",
+        "template_body": (
+            "Happy World Craft Day {name}! ✂️🎨 Craft is not just an activity — it develops "
+            "fine motor skills, creativity, problem-solving and self-expression in every child. "
+            "As India's craft material experts, SmartShape is proud to support your school's "
+            "craft programme. 🖌️ — SmartShape Team"
+        ),
+        "is_active": True, "sent_total": 0,
+    },
+    {
+        "name": "World Poetry Day",
+        "type": "festival", "category": "School",
+        "trigger": "fixed_date", "fixed_date": "03-21", "is_date_fixed": True,
+        "audience": "all_contacts",
+        "template_body": (
+            "Happy World Poetry Day {name}! ✍️ Poetry teaches children to find beauty in "
+            "words, rhythm in thought and emotion in expression. Share a poem with your "
+            "students today — you might just ignite a lifelong love of literature! "
+            "📜 — SmartShape Team"
+        ),
+        "is_active": True, "sent_total": 0,
+    },
+    {
+        "name": "World Theatre Day",
+        "type": "festival", "category": "School",
+        "trigger": "fixed_date", "fixed_date": "03-27", "is_date_fixed": True,
+        "audience": "all_contacts",
+        "template_body": (
+            "Happy World Theatre Day {name}! 🎭 Theatre builds confidence, empathy and "
+            "creative expression in young minds. A child who performs on stage learns courage, "
+            "communication and collaboration. SmartShape celebrates every school that makes "
+            "space for the performing arts! 🌟 — SmartShape Team"
+        ),
+        "is_active": True, "sent_total": 0,
+    },
+    {
+        "name": "World Art Day",
+        "type": "festival", "category": "School",
+        "trigger": "fixed_date", "fixed_date": "04-15", "is_date_fixed": True,
+        "audience": "all_contacts",
+        "template_body": (
+            "Happy World Art Day {name}! 🎨 On Leonardo da Vinci's birthday, let us celebrate "
+            "the power of art to transform, inspire and heal. Art is not extra — it is "
+            "essential. SmartShape is honoured to provide the tools that help your students "
+            "create masterpieces! 🖌️ — SmartShape Team"
+        ),
+        "is_active": True, "sent_total": 0,
+    },
+    {
+        "name": "World Creativity & Innovation Day",
+        "type": "festival", "category": "School",
+        "trigger": "fixed_date", "fixed_date": "04-21", "is_date_fixed": True,
+        "audience": "all_contacts",
+        "template_body": (
+            "Happy World Creativity & Innovation Day {name}! 💡 Every child is born creative. "
+            "Schools that nurture creativity produce the problem-solvers and innovators of "
+            "tomorrow. SmartShape exists to help your school unlock every child's creative "
+            "potential! ✨ — SmartShape Team"
+        ),
+        "is_active": True, "sent_total": 0,
+    },
+    {
+        "name": "World Book Day",
+        "type": "festival", "category": "School",
+        "trigger": "fixed_date", "fixed_date": "04-23", "is_date_fixed": True,
+        "audience": "all_contacts",
+        "template_body": (
+            "Happy World Book Day {name}! 📚 A reader today is a leader tomorrow. A school "
+            "library is one of the most powerful tools a child can have. SmartShape celebrates "
+            "every school that makes reading a priority and books a treasure! "
+            "📖 — SmartShape Team"
+        ),
+        "is_active": True, "sent_total": 0,
+    },
+    {
+        "name": "World Dance Day",
+        "type": "festival", "category": "School",
+        "trigger": "fixed_date", "fixed_date": "04-29", "is_date_fixed": True,
+        "audience": "all_contacts",
+        "template_body": (
+            "Happy World Dance Day {name}! 💃 Dance teaches rhythm, discipline, coordination "
+            "and pure joy. A child who dances learns to express what words cannot. SmartShape "
+            "celebrates every school that keeps the performing arts alive! 🕺 — SmartShape Team"
+        ),
+        "is_active": True, "sent_total": 0,
+    },
+    {
+        "name": "World Yoga Day",
+        "type": "festival", "category": "Global",
+        "trigger": "fixed_date", "fixed_date": "06-21", "is_date_fixed": True,
+        "audience": "all_contacts",
+        "template_body": (
+            "Happy International Yoga Day {name}! 🧘 Yoga teaches children mindfulness, "
+            "focus, discipline and inner peace — skills that make better students and better "
+            "human beings. SmartShape celebrates every school that nurtures young minds and "
+            "healthy bodies! 🌿 — SmartShape Team"
+        ),
+        "is_active": True, "sent_total": 0,
+    },
+    {
+        "name": "World Music Day",
+        "type": "festival", "category": "School",
+        "trigger": "fixed_date", "fixed_date": "06-21", "is_date_fixed": True,
+        "audience": "all_contacts",
+        "template_body": (
+            "Happy World Music Day (Fête de la Musique) {name}! 🎵 Music enhances learning, "
+            "develops concentration and brings joy. Schools with music programmes produce "
+            "students with higher emotional intelligence and academic achievement. "
+            "🎶 — SmartShape Team"
+        ),
+        "is_active": False, "sent_total": 0,
+    },
+    {
+        "name": "National Sports Day",
+        "type": "festival", "category": "School",
+        "trigger": "fixed_date", "fixed_date": "08-29", "is_date_fixed": True,
+        "audience": "all_contacts",
+        "template_body": (
+            "Happy National Sports Day {name}! 🏆 On Major Dhyan Chand's birthday, we "
+            "celebrate the spirit of sportsmanship every school instils. Sports teach teamwork, "
+            "resilience and discipline — skills that extend far beyond the playing field! "
+            "🥅 — SmartShape Team"
+        ),
+        "is_active": True, "sent_total": 0,
+    },
+    {
+        "name": "World Photography Day",
+        "type": "festival", "category": "School",
+        "trigger": "fixed_date", "fixed_date": "08-19", "is_date_fixed": True,
+        "audience": "all_contacts",
+        "template_body": (
+            "Happy World Photography Day {name}! 📸 Photography teaches children to observe, "
+            "frame and tell stories through their eyes. It is a powerful creative tool for "
+            "school projects, memories and self-expression. SmartShape celebrates visual "
+            "creativity! 🌟 — SmartShape Team"
+        ),
+        "is_active": True, "sent_total": 0,
+    },
+    {
+        "name": "World Literacy Day",
+        "type": "festival", "category": "School",
+        "trigger": "fixed_date", "fixed_date": "09-08", "is_date_fixed": True,
+        "audience": "all_contacts",
+        "template_body": (
+            "Happy International Literacy Day {name}! 📖 Literacy is the foundation of all "
+            "learning. Your school's work in building strong readers and writers is one of the "
+            "most important contributions to India's future. SmartShape salutes every "
+            "educator! — SmartShape Team"
+        ),
+        "is_active": True, "sent_total": 0,
+    },
+    {
+        "name": "World Mental Health Day",
+        "type": "festival", "category": "Global",
+        "trigger": "fixed_date", "fixed_date": "10-10", "is_date_fixed": True,
+        "audience": "all_contacts",
+        "template_body": (
+            "Happy World Mental Health Day {name}! 💚 A child's mental wellbeing is as "
+            "important as their academic achievement. Schools that nurture emotional health "
+            "alongside intelligence build truly whole human beings. Thank you for caring for "
+            "the whole child! 🌸 — SmartShape Team"
+        ),
+        "is_active": True, "sent_total": 0,
+    },
+    {
+        "name": "World Students' Day (APJ Abdul Kalam Jayanti)",
+        "type": "festival", "category": "National",
+        "trigger": "fixed_date", "fixed_date": "10-15", "is_date_fixed": True,
+        "audience": "all_contacts",
+        "template_body": (
+            "Happy World Students' Day {name}! 🚀 On the birth anniversary of Bharat Ratna "
+            "Dr. APJ Abdul Kalam — India's Missile Man and beloved People's President — let us "
+            "inspire every student to dream without limits and work without rest. "
+            "🌟 — SmartShape Team"
+        ),
+        "is_active": True, "sent_total": 0,
+    },
+    {
+        "name": "World Science Day for Peace",
+        "type": "festival", "category": "School",
+        "trigger": "fixed_date", "fixed_date": "11-10", "is_date_fixed": True,
+        "audience": "all_contacts",
+        "template_body": (
+            "Happy World Science Day for Peace & Development {name}! 🔭 Science is humanity's "
+            "greatest tool for solving the world's challenges. Let us inspire every student to "
+            "ask questions, experiment boldly and imagine a better world! "
+            "🌍 — SmartShape Team"
+        ),
+        "is_active": True, "sent_total": 0,
+    },
+    {
+        "name": "World Kindness Day",
+        "type": "festival", "category": "Global",
+        "trigger": "fixed_date", "fixed_date": "11-13", "is_date_fixed": True,
+        "audience": "all_contacts",
+        "template_body": (
+            "Happy World Kindness Day {name}! 💛 Kindness is the superpower we should teach "
+            "every child. A school culture built on kindness produces compassionate leaders "
+            "who will make the world a better place. SmartShape celebrates schools that "
+            "teach with heart! 🌸 — SmartShape Team"
+        ),
+        "is_active": True, "sent_total": 0,
+    },
+    {
+        "name": "National Mathematics Day (Ramanujan Jayanti)",
+        "type": "festival", "category": "School",
+        "trigger": "fixed_date", "fixed_date": "12-22", "is_date_fixed": True,
+        "audience": "all_contacts",
+        "template_body": (
+            "Happy National Mathematics Day {name}! 🔢 On the birth anniversary of the "
+            "legendary Srinivasa Ramanujan — the man who knew infinity — let us inspire our "
+            "students to fall in love with the beauty of mathematics. Numbers are the poetry "
+            "of the universe! ∞ — SmartShape Team"
+        ),
+        "is_active": True, "sent_total": 0,
+    },
+
+    # ── Family & Relationship Days ─────────────────────────────────────────────
+    {
+        "name": "Tagore Jayanti",
+        "type": "festival", "category": "National",
+        "trigger": "fixed_date", "fixed_date": "05-07", "is_date_fixed": True,
+        "audience": "all_contacts",
+        "template_body": (
+            "Happy Rabindranath Tagore Jayanti {name}! 🌼 Gurudev said: 'Don't limit a child "
+            "to your own learning, for they were born in another time.' His philosophy of "
+            "learning through creativity and nature is as relevant today as ever. SmartShape "
+            "celebrates his timeless vision! 🖋️ — SmartShape Team"
+        ),
+        "is_active": True, "sent_total": 0,
+    },
+    {
+        "name": "International Families Day",
+        "type": "festival", "category": "Global",
+        "trigger": "fixed_date", "fixed_date": "05-15", "is_date_fixed": True,
+        "audience": "all_contacts",
+        "template_body": (
+            "Happy International Families Day {name}! 👨‍👩‍👧‍👦 Schools and families are the two "
+            "greatest forces shaping a child's life. Thank you for partnering with parents to "
+            "build strong, confident and creative children. SmartShape is honoured to support "
+            "this beautiful journey! — SmartShape Team"
+        ),
+        "is_active": True, "sent_total": 0,
+    },
+    {
+        "name": "Mother's Day",
+        "type": "festival", "category": "Personal",
+        "trigger": "fixed_date", "fixed_date": "05-11", "is_date_fixed": False,
+        "audience": "all_contacts",
+        "template_body": (
+            "Happy Mother's Day {name}! 💐 Mothers are a child's first and greatest teacher. "
+            "Today we honour every mother who wakes up each morning to shape a better tomorrow. "
+            "SmartShape is proud to support the schools that nurture these wonderful children "
+            "every day. — SmartShape Team"
+        ),
+        "is_active": True, "sent_total": 0,
+    },
+    {
+        "name": "Father's Day",
+        "type": "festival", "category": "Personal",
+        "trigger": "fixed_date", "fixed_date": "06-15", "is_date_fixed": False,
+        "audience": "all_contacts",
+        "template_body": (
+            "Happy Father's Day {name}! 👨‍👧 A father's love is the quiet strength behind every "
+            "great student. Today, we celebrate the dads who inspire, guide and cheer from the "
+            "sidelines. SmartShape salutes every parent who trusts your school with their most "
+            "precious treasure! 🌟 — SmartShape Team"
+        ),
+        "is_active": True, "sent_total": 0,
+    },
+    {
+        "name": "World Parents Day",
+        "type": "festival", "category": "Global",
+        "trigger": "fixed_date", "fixed_date": "07-26", "is_date_fixed": True,
+        "audience": "all_contacts",
+        "template_body": (
+            "Happy World Parents Day {name}! 👨‍👩‍👦 Today we celebrate the two pillars of every "
+            "child's life — the ones who make all school journeys possible. SmartShape thanks "
+            "every parent who trusts your school to nurture their little one's future. "
+            "🌟 — SmartShape Team"
+        ),
+        "is_active": True, "sent_total": 0,
+    },
+    {
+        "name": "Friendship Day",
+        "type": "festival", "category": "School",
+        "trigger": "fixed_date", "fixed_date": "08-03", "is_date_fixed": False,
+        "audience": "all_contacts",
+        "template_body": (
+            "Happy Friendship Day {name}! 🤝 Schools are where lifelong friendships are made. "
+            "The bonds formed in your classrooms last a lifetime! SmartShape celebrates the "
+            "joy of learning together, growing together and creating together. "
+            "💛 — SmartShape Team"
+        ),
+        "is_active": True, "sent_total": 0,
+    },
+    {
+        "name": "Grandparents Day",
+        "type": "festival", "category": "Personal",
+        "trigger": "fixed_date", "fixed_date": "09-06", "is_date_fixed": False,
+        "audience": "all_contacts",
+        "template_body": (
+            "Happy Grandparents' Day {name}! 👴👵 Grandparents are living libraries of wisdom, "
+            "stories and unconditional love. Schools that celebrate this beautiful bond teach "
+            "children the irreplaceable value of family and heritage. "
+            "💛 — SmartShape Team"
+        ),
+        "is_active": True, "sent_total": 0,
+    },
 ]
 
 
 async def _seed_defaults():
     count = await db.greeting_rules.count_documents({})
-    if count > 0:
+    if count >= len(_DEFAULT_RULES):
         return
     now_iso = datetime.now(timezone.utc).isoformat()
     for rule in _DEFAULT_RULES:
-        await db.greeting_rules.insert_one({
-            "rule_id": f"greet_{uuid.uuid4().hex[:10]}",
-            **rule,
-            "created_by": "system",
-            "created_at": now_iso,
-            "updated_at": now_iso,
-        })
+        exists = await db.greeting_rules.find_one({"name": rule["name"]})
+        if not exists:
+            await db.greeting_rules.insert_one({
+                "rule_id": f"greet_{uuid.uuid4().hex[:10]}",
+                **rule,
+                "created_by": "system",
+                "created_at": now_iso,
+                "updated_at": now_iso,
+            })
 
 
 # ── Endpoints ──────────────────────────────────────────────────────────────────
