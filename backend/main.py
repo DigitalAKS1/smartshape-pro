@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from typing import Set
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.staticfiles import StaticFiles
 from starlette.middleware.cors import CORSMiddleware
 
 from database import db, connect_db, close_db
@@ -82,6 +83,11 @@ app.include_router(greeting_router, prefix="/api")
 app.include_router(whatsapp_router, prefix="/api")
 app.include_router(email_router, prefix="/api")
 app.include_router(demo_router, prefix="/api")
+
+# ── Static files — uploaded WhatsApp attachments served publicly ───────────────
+_WA_UPLOADS = os.path.join(os.path.dirname(__file__), "uploads", "whatsapp")
+os.makedirs(_WA_UPLOADS, exist_ok=True)
+app.mount("/uploads/whatsapp", StaticFiles(directory=_WA_UPLOADS), name="wa_uploads")
 
 
 @app.get("/api/health")

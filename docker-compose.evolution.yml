@@ -1,0 +1,80 @@
+version: '3.8'
+
+# ────────────────────────────────────────────────────────────────────
+# SmartShape — Evolution API WhatsApp Stack
+# Usage:
+#   1. Copy .env.evolution.example → .env.evolution and fill in values
+#   2. docker compose -f docker-compose.evolution.yml up -d
+#   3. Open SmartShape → Marketing → WhatsApp → Connect → scan QR
+# ────────────────────────────────────────────────────────────────────
+
+services:
+
+  evolution-api:
+    image: atendai/evolution-api:v2.2.3
+    container_name: smartshape_evolution
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env.evolution
+    volumes:
+      - evolution_instances:/evolution/instances
+      - evolution_store:/evolution/store
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - smartshape_net
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+  redis:
+    image: redis:7-alpine
+    container_name: smartshape_redis_wa
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    networks:
+      - smartshape_net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: smartshape_postgres_wa
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       evolution
+      POSTGRES_USER:     evolution
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - smartshape_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U evolution"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  evolution_instances:
+  evolution_store:
+  redis_data:
+  postgres_data:
+
+networks:
+  smartshape_net:
+    name: smartshape_net
+    driver: bridge

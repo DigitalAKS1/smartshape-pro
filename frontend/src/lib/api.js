@@ -237,19 +237,36 @@ export const demo = {
 
 // WhatsApp Marketing
 export const whatsApp = {
+  // Templates
   getTemplates:   ()       => API.get('/whatsapp/templates'),
   createTemplate: (data)   => API.post('/whatsapp/templates', data),
   updateTemplate: (id, d)  => API.put(`/whatsapp/templates/${id}`, d),
   deleteTemplate: (id)     => API.delete(`/whatsapp/templates/${id}`),
+  // Campaigns
   getCampaigns:   ()       => API.get('/whatsapp/campaigns'),
   createCampaign: (data)   => API.post('/whatsapp/campaigns', data),
   updateCampaign: (id, d)  => API.put(`/whatsapp/campaigns/${id}`, d),
   deleteCampaign: (id)     => API.delete(`/whatsapp/campaigns/${id}`),
   launchCampaign: (id)     => API.post(`/whatsapp/campaigns/${id}/launch`),
+  // Analytics & queue
   getAnalytics:   ()       => API.get('/whatsapp/analytics'),
   getQueue:       (params) => API.get('/whatsapp/queue', { params }),
   getProvider:    ()       => API.get('/whatsapp/provider'),
   saveProvider:   (data)   => API.post('/whatsapp/provider', data),
+  // ── Evolution API — WhatsApp instance management ──────────────────────────
+  instanceConnect: ()      => API.post('/whatsapp/instance/create'),
+  instanceStatus:  ()      => API.get('/whatsapp/instance/status'),
+  instanceQR:      ()      => API.get('/whatsapp/instance/qr'),
+  instanceLogout:  ()      => API.delete('/whatsapp/instance/logout'),
+  // ── Attachments ───────────────────────────────────────────────────────────
+  uploadAttachment: (file) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    return API.post('/whatsapp/attachments/upload', fd, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+  },
+  listAttachments: () => API.get('/whatsapp/attachments'),
 };
 
 // Email Marketing

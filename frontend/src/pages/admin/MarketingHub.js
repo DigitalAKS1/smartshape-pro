@@ -17,6 +17,7 @@ import {
   Check, Wifi, Calendar, Key, Globe, Copy,
   Flag, BookOpen, Heart, School, Cake, FileText,
   PieChart, Target, Inbox, X, Mail, AtSign,
+  Paperclip, Brain, Upload, Smartphone as PhoneIcon, QrCode, Link2, Loader2,
 } from 'lucide-react';
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
@@ -430,16 +431,39 @@ function OverviewTab({ tk, campaigns, greetings, drips, waConnected, setTab, ana
 // ══════════════════════════════════════════════════════════════════════════════
 const TMPL_CAT_LABELS = { intro: 'Intro', catalogue: 'Catalogue', offer: 'Offer', followup: 'Follow-up', reengagement: 'Re-engagement', seasonal: 'Seasonal' };
 
-function CampaignsTab({ tk, campaigns, setCampaigns, roles, contacts, templates, allTags }) {
+function CampaignsTab({ tk, campaigns, setCampaigns, roles, contacts, templates, allTags, waConnected, openQrDialog }) {
   const [filter, setFilter] = useState('all');
   const [showCreate, setShowCreate] = useState(false);
   const [launching, setLaunching] = useState(null);
+  // Attachment state
+  const [attachments, setAttachments] = useState([]);
+  const [uploadingFile, setUploadingFile] = useState(false);
   const [step, setStep] = useState(1);
   const [saving, setSaving] = useState(false);
   const [previewTmpl, setPreviewTmpl] = useState(null);
   const [previewCamp, setPreviewCamp] = useState(null);
   const [previewContact, setPreviewContact] = useState(0);
-  const [form, setForm] = useState({ name: '', audience: 'all', role_id: '', tag_ids: [], lead_stages: [], school_types: [], min_strength: '', school_cities: '', template_id: '', message: '', schedule: 'draft', schedule_at: '' });
+  const [form, setForm] = useState({ name: '', audience: 'all', role_id: '', tag_ids: [], lead_stages: [], school_types: [], min_strength: '', school_cities: '', template_id: '', message: '', schedule: 'draft', schedule_at: '', ai_personalization: true, attachment_id: null });
+
+  // Load attachments once
+  useEffect(() => {
+    waApi.listAttachments().then(r => setAttachments(r.data || [])).catch(() => {});
+  }, []); // eslint-disable-line
+
+  async function handleAttachFile(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadingFile(true);
+    try {
+      const r = await waApi.uploadAttachment(file);
+      const att = r.data;
+      setAttachments(prev => [att, ...prev]);
+      setForm(p => ({ ...p, attachment_id: att.attachment_id }));
+      toast.success(`"${file.name}" uploaded`);
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || 'Upload failed');
+    } finally { setUploadingFile(false); e.target.value = ''; }
+  }
 
   const PIPELINE_STAGES = [
     { id: 'new', label: 'New' }, { id: 'contacted', label: 'Contacted' },
@@ -480,7 +504,7 @@ function CampaignsTab({ tk, campaigns, setCampaigns, roles, contacts, templates,
 
   function closeCreate() {
     setShowCreate(false); setStep(1);
-    setForm({ name: '', audience: 'all', role_id: '', tag_ids: [], lead_stages: [], school_types: [], min_strength: '', school_cities: '', template_id: '', message: '', schedule: 'draft', schedule_at: '' });
+    setForm({ name: '', audience: 'all', role_id: '', tag_ids: [], lead_stages: [], school_types: [], min_strength: '', school_cities: '', template_id: '', message: '', schedule: 'draft', schedule_at: '', ai_personalization: true, attachment_id: null });
   }
 
   function pickTemplate(tmpl) {
@@ -518,6 +542,8 @@ function CampaignsTab({ tk, campaigns, setCampaigns, roles, contacts, templates,
         audience_filter,
         audience_label: audienceLabel,
         scheduled_at: form.schedule === 'schedule' ? form.schedule_at : null,
+        ai_personalization: form.ai_personalization,
+        attachment_id: form.attachment_id || null,
       });
       setCampaigns(prev => [mapCampaign(res.data), ...prev]);
       closeCreate();
@@ -565,13 +591,38 @@ function CampaignsTab({ tk, campaigns, setCampaigns, roles, contacts, templates,
             </button>
           ))}
         </div>
-        <div className="sm:ml-auto">
+        <div className="sm:ml-auto flex items-center gap-2">
+          {/* Evolution connection badge */}
+          <button onClick={waConnected ? undefined : openQrDialog}
+            className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border transition-colors ${
+              waConnected
+                ? 'border-green-500/30 bg-green-500/10 text-green-600 cursor-default'
+                : 'border-amber-500/30 bg-amber-500/10 text-amber-600 hover:bg-amber-500/20 cursor-pointer'
+            }`}>
+            {waConnected ? <Wifi className="h-3 w-3" /> : <QrCode className="h-3 w-3" />}
+            {waConnected ? 'WA Connected' : 'Connect WA'}
+          </button>
           <Button size="sm" className="h-9 gap-1.5 bg-[var(--accent)] hover:bg-[var(--accent)]/90 text-white"
             onClick={() => setShowCreate(true)}>
             <Plus className="h-3.5 w-3.5" /> New Campaign
           </Button>
         </div>
       </div>
+
+      {/* Not-connected notice */}
+      {!waConnected && (
+        <div className={`${tk.card} border border-amber-500/20 rounded-xl p-3 flex items-center gap-3 mb-1`}>
+          <QrCode className="h-5 w-5 text-amber-500 flex-shrink-0" />
+          <div className="flex-1">
+            <p className={`text-xs font-semibold ${tk.t1}`}>WhatsApp not connected — campaigns will queue but not send</p>
+            <p className={`text-[11px] ${tk.tm}`}>Scan the QR code to link your phone via Evolution API. Messages send at 3-second intervals to avoid bans.</p>
+          </div>
+          <Button size="sm" variant="outline" onClick={openQrDialog}
+            className="border-amber-500/30 text-amber-600 hover:bg-amber-500/10 text-xs gap-1.5 flex-shrink-0">
+            <QrCode className="h-3.5 w-3.5" /> Scan QR
+          </Button>
+        </div>
+      )}
 
       {/* Cards */}
       {filtered.length === 0 ? (
@@ -895,14 +946,73 @@ function CampaignsTab({ tk, campaigns, setCampaigns, roles, contacts, templates,
                 </div>
                 <div>
                   <Label className={`${tk.t2} text-xs mb-1 block`}>
-                    Message Preview / Edit
-                    <span className={`${tk.tm} font-normal ml-1`}>(personalise before sending)</span>
+                    Message / Template Base
+                    <span className={`${tk.tm} font-normal ml-1`}>(Claude AI will personalise per recipient)</span>
                   </Label>
                   <textarea rows={5} className={`w-full rounded-xl border px-3 py-2.5 text-xs resize-none ${tk.inp}`}
                     placeholder="Write your message… Use {name} and {school_name} as variables."
                     value={form.message}
                     onChange={e => setForm(p => ({ ...p, message: e.target.value }))} />
                   <p className={`text-[11px] ${tk.tm} mt-0.5`}>{form.message.length} chars · <span className="font-mono text-[var(--accent)]">{'{name}'}</span> + <span className="font-mono text-[var(--accent)]">{'{school_name}'}</span> are auto-filled</p>
+                </div>
+
+                {/* ── AI Personalisation toggle ── */}
+                <div className={`flex items-center justify-between p-3 rounded-xl border ${tk.bdr} bg-[var(--bg-primary)]`}>
+                  <div className="flex items-center gap-2.5">
+                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${form.ai_personalization ? 'bg-violet-500/15' : 'bg-gray-500/10'}`}>
+                      <Brain className={`h-4 w-4 ${form.ai_personalization ? 'text-violet-500' : 'text-gray-400'}`} />
+                    </div>
+                    <div>
+                      <p className={`text-xs font-semibold ${tk.t1}`}>Claude AI Personalisation</p>
+                      <p className={`text-[10px] ${tk.tm}`}>
+                        {form.ai_personalization
+                          ? 'Unique message per contact (name, school, stage-aware)'
+                          : 'Simple {name} substitution only'}
+                      </p>
+                    </div>
+                  </div>
+                  <Switch checked={form.ai_personalization}
+                    onCheckedChange={v => setForm(p => ({ ...p, ai_personalization: v }))} />
+                </div>
+
+                {/* ── Attachment picker ── */}
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <Label className={`${tk.t2} text-xs`}>Attachment (optional)</Label>
+                    <label className={`flex items-center gap-1 text-[10px] px-2 py-1 rounded-lg border ${tk.bdr} ${tk.t2} cursor-pointer hover:bg-[var(--bg-primary)] transition-colors`}>
+                      {uploadingFile ? <Loader2 className="h-3 w-3 animate-spin" /> : <Upload className="h-3 w-3" />}
+                      {uploadingFile ? 'Uploading…' : 'Upload File'}
+                      <input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp,.mp4,.mov" className="hidden" onChange={handleAttachFile} disabled={uploadingFile} />
+                    </label>
+                  </div>
+                  {attachments.length > 0 ? (
+                    <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
+                      {/* None option */}
+                      <button onClick={() => setForm(p => ({ ...p, attachment_id: null }))}
+                        className={`w-full flex items-center gap-2 p-2 rounded-lg border text-left transition-colors ${
+                          !form.attachment_id ? 'border-[var(--accent)] bg-[var(--accent)]/5' : `border-[var(--border-color)] ${tk.hov}`
+                        }`}>
+                        <X className="h-3.5 w-3.5 text-gray-400 flex-shrink-0" />
+                        <span className={`text-xs ${tk.t2}`}>No attachment — text only</span>
+                      </button>
+                      {attachments.map(att => (
+                        <button key={att.attachment_id}
+                          onClick={() => setForm(p => ({ ...p, attachment_id: att.attachment_id }))}
+                          className={`w-full flex items-center gap-2 p-2 rounded-lg border text-left transition-colors ${
+                            form.attachment_id === att.attachment_id ? 'border-[var(--accent)] bg-[var(--accent)]/5' : `border-[var(--border-color)] ${tk.hov}`
+                          }`}>
+                          <Paperclip className={`h-3.5 w-3.5 flex-shrink-0 ${att.attachment_type === 'image' ? 'text-blue-400' : att.attachment_type === 'video' ? 'text-purple-400' : 'text-red-400'}`} />
+                          <div className="flex-1 min-w-0">
+                            <p className={`text-xs ${tk.t1} truncate`}>{att.filename}</p>
+                            <p className={`text-[10px] ${tk.tm}`}>{att.attachment_type} · {Math.round(att.size_bytes / 1024)} KB</p>
+                          </div>
+                          {form.attachment_id === att.attachment_id && <Check className="h-3.5 w-3.5 text-[var(--accent)] flex-shrink-0" />}
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className={`text-[11px] ${tk.tm} text-center py-3`}>No attachments yet — upload a PDF, image, or video above</p>
+                  )}
                 </div>
               </div>
             )}
@@ -945,10 +1055,12 @@ function CampaignsTab({ tk, campaigns, setCampaigns, roles, contacts, templates,
                 <div className="bg-[var(--bg-primary)] rounded-xl p-3.5 space-y-2">
                   <p className={`text-[10px] font-bold uppercase tracking-widest ${tk.tm} mb-2`}>Review</p>
                   {[
-                    { label: 'Campaign',  value: form.name || 'Untitled' },
-                    { label: 'Audience',  value: `${AUDIENCE_OPTS.find(a => a.key === form.audience)?.label || form.audience}${form.audience === 'role' && form.role_id ? ` — ${roles.find(r => r.role_id === form.role_id)?.name || ''}` : ''}${audienceCount !== null ? ` (~${audienceCount})` : ''}` },
-                    { label: 'Template',  value: form.template_id ? (templates.find(t => t.template_id === form.template_id)?.name || 'Custom') : (form.message ? 'Custom message' : 'Not selected') },
-                    { label: 'Schedule',  value: form.schedule === 'draft' ? 'Save as Draft' : (form.schedule_at || 'Not set') },
+                    { label: 'Campaign',     value: form.name || 'Untitled' },
+                    { label: 'Audience',     value: `${AUDIENCE_OPTS.find(a => a.key === form.audience)?.label || form.audience}${form.audience === 'role' && form.role_id ? ` — ${roles.find(r => r.role_id === form.role_id)?.name || ''}` : ''}${audienceCount !== null ? ` (~${audienceCount})` : ''}` },
+                    { label: 'Template',     value: form.template_id ? (templates.find(t => t.template_id === form.template_id)?.name || 'Custom') : (form.message ? 'Custom message' : 'Not selected') },
+                    { label: 'AI Personalise', value: form.ai_personalization ? '✓ Claude Haiku (unique per contact)' : '✗ Template substitution only' },
+                    { label: 'Attachment',   value: form.attachment_id ? (attachments.find(a => a.attachment_id === form.attachment_id)?.filename || 'Attached') : 'None' },
+                    { label: 'Schedule',     value: form.schedule === 'draft' ? 'Save as Draft' : (form.schedule_at || 'Not set') },
                   ].map(r => (
                     <div key={r.label} className="flex items-center justify-between">
                       <span className={`text-xs ${tk.tm}`}>{r.label}</span>
@@ -2911,6 +3023,12 @@ export default function MarketingHub() {
 
   const [tab, setTab] = useState('overview');
   const [waConnected, setWaConnected] = useState(false);
+  // Evolution API state
+  const [evolutionState, setEvolutionState] = useState('close');  // open | connecting | close
+  const [qrDialog, setQrDialog] = useState(false);
+  const [qrData, setQrData] = useState(null);
+  const [qrLoading, setQrLoading] = useState(false);
+
   const [campaigns, setCampaigns] = useState([]);
   const [templates, setTemplates] = useState([]);
   const [drips, setDrips] = useState([]);
@@ -2929,7 +3047,53 @@ export default function MarketingHub() {
     waApi.getTemplates().then(r => setTemplates(r.data || [])).catch(() => {});
     waApi.getAnalytics().then(r => setAnalytics(r.data)).catch(() => {});
     tagsApi.getAll().then(r => setAllTags(r.data || [])).catch(() => {});
+    // Check Evolution API connection
+    waApi.instanceStatus().then(r => {
+      const state = r.data?.state || 'close';
+      setEvolutionState(state);
+      setWaConnected(state === 'open');
+    }).catch(() => {});
   }
+
+  async function openQrDialog() {
+    setQrDialog(true);
+    setQrLoading(true);
+    setQrData(null);
+    try {
+      // Ensure instance exists first
+      await waApi.instanceConnect().catch(() => {});
+      const r = await waApi.instanceQR();
+      setQrData(r.data);
+    } catch { toast.error('Could not fetch QR — is Evolution API running?'); }
+    finally { setQrLoading(false); }
+  }
+
+  async function refreshQr() {
+    setQrLoading(true);
+    try {
+      const r = await waApi.instanceQR();
+      setQrData(r.data);
+    } catch { toast.error('Failed to refresh QR'); }
+    finally { setQrLoading(false); }
+  }
+
+  // Poll evolution status every 10 s while QR dialog is open (to auto-close on connect)
+  useEffect(() => {
+    if (!qrDialog) return;
+    const iv = setInterval(async () => {
+      try {
+        const r = await waApi.instanceStatus();
+        const state = r.data?.state || 'close';
+        setEvolutionState(state);
+        if (state === 'open') {
+          setWaConnected(true);
+          setQrDialog(false);
+          toast.success('WhatsApp connected! Ready to send campaigns.');
+        }
+      } catch { /* ignore */ }
+    }, 10000);
+    return () => clearInterval(iv);
+  }, [qrDialog]); // eslint-disable-line
 
   useEffect(() => { reload(); }, []); // eslint-disable-line
 
@@ -2967,16 +3131,17 @@ export default function MarketingHub() {
               <Mail className="h-3 w-3 text-sky-600 flex-shrink-0" />
               <span className="text-[11px] font-semibold text-sky-700 tracking-tight">Email Ready</span>
             </div>
-            <div className={`flex items-center gap-1.5 rounded-full px-3 py-1 border ${
-              waConnected ? 'bg-green-50 border-green-200/80' : 'bg-amber-50 border-amber-200/80'
-            }`}>
+            <button onClick={waConnected ? undefined : openQrDialog}
+              className={`flex items-center gap-1.5 rounded-full px-3 py-1 border transition-colors ${
+                waConnected ? 'bg-green-50 border-green-200/80 cursor-default' : 'bg-amber-50 border-amber-200/80 hover:bg-amber-100 cursor-pointer'
+              }`}>
               {waConnected
                 ? <Wifi className="h-3 w-3 text-green-600 flex-shrink-0" />
-                : <WifiOff className="h-3 w-3 text-amber-600 flex-shrink-0" />}
+                : <QrCode className="h-3 w-3 text-amber-600 flex-shrink-0" />}
               <span className={`text-[11px] font-semibold tracking-tight ${waConnected ? 'text-green-700' : 'text-amber-700'}`}>
-                {waConnected ? 'WhatsApp On' : 'WA: Connect Now'}
+                {waConnected ? 'WhatsApp On' : 'Scan QR to Connect'}
               </span>
-            </div>
+            </button>
           </div>
 
           {/* Page title */}
@@ -3008,15 +3173,82 @@ export default function MarketingHub() {
 
           {/* Content */}
           {tab === 'overview'  && <OverviewTab   tk={tk} campaigns={campaigns} greetings={greetings} drips={drips} waConnected={waConnected} setTab={setTab} analytics={analytics} loadDemo={loadDemo} clearDemo={clearDemo} />}
-          {tab === 'campaigns' && <CampaignsTab  tk={tk} campaigns={campaigns} setCampaigns={setCampaigns} roles={roles} contacts={contacts} templates={templates} allTags={allTags} />}
+          {tab === 'campaigns' && <CampaignsTab  tk={tk} campaigns={campaigns} setCampaigns={setCampaigns} roles={roles} contacts={contacts} templates={templates} allTags={allTags} waConnected={waConnected} openQrDialog={openQrDialog} />}
           {tab === 'templates' && <TemplatesTab  tk={tk} templates={templates} setTemplates={setTemplates} />}
           {tab === 'greetings' && <GreetingsTab  tk={tk} greetings={greetings} setGreetings={setGreetings} />}
           {tab === 'drips'     && <DripsTab      tk={tk} drips={drips} setDrips={setDrips} />}
           {tab === 'analytics' && <AnalyticsTab  tk={tk} analytics={analytics} campaigns={campaigns} />}
-          {tab === 'setup'     && <WhatsAppSetupTab tk={tk} waConnected={waConnected} setWaConnected={setWaConnected} />}
+          {tab === 'setup'     && <WhatsAppSetupTab tk={tk} waConnected={waConnected} setWaConnected={setWaConnected} evolutionState={evolutionState} openQrDialog={openQrDialog} />}
           {tab === 'email'     && <EmailHubTab   tk={tk} />}
         </div>
       </div>
+
+      {/* ── Evolution API QR Connect Dialog ───────────────────────────────── */}
+      <Dialog open={qrDialog} onOpenChange={setQrDialog}>
+        <DialogContent className={`${tk.card} border ${tk.bdr} w-[calc(100vw-2rem)] max-w-sm`}>
+          <DialogHeader>
+            <DialogTitle className={`flex items-center gap-2 ${tk.t1}`}>
+              <QrCode className="h-5 w-5 text-[var(--accent)]" />
+              Connect WhatsApp
+            </DialogTitle>
+            <DialogDescription className={tk.tm}>
+              Open WhatsApp on your phone → Linked Devices → Link a Device → scan QR
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="py-2 space-y-4">
+            {/* QR code area */}
+            <div className={`flex items-center justify-center rounded-2xl border-2 border-dashed ${tk.bdr} p-4 min-h-[200px]`}>
+              {qrLoading ? (
+                <div className="flex flex-col items-center gap-3">
+                  <Loader2 className="h-10 w-10 animate-spin text-[var(--accent)]" />
+                  <p className={`text-xs ${tk.tm}`}>Generating QR code…</p>
+                </div>
+              ) : qrData?.base64 ? (
+                <img src={qrData.base64} alt="WhatsApp QR" className="w-48 h-48 rounded-xl" />
+              ) : (
+                <div className="flex flex-col items-center gap-3 text-center">
+                  <PhoneIcon className="h-10 w-10 text-gray-400" />
+                  <p className={`text-xs ${tk.tm}`}>QR not available — make sure Evolution API is running</p>
+                </div>
+              )}
+            </div>
+
+            {/* Status indicator */}
+            <div className={`flex items-center gap-2 text-xs p-3 rounded-xl ${
+              evolutionState === 'open' ? 'bg-green-500/10 text-green-600' :
+              evolutionState === 'connecting' ? 'bg-blue-500/10 text-blue-600' :
+              'bg-amber-500/10 text-amber-600'
+            }`}>
+              <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                evolutionState === 'open' ? 'bg-green-500 animate-pulse' :
+                evolutionState === 'connecting' ? 'bg-blue-500 animate-pulse' :
+                'bg-amber-500'
+              }`} />
+              <span className="font-medium">
+                {evolutionState === 'open' ? 'Connected — closing dialog…' :
+                 evolutionState === 'connecting' ? 'Scanning detected — waiting for confirmation…' :
+                 'Waiting for QR scan…'}
+              </span>
+            </div>
+
+            <p className={`text-[11px] ${tk.tm} text-center`}>
+              QR expires in ~40 seconds. The dialog closes automatically once connected.
+            </p>
+          </div>
+
+          <DialogFooter className="flex gap-2">
+            <Button variant="outline" size="sm" onClick={refreshQr} disabled={qrLoading}
+              className={`border-[var(--border-color)] ${tk.t2} gap-1.5`}>
+              <RefreshCw className={`h-3.5 w-3.5 ${qrLoading ? 'animate-spin' : ''}`} /> Refresh QR
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => setQrDialog(false)}
+              className={`border-[var(--border-color)] ${tk.t2}`}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </AdminLayout>
   );
 }
