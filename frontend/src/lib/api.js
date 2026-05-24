@@ -226,6 +226,12 @@ export const greetingRules = {
   logs: (params) => API.get('/greetings/logs', { params }),
 };
 
+// Demo seeder
+export const demo = {
+  seedMarketing: () => API.post('/demo/marketing'),
+  clearMarketing: () => API.delete('/demo/marketing'),
+};
+
 // WhatsApp Marketing
 export const whatsApp = {
   getTemplates:   ()       => API.get('/whatsapp/templates'),

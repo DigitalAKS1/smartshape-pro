@@ -36,6 +36,7 @@ from routes.device_routes import router as device_router
 from routes.drip_routes import router as drip_router
 from routes.greeting_routes import router as greeting_router
 from routes.whatsapp_routes import router as whatsapp_router
+from routes.demo_routes import router as demo_router
 
 # ── App instance ───────────────────────────────────────────────────────────────
 app = FastAPI(title="SmartShape Pro API", version="1.0.0")
@@ -75,6 +76,7 @@ app.include_router(device_router, prefix="/api")
 app.include_router(drip_router, prefix="/api")
 app.include_router(greeting_router, prefix="/api")
 app.include_router(whatsapp_router, prefix="/api")
+app.include_router(demo_router, prefix="/api")
 
 
 @app.get("/api/health")

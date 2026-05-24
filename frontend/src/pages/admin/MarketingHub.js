@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import AdminLayout from '../../components/layouts/AdminLayout';
 import { useTheme } from '../../contexts/ThemeContext';
-import { contactRoles as contactRolesApi, contacts as contactsApi, dripSequences as dripApi, greetingRules as greetingsApi, whatsApp as waApi } from '../../lib/api';
+import { contactRoles as contactRolesApi, contacts as contactsApi, dripSequences as dripApi, greetingRules as greetingsApi, whatsApp as waApi, demo as demoApi } from '../../lib/api';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
@@ -145,7 +145,20 @@ function mapSeq(s) {
 // ══════════════════════════════════════════════════════════════════════════════
 // Tab 1 — Overview
 // ══════════════════════════════════════════════════════════════════════════════
-function OverviewTab({ tk, campaigns, greetings, drips, waConnected, setTab, analytics }) {
+function OverviewTab({ tk, campaigns, greetings, drips, waConnected, setTab, analytics, loadDemo, clearDemo }) {
+  const [demoLoading, setDemoLoading] = useState(false);
+  const [clearLoading, setClearLoading] = useState(false);
+  const hasDemo = campaigns.some(c => c.name?.includes('[DEMO]'));
+
+  async function handleLoadDemo() {
+    setDemoLoading(true);
+    try { await loadDemo(); } finally { setDemoLoading(false); }
+  }
+  async function handleClearDemo() {
+    setClearLoading(true);
+    try { await clearDemo(); } finally { setClearLoading(false); }
+  }
+
   const msgSent      = analytics?.messages?.sent  ?? campaigns.filter(c => c.status === 'completed').reduce((s, c) => s + c.stats.sent, 0);
   const msgPending   = analytics?.messages?.pending ?? 0;
   const dripActive   = analytics?.drips?.active   ?? drips.filter(d => d.active).length;
@@ -162,6 +175,90 @@ function OverviewTab({ tk, campaigns, greetings, drips, waConnected, setTab, ana
 
   return (
     <div className="space-y-5">
+
+      {/* ── Demo banner ────────────────────────────────────────────────────── */}
+      <div className={`${tk.card} border ${tk.bdr} rounded-xl p-4`}>
+        <div className="flex items-start sm:items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-[var(--accent)]/10 flex items-center justify-center flex-shrink-0">
+            <Zap className="h-5 w-5 text-[var(--accent)]" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className={`text-sm font-semibold ${tk.t1}`}>Try the Demo</p>
+            <p className={`text-xs ${tk.tm} mt-0.5 leading-relaxed`}>
+              Load 5 sample school contacts (Ramesh · Priya · Rajesh · Anita · Suresh), 3 campaigns
+              (Diwali completed · New Year queued · Year-End draft), drip enrollments &amp; greeting logs —
+              to see every tab populated with realistic data.
+            </p>
+          </div>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {hasDemo && (
+              <Button size="sm" variant="outline"
+                className={`h-8 gap-1 text-xs border-red-400/40 text-red-400 hover:bg-red-400/10`}
+                disabled={clearLoading} onClick={handleClearDemo}>
+                {clearLoading ? <RefreshCw className="h-3 w-3 animate-spin" /> : <X className="h-3 w-3" />}
+                Clear Demo
+              </Button>
+            )}
+            <Button size="sm"
+              className="h-8 gap-1 text-xs bg-[var(--accent)] hover:bg-[var(--accent)]/90 text-white"
+              disabled={demoLoading} onClick={handleLoadDemo}>
+              {demoLoading ? <RefreshCw className="h-3 w-3 animate-spin" /> : <Play className="h-3 w-3" />}
+              {hasDemo ? 'Re-seed Demo' : 'Load Demo Data'}
+            </Button>
+          </div>
+        </div>
+
+        {/* Step-by-step story */}
+        {hasDemo && (
+          <div className={`mt-4 pt-4 border-t ${tk.bdr}`}>
+            <p className={`text-[10px] font-bold uppercase tracking-widest ${tk.tm} mb-3`}>Demo Story — What was seeded</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+              {[
+                {
+                  step: '1. Contacts added',
+                  detail: '5 school personas: Ramesh (Principal, DPS), Priya (Teacher, St. Mary\'s), Rajesh (Purchase, Navyug), Anita (Principal, Ryan), Suresh (Teacher, DAV)',
+                  col: 'text-blue-500', bg: 'bg-blue-500/10',
+                },
+                {
+                  step: '2. Campaigns created',
+                  detail: 'Diwali Offer (completed, 5 sent) · New Academic Year (queued, 2 pending to principals) · Year End Clearance (draft — click Launch to send!)',
+                  col: 'text-purple-500', bg: 'bg-purple-500/10',
+                },
+                {
+                  step: '3. Drip sequence flow',
+                  detail: 'Ramesh got Day-0 intro + Day-3 catalogue (sent). Day-7 offer is PENDING. Priya got Day-0 intro (sent). Day-3 showcase is PENDING.',
+                  col: 'text-yellow-500', bg: 'bg-yellow-500/10',
+                },
+                {
+                  step: '4. Auto-greetings sent',
+                  detail: 'Teachers\' Day sent to Ramesh & Priya (Sep 5, 2025). New Year sent to Ramesh, Anita & Suresh (Jan 1, 2026). Check Analytics tab!',
+                  col: 'text-pink-500', bg: 'bg-pink-500/10',
+                },
+              ].map(s => (
+                <div key={s.step} className={`${s.bg} rounded-xl p-3`}>
+                  <p className={`text-[11px] font-bold ${s.col} mb-1`}>{s.step}</p>
+                  <p className={`text-[10px] ${tk.tm} leading-relaxed`}>{s.detail}</p>
+                </div>
+              ))}
+            </div>
+            <div className={`mt-3 flex flex-wrap gap-2`}>
+              {[
+                { label: '→ Campaigns tab', tab: 'campaigns', hint: 'See 3 campaigns · Launch the draft!' },
+                { label: '→ Analytics tab', tab: 'analytics', hint: 'See message breakdown chart' },
+                { label: '→ Templates tab', tab: 'templates', hint: 'Browse 15 expert templates' },
+                { label: '→ Greetings tab', tab: 'greetings', hint: 'See 54 rules · toggle active' },
+              ].map(l => (
+                <button key={l.tab} onClick={() => setTab(l.tab)}
+                  className={`flex items-center gap-1.5 text-[11px] px-2.5 py-1.5 rounded-lg border ${tk.bdr} ${tk.hov} ${tk.t2} transition-colors`}>
+                  <span>{l.label}</span>
+                  <span className={`${tk.tm}`}>— {l.hint}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* Not-connected banner */}
       {!waConnected && (
         <div className={`${tk.card} border border-yellow-500/30 rounded-xl p-4 flex items-start sm:items-center gap-3`}>
@@ -1635,7 +1732,7 @@ export default function MarketingHub() {
   const [contacts, setContacts] = useState([]);
   const [analytics, setAnalytics] = useState(null);
 
-  useEffect(() => {
+  function reload() {
     contactRolesApi.getAll().then(r => setRoles(r.data || [])).catch(() => {});
     contactsApi.getAll().then(r => setContacts(r.data || [])).catch(() => {});
     dripApi.getAll().then(r => setDrips((r.data || []).map(mapSeq))).catch(() => {});
@@ -1643,7 +1740,28 @@ export default function MarketingHub() {
     waApi.getCampaigns().then(r => setCampaigns((r.data || []).map(mapCampaign))).catch(() => {});
     waApi.getTemplates().then(r => setTemplates(r.data || [])).catch(() => {});
     waApi.getAnalytics().then(r => setAnalytics(r.data)).catch(() => {});
-  }, []);
+  }
+
+  useEffect(() => { reload(); }, []); // eslint-disable-line
+
+  async function loadDemo() {
+    try {
+      const res = await demoApi.seedMarketing();
+      const d = res.data;
+      if (d.already_seeded) { toast.info('Demo data already loaded'); return; }
+      toast.success(`Demo loaded! ${d.summary.campaigns} campaigns · ${d.summary.whatsapp_messages} messages queued`);
+      reload();
+      setTab('analytics');
+    } catch { toast.error('Failed to load demo data'); }
+  }
+
+  async function clearDemo() {
+    try {
+      await demoApi.clearMarketing();
+      toast.success('Demo data cleared');
+      reload();
+    } catch { toast.error('Failed to clear demo data'); }
+  }
 
   return (
     <AdminLayout>
@@ -1680,7 +1798,7 @@ export default function MarketingHub() {
           </div>
 
           {/* Content */}
-          {tab === 'overview'  && <OverviewTab   tk={tk} campaigns={campaigns} greetings={greetings} drips={drips} waConnected={waConnected} setTab={setTab} analytics={analytics} />}
+          {tab === 'overview'  && <OverviewTab   tk={tk} campaigns={campaigns} greetings={greetings} drips={drips} waConnected={waConnected} setTab={setTab} analytics={analytics} loadDemo={loadDemo} clearDemo={clearDemo} />}
           {tab === 'campaigns' && <CampaignsTab  tk={tk} campaigns={campaigns} setCampaigns={setCampaigns} roles={roles} contacts={contacts} templates={templates} />}
           {tab === 'templates' && <TemplatesTab  tk={tk} templates={templates} setTemplates={setTemplates} />}
           {tab === 'greetings' && <GreetingsTab  tk={tk} greetings={greetings} setGreetings={setGreetings} />}
