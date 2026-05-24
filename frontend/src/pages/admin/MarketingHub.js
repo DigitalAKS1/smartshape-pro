@@ -2931,7 +2931,7 @@ function EmailSetupSubTab({ tk }) {
             { label: 'Personalisation',       value: 'Always use {name} & school name', icon: Users },
             { label: 'Follow-up Timing',      value: '3–7 days after no reply',         icon: RefreshCw },
             { label: 'Unsubscribe Compliance', value: 'Always include opt-out link',    icon: CheckCircle },
-            { label: 'Mobile Preview',        value: 'Test subject on mobile first',    icon: Smartphone },
+            { label: 'Mobile Preview',        value: 'Test subject on mobile first',    icon: PhoneIcon },
           ].map(tip => {
             const Icon = tip.icon;
             return (
@@ -3013,7 +3013,7 @@ const TABS = [
   { key: 'greetings',  label: 'Greetings',  Icon: Gift },
   { key: 'drips',      label: 'Drip',       Icon: Zap },
   { key: 'analytics',  label: 'Analytics',  Icon: PieChart },
-  { key: 'setup',      label: 'WhatsApp',   Icon: Smartphone },
+  { key: 'setup',      label: 'WhatsApp',   Icon: PhoneIcon },
   { key: 'email',      label: 'Email',      Icon: Mail },
 ];
 
