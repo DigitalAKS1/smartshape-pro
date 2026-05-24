@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import AdminLayout from '../../components/layouts/AdminLayout';
 import { useTheme } from '../../contexts/ThemeContext';
-import { contactRoles as contactRolesApi, contacts as contactsApi, dripSequences as dripApi, greetingRules as greetingsApi, whatsApp as waApi, demo as demoApi } from '../../lib/api';
+import { contactRoles as contactRolesApi, contacts as contactsApi, dripSequences as dripApi, greetingRules as greetingsApi, whatsApp as waApi, email as emailApi, demo as demoApi } from '../../lib/api';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
@@ -16,7 +16,7 @@ import {
   ChevronRight, ChevronDown, Trash2, Play, Eye,
   Check, Wifi, Calendar, Key, Globe, Copy,
   Flag, BookOpen, Heart, School, Cake, FileText,
-  PieChart, Target, Inbox, X,
+  PieChart, Target, Inbox, X, Mail, AtSign,
 } from 'lucide-react';
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
@@ -1708,6 +1708,663 @@ function WhatsAppSetupTab({ tk, waConnected, setWaConnected }) {
 // ══════════════════════════════════════════════════════════════════════════════
 // Main Component
 // ══════════════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════════
+// Tab 8 — Email Hub (Campaigns · Templates · Analytics · Setup)
+// ══════════════════════════════════════════════════════════════════════════════
+const BLANK_EMAIL_TMPL = { name: '', category: 'intro', subject: '', body: '' };
+
+function EmailCampaignsSubTab({ tk, campaigns, setCampaigns, roles, contacts, templates }) {
+  const [filter, setFilter] = useState('all');
+  const [showCreate, setShowCreate] = useState(false);
+  const [launching, setLaunching] = useState(null);
+  const [step, setStep] = useState(1);
+  const [saving, setSaving] = useState(false);
+  const [previewTmpl, setPreviewTmpl] = useState(null);
+  const [form, setForm] = useState({ name: '', audience: 'all', role_id: '', template_id: '', subject: '', message: '', schedule: 'draft', schedule_at: '' });
+
+  const audienceCount = (() => {
+    if (form.audience === 'all') return contacts.length;
+    if (form.audience === 'role' && form.role_id) {
+      const rName = (roles.find(r => r.role_id === form.role_id)?.name || '').toLowerCase();
+      return contacts.filter(c =>
+        c.contact_role_id === form.role_id ||
+        (rName && (c.designation || '').toLowerCase() === rName)
+      ).length;
+    }
+    return 0;
+  })();
+
+  const FILTERS = [
+    { key: 'all',       label: 'All',       count: campaigns.length },
+    { key: 'draft',     label: 'Draft',     count: campaigns.filter(c => c.status === 'draft').length },
+    { key: 'queued',    label: 'Queued',    count: campaigns.filter(c => c.status === 'queued').length },
+    { key: 'completed', label: 'Completed', count: campaigns.filter(c => c.status === 'completed').length },
+  ];
+  const filtered = filter === 'all' ? campaigns : campaigns.filter(c => c.status === filter);
+
+  function closeCreate() {
+    setShowCreate(false); setStep(1);
+    setForm({ name: '', audience: 'all', role_id: '', template_id: '', subject: '', message: '', schedule: 'draft', schedule_at: '' });
+  }
+
+  function pickTemplate(tmpl) {
+    setForm(p => ({ ...p, template_id: tmpl.template_id, subject: tmpl.subject || '', message: tmpl.body }));
+  }
+
+  async function createCampaign() {
+    if (!form.name.trim()) { toast.error('Campaign name is required'); return; }
+    setSaving(true);
+    try {
+      const roleLabel = form.audience === 'role' && form.role_id
+        ? roles.find(r => r.role_id === form.role_id)?.name || 'By Role' : 'All Contacts';
+      const audience_filter = form.audience === 'role' && form.role_id
+        ? { roles: [roles.find(r => r.role_id === form.role_id)?.name].filter(Boolean) } : {};
+      const res = await emailApi.createCampaign({
+        name: form.name.trim(),
+        template_id: form.template_id || null,
+        subject: form.subject.trim(),
+        message: form.message.trim(),
+        audience_filter,
+        audience_label: roleLabel,
+        scheduled_at: form.schedule === 'schedule' ? form.schedule_at : null,
+      });
+      setCampaigns(prev => [mapCampaign(res.data), ...prev]);
+      closeCreate();
+      toast.success('Email campaign created as draft');
+    } catch { toast.error('Failed to create campaign'); }
+    finally { setSaving(false); }
+  }
+
+  async function launch(camp) {
+    setLaunching(camp.id);
+    try {
+      const res = await emailApi.launchCampaign(camp.campaign_id);
+      const { queued, status } = res.data;
+      setCampaigns(prev => prev.map(c => c.id === camp.id ? { ...c, status, stats: { ...c.stats, sent: queued } } : c));
+      toast.success(`${queued} emails queued for ${camp.name}`);
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Failed to launch campaign'); }
+    finally { setLaunching(null); }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
+        <div className={`flex items-center gap-0.5 p-1 bg-[var(--bg-primary)] border ${tk.bdr} rounded-xl overflow-x-auto no-scrollbar flex-shrink-0`}>
+          {FILTERS.map(f => (
+            <button key={f.key} onClick={() => setFilter(f.key)}
+              className={`flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg whitespace-nowrap transition-colors ${
+                filter === f.key ? `${tk.card} ${tk.t1} shadow-sm` : `${tk.tm} ${tk.hov}`
+              }`}>
+              {f.label}
+              <span className={`text-[10px] min-w-[16px] text-center px-1 rounded-full ${
+                filter === f.key ? 'bg-[var(--accent)]/15 text-[var(--accent)]' : 'bg-[var(--border-color)]'
+              }`}>{f.count}</span>
+            </button>
+          ))}
+        </div>
+        <div className="flex-1" />
+        <Button size="sm" className="h-8 gap-1 bg-[var(--accent)] hover:bg-[var(--accent)]/90 text-white text-xs"
+          onClick={() => setShowCreate(true)}>
+          <Plus className="h-3 w-3" /> New Email Campaign
+        </Button>
+      </div>
+
+      {filtered.length === 0 ? (
+        <div className={`${tk.card} border ${tk.bdr} rounded-xl py-16 text-center`}>
+          <Mail className={`h-10 w-10 ${tk.tm} mx-auto mb-3`} />
+          <p className={`text-sm font-medium ${tk.t2}`}>No email campaigns yet</p>
+          <p className={`text-xs ${tk.tm} mt-1`}>Create your first email campaign to start reaching school contacts</p>
+        </div>
+      ) : (
+        <div className="space-y-2.5">
+          {filtered.map(c => (
+            <div key={c.id} className={`${tk.card} border ${tk.bdr} rounded-xl p-4`}>
+              <div className="flex items-start gap-3">
+                <div className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${
+                  c.status === 'completed' ? 'bg-green-500/15' : c.status === 'queued' ? 'bg-blue-500/15' : 'bg-gray-500/15'
+                }`}>
+                  <Mail className={`h-4 w-4 ${c.status === 'completed' ? 'text-green-500' : c.status === 'queued' ? 'text-blue-500' : tk.tm}`} />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <p className={`text-sm font-semibold ${tk.t1}`}>{c.name}</p>
+                    <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${STATUS_CHIP[c.status] || 'bg-gray-500/15 text-gray-400'}`}>
+                      {c.status}
+                    </span>
+                  </div>
+                  <div className={`flex items-center gap-3 mt-1 text-[11px] ${tk.tm} flex-wrap`}>
+                    <span className="flex items-center gap-1"><Users className="h-3 w-3" />{c.audience_label} ({c.audience_count})</span>
+                    {c.stats.sent > 0 && <span className="flex items-center gap-1"><Send className="h-3 w-3" />{c.stats.sent} sent</span>}
+                    <span className="flex items-center gap-1"><Calendar className="h-3 w-3" />{c.created_at}</span>
+                  </div>
+                </div>
+                {c.status === 'draft' && (
+                  <Button size="sm" variant="outline"
+                    className={`h-8 gap-1 text-xs border-[var(--accent)]/40 text-[var(--accent)] hover:bg-[var(--accent)]/10 flex-shrink-0`}
+                    disabled={!!launching} onClick={() => launch(c)}>
+                    {launching === c.id ? <RefreshCw className="h-3 w-3 animate-spin" /> : <Play className="h-3 w-3" />}
+                    Launch
+                  </Button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Create dialog — 2-step */}
+      <Dialog open={showCreate} onOpenChange={closeCreate}>
+        <DialogContent className={`${tk.card} border ${tk.bdr} w-[calc(100vw-2rem)] max-w-lg max-h-[90vh] overflow-y-auto`}>
+          <DialogHeader>
+            <DialogTitle className={tk.t1}>New Email Campaign</DialogTitle>
+            <DialogDescription className={tk.tm}>Step {step} of 2 — {step === 1 ? 'Audience & Content' : 'Preview & Schedule'}</DialogDescription>
+          </DialogHeader>
+          {step === 1 ? (
+            <div className="space-y-4 py-1">
+              <div>
+                <Label className={`${tk.t2} text-xs mb-1.5 block`}>Campaign Name *</Label>
+                <Input className={`h-10 ${tk.inp}`} placeholder="e.g. Annual Day ROI Pitch"
+                  value={form.name} onChange={e => setForm(p => ({ ...p, name: e.target.value }))} />
+              </div>
+              <div>
+                <Label className={`${tk.t2} text-xs mb-1.5 block`}>Audience</Label>
+                <div className="grid grid-cols-2 gap-2">
+                  {[{ key: 'all', label: 'All Contacts', count: contacts.length }, { key: 'role', label: 'By Designation', count: audienceCount }].map(opt => (
+                    <button key={opt.key} onClick={() => setForm(p => ({ ...p, audience: opt.key }))}
+                      className={`p-3 rounded-xl border-2 text-left transition-all ${
+                        form.audience === opt.key ? 'border-[var(--accent)] bg-[var(--accent)]/5' : `border-[var(--border-color)] ${tk.hov}`
+                      }`}>
+                      <p className={`text-xs font-semibold ${tk.t1}`}>{opt.label}</p>
+                      <p className={`text-[10px] ${tk.tm} mt-0.5`}>{opt.count} contacts</p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {form.audience === 'role' && (
+                <div>
+                  <Label className={`${tk.t2} text-xs mb-1.5 block`}>Designation</Label>
+                  <select className={`w-full h-10 rounded-xl border px-3 text-sm ${tk.inp}`}
+                    value={form.role_id} onChange={e => setForm(p => ({ ...p, role_id: e.target.value }))}>
+                    <option value="">Select role…</option>
+                    {roles.map(r => <option key={r.role_id} value={r.role_id}>{r.name}</option>)}
+                  </select>
+                </div>
+              )}
+              <div>
+                <Label className={`${tk.t2} text-xs mb-1.5 block`}>Use Template (optional)</Label>
+                <div className="grid grid-cols-1 gap-2 max-h-40 overflow-y-auto pr-1">
+                  {templates.map(t => {
+                    const m = TMPL_CAT_META[t.category] || { bg: 'bg-gray-400/15', col: 'text-gray-400', label: t.category };
+                    const selected = form.template_id === t.template_id;
+                    return (
+                      <button key={t.template_id} onClick={() => selected ? setForm(p => ({ ...p, template_id: '', subject: '', message: '' })) : pickTemplate(t)}
+                        className={`p-3 rounded-xl border-2 text-left transition-all ${selected ? 'border-[var(--accent)] bg-[var(--accent)]/5' : `border-[var(--border-color)] ${tk.hov}`}`}>
+                        <div className="flex items-center gap-2">
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${m.bg} ${m.col}`}>{m.label}</span>
+                          <p className={`text-xs font-medium ${tk.t1} truncate`}>{t.name}</p>
+                        </div>
+                        {t.subject && <p className={`text-[10px] ${tk.tm} mt-1 truncate`}>✉ {t.subject}</p>}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              <div>
+                <Label className={`${tk.t2} text-xs mb-1.5 block`}>Email Subject *</Label>
+                <Input className={`h-10 ${tk.inp}`} placeholder="e.g. How 750+ Schools Save ₹2–5 Lakhs on Craft"
+                  value={form.subject} onChange={e => setForm(p => ({ ...p, subject: e.target.value }))} />
+              </div>
+              <div>
+                <Label className={`${tk.t2} text-xs mb-1.5 block`}>Email Body</Label>
+                <textarea rows={6} className={`w-full rounded-xl border px-3 py-2.5 text-xs resize-none ${tk.inp}`}
+                  placeholder="Write the email body. Use {name} and {school_name} for personalisation."
+                  value={form.message} onChange={e => setForm(p => ({ ...p, message: e.target.value }))} />
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-4 py-1">
+              {/* Email preview mock */}
+              <div className={`border ${tk.bdr} rounded-xl overflow-hidden`}>
+                <div className={`bg-[var(--bg-primary)] border-b ${tk.bdr} px-4 py-3`}>
+                  <p className={`text-[10px] ${tk.tm} mb-0.5`}>From: SmartShape Team &lt;noreply@smartshape.in&gt;</p>
+                  <p className={`text-[10px] ${tk.tm} mb-0.5`}>To: {audienceCount} contacts</p>
+                  <p className={`text-xs font-semibold ${tk.t1}`}>
+                    {form.subject.replace('{name}', 'Ramesh').replace('{school_name}', 'Delhi Public School') || '(No subject)'}
+                  </p>
+                </div>
+                <div className="p-4 bg-white/2">
+                  <p className="text-xs text-[var(--text-secondary)] whitespace-pre-wrap leading-relaxed">
+                    {(form.message || '(No body)').replace('{name}', 'Ramesh').replace('{school_name}', 'Delhi Public School').substring(0, 300)}
+                    {form.message.length > 300 ? '…' : ''}
+                  </p>
+                </div>
+              </div>
+              <div>
+                <Label className={`${tk.t2} text-xs mb-2 block`}>Schedule</Label>
+                <div className="flex gap-2">
+                  {[{ key: 'draft', label: 'Save as Draft' }, { key: 'now', label: 'Send Immediately' }].map(opt => (
+                    <button key={opt.key} onClick={() => setForm(p => ({ ...p, schedule: opt.key }))}
+                      className={`flex-1 py-2 rounded-xl border-2 text-xs font-medium transition-all ${
+                        form.schedule === opt.key ? 'border-[var(--accent)] bg-[var(--accent)]/5 text-[var(--accent)]' : `border-[var(--border-color)] ${tk.t2}`
+                      }`}>{opt.label}</button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+          <DialogFooter className="gap-2">
+            <Button variant="outline" size="sm" className={`border-[var(--border-color)] ${tk.t2}`}
+              onClick={step === 1 ? closeCreate : () => setStep(1)}>
+              {step === 1 ? 'Cancel' : 'Back'}
+            </Button>
+            {step === 1 ? (
+              <Button size="sm" className="bg-[var(--accent)] hover:bg-[var(--accent)]/90 text-white"
+                onClick={() => setStep(2)} disabled={!form.name.trim()}>Next: Preview →</Button>
+            ) : (
+              <Button size="sm" className="bg-[var(--accent)] hover:bg-[var(--accent)]/90 text-white"
+                onClick={createCampaign} disabled={saving}>{saving ? 'Saving…' : 'Create Campaign'}</Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+function EmailTemplatesSubTab({ tk, templates, setTemplates }) {
+  const [filterCat, setFilterCat] = useState('All');
+  const [preview, setPreview] = useState(null);
+  const [showCreate, setShowCreate] = useState(false);
+  const [form, setForm] = useState(BLANK_EMAIL_TMPL);
+  const [saving, setSaving] = useState(false);
+
+  const filtered = filterCat === 'All' ? templates : templates.filter(t => t.category === filterCat);
+
+  async function create() {
+    if (!form.name.trim()) { toast.error('Template name is required'); return; }
+    if (!form.subject.trim()) { toast.error('Subject line is required'); return; }
+    if (!form.body.trim()) { toast.error('Email body is required'); return; }
+    setSaving(true);
+    try {
+      const vars = [];
+      if (form.body.includes('{name}') || form.subject.includes('{name}')) vars.push('name');
+      if (form.body.includes('{school_name}') || form.subject.includes('{school_name}')) vars.push('school_name');
+      const res = await emailApi.createTemplate({ ...form, variables: vars });
+      setTemplates(prev => [...prev, res.data]);
+      setShowCreate(false);
+      setForm(BLANK_EMAIL_TMPL);
+      toast.success('Email template saved');
+    } catch { toast.error('Failed to save template'); }
+    finally { setSaving(false); }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h3 className={`text-sm font-semibold ${tk.t1}`}>Email Templates
+            <span className={`ml-2 text-xs font-normal ${tk.tm}`}>{templates.length} total</span>
+          </h3>
+          <p className={`text-xs ${tk.tm} mt-0.5`}>Reusable email messages — select when creating campaigns</p>
+        </div>
+        <Button size="sm" className="h-8 gap-1 bg-[var(--accent)] hover:bg-[var(--accent)]/90 text-white text-xs flex-shrink-0"
+          onClick={() => setShowCreate(true)}>
+          <Plus className="h-3 w-3" /> New Template
+        </Button>
+      </div>
+
+      <div className="flex gap-1.5 overflow-x-auto no-scrollbar pb-1">
+        {TMPL_CATS.map(c => (
+          <button key={c} onClick={() => setFilterCat(c)}
+            className={`text-xs px-3 py-1.5 rounded-full whitespace-nowrap font-medium transition-colors flex-shrink-0 ${
+              filterCat === c ? 'bg-[var(--accent)] text-white' : `${tk.card} border ${tk.bdr} ${tk.t2} ${tk.hov}`
+            }`}>
+            {TMPL_CAT_META[c]?.label || c}
+          </button>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+        {filtered.map(t => {
+          const m = TMPL_CAT_META[t.category] || { label: t.category, col: 'text-gray-400', bg: 'bg-gray-400/15' };
+          return (
+            <div key={t.template_id} className={`${tk.card} border ${tk.bdr} rounded-xl p-4 flex flex-col gap-3`}>
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex-1 min-w-0">
+                  <p className={`text-sm font-semibold ${tk.t1} leading-tight`}>{t.name}</p>
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${m.bg} ${m.col} font-medium mt-1 inline-block`}>{m.label}</span>
+                </div>
+                <button onClick={() => setPreview(t)}
+                  className={`h-7 w-7 rounded-lg ${tk.hov} flex items-center justify-center flex-shrink-0`}>
+                  <Eye className={`h-3.5 w-3.5 ${tk.tm}`} />
+                </button>
+              </div>
+              {t.subject && (
+                <p className={`text-[11px] font-medium ${tk.t2} leading-tight`}>✉ {t.subject}</p>
+              )}
+              <p className={`text-[11px] ${tk.tm} leading-relaxed line-clamp-3`}>{t.body}</p>
+              <div className="flex items-center justify-between mt-auto pt-2 border-t border-[var(--border-color)]">
+                <div className="flex items-center gap-1.5">
+                  {(t.variables || []).map(v => (
+                    <span key={v} className="text-[10px] font-mono px-1.5 py-0.5 rounded-md bg-[var(--bg-primary)] border border-[var(--border-color)] text-[var(--accent)]">
+                      {'{' + v + '}'}
+                    </span>
+                  ))}
+                </div>
+                {t.usage_count > 0 && <span className={`text-[10px] ${tk.tm}`}>Used {t.usage_count}×</span>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Preview dialog */}
+      {preview && (
+        <Dialog open={!!preview} onOpenChange={() => setPreview(null)}>
+          <DialogContent className={`${tk.card} border ${tk.bdr} w-[calc(100vw-2rem)] max-w-lg max-h-[85vh] overflow-y-auto`}>
+            <DialogHeader>
+              <div className="flex items-center justify-between">
+                <DialogTitle className={tk.t1}>{preview.name}</DialogTitle>
+                <span className={`text-[10px] px-2 py-0.5 rounded-full ${TMPL_CAT_META[preview.category]?.bg} ${TMPL_CAT_META[preview.category]?.col} font-medium`}>
+                  {TMPL_CAT_META[preview.category]?.label || preview.category}
+                </span>
+              </div>
+            </DialogHeader>
+            {/* Email mock-up */}
+            <div className={`border ${tk.bdr} rounded-xl overflow-hidden text-xs`}>
+              <div className={`bg-[var(--bg-primary)] border-b ${tk.bdr} px-4 py-3 space-y-1`}>
+                <div className="flex gap-2"><span className={`${tk.tm} w-12`}>From</span><span className={`${tk.t2}`}>SmartShape Team &lt;noreply@smartshape.in&gt;</span></div>
+                <div className="flex gap-2"><span className={`${tk.tm} w-12`}>To</span><span className={`${tk.t2}`}>Ramesh Kumar &lt;ramesh@dpsdwarka.edu.in&gt;</span></div>
+                <div className="flex gap-2">
+                  <span className={`${tk.tm} w-12`}>Subject</span>
+                  <span className={`font-semibold ${tk.t1}`}>
+                    {(preview.subject || '').replace('{name}', 'Ramesh').replace('{school_name}', 'Delhi Public School')}
+                  </span>
+                </div>
+              </div>
+              <div className="p-4">
+                <p className={`text-[11px] ${tk.t2} leading-relaxed whitespace-pre-wrap`}>
+                  {(preview.body || '').replace('{name}', 'Ramesh').replace('{school_name}', 'Delhi Public School')}
+                </p>
+              </div>
+            </div>
+            <p className={`text-[11px] ${tk.tm}`}>Variables auto-filled with sample data for preview</p>
+            <DialogFooter>
+              <Button variant="outline" size="sm" className={`border-[var(--border-color)] ${tk.t2}`}
+                onClick={() => setPreview(null)}>Close</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {/* Create dialog */}
+      <Dialog open={showCreate} onOpenChange={setShowCreate}>
+        <DialogContent className={`${tk.card} border ${tk.bdr} w-[calc(100vw-2rem)] max-w-lg max-h-[90vh] overflow-y-auto`}>
+          <DialogHeader>
+            <DialogTitle className={tk.t1}>New Email Template</DialogTitle>
+            <DialogDescription className={tk.tm}>Reusable email for campaigns. Use {'{name}'} and {'{school_name}'} for personalisation.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-1">
+            <div>
+              <Label className={`${tk.t2} text-xs mb-1.5 block`}>Template Name</Label>
+              <Input className={`h-10 ${tk.inp}`} placeholder="e.g. Principal ROI Pitch"
+                value={form.name} onChange={e => setForm(p => ({ ...p, name: e.target.value }))} />
+            </div>
+            <div>
+              <Label className={`${tk.t2} text-xs mb-1.5 block`}>Category</Label>
+              <div className="flex flex-wrap gap-1.5">
+                {Object.entries(TMPL_CAT_META).map(([k, m]) => (
+                  <button key={k} onClick={() => setForm(p => ({ ...p, category: k }))}
+                    className={`text-xs px-3 py-1.5 rounded-full font-medium border-2 transition-all ${
+                      form.category === k ? 'border-[var(--accent)] bg-[var(--accent)]/10 text-[var(--accent)]' : `border-[var(--border-color)] ${tk.t2}`
+                    }`}>{m.label}</button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <Label className={`${tk.t2} text-xs mb-1.5 block`}>Subject Line</Label>
+              <Input className={`h-10 ${tk.inp}`} placeholder="e.g. How 750+ Schools Save ₹2–5 Lakhs on Craft"
+                value={form.subject} onChange={e => setForm(p => ({ ...p, subject: e.target.value }))} />
+            </div>
+            <div>
+              <Label className={`${tk.t2} text-xs mb-1.5 block`}>Email Body</Label>
+              <textarea rows={8} className={`w-full rounded-xl border px-3 py-2.5 text-xs resize-none ${tk.inp}`}
+                placeholder="Write the full email body here. Use {name} and {school_name} for personalisation."
+                value={form.body} onChange={e => setForm(p => ({ ...p, body: e.target.value }))} />
+              <p className={`text-[11px] ${tk.tm} mt-1`}>{form.body.length} chars</p>
+            </div>
+          </div>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" size="sm" className={`border-[var(--border-color)] ${tk.t2}`}
+              onClick={() => setShowCreate(false)}>Cancel</Button>
+            <Button size="sm" className="bg-[var(--accent)] hover:bg-[var(--accent)]/90 text-white"
+              onClick={create} disabled={saving}>{saving ? 'Saving…' : 'Save Template'}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+function EmailAnalyticsSubTab({ tk, analytics }) {
+  if (!analytics) {
+    return (
+      <div className={`${tk.card} border ${tk.bdr} rounded-xl py-16 text-center`}>
+        <RefreshCw className={`h-8 w-8 ${tk.tm} mx-auto mb-3 animate-spin`} />
+        <p className={`text-sm ${tk.t2}`}>Loading analytics…</p>
+      </div>
+    );
+  }
+  const { messages, campaigns: campData, by_type = {} } = analytics;
+  const totalByType = Object.values(by_type).reduce((s, v) => s + v, 0);
+  const kpis = [
+    { label: 'Total Queued',       value: messages.total,     icon: Inbox,       col: 'text-blue-500',   bg: 'bg-blue-500/10' },
+    { label: 'Emails Sent',        value: messages.sent,      icon: Send,        col: 'text-green-500',  bg: 'bg-green-500/10' },
+    { label: 'Pending / In Queue', value: messages.pending,   icon: Clock,       col: 'text-orange-500', bg: 'bg-orange-500/10' },
+    { label: 'Failed',             value: messages.failed,    icon: AlertCircle, col: 'text-red-400',    bg: 'bg-red-400/10' },
+    { label: 'Total Campaigns',    value: campData.total,     icon: Megaphone,   col: 'text-purple-500', bg: 'bg-purple-500/10' },
+    { label: 'Live Campaigns',     value: campData.live,      icon: Activity,    col: 'text-cyan-500',   bg: 'bg-cyan-500/10' },
+  ];
+  return (
+    <div className="space-y-5">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+        {kpis.map(k => {
+          const Icon = k.icon;
+          return (
+            <div key={k.label} className={`${tk.card} border ${tk.bdr} rounded-xl p-4`}>
+              <div className={`w-8 h-8 rounded-lg ${k.bg} flex items-center justify-center mb-3`}>
+                <Icon className={`h-4 w-4 ${k.col}`} />
+              </div>
+              <p className={`text-xl font-bold ${tk.t1} leading-none`}>{(k.value || 0).toLocaleString('en-IN')}</p>
+              <p className={`text-[11px] ${tk.tm} mt-1 leading-tight`}>{k.label}</p>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className={`${tk.card} border ${tk.bdr} rounded-xl p-4`}>
+          <div className="flex items-center gap-2 mb-4">
+            <PieChart className={`h-4 w-4 ${tk.tm}`} />
+            <h3 className={`text-sm font-semibold ${tk.t1}`}>Emails by Type</h3>
+          </div>
+          {totalByType === 0 ? (
+            <p className={`text-xs ${tk.tm} py-4 text-center`}>No emails queued yet</p>
+          ) : (
+            <div className="space-y-3">
+              {Object.entries(by_type).map(([type, count]) => {
+                const pctVal = Math.round((count / totalByType) * 100);
+                const colors = { campaign: { bar: 'bg-purple-500', txt: 'text-purple-500', lbl: 'Campaigns' }, drip: { bar: 'bg-blue-500', txt: 'text-blue-500', lbl: 'Drip' }, other: { bar: 'bg-gray-400', txt: 'text-gray-400', lbl: 'Other' } };
+                const m = colors[type] || colors.other;
+                return (
+                  <div key={type}>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className={`text-xs font-medium ${tk.t2}`}>{m.lbl}</span>
+                      <span className={`text-xs font-bold ${m.txt}`}>{count.toLocaleString('en-IN')} · {pctVal}%</span>
+                    </div>
+                    <div className="h-2 rounded-full bg-[var(--bg-primary)]">
+                      <div className={`h-2 rounded-full ${m.bar} transition-all`} style={{ width: `${pctVal}%` }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        <div className={`${tk.card} border ${tk.bdr} rounded-xl`}>
+          <div className={`flex items-center gap-2 px-4 py-3 border-b ${tk.bdr}`}>
+            <Target className={`h-4 w-4 ${tk.tm}`} />
+            <h3 className={`text-sm font-semibold ${tk.t1}`}>Campaign Performance</h3>
+          </div>
+          {campData.list.length === 0 ? (
+            <p className={`text-xs ${tk.tm} p-4 text-center`}>No campaigns yet</p>
+          ) : (
+            <div className={`divide-y divide-[var(--border-color)]`}>
+              {campData.list.slice(0, 6).map(c => (
+                <div key={c.campaign_id} className="px-4 py-3 flex items-center gap-3">
+                  <div className="flex-1 min-w-0">
+                    <p className={`text-xs font-medium ${tk.t1} truncate`}>{c.name}</p>
+                    <p className={`text-[11px] ${tk.tm} mt-0.5`}>{c.audience_count || 0} contacts</p>
+                  </div>
+                  <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full flex-shrink-0 ${STATUS_CHIP[c.status] || 'bg-gray-500/15 text-gray-400'}`}>
+                    {c.status}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function EmailSetupSubTab({ tk }) {
+  const SEQUENCE = [
+    { day: 'Day 0',  icon: AtSign,      col: 'text-blue-500',   bg: 'bg-blue-500/10',   title: 'Cold Introduction',      desc: 'Principal First Touch or Teacher Introduction — machine intro, 750+ schools, offer to share ROI sheet.' },
+    { day: 'Day 3',  icon: TrendingUp,  col: 'text-purple-500', bg: 'bg-purple-500/10', title: 'ROI Calculator',          desc: 'Send personalised ROI calculation: how much the school spends vs how much they could save with SMARTS-SHAPES.' },
+    { day: 'Day 7',  icon: Calendar,    col: 'text-orange-500', bg: 'bg-orange-500/10', title: 'Demo Invitation',         desc: 'Invite for a 20-minute live demo at school — show the machine in action, no obligation.' },
+    { day: 'Day 14', icon: FileText,    col: 'text-cyan-500',   bg: 'bg-cyan-500/10',   title: 'Die Library Catalogue',  desc: 'Share the 750+ die catalogue PDF — helps the school visualise activity planning for the full year.' },
+    { day: 'Day 21', icon: Gift,        col: 'text-green-500',  bg: 'bg-green-500/10',  title: 'Bundle Offer',           desc: 'Academic Year Bundle: machine + free 50-die starter pack + priority installation + flexible EMI.' },
+    { day: 'Day 30', icon: Star,        col: 'text-amber-500',  bg: 'bg-amber-500/10',  title: 'Peer Success Story',     desc: 'Share a story: a nearby similar school saving ₹4L/year — builds credibility and social proof.' },
+    { day: 'Day 45', icon: RefreshCw,   col: 'text-red-400',    bg: 'bg-red-400/10',    title: 'Re-engagement',          desc: 'Cold Lead Revival: "It\'s been a while — here\'s what\'s new." New dies, better pricing, peer installs.' },
+  ];
+  return (
+    <div className="space-y-5">
+      <div className={`${tk.card} border ${tk.bdr} rounded-xl p-5`}>
+        <div className="flex items-center gap-3 mb-4">
+          <div className="w-10 h-10 rounded-xl bg-blue-500/10 flex items-center justify-center flex-shrink-0">
+            <Mail className="h-5 w-5 text-blue-500" />
+          </div>
+          <div>
+            <h3 className={`text-sm font-semibold ${tk.t1}`}>SmartShape Email Marketing Blueprint</h3>
+            <p className={`text-xs ${tk.tm}`}>7-touch cold-to-warm sequence for school B2B email outreach</p>
+          </div>
+        </div>
+        <div className="space-y-3">
+          {SEQUENCE.map((s, i) => {
+            const Icon = s.icon;
+            return (
+              <div key={i} className="flex items-start gap-3">
+                <div className={`w-8 h-8 rounded-lg ${s.bg} flex items-center justify-center flex-shrink-0 mt-0.5`}>
+                  <Icon className={`h-3.5 w-3.5 ${s.col}`} />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${s.bg} ${s.col} font-semibold`}>{s.day}</span>
+                    <p className={`text-xs font-semibold ${tk.t1}`}>{s.title}</p>
+                  </div>
+                  <p className={`text-[11px] ${tk.tm} mt-0.5 leading-relaxed`}>{s.desc}</p>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className={`${tk.card} border ${tk.bdr} rounded-xl p-4`}>
+        <h3 className={`text-sm font-semibold ${tk.t1} mb-3`}>Email Best Practices for School B2B</h3>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {[
+            { label: 'Best Send Time',        value: 'Tue–Thu, 8–10am or 4–6pm',      icon: Clock },
+            { label: 'Subject Line Length',   value: 'Under 60 characters',            icon: FileText },
+            { label: 'Personalisation',       value: 'Always use {name} & school name', icon: Users },
+            { label: 'Follow-up Timing',      value: '3–7 days after no reply',         icon: RefreshCw },
+            { label: 'Unsubscribe Compliance', value: 'Always include opt-out link',    icon: CheckCircle },
+            { label: 'Mobile Preview',        value: 'Test subject on mobile first',    icon: Smartphone },
+          ].map(tip => {
+            const Icon = tip.icon;
+            return (
+              <div key={tip.label} className={`flex items-center gap-3 p-3 rounded-xl bg-[var(--bg-primary)] border ${tk.bdr}`}>
+                <Icon className={`h-4 w-4 ${tk.tm} flex-shrink-0`} />
+                <div>
+                  <p className={`text-[11px] font-semibold ${tk.t2}`}>{tip.label}</p>
+                  <p className={`text-[10px] ${tk.tm}`}>{tip.value}</p>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function EmailHubTab({ tk }) {
+  const [subTab, setSubTab] = useState('campaigns');
+  const [campaigns, setCampaigns] = useState([]);
+  const [templates, setTemplates] = useState([]);
+  const [analytics, setAnalytics] = useState(null);
+  const [roles, setRoles] = useState([]);
+  const [contacts, setContacts] = useState([]);
+
+  function reload() {
+    emailApi.getCampaigns().then(r => setCampaigns((r.data || []).map(mapCampaign))).catch(() => {});
+    emailApi.getTemplates().then(r => setTemplates(r.data || [])).catch(() => {});
+    emailApi.getAnalytics().then(r => setAnalytics(r.data)).catch(() => {});
+    contactRolesApi.getAll().then(r => setRoles(r.data || [])).catch(() => {});
+    contactsApi.getAll().then(r => setContacts(r.data || [])).catch(() => {});
+  }
+
+  useEffect(() => { reload(); }, []); // eslint-disable-line
+
+  const EMAIL_SUBTABS = [
+    { key: 'campaigns', label: 'Campaigns', Icon: Megaphone },
+    { key: 'templates', label: 'Templates', Icon: FileText },
+    { key: 'analytics', label: 'Analytics', Icon: PieChart },
+    { key: 'setup',     label: 'Setup',     Icon: Key },
+  ];
+
+  return (
+    <div className="space-y-4">
+      {/* Sub-tab bar */}
+      <div className={`flex items-center gap-0.5 p-1 ${tk.card} border ${tk.bdr} rounded-xl overflow-x-auto no-scrollbar`}>
+        {EMAIL_SUBTABS.map(({ key, label, Icon }) => (
+          <button key={key} onClick={() => setSubTab(key)}
+            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap ${
+              subTab === key
+                ? 'bg-[var(--bg-primary)] text-[var(--text-primary)] shadow-sm'
+                : `${tk.tm} ${tk.hov} hover:text-[var(--text-secondary)]`
+            }`}>
+            <Icon className="h-3.5 w-3.5 flex-shrink-0" />
+            <span>{label}</span>
+          </button>
+        ))}
+        <div className="flex-1" />
+        <button onClick={reload} className={`h-8 w-8 rounded-lg ${tk.hov} flex items-center justify-center flex-shrink-0`} title="Refresh">
+          <RefreshCw className={`h-3.5 w-3.5 ${tk.tm}`} />
+        </button>
+      </div>
+
+      {subTab === 'campaigns' && <EmailCampaignsSubTab tk={tk} campaigns={campaigns} setCampaigns={setCampaigns} roles={roles} contacts={contacts} templates={templates} />}
+      {subTab === 'templates' && <EmailTemplatesSubTab tk={tk} templates={templates} setTemplates={setTemplates} />}
+      {subTab === 'analytics' && <EmailAnalyticsSubTab tk={tk} analytics={analytics} />}
+      {subTab === 'setup'     && <EmailSetupSubTab     tk={tk} />}
+    </div>
+  );
+}
+
 const TABS = [
   { key: 'overview',   label: 'Overview',   Icon: BarChart2 },
   { key: 'campaigns',  label: 'Campaigns',  Icon: Megaphone },
@@ -1716,6 +2373,7 @@ const TABS = [
   { key: 'drips',      label: 'Drip',       Icon: Zap },
   { key: 'analytics',  label: 'Analytics',  Icon: PieChart },
   { key: 'setup',      label: 'WhatsApp',   Icon: Smartphone },
+  { key: 'email',      label: 'Email',      Icon: Mail },
 ];
 
 export default function MarketingHub() {
@@ -1805,6 +2463,7 @@ export default function MarketingHub() {
           {tab === 'drips'     && <DripsTab      tk={tk} drips={drips} setDrips={setDrips} />}
           {tab === 'analytics' && <AnalyticsTab  tk={tk} analytics={analytics} campaigns={campaigns} />}
           {tab === 'setup'     && <WhatsAppSetupTab tk={tk} waConnected={waConnected} setWaConnected={setWaConnected} />}
+          {tab === 'email'     && <EmailHubTab   tk={tk} />}
         </div>
       </div>
     </AdminLayout>

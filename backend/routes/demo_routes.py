@@ -325,20 +325,137 @@ async def seed_demo_marketing(request: Request):
             })
             created["greetings"] += 1
 
+    # ── 8. Email campaigns ─────────────────────────────────────────────────────
+    email_intro_subject = "How 750+ Schools Save ₹2–5 Lakhs on Craft: SmartShape SMARTS-SHAPES"
+    email_intro_body = (
+        "Namaskar {name} ji,\n\n"
+        "I'm writing from SmartShape (founded 1999, Faridabad) — makers of the "
+        "SMARTS-SHAPES die-cutting machine, used by 750+ schools across India.\n\n"
+        "Schools save ₹2–5 Lakhs every year by producing craft shapes in-house with "
+        "our machine. I'd love to share a 20-minute live demo at your school.\n\n"
+        "— SmartShape Team"
+    )
+    email_camp_a_id = f"ecamp_{uuid.uuid4().hex[:10]}"
+    await db.email_campaigns.insert_one({
+        "campaign_id": email_camp_a_id,
+        "name": f"Principal Introduction Blast 2025 {DEMO_MARKER}",
+        "description": "Cold outreach to all principals introducing SMARTS-SHAPES",
+        "template_id": None,
+        "subject": email_intro_subject,
+        "message": email_intro_body,
+        "audience_filter": {"roles": ["Principal"]},
+        "audience_label": "Principals",
+        "audience_count": len(principals),
+        "status": "completed",
+        "sent_count": len(principals), "delivered_count": len(principals), "failed_count": 0,
+        "created_by": user["email"],
+        "created_by_name": user.get("name", user["email"]),
+        "created_at": (now - timedelta(days=25)).isoformat(),
+        "sent_at":    (now - timedelta(days=24)).isoformat(),
+        "is_demo": True,
+    })
+    created["campaigns"] += 1
+
+    for c in principals:
+        await db.email_scheduled.insert_one({
+            "scheduled_id": f"esched_{uuid.uuid4().hex[:10]}",
+            "campaign_id": email_camp_a_id,
+            "contact_name": c["first_name"],
+            "email": c["email"],
+            "subject": email_intro_subject,
+            "message": email_intro_body.replace("{name}", c["first_name"]),
+            "status": "sent",
+            "queued_at": (now - timedelta(days=24)).isoformat(),
+            "sent_at":   (now - timedelta(days=24)).isoformat(),
+            "type": "campaign", "is_demo": True,
+        })
+        created["messages"] += 1
+
+    email_camp_b_id = f"ecamp_{uuid.uuid4().hex[:10]}"
+    roi_subject = "How Much Is Your School Spending on Craft? (The Real Number May Surprise You)"
+    roi_body = (
+        "Hello {name},\n\n"
+        "Most schools spend ₹3–6 Lakhs/year on craft materials and outsourced cutting. "
+        "With one SMARTS-SHAPES machine, that drops by 60–80%.\n\n"
+        "The machine pays for itself in under a year — 750+ schools have already made the switch.\n\n"
+        "Can I prepare a customised ROI calculation for your school?\n\n"
+        "— SmartShape Team"
+    )
+    await db.email_campaigns.insert_one({
+        "campaign_id": email_camp_b_id,
+        "name": f"ROI Calculator Blast {DEMO_MARKER}",
+        "description": "ROI pitch email to all school contacts",
+        "template_id": None,
+        "subject": roi_subject,
+        "message": roi_body,
+        "audience_filter": {},
+        "audience_label": "All Contacts",
+        "audience_count": 5,
+        "status": "queued",
+        "sent_count": 5, "delivered_count": 0, "failed_count": 0,
+        "created_by": user["email"],
+        "created_by_name": user.get("name", user["email"]),
+        "created_at": (now - timedelta(days=1)).isoformat(),
+        "sent_at":    (now - timedelta(hours=2)).isoformat(),
+        "is_demo": True,
+    })
+    created["campaigns"] += 1
+
+    for c in DEMO_CONTACTS:
+        await db.email_scheduled.insert_one({
+            "scheduled_id": f"esched_{uuid.uuid4().hex[:10]}",
+            "campaign_id": email_camp_b_id,
+            "contact_name": c["first_name"],
+            "email": c["email"],
+            "subject": roi_subject,
+            "message": roi_body.replace("{name}", c["first_name"]),
+            "status": "pending",
+            "queued_at": (now - timedelta(hours=2)).isoformat(),
+            "sent_at": None,
+            "type": "campaign", "is_demo": True,
+        })
+        created["messages"] += 1
+
+    await db.email_campaigns.insert_one({
+        "campaign_id": f"ecamp_{uuid.uuid4().hex[:10]}",
+        "name": f"Annual Day Preparation Email {DEMO_MARKER}",
+        "description": "Seasonal pitch for school events — Annual Day, Sports Day",
+        "template_id": None,
+        "subject": "Annual Day Coming Up? SMARTS-SHAPES Transforms School Event Preparation",
+        "message": (
+            "Hello {name},\n\n"
+            "Annual Day, Sports Day, Science Fair — every school event needs hundreds of "
+            "props, decorations, and craft pieces. With SMARTS-SHAPES, your team produces "
+            "everything in-house in hours instead of days.\n\n"
+            "Would it be worth a 20-minute call before your event prep begins?\n\n"
+            "— SmartShape Team"
+        ),
+        "audience_filter": {},
+        "audience_label": "All Contacts",
+        "audience_count": 5,
+        "status": "draft",
+        "sent_count": 0, "delivered_count": 0, "failed_count": 0,
+        "created_by": user["email"],
+        "created_by_name": user.get("name", user["email"]),
+        "created_at": (now - timedelta(hours=3)).isoformat(),
+        "sent_at": None,
+        "is_demo": True,
+    })
+    created["campaigns"] += 1
+
     return {
         "seeded": True,
         "summary": {
             "contacts_added": created["contacts"],
-            "campaigns": "3 (1 completed · 1 queued · 1 draft)",
+            "campaigns": "6 (3 WhatsApp + 3 Email · 2 completed · 2 queued · 2 draft)",
             "whatsapp_messages": created["messages"],
             "drip_enrollments": created["enrollments"],
             "greeting_logs": created["greetings"],
         },
         "story": (
-            "Ramesh Kumar (DPS Principal) received a Diwali demo invitation, was enrolled in "
-            "the Principal Machine Pitch drip sequence (₹2–5L savings pitch → ROI sheet → demo "
-            "booking), and received New Year + Teachers' Day greetings. "
-            "2 campaigns: demo drive to principals queued, Annual Day pitch in draft."
+            "Ramesh Kumar (DPS Principal) received a Diwali WA demo invitation + intro email, "
+            "enrolled in the Principal Machine Pitch drip sequence, and received New Year + "
+            "Teachers' Day greetings. 3 WA + 3 Email campaigns seeded across all statuses."
         ),
     }
 
@@ -349,6 +466,7 @@ async def clear_demo_marketing(request: Request):
     await get_current_user(request)
     results = {}
     for coll_name in ("contacts", "whatsapp_campaigns", "whatsapp_scheduled",
+                      "email_campaigns", "email_scheduled",
                       "drip_enrollments", "greeting_logs"):
         coll = getattr(db, coll_name)
         r = await coll.delete_many({"is_demo": True})

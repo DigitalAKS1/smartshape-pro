@@ -247,6 +247,21 @@ export const whatsApp = {
   getQueue:       (params) => API.get('/whatsapp/queue', { params }),
 };
 
+// Email Marketing
+export const email = {
+  getTemplates:   ()       => API.get('/email/templates'),
+  createTemplate: (data)   => API.post('/email/templates', data),
+  updateTemplate: (id, d)  => API.put(`/email/templates/${id}`, d),
+  deleteTemplate: (id)     => API.delete(`/email/templates/${id}`),
+  getCampaigns:   ()       => API.get('/email/campaigns'),
+  createCampaign: (data)   => API.post('/email/campaigns', data),
+  updateCampaign: (id, d)  => API.put(`/email/campaigns/${id}`, d),
+  deleteCampaign: (id)     => API.delete(`/email/campaigns/${id}`),
+  launchCampaign: (id)     => API.post(`/email/campaigns/${id}/launch`),
+  getAnalytics:   ()       => API.get('/email/analytics'),
+  getQueue:       (params) => API.get('/email/queue', { params }),
+};
+
 // Drip Sequences
 export const dripSequences = {
   getAll: () => API.get('/drip/sequences'),
