@@ -186,6 +186,8 @@ export const contacts = {
   update: (id, data) => API.put(`/contacts/${id}`, data),
   delete: (id) => API.delete(`/contacts/${id}`),
   convertToLead: (id, data) => API.post(`/contacts/${id}/convert-to-lead`, data),
+  addTag: (contactId, tagId) => API.post(`/contacts/${contactId}/tags`, { tag_id: tagId }),
+  removeTag: (contactId, tagId) => API.delete(`/contacts/${contactId}/tags/${tagId}`),
   importCsv: (file) => {
     const fd = new FormData();
     fd.append('file', file);

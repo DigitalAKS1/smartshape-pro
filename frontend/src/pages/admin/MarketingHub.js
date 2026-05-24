@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import AdminLayout from '../../components/layouts/AdminLayout';
 import { useTheme } from '../../contexts/ThemeContext';
-import { contactRoles as contactRolesApi, contacts as contactsApi, dripSequences as dripApi, greetingRules as greetingsApi, whatsApp as waApi, email as emailApi, demo as demoApi } from '../../lib/api';
+import { contactRoles as contactRolesApi, contacts as contactsApi, dripSequences as dripApi, greetingRules as greetingsApi, whatsApp as waApi, email as emailApi, demo as demoApi, tags as tagsApi } from '../../lib/api';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
@@ -44,6 +44,7 @@ function mapCampaign(c) {
     audience_count: c.audience_count || 0,
     template_id: c.template_id || null,
     message: c.message || '',
+    subject: c.subject || '',
     audience_filter: c.audience_filter || {},
     stats: {
       sent: c.sent_count || 0,
@@ -56,6 +57,14 @@ function mapCampaign(c) {
       : '',
     scheduled_at: c.scheduled_at || null,
   };
+}
+
+// ── Campaign preview helper — personalize message with sample contact ──────────
+function personalize(text, contact) {
+  if (!text || !contact) return text || '';
+  const name = (contact.first_name || (contact.name || '').split(' ')[0] || 'Ramesh');
+  const school = contact.company || 'Your School';
+  return text.replace(/\{name\}/g, name).replace(/\{school_name\}/g, school);
 }
 
 
@@ -393,14 +402,16 @@ function OverviewTab({ tk, campaigns, greetings, drips, waConnected, setTab, ana
 // ══════════════════════════════════════════════════════════════════════════════
 const TMPL_CAT_LABELS = { intro: 'Intro', catalogue: 'Catalogue', offer: 'Offer', followup: 'Follow-up', reengagement: 'Re-engagement', seasonal: 'Seasonal' };
 
-function CampaignsTab({ tk, campaigns, setCampaigns, roles, contacts, templates }) {
+function CampaignsTab({ tk, campaigns, setCampaigns, roles, contacts, templates, allTags }) {
   const [filter, setFilter] = useState('all');
   const [showCreate, setShowCreate] = useState(false);
   const [launching, setLaunching] = useState(null);
   const [step, setStep] = useState(1);
   const [saving, setSaving] = useState(false);
   const [previewTmpl, setPreviewTmpl] = useState(null);
-  const [form, setForm] = useState({ name: '', audience: 'all', role_id: '', template_id: '', message: '', schedule: 'draft', schedule_at: '' });
+  const [previewCamp, setPreviewCamp] = useState(null);
+  const [previewContact, setPreviewContact] = useState(0);
+  const [form, setForm] = useState({ name: '', audience: 'all', role_id: '', tag_ids: [], template_id: '', message: '', schedule: 'draft', schedule_at: '' });
 
   const audienceCount = (() => {
     if (form.audience === 'all') return contacts.length;
@@ -410,6 +421,9 @@ function CampaignsTab({ tk, campaigns, setCampaigns, roles, contacts, templates 
         c.contact_role_id === form.role_id ||
         (rName && (c.designation || '').toLowerCase() === rName)
       ).length;
+    }
+    if (form.audience === 'tags' && form.tag_ids.length > 0) {
+      return contacts.filter(c => form.tag_ids.some(tid => (c.tag_ids || []).includes(tid))).length;
     }
     return 0;
   })();
@@ -424,9 +438,13 @@ function CampaignsTab({ tk, campaigns, setCampaigns, roles, contacts, templates 
 
   const filtered = filter === 'all' ? campaigns : campaigns.filter(c => c.status === filter);
 
+  // Sample contacts for preview
+  const sampleContacts = contacts.filter(c => c.phone).slice(0, 5);
+  const previewSample = sampleContacts[previewContact] || { name: 'Ramesh Kumar', first_name: 'Ramesh', company: 'Delhi Public School' };
+
   function closeCreate() {
     setShowCreate(false); setStep(1);
-    setForm({ name: '', audience: 'all', role_id: '', template_id: '', message: '', schedule: 'draft', schedule_at: '' });
+    setForm({ name: '', audience: 'all', role_id: '', tag_ids: [], template_id: '', message: '', schedule: 'draft', schedule_at: '' });
   }
 
   function pickTemplate(tmpl) {
@@ -437,21 +455,24 @@ function CampaignsTab({ tk, campaigns, setCampaigns, roles, contacts, templates 
     if (!form.name.trim()) { toast.error('Campaign name is required'); return; }
     setSaving(true);
     try {
-      const roleLabel = form.audience === 'role' && form.role_id
-        ? roles.find(r => r.role_id === form.role_id)?.name || 'By Role'
-        : 'All Contacts';
-      const audience_filter = form.audience === 'role' && form.role_id
-        ? { roles: [roles.find(r => r.role_id === form.role_id)?.name].filter(Boolean) }
-        : {};
-      const payload = {
+      let audience_filter = {};
+      let audienceLabel = 'All Contacts';
+      if (form.audience === 'role' && form.role_id) {
+        const rName = roles.find(r => r.role_id === form.role_id)?.name;
+        audience_filter = { roles: [rName].filter(Boolean) };
+        audienceLabel = rName || 'By Role';
+      } else if (form.audience === 'tags' && form.tag_ids.length > 0) {
+        audience_filter = { tags: form.tag_ids };
+        audienceLabel = form.tag_ids.map(id => allTags.find(t => t.tag_id === id)?.name || id).join(', ');
+      }
+      const res = await waApi.createCampaign({
         name: form.name.trim(),
         template_id: form.template_id || null,
         message: form.message.trim(),
         audience_filter,
-        audience_label: roleLabel,
+        audience_label: audienceLabel,
         scheduled_at: form.schedule === 'schedule' ? form.schedule_at : null,
-      };
-      const res = await waApi.createCampaign(payload);
+      });
       setCampaigns(prev => [mapCampaign(res.data), ...prev]);
       closeCreate();
       toast.success('Campaign created as draft');
@@ -474,6 +495,7 @@ function CampaignsTab({ tk, campaigns, setCampaigns, roles, contacts, templates 
   const AUDIENCE_OPTS = [
     { key: 'all',  label: 'All Contacts',   desc: `${contacts.length} contacts in your database` },
     { key: 'role', label: 'By Designation', desc: 'Principal, Teacher, Purchase Head, etc.' },
+    { key: 'tags', label: 'By Tags',        desc: 'Hot Lead, Demo Done, Budget Approved, etc.' },
   ];
 
   return (
@@ -546,8 +568,9 @@ function CampaignsTab({ tk, campaigns, setCampaigns, roles, contacts, templates 
                         {launching === c.id ? 'Launching…' : 'Launch'}
                       </Button>
                     )}
-                    <button className={`h-7 w-7 rounded-lg ${tk.hov} flex items-center justify-center`}>
-                      <MoreVertical className={`h-4 w-4 ${tk.tm}`} />
+                    <button onClick={() => { setPreviewCamp(c); setPreviewContact(0); }}
+                      className={`h-7 w-7 rounded-lg ${tk.hov} flex items-center justify-center`} title="Preview message">
+                      <Eye className={`h-4 w-4 ${tk.tm}`} />
                     </button>
                   </div>
                 </div>
@@ -662,6 +685,35 @@ function CampaignsTab({ tk, campaigns, setCampaigns, roles, contacts, templates 
                                 </button>
                               );
                             })}
+                          </div>
+                        )}
+                        {/* Tags sub-selector */}
+                        {opt.key === 'tags' && form.audience === 'tags' && allTags.length > 0 && (
+                          <div className="mt-2 ml-7">
+                            <p className={`text-[10px] ${tk.tm} mb-1.5`}>Select tags — contacts matching ANY selected tag will receive the campaign</p>
+                            <div className="flex flex-wrap gap-1.5">
+                              {allTags.map(tag => {
+                                const selected = form.tag_ids.includes(tag.tag_id);
+                                const cnt = contacts.filter(c => (c.tag_ids || []).includes(tag.tag_id)).length;
+                                return (
+                                  <button key={tag.tag_id}
+                                    onClick={() => setForm(p => ({
+                                      ...p,
+                                      tag_ids: selected
+                                        ? p.tag_ids.filter(id => id !== tag.tag_id)
+                                        : [...p.tag_ids, tag.tag_id]
+                                    }))}
+                                    className={`flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border-2 transition-all ${
+                                      selected ? 'text-white border-transparent' : `border-[var(--border-color)] ${tk.t2} ${tk.hov}`
+                                    }`}
+                                    style={selected ? { backgroundColor: tag.color, borderColor: tag.color } : {}}>
+                                    <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: selected ? 'white' : tag.color }} />
+                                    {tag.name}
+                                    <span className={`font-bold text-[10px] ${selected ? 'text-white/80' : tk.tm}`}>{cnt}</span>
+                                  </button>
+                                );
+                              })}
+                            </div>
                           </div>
                         )}
                       </div>
@@ -786,6 +838,84 @@ function CampaignsTab({ tk, campaigns, setCampaigns, roles, contacts, templates 
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* WhatsApp Campaign Preview Dialog */}
+      {previewCamp && (
+        <Dialog open={!!previewCamp} onOpenChange={() => setPreviewCamp(null)}>
+          <DialogContent className={`${tk.card} border ${tk.bdr} w-[calc(100vw-2rem)] max-w-md`}>
+            <DialogHeader>
+              <DialogTitle className={`${tk.t1} flex items-center gap-2`}>
+                <MessageSquare className="h-4 w-4 text-green-500" />
+                WhatsApp Preview
+              </DialogTitle>
+              <DialogDescription className={tk.tm}>{previewCamp.name}</DialogDescription>
+            </DialogHeader>
+
+            {/* Preview-as selector */}
+            {sampleContacts.length > 0 && (
+              <div className="flex items-center gap-2">
+                <span className={`text-[11px] ${tk.tm} flex-shrink-0`}>Preview as:</span>
+                <div className="flex gap-1 overflow-x-auto no-scrollbar">
+                  {sampleContacts.map((c, i) => (
+                    <button key={c.contact_id || i} onClick={() => setPreviewContact(i)}
+                      className={`text-[10px] px-2 py-1 rounded-full whitespace-nowrap flex-shrink-0 border transition-all ${
+                        previewContact === i ? 'bg-green-500 border-green-500 text-white' : `border-[var(--border-color)] ${tk.t2}`
+                      }`}>
+                      {(c.first_name || c.name?.split(' ')[0] || 'Contact')}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* WhatsApp phone mock */}
+            <div className="bg-[#0b141a] rounded-2xl p-4 relative overflow-hidden">
+              {/* Status bar */}
+              <div className="flex items-center justify-between mb-3 opacity-60">
+                <span className="text-white text-[10px] font-medium">9:41 AM</span>
+                <div className="flex items-center gap-1">
+                  <div className="w-3 h-1.5 rounded-sm bg-white" /><div className="w-1 h-1 rounded-full bg-white" />
+                </div>
+              </div>
+              {/* Chat header */}
+              <div className="flex items-center gap-2 mb-4 pb-3 border-b border-white/10">
+                <div className="w-8 h-8 rounded-full bg-green-500/30 flex items-center justify-center">
+                  <MessageSquare className="h-4 w-4 text-green-400" />
+                </div>
+                <div>
+                  <p className="text-white text-xs font-semibold">SmartShape Team</p>
+                  <p className="text-white/50 text-[10px]">Online</p>
+                </div>
+              </div>
+              {/* Message bubble */}
+              <div className="flex justify-end">
+                <div className="bg-[#005c4b] rounded-2xl rounded-tr-sm px-3 py-2.5 max-w-[85%]">
+                  <p className="text-white text-[11px] leading-relaxed whitespace-pre-wrap">
+                    {personalize(previewCamp.message, previewSample)}
+                  </p>
+                  <div className="flex items-center justify-end gap-1 mt-1.5">
+                    <span className="text-white/50 text-[9px]">Now</span>
+                    <svg className="w-3 h-3 text-[#53bdeb]" viewBox="0 0 16 11" fill="currentColor">
+                      <path d="M11.071.653a.75.75 0 0 1 1.06 1.06L5.243 8.6 3.12 6.477A.75.75 0 0 0 2.06 7.536l2.652 2.652a.75.75 0 0 0 1.06 0L12.132 3.8l.707-.707-.707-.707L11.07.653zM7.593 8.6 5.47 6.477a.75.75 0 0 0-1.06 1.06l2.652 2.652a.75.75 0 0 0 1.06 0L14.571 3.24l-1.06-1.06L7.593 8.6z" />
+                    </svg>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className={`flex items-center justify-between text-[11px] ${tk.tm}`}>
+              <span>{previewCamp.audience_label} · {previewCamp.audience_count} contacts</span>
+              <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${STATUS_CHIP[previewCamp.status] || 'bg-gray-500/15 text-gray-400'}`}>
+                {previewCamp.status}
+              </span>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" size="sm" className={`border-[var(--border-color)] ${tk.t2}`}
+                onClick={() => setPreviewCamp(null)}>Close</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
     </div>
   );
 }
@@ -1713,14 +1843,16 @@ function WhatsAppSetupTab({ tk, waConnected, setWaConnected }) {
 // ══════════════════════════════════════════════════════════════════════════════
 const BLANK_EMAIL_TMPL = { name: '', category: 'intro', subject: '', body: '' };
 
-function EmailCampaignsSubTab({ tk, campaigns, setCampaigns, roles, contacts, templates }) {
+function EmailCampaignsSubTab({ tk, campaigns, setCampaigns, roles, contacts, templates, allTags }) {
   const [filter, setFilter] = useState('all');
   const [showCreate, setShowCreate] = useState(false);
   const [launching, setLaunching] = useState(null);
   const [step, setStep] = useState(1);
   const [saving, setSaving] = useState(false);
   const [previewTmpl, setPreviewTmpl] = useState(null);
-  const [form, setForm] = useState({ name: '', audience: 'all', role_id: '', template_id: '', subject: '', message: '', schedule: 'draft', schedule_at: '' });
+  const [previewCamp, setPreviewCamp] = useState(null);
+  const [previewContact, setPreviewContact] = useState(0);
+  const [form, setForm] = useState({ name: '', audience: 'all', role_id: '', tag_ids: [], template_id: '', subject: '', message: '', schedule: 'draft', schedule_at: '' });
 
   const audienceCount = (() => {
     if (form.audience === 'all') return contacts.length;
@@ -1730,6 +1862,9 @@ function EmailCampaignsSubTab({ tk, campaigns, setCampaigns, roles, contacts, te
         c.contact_role_id === form.role_id ||
         (rName && (c.designation || '').toLowerCase() === rName)
       ).length;
+    }
+    if (form.audience === 'tags' && form.tag_ids.length > 0) {
+      return contacts.filter(c => form.tag_ids.some(tid => (c.tag_ids || []).includes(tid))).length;
     }
     return 0;
   })();
@@ -1742,9 +1877,12 @@ function EmailCampaignsSubTab({ tk, campaigns, setCampaigns, roles, contacts, te
   ];
   const filtered = filter === 'all' ? campaigns : campaigns.filter(c => c.status === filter);
 
+  const sampleContacts = contacts.filter(c => c.email).slice(0, 5);
+  const previewSampleE = sampleContacts[previewContact] || { name: 'Ramesh Kumar', first_name: 'Ramesh', company: 'Delhi Public School', email: 'ramesh@dpsdwarka.edu.in' };
+
   function closeCreate() {
     setShowCreate(false); setStep(1);
-    setForm({ name: '', audience: 'all', role_id: '', template_id: '', subject: '', message: '', schedule: 'draft', schedule_at: '' });
+    setForm({ name: '', audience: 'all', role_id: '', tag_ids: [], template_id: '', subject: '', message: '', schedule: 'draft', schedule_at: '' });
   }
 
   function pickTemplate(tmpl) {
@@ -1755,17 +1893,23 @@ function EmailCampaignsSubTab({ tk, campaigns, setCampaigns, roles, contacts, te
     if (!form.name.trim()) { toast.error('Campaign name is required'); return; }
     setSaving(true);
     try {
-      const roleLabel = form.audience === 'role' && form.role_id
-        ? roles.find(r => r.role_id === form.role_id)?.name || 'By Role' : 'All Contacts';
-      const audience_filter = form.audience === 'role' && form.role_id
-        ? { roles: [roles.find(r => r.role_id === form.role_id)?.name].filter(Boolean) } : {};
+      let audience_filter = {};
+      let audienceLabel = 'All Contacts';
+      if (form.audience === 'role' && form.role_id) {
+        const rName = roles.find(r => r.role_id === form.role_id)?.name;
+        audience_filter = { roles: [rName].filter(Boolean) };
+        audienceLabel = rName || 'By Role';
+      } else if (form.audience === 'tags' && form.tag_ids.length > 0) {
+        audience_filter = { tags: form.tag_ids };
+        audienceLabel = form.tag_ids.map(id => (allTags || []).find(t => t.tag_id === id)?.name || id).join(', ');
+      }
       const res = await emailApi.createCampaign({
         name: form.name.trim(),
         template_id: form.template_id || null,
         subject: form.subject.trim(),
         message: form.message.trim(),
         audience_filter,
-        audience_label: roleLabel,
+        audience_label: audienceLabel,
         scheduled_at: form.schedule === 'schedule' ? form.schedule_at : null,
       });
       setCampaigns(prev => [mapCampaign(res.data), ...prev]);
@@ -1838,18 +1982,101 @@ function EmailCampaignsSubTab({ tk, campaigns, setCampaigns, roles, contacts, te
                     <span className="flex items-center gap-1"><Calendar className="h-3 w-3" />{c.created_at}</span>
                   </div>
                 </div>
-                {c.status === 'draft' && (
-                  <Button size="sm" variant="outline"
-                    className={`h-8 gap-1 text-xs border-[var(--accent)]/40 text-[var(--accent)] hover:bg-[var(--accent)]/10 flex-shrink-0`}
-                    disabled={!!launching} onClick={() => launch(c)}>
-                    {launching === c.id ? <RefreshCw className="h-3 w-3 animate-spin" /> : <Play className="h-3 w-3" />}
-                    Launch
-                  </Button>
-                )}
+                <div className="flex items-center gap-1.5 flex-shrink-0">
+                  {c.status === 'draft' && (
+                    <Button size="sm" variant="outline"
+                      className={`h-8 gap-1 text-xs border-[var(--accent)]/40 text-[var(--accent)] hover:bg-[var(--accent)]/10`}
+                      disabled={!!launching} onClick={() => launch(c)}>
+                      {launching === c.id ? <RefreshCw className="h-3 w-3 animate-spin" /> : <Play className="h-3 w-3" />}
+                      Launch
+                    </Button>
+                  )}
+                  <button onClick={() => { setPreviewCamp(c); setPreviewContact(0); }}
+                    className={`h-8 w-8 rounded-lg ${tk.hov} flex items-center justify-center`} title="Preview email">
+                    <Eye className={`h-4 w-4 ${tk.tm}`} />
+                  </button>
+                </div>
               </div>
             </div>
           ))}
         </div>
+      )}
+
+      {/* Email Campaign Preview Dialog */}
+      {previewCamp && (
+        <Dialog open={!!previewCamp} onOpenChange={() => setPreviewCamp(null)}>
+          <DialogContent className={`${tk.card} border ${tk.bdr} w-[calc(100vw-2rem)] max-w-lg max-h-[85vh] overflow-y-auto`}>
+            <DialogHeader>
+              <DialogTitle className={`${tk.t1} flex items-center gap-2`}>
+                <Mail className="h-4 w-4 text-blue-500" />
+                Email Preview
+              </DialogTitle>
+              <DialogDescription className={tk.tm}>{previewCamp.name}</DialogDescription>
+            </DialogHeader>
+
+            {/* Preview-as selector */}
+            {sampleContacts.length > 0 && (
+              <div className="flex items-center gap-2">
+                <span className={`text-[11px] ${tk.tm} flex-shrink-0`}>Preview as:</span>
+                <div className="flex gap-1 overflow-x-auto no-scrollbar">
+                  {sampleContacts.map((c, i) => (
+                    <button key={c.contact_id || i} onClick={() => setPreviewContact(i)}
+                      className={`text-[10px] px-2 py-1 rounded-full whitespace-nowrap flex-shrink-0 border transition-all ${
+                        previewContact === i ? 'bg-blue-500 border-blue-500 text-white' : `border-[var(--border-color)] ${tk.t2}`
+                      }`}>
+                      {(c.first_name || c.name?.split(' ')[0] || 'Contact')}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Email client mock */}
+            <div className={`border ${tk.bdr} rounded-xl overflow-hidden`}>
+              {/* Browser chrome */}
+              <div className="bg-[var(--bg-primary)] border-b border-[var(--border-color)] px-3 py-2 flex items-center gap-2">
+                <div className="flex gap-1"><div className="w-2.5 h-2.5 rounded-full bg-red-400" /><div className="w-2.5 h-2.5 rounded-full bg-yellow-400" /><div className="w-2.5 h-2.5 rounded-full bg-green-400" /></div>
+                <span className={`text-[10px] ${tk.tm} flex-1 text-center`}>Gmail</span>
+              </div>
+              {/* Email header */}
+              <div className="bg-white/3 border-b border-[var(--border-color)] px-4 py-3 space-y-1.5">
+                <div className="flex gap-3 items-baseline">
+                  <span className={`text-[10px] font-semibold ${tk.tm} w-12 flex-shrink-0`}>From</span>
+                  <span className={`text-xs ${tk.t2}`}>SmartShape Team &lt;noreply@smartshape.in&gt;</span>
+                </div>
+                <div className="flex gap-3 items-baseline">
+                  <span className={`text-[10px] font-semibold ${tk.tm} w-12 flex-shrink-0`}>To</span>
+                  <span className={`text-xs ${tk.t2}`}>
+                    {previewSampleE.name || `${previewSampleE.first_name} ${previewSampleE.last_name || ''}`} &lt;{previewSampleE.email || 'contact@school.edu.in'}&gt;
+                  </span>
+                </div>
+                <div className="flex gap-3 items-baseline">
+                  <span className={`text-[10px] font-semibold ${tk.tm} w-12 flex-shrink-0`}>Subject</span>
+                  <span className={`text-xs font-semibold ${tk.t1} leading-tight`}>
+                    {personalize(previewCamp.subject, previewSampleE) || '(No subject)'}
+                  </span>
+                </div>
+              </div>
+              {/* Email body */}
+              <div className="p-4 min-h-[80px]">
+                <p className={`text-[11px] ${tk.t2} whitespace-pre-wrap leading-relaxed`}>
+                  {personalize(previewCamp.message, previewSampleE) || '(No body content)'}
+                </p>
+              </div>
+            </div>
+
+            <div className={`flex items-center justify-between text-[11px] ${tk.tm}`}>
+              <span>{previewCamp.audience_label} · {previewCamp.audience_count} contacts</span>
+              <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${STATUS_CHIP[previewCamp.status] || 'bg-gray-500/15 text-gray-400'}`}>
+                {previewCamp.status}
+              </span>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" size="sm" className={`border-[var(--border-color)] ${tk.t2}`}
+                onClick={() => setPreviewCamp(null)}>Close</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       )}
 
       {/* Create dialog — 2-step */}
@@ -1868,14 +2095,14 @@ function EmailCampaignsSubTab({ tk, campaigns, setCampaigns, roles, contacts, te
               </div>
               <div>
                 <Label className={`${tk.t2} text-xs mb-1.5 block`}>Audience</Label>
-                <div className="grid grid-cols-2 gap-2">
-                  {[{ key: 'all', label: 'All Contacts', count: contacts.length }, { key: 'role', label: 'By Designation', count: audienceCount }].map(opt => (
+                <div className="grid grid-cols-3 gap-2">
+                  {[{ key: 'all', label: 'All Contacts', count: contacts.length }, { key: 'role', label: 'By Designation', count: audienceCount }, { key: 'tags', label: 'By Tags', count: audienceCount }].map(opt => (
                     <button key={opt.key} onClick={() => setForm(p => ({ ...p, audience: opt.key }))}
                       className={`p-3 rounded-xl border-2 text-left transition-all ${
                         form.audience === opt.key ? 'border-[var(--accent)] bg-[var(--accent)]/5' : `border-[var(--border-color)] ${tk.hov}`
                       }`}>
                       <p className={`text-xs font-semibold ${tk.t1}`}>{opt.label}</p>
-                      <p className={`text-[10px] ${tk.tm} mt-0.5`}>{opt.count} contacts</p>
+                      <p className={`text-[10px] ${tk.tm} mt-0.5`}>{form.audience === opt.key ? `${audienceCount} contacts` : (opt.key === 'all' ? `${contacts.length} contacts` : 'Filter')}</p>
                     </button>
                   ))}
                 </div>
@@ -1888,6 +2115,26 @@ function EmailCampaignsSubTab({ tk, campaigns, setCampaigns, roles, contacts, te
                     <option value="">Select role…</option>
                     {roles.map(r => <option key={r.role_id} value={r.role_id}>{r.name}</option>)}
                   </select>
+                </div>
+              )}
+              {form.audience === 'tags' && (allTags || []).length > 0 && (
+                <div>
+                  <Label className={`${tk.t2} text-xs mb-1.5 block`}>Tags — contacts matching ANY selected tag</Label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {(allTags || []).map(tag => {
+                      const sel = form.tag_ids.includes(tag.tag_id);
+                      const cnt = contacts.filter(c => (c.tag_ids || []).includes(tag.tag_id)).length;
+                      return (
+                        <button key={tag.tag_id}
+                          onClick={() => setForm(p => ({ ...p, tag_ids: sel ? p.tag_ids.filter(id => id !== tag.tag_id) : [...p.tag_ids, tag.tag_id] }))}
+                          className={`flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border-2 transition-all ${sel ? 'text-white border-transparent' : `border-[var(--border-color)] ${tk.t2}`}`}
+                          style={sel ? { backgroundColor: tag.color, borderColor: tag.color } : {}}>
+                          <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: sel ? 'white' : tag.color }} />
+                          {tag.name} <span className={`text-[10px] ${sel ? 'text-white/80' : tk.tm}`}>{cnt}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
               )}
               <div>
@@ -2318,6 +2565,7 @@ function EmailHubTab({ tk }) {
   const [analytics, setAnalytics] = useState(null);
   const [roles, setRoles] = useState([]);
   const [contacts, setContacts] = useState([]);
+  const [allTags, setAllTags] = useState([]);
 
   function reload() {
     emailApi.getCampaigns().then(r => setCampaigns((r.data || []).map(mapCampaign))).catch(() => {});
@@ -2325,6 +2573,7 @@ function EmailHubTab({ tk }) {
     emailApi.getAnalytics().then(r => setAnalytics(r.data)).catch(() => {});
     contactRolesApi.getAll().then(r => setRoles(r.data || [])).catch(() => {});
     contactsApi.getAll().then(r => setContacts(r.data || [])).catch(() => {});
+    tagsApi.getAll().then(r => setAllTags(r.data || [])).catch(() => {});
   }
 
   useEffect(() => { reload(); }, []); // eslint-disable-line
@@ -2357,7 +2606,7 @@ function EmailHubTab({ tk }) {
         </button>
       </div>
 
-      {subTab === 'campaigns' && <EmailCampaignsSubTab tk={tk} campaigns={campaigns} setCampaigns={setCampaigns} roles={roles} contacts={contacts} templates={templates} />}
+      {subTab === 'campaigns' && <EmailCampaignsSubTab tk={tk} campaigns={campaigns} setCampaigns={setCampaigns} roles={roles} contacts={contacts} templates={templates} allTags={allTags} />}
       {subTab === 'templates' && <EmailTemplatesSubTab tk={tk} templates={templates} setTemplates={setTemplates} />}
       {subTab === 'analytics' && <EmailAnalyticsSubTab tk={tk} analytics={analytics} />}
       {subTab === 'setup'     && <EmailSetupSubTab     tk={tk} />}
@@ -2389,6 +2638,7 @@ export default function MarketingHub() {
   const [roles, setRoles] = useState([]);
   const [contacts, setContacts] = useState([]);
   const [analytics, setAnalytics] = useState(null);
+  const [allTags, setAllTags] = useState([]);
 
   function reload() {
     contactRolesApi.getAll().then(r => setRoles(r.data || [])).catch(() => {});
@@ -2398,6 +2648,7 @@ export default function MarketingHub() {
     waApi.getCampaigns().then(r => setCampaigns((r.data || []).map(mapCampaign))).catch(() => {});
     waApi.getTemplates().then(r => setTemplates(r.data || [])).catch(() => {});
     waApi.getAnalytics().then(r => setAnalytics(r.data)).catch(() => {});
+    tagsApi.getAll().then(r => setAllTags(r.data || [])).catch(() => {});
   }
 
   useEffect(() => { reload(); }, []); // eslint-disable-line
@@ -2457,7 +2708,7 @@ export default function MarketingHub() {
 
           {/* Content */}
           {tab === 'overview'  && <OverviewTab   tk={tk} campaigns={campaigns} greetings={greetings} drips={drips} waConnected={waConnected} setTab={setTab} analytics={analytics} loadDemo={loadDemo} clearDemo={clearDemo} />}
-          {tab === 'campaigns' && <CampaignsTab  tk={tk} campaigns={campaigns} setCampaigns={setCampaigns} roles={roles} contacts={contacts} templates={templates} />}
+          {tab === 'campaigns' && <CampaignsTab  tk={tk} campaigns={campaigns} setCampaigns={setCampaigns} roles={roles} contacts={contacts} templates={templates} allTags={allTags} />}
           {tab === 'templates' && <TemplatesTab  tk={tk} templates={templates} setTemplates={setTemplates} />}
           {tab === 'greetings' && <GreetingsTab  tk={tk} greetings={greetings} setGreetings={setGreetings} />}
           {tab === 'drips'     && <DripsTab      tk={tk} drips={drips} setDrips={setDrips} />}

@@ -271,9 +271,48 @@ async def delete_contact_role(role_id: str, request: Request):
 
 # ==================== TAG MASTER ====================
 
+# 12 expert marketing tags pre-seeded for SmartShape B2B school sales cycle
+_DEFAULT_MARKETING_TAGS = [
+    # Lead temperature
+    {"name": "Hot Lead",           "color": "#ef4444", "group": "temperature"},
+    {"name": "Warm Lead",          "color": "#f97316", "group": "temperature"},
+    {"name": "Cold Lead",          "color": "#6b7280", "group": "temperature"},
+    # Demo status
+    {"name": "Demo Done",          "color": "#22c55e", "group": "demo"},
+    {"name": "Demo Scheduled",     "color": "#3b82f6", "group": "demo"},
+    {"name": "Demo Interested",    "color": "#a855f7", "group": "demo"},
+    # Decision status
+    {"name": "Budget Approved",    "color": "#10b981", "group": "decision"},
+    {"name": "Decision Pending",   "color": "#eab308", "group": "decision"},
+    {"name": "Price Sensitive",    "color": "#f59e0b", "group": "decision"},
+    # Relationship
+    {"name": "Key Decision Maker", "color": "#06b6d4", "group": "relationship"},
+    {"name": "Referral",           "color": "#8b5cf6", "group": "relationship"},
+    {"name": "Existing Customer",  "color": "#059669", "group": "relationship"},
+]
+
+
+async def _seed_marketing_tags():
+    existing_names = {
+        t["name"] async for t in db.tags.find({}, {"name": 1, "_id": 0})
+    }
+    now_iso = datetime.now(timezone.utc).isoformat()
+    for tag in _DEFAULT_MARKETING_TAGS:
+        if tag["name"] not in existing_names:
+            await db.tags.insert_one({
+                "tag_id": f"tag_{uuid.uuid4().hex[:8]}",
+                "name": tag["name"],
+                "color": tag["color"],
+                "group": tag["group"],
+                "created_by": "system",
+                "created_at": now_iso,
+            })
+
+
 @router.get("/tags")
 async def get_tags(request: Request):
     await get_current_user(request)
+    await _seed_marketing_tags()
     return await db.tags.find({}, {"_id": 0}).sort("name", 1).to_list(500)
 
 
@@ -668,6 +707,34 @@ async def delete_contact(contact_id: str, request: Request):
         {"$set": {"is_deleted": True, "deleted_at": now_iso, "deleted_by": user["email"]}}
     )
     return {"message": "Contact archived (soft-deleted)"}
+
+
+@router.post("/contacts/{contact_id}/tags")
+async def add_contact_tag(contact_id: str, request: Request):
+    """Add a tag to a contact. Body: {tag_id: str}"""
+    await get_current_user(request)
+    body = await request.json()
+    tag_id = body.get("tag_id", "").strip()
+    if not tag_id:
+        raise HTTPException(400, "tag_id is required")
+    if not await db.tags.find_one({"tag_id": tag_id}):
+        raise HTTPException(404, "Tag not found")
+    await db.contacts.update_one(
+        {"contact_id": contact_id},
+        {"$addToSet": {"tag_ids": tag_id}}
+    )
+    return await db.contacts.find_one({"contact_id": contact_id}, {"_id": 0})
+
+
+@router.delete("/contacts/{contact_id}/tags/{tag_id}")
+async def remove_contact_tag(contact_id: str, tag_id: str, request: Request):
+    """Remove a tag from a contact."""
+    await get_current_user(request)
+    await db.contacts.update_one(
+        {"contact_id": contact_id},
+        {"$pull": {"tag_ids": tag_id}}
+    )
+    return await db.contacts.find_one({"contact_id": contact_id}, {"_id": 0})
 
 
 @router.put("/contacts/{contact_id}/restore")

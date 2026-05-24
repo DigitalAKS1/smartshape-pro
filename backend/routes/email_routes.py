@@ -379,9 +379,20 @@ async def _seed_templates():
 # ── Audience resolution (same logic as WhatsApp, uses email field) ────────────
 
 async def _resolve_audience(audience_filter: dict) -> list:
-    roles = audience_filter.get("roles", [])
+    roles  = audience_filter.get("roles", [])
     boards = audience_filter.get("boards", [])
     cities = audience_filter.get("cities", [])
+    tags   = audience_filter.get("tags", [])   # list of tag_ids — ANY match
+
+    base_filt = {"is_deleted": {"$ne": True}}
+    if boards:
+        base_filt["board"] = {"$in": boards}
+    if cities:
+        base_filt["city"] = {"$in": cities}
+
+    if tags:
+        base_filt["tag_ids"] = {"$in": tags}
+        return await db.contacts.find(base_filt, {"_id": 0}).to_list(None)
 
     if roles:
         role_docs = await db.contact_roles.find(
@@ -389,19 +400,14 @@ async def _resolve_audience(audience_filter: dict) -> list:
         ).to_list(None)
         role_ids = {r["role_id"] for r in role_docs}
         role_names_lower = {r["name"].lower() for r in role_docs}
-        all_contacts = await db.contacts.find({}, {"_id": 0}).to_list(None)
+        all_contacts = await db.contacts.find(base_filt, {"_id": 0}).to_list(None)
         return [
             c for c in all_contacts
             if c.get("contact_role_id") in role_ids
             or (c.get("designation") or "").lower() in role_names_lower
         ]
 
-    filt = {}
-    if boards:
-        filt["board"] = {"$in": boards}
-    if cities:
-        filt["city"] = {"$in": cities}
-    return await db.contacts.find(filt, {"_id": 0}).to_list(None)
+    return await db.contacts.find(base_filt, {"_id": 0}).to_list(None)
 
 
 # ── Template endpoints ─────────────────────────────────────────────────────────
