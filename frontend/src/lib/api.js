@@ -188,6 +188,7 @@ export const contacts = {
   convertToLead: (id, data) => API.post(`/contacts/${id}/convert-to-lead`, data),
   addTag: (contactId, tagId) => API.post(`/contacts/${contactId}/tags`, { tag_id: tagId }),
   removeTag: (contactId, tagId) => API.delete(`/contacts/${contactId}/tags/${tagId}`),
+  getActivity: (id) => API.get(`/contacts/${id}/activity`),
   importCsv: (file) => {
     const fd = new FormData();
     fd.append('file', file);
@@ -296,6 +297,8 @@ export const leads = {
   autoAssign: (leadIds) => API.post('/leads/auto-assign', leadIds ? { lead_ids: leadIds } : {}),
   reassign: (data) => API.post('/leads/reassign', data),
   bulkAssign: (data) => API.post('/leads/bulk-assign', data),
+  bulkTag: (data) => API.post('/leads/bulk-tag', data),
+  bulkStage: (data) => API.post('/leads/bulk-stage', data),
   lock: (id, isLocked) => API.post(`/leads/${id}/lock`, { is_locked: isLocked }),
   importCsv: (file) => {
     const fd = new FormData();

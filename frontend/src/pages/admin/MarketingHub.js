@@ -439,7 +439,14 @@ function CampaignsTab({ tk, campaigns, setCampaigns, roles, contacts, templates,
   const [previewTmpl, setPreviewTmpl] = useState(null);
   const [previewCamp, setPreviewCamp] = useState(null);
   const [previewContact, setPreviewContact] = useState(0);
-  const [form, setForm] = useState({ name: '', audience: 'all', role_id: '', tag_ids: [], template_id: '', message: '', schedule: 'draft', schedule_at: '' });
+  const [form, setForm] = useState({ name: '', audience: 'all', role_id: '', tag_ids: [], lead_stages: [], school_types: [], min_strength: '', school_cities: '', template_id: '', message: '', schedule: 'draft', schedule_at: '' });
+
+  const PIPELINE_STAGES = [
+    { id: 'new', label: 'New' }, { id: 'contacted', label: 'Contacted' },
+    { id: 'demo', label: 'Demo' }, { id: 'negotiation', label: 'Negotiation' },
+    { id: 'quoted', label: 'Quoted' }, { id: 'follow_up', label: 'Follow Up' },
+    { id: 'won', label: 'Won' }, { id: 'lost', label: 'Lost' },
+  ];
 
   const audienceCount = (() => {
     if (form.audience === 'all') return contacts.length;
@@ -453,7 +460,8 @@ function CampaignsTab({ tk, campaigns, setCampaigns, roles, contacts, templates,
     if (form.audience === 'tags' && form.tag_ids.length > 0) {
       return contacts.filter(c => form.tag_ids.some(tid => (c.tag_ids || []).includes(tid))).length;
     }
-    return 0;
+    // lead_stage and school_attrs counts are server-side — show '?' until launched
+    return null;
   })();
 
   const FILTERS = [
@@ -472,7 +480,7 @@ function CampaignsTab({ tk, campaigns, setCampaigns, roles, contacts, templates,
 
   function closeCreate() {
     setShowCreate(false); setStep(1);
-    setForm({ name: '', audience: 'all', role_id: '', tag_ids: [], template_id: '', message: '', schedule: 'draft', schedule_at: '' });
+    setForm({ name: '', audience: 'all', role_id: '', tag_ids: [], lead_stages: [], school_types: [], min_strength: '', school_cities: '', template_id: '', message: '', schedule: 'draft', schedule_at: '' });
   }
 
   function pickTemplate(tmpl) {
@@ -492,6 +500,16 @@ function CampaignsTab({ tk, campaigns, setCampaigns, roles, contacts, templates,
       } else if (form.audience === 'tags' && form.tag_ids.length > 0) {
         audience_filter = { tags: form.tag_ids };
         audienceLabel = form.tag_ids.map(id => allTags.find(t => t.tag_id === id)?.name || id).join(', ');
+      } else if (form.audience === 'lead_stage' && form.lead_stages.length > 0) {
+        audience_filter = { lead_stages: form.lead_stages };
+        audienceLabel = `Lead Stage: ${form.lead_stages.join(', ')}`;
+      } else if (form.audience === 'school_attrs') {
+        audience_filter = {};
+        const labels = [];
+        if (form.school_types.length > 0) { audience_filter.school_types = form.school_types; labels.push(form.school_types.join('/')); }
+        if (form.min_strength) { audience_filter.min_strength = parseInt(form.min_strength); labels.push(`${form.min_strength}+ students`); }
+        if (form.school_cities.trim()) { audience_filter.school_cities = form.school_cities.split(',').map(s => s.trim()).filter(Boolean); labels.push(form.school_cities); }
+        audienceLabel = labels.length > 0 ? `School: ${labels.join(' · ')}` : 'By School Attributes';
       }
       const res = await waApi.createCampaign({
         name: form.name.trim(),
@@ -521,9 +539,11 @@ function CampaignsTab({ tk, campaigns, setCampaigns, roles, contacts, templates,
   }
 
   const AUDIENCE_OPTS = [
-    { key: 'all',  label: 'All Contacts',   desc: `${contacts.length} contacts in your database` },
-    { key: 'role', label: 'By Designation', desc: 'Principal, Teacher, Purchase Head, etc.' },
-    { key: 'tags', label: 'By Tags',        desc: 'Hot Lead, Demo Done, Budget Approved, etc.' },
+    { key: 'all',         label: 'All Contacts',        desc: `${contacts.length} contacts in your database` },
+    { key: 'role',        label: 'By Designation',      desc: 'Principal, Teacher, Purchase Head, etc.' },
+    { key: 'tags',        label: 'By Tags',             desc: 'Hot Lead, Demo Done, Budget Approved, etc.' },
+    { key: 'lead_stage',  label: 'By Lead Stage',       desc: 'Demo, Negotiation, Quoted — contacts with active leads' },
+    { key: 'school_attrs',label: 'By School Attributes',desc: 'Filter by board type, city, or minimum student strength' },
   ];
 
   return (
@@ -684,9 +704,14 @@ function CampaignsTab({ tk, campaigns, setCampaigns, roles, contacts, templates,
                 <div>
                   <div className="flex items-center justify-between mb-2">
                     <Label className={`${tk.t2} text-xs`}>Who do you want to reach?</Label>
-                    {audienceCount > 0 && (
+                    {(audienceCount !== null && audienceCount > 0) && (
                       <span className="text-xs px-2 py-0.5 rounded-full bg-[var(--accent)]/10 text-[var(--accent)] font-semibold">
                         ~{audienceCount} contacts
+                      </span>
+                    )}
+                    {audienceCount === null && (
+                      <span className={`text-[10px] px-2 py-0.5 rounded-full border ${tk.bdr} ${tk.tm}`}>
+                        resolved on launch
                       </span>
                     )}
                   </div>
@@ -762,6 +787,70 @@ function CampaignsTab({ tk, campaigns, setCampaigns, roles, contacts, templates,
                                   </button>
                                 );
                               })}
+                            </div>
+                          </div>
+                        )}
+                        {/* Lead Stage sub-selector */}
+                        {opt.key === 'lead_stage' && form.audience === 'lead_stage' && (
+                          <div className="mt-2 ml-7">
+                            <p className={`text-[10px] ${tk.tm} mb-1.5`}>Target contacts whose linked lead is currently in these stages</p>
+                            <div className="flex flex-wrap gap-1.5">
+                              {PIPELINE_STAGES.map(s => {
+                                const sel = form.lead_stages.includes(s.id);
+                                return (
+                                  <button key={s.id}
+                                    onClick={() => setForm(p => ({
+                                      ...p,
+                                      lead_stages: sel ? p.lead_stages.filter(x => x !== s.id) : [...p.lead_stages, s.id]
+                                    }))}
+                                    className={`text-xs px-2.5 py-1 rounded-full border-2 transition-all ${
+                                      sel ? 'bg-[var(--accent)] border-[var(--accent)] text-white' : `border-[var(--border-color)] ${tk.t2} ${tk.hov}`
+                                    }`}>
+                                    {s.label}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+                        {/* School Attributes sub-selector */}
+                        {opt.key === 'school_attrs' && form.audience === 'school_attrs' && (
+                          <div className="mt-2 ml-7 space-y-2">
+                            <div>
+                              <p className={`text-[10px] ${tk.tm} mb-1.5`}>Board type (select any)</p>
+                              <div className="flex flex-wrap gap-1.5">
+                                {['CBSE', 'ICSE', 'IB', 'State Board', 'Montessori'].map(bt => {
+                                  const sel = form.school_types.includes(bt);
+                                  return (
+                                    <button key={bt}
+                                      onClick={() => setForm(p => ({
+                                        ...p,
+                                        school_types: sel ? p.school_types.filter(x => x !== bt) : [...p.school_types, bt]
+                                      }))}
+                                      className={`text-xs px-2.5 py-1 rounded-full border-2 transition-all ${
+                                        sel ? 'bg-[var(--accent)] border-[var(--accent)] text-white' : `border-[var(--border-color)] ${tk.t2} ${tk.hov}`
+                                      }`}>
+                                      {bt}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                            <div className="flex gap-2">
+                              <div className="flex-1">
+                                <p className={`text-[10px] ${tk.tm} mb-1`}>Min. strength</p>
+                                <input type="number" min="0" placeholder="e.g. 500"
+                                  value={form.min_strength}
+                                  onChange={e => setForm(p => ({ ...p, min_strength: e.target.value }))}
+                                  className={`w-full text-xs px-2 py-1.5 rounded-lg border ${tk.bdr} bg-[var(--bg-primary)] ${tk.t1} focus:outline-none focus:border-[var(--accent)]`} />
+                              </div>
+                              <div className="flex-1">
+                                <p className={`text-[10px] ${tk.tm} mb-1`}>Cities (comma-sep.)</p>
+                                <input type="text" placeholder="Delhi, Mumbai"
+                                  value={form.school_cities}
+                                  onChange={e => setForm(p => ({ ...p, school_cities: e.target.value }))}
+                                  className={`w-full text-xs px-2 py-1.5 rounded-lg border ${tk.bdr} bg-[var(--bg-primary)] ${tk.t1} focus:outline-none focus:border-[var(--accent)]`} />
+                              </div>
                             </div>
                           </div>
                         )}
@@ -857,7 +946,7 @@ function CampaignsTab({ tk, campaigns, setCampaigns, roles, contacts, templates,
                   <p className={`text-[10px] font-bold uppercase tracking-widest ${tk.tm} mb-2`}>Review</p>
                   {[
                     { label: 'Campaign',  value: form.name || 'Untitled' },
-                    { label: 'Audience',  value: `${AUDIENCE_OPTS.find(a => a.key === form.audience)?.label || form.audience}${form.audience === 'role' && form.role_id ? ` — ${roles.find(r => r.role_id === form.role_id)?.name || ''}` : ''} (~${audienceCount})` },
+                    { label: 'Audience',  value: `${AUDIENCE_OPTS.find(a => a.key === form.audience)?.label || form.audience}${form.audience === 'role' && form.role_id ? ` — ${roles.find(r => r.role_id === form.role_id)?.name || ''}` : ''}${audienceCount !== null ? ` (~${audienceCount})` : ''}` },
                     { label: 'Template',  value: form.template_id ? (templates.find(t => t.template_id === form.template_id)?.name || 'Custom') : (form.message ? 'Custom message' : 'Not selected') },
                     { label: 'Schedule',  value: form.schedule === 'draft' ? 'Save as Draft' : (form.schedule_at || 'Not set') },
                   ].map(r => (
@@ -1952,7 +2041,14 @@ function EmailCampaignsSubTab({ tk, campaigns, setCampaigns, roles, contacts, te
   const [previewTmpl, setPreviewTmpl] = useState(null);
   const [previewCamp, setPreviewCamp] = useState(null);
   const [previewContact, setPreviewContact] = useState(0);
-  const [form, setForm] = useState({ name: '', audience: 'all', role_id: '', tag_ids: [], template_id: '', subject: '', message: '', schedule: 'draft', schedule_at: '' });
+  const [form, setForm] = useState({ name: '', audience: 'all', role_id: '', tag_ids: [], lead_stages: [], school_types: [], min_strength: '', school_cities: '', template_id: '', subject: '', message: '', schedule: 'draft', schedule_at: '' });
+
+  const E_PIPELINE_STAGES = [
+    { id: 'new', label: 'New' }, { id: 'contacted', label: 'Contacted' },
+    { id: 'demo', label: 'Demo' }, { id: 'negotiation', label: 'Negotiation' },
+    { id: 'quoted', label: 'Quoted' }, { id: 'follow_up', label: 'Follow Up' },
+    { id: 'won', label: 'Won' }, { id: 'lost', label: 'Lost' },
+  ];
 
   const audienceCount = (() => {
     if (form.audience === 'all') return contacts.length;
@@ -1966,8 +2062,16 @@ function EmailCampaignsSubTab({ tk, campaigns, setCampaigns, roles, contacts, te
     if (form.audience === 'tags' && form.tag_ids.length > 0) {
       return contacts.filter(c => form.tag_ids.some(tid => (c.tag_ids || []).includes(tid))).length;
     }
-    return 0;
+    return null;
   })();
+
+  const E_AUDIENCE_OPTS = [
+    { key: 'all',         label: 'All Contacts',        desc: `${contacts.length} contacts in your database` },
+    { key: 'role',        label: 'By Designation',      desc: 'Principal, Teacher, Purchase Head, etc.' },
+    { key: 'tags',        label: 'By Tags',             desc: 'Hot Lead, Demo Done, Budget Approved, etc.' },
+    { key: 'lead_stage',  label: 'By Lead Stage',       desc: 'Demo, Negotiation, Quoted — contacts with active leads' },
+    { key: 'school_attrs',label: 'By School Attributes',desc: 'Filter by board type, city, or minimum student strength' },
+  ];
 
   const FILTERS = [
     { key: 'all',       label: 'All',       count: campaigns.length },
@@ -1982,7 +2086,7 @@ function EmailCampaignsSubTab({ tk, campaigns, setCampaigns, roles, contacts, te
 
   function closeCreate() {
     setShowCreate(false); setStep(1);
-    setForm({ name: '', audience: 'all', role_id: '', tag_ids: [], template_id: '', subject: '', message: '', schedule: 'draft', schedule_at: '' });
+    setForm({ name: '', audience: 'all', role_id: '', tag_ids: [], lead_stages: [], school_types: [], min_strength: '', school_cities: '', template_id: '', subject: '', message: '', schedule: 'draft', schedule_at: '' });
   }
 
   function pickTemplate(tmpl) {
@@ -2002,6 +2106,16 @@ function EmailCampaignsSubTab({ tk, campaigns, setCampaigns, roles, contacts, te
       } else if (form.audience === 'tags' && form.tag_ids.length > 0) {
         audience_filter = { tags: form.tag_ids };
         audienceLabel = form.tag_ids.map(id => (allTags || []).find(t => t.tag_id === id)?.name || id).join(', ');
+      } else if (form.audience === 'lead_stage' && form.lead_stages.length > 0) {
+        audience_filter = { lead_stages: form.lead_stages };
+        audienceLabel = `Lead Stage: ${form.lead_stages.join(', ')}`;
+      } else if (form.audience === 'school_attrs') {
+        audience_filter = {};
+        const labels = [];
+        if (form.school_types.length > 0) { audience_filter.school_types = form.school_types; labels.push(form.school_types.join('/')); }
+        if (form.min_strength) { audience_filter.min_strength = parseInt(form.min_strength); labels.push(`${form.min_strength}+ students`); }
+        if (form.school_cities.trim()) { audience_filter.school_cities = form.school_cities.split(',').map(s => s.trim()).filter(Boolean); labels.push(form.school_cities); }
+        audienceLabel = labels.length > 0 ? `School: ${labels.join(' · ')}` : 'By School Attributes';
       }
       const res = await emailApi.createCampaign({
         name: form.name.trim(),
@@ -2194,49 +2308,115 @@ function EmailCampaignsSubTab({ tk, campaigns, setCampaigns, roles, contacts, te
                   value={form.name} onChange={e => setForm(p => ({ ...p, name: e.target.value }))} />
               </div>
               <div>
-                <Label className={`${tk.t2} text-xs mb-1.5 block`}>Audience</Label>
-                <div className="grid grid-cols-3 gap-2">
-                  {[{ key: 'all', label: 'All Contacts', count: contacts.length }, { key: 'role', label: 'By Designation', count: audienceCount }, { key: 'tags', label: 'By Tags', count: audienceCount }].map(opt => (
-                    <button key={opt.key} onClick={() => setForm(p => ({ ...p, audience: opt.key }))}
-                      className={`p-3 rounded-xl border-2 text-left transition-all ${
-                        form.audience === opt.key ? 'border-[var(--accent)] bg-[var(--accent)]/5' : `border-[var(--border-color)] ${tk.hov}`
-                      }`}>
-                      <p className={`text-xs font-semibold ${tk.t1}`}>{opt.label}</p>
-                      <p className={`text-[10px] ${tk.tm} mt-0.5`}>{form.audience === opt.key ? `${audienceCount} contacts` : (opt.key === 'all' ? `${contacts.length} contacts` : 'Filter')}</p>
-                    </button>
+                <div className="flex items-center justify-between mb-2">
+                  <Label className={`${tk.t2} text-xs`}>Who do you want to reach?</Label>
+                  {audienceCount !== null && audienceCount > 0 && (
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-[var(--accent)]/10 text-[var(--accent)] font-semibold">~{audienceCount} contacts</span>
+                  )}
+                  {audienceCount === null && (
+                    <span className={`text-[10px] px-2 py-0.5 rounded-full border ${tk.bdr} ${tk.tm}`}>resolved on launch</span>
+                  )}
+                </div>
+                <div className="space-y-2">
+                  {E_AUDIENCE_OPTS.map(opt => (
+                    <div key={opt.key}>
+                      <button onClick={() => setForm(p => ({ ...p, audience: opt.key, role_id: '' }))}
+                        className={`w-full flex items-center gap-3 p-3 rounded-xl border-2 text-left transition-colors ${
+                          form.audience === opt.key ? 'border-[var(--accent)] bg-[var(--accent)]/5' : `border-[var(--border-color)] ${tk.hov}`
+                        }`}>
+                        <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center flex-shrink-0 ${
+                          form.audience === opt.key ? 'border-[var(--accent)]' : 'border-[var(--text-muted)]'
+                        }`}>
+                          {form.audience === opt.key && <div className="w-2 h-2 rounded-full bg-[var(--accent)]" />}
+                        </div>
+                        <div>
+                          <p className={`text-sm font-medium ${tk.t1}`}>{opt.label}</p>
+                          <p className={`text-[11px] ${tk.tm}`}>{opt.desc}</p>
+                        </div>
+                      </button>
+                      {opt.key === 'role' && form.audience === 'role' && roles.length > 0 && (
+                        <div className="mt-2 ml-7 flex flex-wrap gap-1.5">
+                          {roles.map(r => {
+                            const rLow = r.name.toLowerCase();
+                            const cnt = contacts.filter(c => c.contact_role_id === r.role_id || (c.designation || '').toLowerCase() === rLow).length;
+                            if (cnt === 0) return null;
+                            return (
+                              <button key={r.role_id} onClick={() => setForm(p => ({ ...p, role_id: r.role_id }))}
+                                className={`flex items-center gap-1 text-xs px-2.5 py-1 rounded-full border transition-all ${
+                                  form.role_id === r.role_id ? 'bg-[var(--accent)] border-[var(--accent)] text-white' : `border-[var(--border-color)] ${tk.t2} ${tk.hov}`
+                                }`}>
+                                {r.name}
+                                <span className={`font-bold text-[10px] ${form.role_id === r.role_id ? 'text-white/80' : tk.tm}`}>{cnt}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                      {opt.key === 'tags' && form.audience === 'tags' && (allTags || []).length > 0 && (
+                        <div className="mt-2 ml-7 flex flex-wrap gap-1.5">
+                          {(allTags || []).map(tag => {
+                            const sel = form.tag_ids.includes(tag.tag_id);
+                            const cnt = contacts.filter(c => (c.tag_ids || []).includes(tag.tag_id)).length;
+                            return (
+                              <button key={tag.tag_id}
+                                onClick={() => setForm(p => ({ ...p, tag_ids: sel ? p.tag_ids.filter(id => id !== tag.tag_id) : [...p.tag_ids, tag.tag_id] }))}
+                                className={`flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border-2 transition-all ${sel ? 'text-white border-transparent' : `border-[var(--border-color)] ${tk.t2}`}`}
+                                style={sel ? { backgroundColor: tag.color, borderColor: tag.color } : {}}>
+                                <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: sel ? 'white' : tag.color }} />
+                                {tag.name} <span className={`text-[10px] ${sel ? 'text-white/80' : tk.tm}`}>{cnt}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                      {opt.key === 'lead_stage' && form.audience === 'lead_stage' && (
+                        <div className="mt-2 ml-7 flex flex-wrap gap-1.5">
+                          {E_PIPELINE_STAGES.map(s => {
+                            const sel = form.lead_stages.includes(s.id);
+                            return (
+                              <button key={s.id}
+                                onClick={() => setForm(p => ({ ...p, lead_stages: sel ? p.lead_stages.filter(x => x !== s.id) : [...p.lead_stages, s.id] }))}
+                                className={`text-xs px-2.5 py-1 rounded-full border-2 transition-all ${sel ? 'bg-[var(--accent)] border-[var(--accent)] text-white' : `border-[var(--border-color)] ${tk.t2} ${tk.hov}`}`}>
+                                {s.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                      {opt.key === 'school_attrs' && form.audience === 'school_attrs' && (
+                        <div className="mt-2 ml-7 space-y-2">
+                          <div className="flex flex-wrap gap-1.5">
+                            {['CBSE', 'ICSE', 'IB', 'State Board', 'Montessori'].map(bt => {
+                              const sel = form.school_types.includes(bt);
+                              return (
+                                <button key={bt}
+                                  onClick={() => setForm(p => ({ ...p, school_types: sel ? p.school_types.filter(x => x !== bt) : [...p.school_types, bt] }))}
+                                  className={`text-xs px-2.5 py-1 rounded-full border-2 transition-all ${sel ? 'bg-[var(--accent)] border-[var(--accent)] text-white' : `border-[var(--border-color)] ${tk.t2} ${tk.hov}`}`}>
+                                  {bt}
+                                </button>
+                              );
+                            })}
+                          </div>
+                          <div className="flex gap-2">
+                            <div className="flex-1">
+                              <p className={`text-[10px] ${tk.tm} mb-1`}>Min. strength</p>
+                              <input type="number" min="0" placeholder="e.g. 500" value={form.min_strength}
+                                onChange={e => setForm(p => ({ ...p, min_strength: e.target.value }))}
+                                className={`w-full text-xs px-2 py-1.5 rounded-lg border ${tk.bdr} bg-[var(--bg-primary)] ${tk.t1} focus:outline-none focus:border-[var(--accent)]`} />
+                            </div>
+                            <div className="flex-1">
+                              <p className={`text-[10px] ${tk.tm} mb-1`}>Cities (comma-sep.)</p>
+                              <input type="text" placeholder="Delhi, Mumbai" value={form.school_cities}
+                                onChange={e => setForm(p => ({ ...p, school_cities: e.target.value }))}
+                                className={`w-full text-xs px-2 py-1.5 rounded-lg border ${tk.bdr} bg-[var(--bg-primary)] ${tk.t1} focus:outline-none focus:border-[var(--accent)]`} />
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   ))}
                 </div>
               </div>
-              {form.audience === 'role' && (
-                <div>
-                  <Label className={`${tk.t2} text-xs mb-1.5 block`}>Designation</Label>
-                  <select className={`w-full h-10 rounded-xl border px-3 text-sm ${tk.inp}`}
-                    value={form.role_id} onChange={e => setForm(p => ({ ...p, role_id: e.target.value }))}>
-                    <option value="">Select role…</option>
-                    {roles.map(r => <option key={r.role_id} value={r.role_id}>{r.name}</option>)}
-                  </select>
-                </div>
-              )}
-              {form.audience === 'tags' && (allTags || []).length > 0 && (
-                <div>
-                  <Label className={`${tk.t2} text-xs mb-1.5 block`}>Tags — contacts matching ANY selected tag</Label>
-                  <div className="flex flex-wrap gap-1.5">
-                    {(allTags || []).map(tag => {
-                      const sel = form.tag_ids.includes(tag.tag_id);
-                      const cnt = contacts.filter(c => (c.tag_ids || []).includes(tag.tag_id)).length;
-                      return (
-                        <button key={tag.tag_id}
-                          onClick={() => setForm(p => ({ ...p, tag_ids: sel ? p.tag_ids.filter(id => id !== tag.tag_id) : [...p.tag_ids, tag.tag_id] }))}
-                          className={`flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border-2 transition-all ${sel ? 'text-white border-transparent' : `border-[var(--border-color)] ${tk.t2}`}`}
-                          style={sel ? { backgroundColor: tag.color, borderColor: tag.color } : {}}>
-                          <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: sel ? 'white' : tag.color }} />
-                          {tag.name} <span className={`text-[10px] ${sel ? 'text-white/80' : tk.tm}`}>{cnt}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
               <div>
                 <Label className={`${tk.t2} text-xs mb-1.5 block`}>Use Template (optional)</Label>
                 <div className="grid grid-cols-1 gap-2 max-h-40 overflow-y-auto pr-1">
@@ -2274,7 +2454,7 @@ function EmailCampaignsSubTab({ tk, campaigns, setCampaigns, roles, contacts, te
               <div className={`border ${tk.bdr} rounded-xl overflow-hidden`}>
                 <div className={`bg-[var(--bg-primary)] border-b ${tk.bdr} px-4 py-3`}>
                   <p className={`text-[10px] ${tk.tm} mb-0.5`}>From: SmartShape Team &lt;noreply@smartshape.in&gt;</p>
-                  <p className={`text-[10px] ${tk.tm} mb-0.5`}>To: {audienceCount} contacts</p>
+                  <p className={`text-[10px] ${tk.tm} mb-0.5`}>To: {audienceCount !== null ? `~${audienceCount} contacts` : 'audience resolved on launch'}</p>
                   <p className={`text-xs font-semibold ${tk.t1}`}>
                     {form.subject.replace('{name}', 'Ramesh').replace('{school_name}', 'Delhi Public School') || '(No subject)'}
                   </p>

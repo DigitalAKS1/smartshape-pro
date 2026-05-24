@@ -379,12 +379,49 @@ async def _seed_templates():
 # ── Audience resolution (same logic as WhatsApp, uses email field) ────────────
 
 async def _resolve_audience(audience_filter: dict) -> list:
-    roles  = audience_filter.get("roles", [])
-    boards = audience_filter.get("boards", [])
-    cities = audience_filter.get("cities", [])
-    tags   = audience_filter.get("tags", [])   # list of tag_ids — ANY match
+    roles        = audience_filter.get("roles", [])
+    boards       = audience_filter.get("boards", [])
+    cities       = audience_filter.get("cities", [])
+    tags         = audience_filter.get("tags", [])
+    lead_stages  = audience_filter.get("lead_stages", [])
+    school_types = audience_filter.get("school_types", [])
+    min_strength = audience_filter.get("min_strength")
+    school_cities = audience_filter.get("school_cities", [])
 
     base_filt = {"is_deleted": {"$ne": True}}
+
+    # By lead stage
+    if lead_stages:
+        leads_in_stage = await db.leads.find(
+            {"stage": {"$in": lead_stages}, "is_deleted": {"$ne": True}},
+            {"_id": 0, "converted_from_contact": 1, "school_id": 1},
+        ).to_list(None)
+        cfc_ids  = [l["converted_from_contact"] for l in leads_in_stage if l.get("converted_from_contact")]
+        sch_ids  = [l["school_id"] for l in leads_in_stage if l.get("school_id")]
+        or_clauses = []
+        if cfc_ids:
+            or_clauses.append({"contact_id": {"$in": cfc_ids}})
+        if sch_ids:
+            or_clauses.append({"school_id": {"$in": sch_ids}})
+        if not or_clauses:
+            return []
+        return await db.contacts.find({"$and": [base_filt, {"$or": or_clauses}]}, {"_id": 0}).to_list(None)
+
+    # By school attributes
+    if school_types or min_strength is not None or school_cities:
+        sch_q: dict = {}
+        if school_types:
+            sch_q["school_type"] = {"$in": school_types}
+        if min_strength is not None:
+            sch_q["school_strength"] = {"$gte": int(min_strength)}
+        if school_cities:
+            sch_q["city"] = {"$in": school_cities}
+        school_ids = [s["school_id"] async for s in db.schools.find(sch_q, {"_id": 0, "school_id": 1})]
+        if not school_ids:
+            return []
+        base_filt["school_id"] = {"$in": school_ids}
+        return await db.contacts.find(base_filt, {"_id": 0}).to_list(None)
+
     if boards:
         base_filt["board"] = {"$in": boards}
     if cities:

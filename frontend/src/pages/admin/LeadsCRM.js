@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import AdminLayout from '../../components/layouts/AdminLayout';
-import { schools as schoolsApi, leads as leadsApi, followups as fuApi, tasks as tasksApi, salesPersons, contacts as contactsApi, exportData, groups as groupsApi, sources as sourcesApi, contactRoles as contactRolesApi, tags as tagsApi } from '../../lib/api';
+import { schools as schoolsApi, leads as leadsApi, followups as fuApi, tasks as tasksApi, salesPersons, contacts as contactsApi, exportData, groups as groupsApi, sources as sourcesApi, contactRoles as contactRolesApi, tags as tagsApi, dripSequences as dripSequencesApi } from '../../lib/api';
 import { formatCurrency, formatDate as _fmt } from '../../lib/utils';
 import { useAuth } from '../../contexts/AuthContext';
 import { useTheme } from '../../contexts/ThemeContext';
@@ -11,7 +11,7 @@ import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../../components/ui/dialog';
 import { toast } from 'sonner';
-import { Plus, Phone, MessageSquare, Mail, Calendar, Clock, CheckCircle, AlertTriangle, User, UserCog, Trash2, Edit2, Upload, Search, Target, ChevronRight, Building2, MapPin, UserPlus, ArrowRightCircle, Download, ChevronLeft, LayoutGrid, Lock, Package, MoreHorizontal, X, Eye } from 'lucide-react';
+import { Plus, Phone, MessageSquare, Mail, Calendar, Clock, CheckCircle, AlertTriangle, User, UserCog, Trash2, Edit2, Upload, Search, Target, ChevronRight, Building2, MapPin, UserPlus, ArrowRightCircle, Download, ChevronLeft, LayoutGrid, Lock, Package, MoreHorizontal, X, Eye, Zap } from 'lucide-react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../../components/ui/dropdown-menu';
 import WhatsAppSendDialog from '../../components/WhatsAppSendDialog';
 import KanbanBoard, { ageColor, AgeBadge } from '../../components/KanbanBoard';
@@ -74,7 +74,7 @@ export default function LeadsCRM() {
   const [taskForm, setTaskForm] = useState({ title: '', type: 'follow_up', lead_id: '', lead_name: '', assigned_to: '', due_date: '', due_time: '', priority: 'medium' });
   // Contact state
   const [contactDialogOpen, setContactDialogOpen] = useState(false);
-  const [contactForm, setContactForm] = useState({ name: '', phone: '', email: '', company: '', designation: '', contact_role_id: '', source: '', source_id: '', notes: '' });
+  const [contactForm, setContactForm] = useState({ name: '', phone: '', email: '', company: '', designation: '', contact_role_id: '', source: '', source_id: '', notes: '', birthday: '', tag_ids: [] });
   const [editContact, setEditContact] = useState(null);
   const [convertDialogOpen, setConvertDialogOpen] = useState(false);
   const [convertContact, setConvertContact] = useState(null);
@@ -84,6 +84,15 @@ export default function LeadsCRM() {
   const [contactImportOpen, setContactImportOpen] = useState(false);
   const contactFileRef = useRef(null);
   const [filterRole, setFilterRole] = useState('');
+  const [filterContactTag, setFilterContactTag] = useState('');
+  // Drip enrollment state (P1-C)
+  const [leadEnrollments, setLeadEnrollments] = useState([]);
+  const [dripSequencesList, setDripSequencesList] = useState([]);
+  const [enrollDialogOpen, setEnrollDialogOpen] = useState(false);
+  const [selectedSequenceId, setSelectedSequenceId] = useState('');
+  // Contact activity (P2-B)
+  const [expandedContactId, setExpandedContactId] = useState(null);
+  const [contactActivity, setContactActivity] = useState([]);
   // Sorting
   const [sortConfig, setSortConfig] = useState({ key: '', dir: 'asc' });
   // Pagination
@@ -104,12 +113,13 @@ export default function LeadsCRM() {
 
   const fetchData = async () => {
     try {
-      const [lr, sr, tr, spr, cr, gr, srcR, rlR, tgR] = await Promise.all([
+      const [lr, sr, tr, spr, cr, gr, srcR, rlR, tgR, dripR] = await Promise.all([
         leadsApi.getAll(), schoolsApi.getAll(), tasksApi.getAll(), salesPersons.getAll(), contactsApi.getAll(),
         groupsApi.getAll().catch(() => ({ data: [] })),
         sourcesApi.getAll().catch(() => ({ data: [] })),
         contactRolesApi.getAll().catch(() => ({ data: [] })),
         tagsApi.getAll().catch(() => ({ data: [] })),
+        dripSequencesApi.getAll().catch(() => ({ data: [] })),
       ]);
       setLeadsList(lr.data);
       setSchoolsList(sr.data);
@@ -120,6 +130,7 @@ export default function LeadsCRM() {
       setSourcesList(srcR.data || []);
       setRolesList(rlR.data || []);
       setTagsList(tgR.data || []);
+      setDripSequencesList(dripR.data || []);
     } catch { toast.error('Failed to load'); }
     finally { setLoading(false); }
   };
@@ -177,15 +188,17 @@ export default function LeadsCRM() {
     setPhysicalDispatches([]);
     setPdForm({ material_type: 'brochure', description: '', courier_name: '', tracking_number: '', sent_date: new Date().toISOString().slice(0, 10) });
     try {
-      const [nr, fr, pdRes] = await Promise.all([
+      const [nr, fr, pdRes, enrollRes] = await Promise.all([
         leadsApi.getNotes(lead.lead_id),
         fuApi.getAll(lead.lead_id),
         fetch(`${process.env.REACT_APP_BACKEND_URL}/api/physical-dispatches?lead_id=${lead.lead_id}`, { credentials: 'include' }).then(r => r.json()).catch(() => []),
+        dripSequencesApi.enrollments({ lead_id: lead.lead_id }).catch(() => ({ data: [] })),
       ]);
       setNotes(nr.data);
       setLeadFollowups(fr.data);
       setPhysicalDispatches(Array.isArray(pdRes) ? pdRes : []);
-    } catch { setNotes([]); setLeadFollowups([]); }
+      setLeadEnrollments(Array.isArray(enrollRes.data) ? enrollRes.data : []);
+    } catch { setNotes([]); setLeadFollowups([]); setLeadEnrollments([]); }
   };
 
   const addPhysicalDispatch = async () => {
@@ -370,19 +383,39 @@ export default function LeadsCRM() {
   const updateTaskStatus = async (taskId, status) => { await tasksApi.update(taskId, { status }); fetchData(); };
 
   // Contact handlers
-  const openCreateContact = () => { setEditContact(null); setContactForm({ name: '', phone: '', email: '', company: '', designation: '', contact_role_id: '', source: '', source_id: '', notes: '', birthday: '' }); setContactDialogOpen(true); };
-  const openEditContact = (c) => { setEditContact(c); setContactForm({ name: c.name, phone: c.phone, email: c.email || '', company: c.company || '', designation: c.designation || '', contact_role_id: c.contact_role_id || '', source: c.source || '', source_id: c.source_id || '', notes: c.notes || '', birthday: c.birthday || '' }); setContactDialogOpen(true); };
+  const openCreateContact = () => { setEditContact(null); setContactForm({ name: '', phone: '', email: '', company: '', designation: '', contact_role_id: '', source: '', source_id: '', notes: '', birthday: '', tag_ids: [] }); setContactDialogOpen(true); };
+  const openEditContact = (c) => { setEditContact(c); setContactForm({ name: c.name, phone: c.phone, email: c.email || '', company: c.company || '', designation: c.designation || '', contact_role_id: c.contact_role_id || '', source: c.source || '', source_id: c.source_id || '', notes: c.notes || '', birthday: c.birthday || '', tag_ids: c.tag_ids || [] }); setContactDialogOpen(true); };
   const saveContact = async () => {
     if (!contactForm.name || !contactForm.phone) { toast.error('Name and phone required'); return; }
     try {
-      const payload = { ...contactForm };
+      const { tag_ids, ...payload } = contactForm;
       // Auto-link school_id when company name exactly matches a school
       if (payload.company && !payload.school_id) {
         const matched = schoolsList.find(s => s.school_name.toLowerCase() === payload.company.toLowerCase());
         if (matched) payload.school_id = matched.school_id;
       }
-      if (editContact) { await contactsApi.update(editContact.contact_id, payload); toast.success('Contact updated'); }
-      else { await contactsApi.create(payload); toast.success('Contact added'); }
+      let contactId;
+      if (editContact) {
+        await contactsApi.update(editContact.contact_id, payload);
+        contactId = editContact.contact_id;
+        toast.success('Contact updated');
+        // Sync tag changes
+        const prevTags = editContact.tag_ids || [];
+        const toAdd = tag_ids.filter(id => !prevTags.includes(id));
+        const toRemove = prevTags.filter(id => !tag_ids.includes(id));
+        await Promise.all([
+          ...toAdd.map(id => contactsApi.addTag(contactId, id)),
+          ...toRemove.map(id => contactsApi.removeTag(contactId, id)),
+        ]);
+      } else {
+        const res = await contactsApi.create(payload);
+        contactId = res.data?.contact_id;
+        toast.success('Contact added');
+        // Add initial tags
+        if (contactId && tag_ids.length > 0) {
+          await Promise.all(tag_ids.map(id => contactsApi.addTag(contactId, id)));
+        }
+      }
       setContactDialogOpen(false); fetchData();
     } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
   };
@@ -555,11 +588,41 @@ export default function LeadsCRM() {
             ))}
           </div>
           {selectedLeadIds.size > 0 && (
-            <div className="flex items-center gap-2" data-testid="bulk-actions-bar">
+            <div className="flex items-center gap-2 flex-wrap" data-testid="bulk-actions-bar">
               <span className={`text-xs ${textSec}`}>{selectedLeadIds.size} selected</span>
               <Button size="sm" onClick={() => { setReassignBulkIds(Array.from(selectedLeadIds)); setReassignLead(null); setReassignOpen(true); }} className="bg-[#e94560] hover:bg-[#f05c75] text-white h-8" data-testid="bulk-reassign-btn">
-                <UserCog className="mr-1 h-3 w-3" /> Bulk Reassign
+                <UserCog className="mr-1 h-3 w-3" /> Reassign
               </Button>
+              <select defaultValue="" className={`h-8 px-2 rounded text-xs ${inputCls} cursor-pointer`}
+                onChange={async e => {
+                  const tagId = e.target.value;
+                  if (!tagId) return;
+                  try {
+                    await leadsApi.bulkTag({ lead_ids: Array.from(selectedLeadIds), tag_id: tagId, action: 'add' });
+                    toast.success(`Tag added to ${selectedLeadIds.size} lead(s)`);
+                    fetchData();
+                  } catch { toast.error('Bulk tag failed'); }
+                  e.target.value = '';
+                }}>
+                <option value="">+ Add Tag</option>
+                {tagsList.map(t => <option key={t.tag_id} value={t.tag_id}>{t.name}</option>)}
+              </select>
+              <select defaultValue="" className={`h-8 px-2 rounded text-xs ${inputCls} cursor-pointer`}
+                onChange={async e => {
+                  const stage = e.target.value;
+                  if (!stage) return;
+                  if (!window.confirm(`Move ${selectedLeadIds.size} lead(s) to stage "${stage}"?`)) { e.target.value = ''; return; }
+                  try {
+                    await leadsApi.bulkStage({ lead_ids: Array.from(selectedLeadIds), stage });
+                    toast.success(`${selectedLeadIds.size} lead(s) moved to ${stage}`);
+                    setSelectedLeadIds(new Set());
+                    fetchData();
+                  } catch { toast.error('Bulk stage change failed'); }
+                  e.target.value = '';
+                }}>
+                <option value="">Move to Stage</option>
+                {STAGES.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
+              </select>
               <Button size="sm" variant="outline" onClick={() => setSelectedLeadIds(new Set())} className={`border-[var(--border-color)] ${textSec} h-8`}>Clear</Button>
             </div>
           )}
@@ -610,6 +673,7 @@ export default function LeadsCRM() {
 
           let cFiltered = contactsList.filter(c => {
             if (filterRole && getRoleName(c) !== filterRole) return false;
+            if (filterContactTag && !(c.tag_ids || []).includes(filterContactTag)) return false;
             if (searchTerm) {
               const s = searchTerm.toLowerCase();
               return (c.name || '').toLowerCase().includes(s) || (c.phone || '').includes(s) || (c.company || '').toLowerCase().includes(s) || (c.email || '').toLowerCase().includes(s);
@@ -654,6 +718,28 @@ export default function LeadsCRM() {
               </div>
             )}
 
+            {/* Tag filter chips */}
+            {tagsList.length > 0 && (
+              <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
+                <span className={`text-[10px] uppercase tracking-wider font-semibold ${textMuted} whitespace-nowrap`}>Tags:</span>
+                <button
+                  onClick={() => { setFilterContactTag(''); setContactPage(1); }}
+                  className={`text-xs px-2.5 py-1 rounded-full whitespace-nowrap border transition-all ${
+                    filterContactTag === '' ? 'bg-[var(--accent)] border-[var(--accent)] text-white' : 'border-[var(--border-color)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]'
+                  }`}>All</button>
+                {tagsList.map(t => (
+                  <button key={t.tag_id}
+                    onClick={() => { setFilterContactTag(t.tag_id); setContactPage(1); }}
+                    className={`text-xs px-2.5 py-1 rounded-full whitespace-nowrap border transition-all ${
+                      filterContactTag === t.tag_id ? 'text-white border-transparent' : 'border-[var(--border-color)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]'
+                    }`}
+                    style={filterContactTag === t.tag_id ? { backgroundColor: t.color } : {}}>
+                    <span className="inline-block w-2 h-2 rounded-full mr-1 align-middle" style={{ backgroundColor: t.color }} />{t.name}
+                  </button>
+                ))}
+              </div>
+            )}
+
             {/* Contacts action bar */}
             <div className="flex flex-wrap items-center gap-2">
               <Button onClick={handleContactExport} variant="outline" size="sm" className="border-[var(--border-color)] text-[var(--text-secondary)]" data-testid="export-contacts-btn">
@@ -687,6 +773,15 @@ export default function LeadsCRM() {
                           )}
                           {contact.company && <span className={`text-xs ${textMuted} truncate`}>{contact.company}</span>}
                         </div>
+                        {(contact.tag_ids || []).length > 0 && (
+                          <div className="flex items-center gap-1 mt-0.5 flex-wrap">
+                            {(contact.tag_ids || []).slice(0, 3).map(tid => {
+                              const tg = tagsList.find(t => t.tag_id === tid);
+                              return tg ? <span key={tid} className="text-[9px] px-1.5 py-0.5 rounded-full text-white font-medium" style={{ backgroundColor: tg.color }}>{tg.name}</span> : null;
+                            })}
+                            {(contact.tag_ids || []).length > 3 && <span className={`text-[9px] ${textMuted}`}>+{(contact.tag_ids || []).length - 3}</span>}
+                          </div>
+                        )}
                         <div className="flex items-center gap-3 mt-1.5 flex-wrap">
                           <a href={`tel:${contact.phone}`} className={`text-xs ${textSec} flex items-center gap-1`}><Phone className="h-3 w-3" />{contact.phone}</a>
                           {contact.email && <a href={`mailto:${contact.email}`} className={`text-xs ${textSec} flex items-center gap-1 max-w-[160px] truncate`}><Mail className="h-3 w-3" />{contact.email}</a>}
@@ -720,15 +815,29 @@ export default function LeadsCRM() {
                       </tr></thead>
                       <tbody>
                         {paginated.map(contact => (
-                          <tr key={contact.contact_id} className={`border-t border-[var(--border-color)] hover:bg-[var(--bg-hover)] ${contact.converted_to_lead ? 'opacity-55' : ''}`} data-testid={`contact-row-${contact.contact_id}`}>
+                          <React.Fragment key={contact.contact_id}>
+                          <tr className={`border-t border-[var(--border-color)] hover:bg-[var(--bg-hover)] cursor-pointer ${contact.converted_to_lead ? 'opacity-55' : ''}`} data-testid={`contact-row-${contact.contact_id}`}
+                            onClick={async () => {
+                              if (expandedContactId === contact.contact_id) { setExpandedContactId(null); return; }
+                              try {
+                                const res = await contactsApi.getActivity(contact.contact_id);
+                                setContactActivity(res.data || []);
+                                setExpandedContactId(contact.contact_id);
+                              } catch { toast.error('Failed to load activity'); }
+                            }}>
                             <td className="py-2.5 px-3">
                               <p className={`${textPri} font-medium text-sm`}>{contact.name}</p>
-                              <div className="flex items-center gap-1.5 mt-0.5">
+                              <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
                                 {getRoleName(contact) && (
                                   <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${getRoleColor(getRoleName(contact))}`}>
                                     {getRoleName(contact)}
                                   </span>
                                 )}
+                                {(contact.tag_ids || []).slice(0, 2).map(tid => {
+                                  const tg = tagsList.find(t => t.tag_id === tid);
+                                  return tg ? <span key={tid} className="text-[9px] px-1.5 py-0.5 rounded-full text-white font-medium" style={{ backgroundColor: tg.color }}>{tg.name}</span> : null;
+                                })}
+                                {(contact.tag_ids || []).length > 2 && <span className={`text-[9px] ${textMuted}`}>+{(contact.tag_ids || []).length - 2}</span>}
                               </div>
                             </td>
                             <td className="py-2.5 px-3">
@@ -748,12 +857,20 @@ export default function LeadsCRM() {
                             </td>
                             <td className="py-2.5 px-3 text-center">
                               {contact.converted_to_lead ? (
-                                <span className="text-[10px] px-2 py-0.5 rounded bg-green-500/20 text-green-400 font-medium">Converted</span>
+                                <button
+                                  onClick={() => {
+                                    const l = leadsList.find(x => x.lead_id === contact.lead_id);
+                                    if (l) { setActiveTab('pipeline'); openDetail(l); }
+                                  }}
+                                  className="text-[10px] px-2 py-0.5 rounded bg-green-500/20 text-green-400 font-medium hover:bg-green-500/30 transition-colors cursor-pointer"
+                                  title="Click to view lead">
+                                  Lead · {leadsList.find(x => x.lead_id === contact.lead_id)?.stage || 'view'}
+                                </button>
                               ) : (
                                 <span className="text-[10px] px-2 py-0.5 rounded bg-blue-500/20 text-blue-400 font-medium">Active</span>
                               )}
                             </td>
-                            <td className="py-2.5 px-3 text-right whitespace-nowrap">
+                            <td className="py-2.5 px-3 text-right whitespace-nowrap" onClick={e => e.stopPropagation()}>
                               <Button size="sm" variant="ghost" onClick={() => openWaForContact(contact)} className="text-green-500 h-7 px-1.5" title="Send WhatsApp" data-testid={`wa-contact-${contact.contact_id}`}><MessageSquare className="h-3.5 w-3.5" /></Button>
                               {!contact.converted_to_lead && (
                                 <Button size="sm" variant="ghost" onClick={() => openConvert(contact)} className="text-[#e94560] h-7 px-1.5" title="Convert to Lead" data-testid={`convert-contact-${contact.contact_id}`}><ArrowRightCircle className="h-3.5 w-3.5" /></Button>
@@ -762,6 +879,32 @@ export default function LeadsCRM() {
                               <Button size="sm" variant="ghost" onClick={() => deleteContact(contact.contact_id)} className="text-red-400 h-7 px-1.5" data-testid={`delete-contact-${contact.contact_id}`}><Trash2 className="h-3 w-3" /></Button>
                             </td>
                           </tr>
+                          {expandedContactId === contact.contact_id && (
+                            <tr>
+                              <td colSpan="8" className={`px-4 py-3 ${isDark ? 'bg-[var(--bg-hover)]' : 'bg-[#f8fafc]'} border-t border-[var(--border-color)]`}>
+                                <p className={`text-xs font-semibold ${textSec} mb-2`}>Activity Timeline</p>
+                                {contactActivity.length === 0 ? (
+                                  <p className={`text-xs ${textMuted}`}>No marketing activity recorded yet</p>
+                                ) : (
+                                  <div className="space-y-1.5">
+                                    {contactActivity.slice(0, 10).map((act, i) => (
+                                      <div key={i} className="flex items-center gap-2 text-xs">
+                                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium capitalize flex-shrink-0 ${
+                                          act.type === 'whatsapp' ? 'bg-green-500/20 text-green-400'
+                                          : act.type === 'drip' ? 'bg-yellow-500/20 text-yellow-600'
+                                          : 'bg-pink-500/20 text-pink-400'
+                                        }`}>{act.type}</span>
+                                        <span className={`flex-1 ${textPri} truncate`}>{act.label}</span>
+                                        {act.status && <span className={`${textMuted} text-[10px] flex-shrink-0`}>{act.status}</span>}
+                                        <span className={`${textMuted} flex-shrink-0`}>{act.at ? formatDate(act.at) : '—'}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </td>
+                            </tr>
+                          )}
+                          </React.Fragment>
                         ))}
                       </tbody>
                     </table>
@@ -821,6 +964,7 @@ export default function LeadsCRM() {
             <div className="hidden sm:block overflow-x-auto">
               <table className="w-full text-sm" data-testid="leads-flat-table">
                 <thead><tr className="bg-[var(--bg-primary)]">
+                  <th className="py-3 px-3 w-8"><input type="checkbox" className="accent-[#e94560]" onChange={e => { if (e.target.checked) setSelectedLeadIds(new Set(sortedLeads.map(l => l.lead_id))); else setSelectedLeadIds(new Set()); }} checked={sortedLeads.length > 0 && sortedLeads.every(l => selectedLeadIds.has(l.lead_id))} /></th>
                   <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} cursor-pointer select-none`} onClick={() => toggleSort('company_name')}>School{sortIndicator('company_name')}</th>
                   <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} cursor-pointer select-none`} onClick={() => toggleSort('contact_name')}>Contact{sortIndicator('contact_name')}</th>
                   <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} cursor-pointer select-none`} onClick={() => toggleSort('lead_type')}>Type{sortIndicator('lead_type')}</th>
@@ -834,6 +978,7 @@ export default function LeadsCRM() {
                     const stg = getStageObj(lead.stage);
                     return (
                       <tr key={lead.lead_id} className="border-t border-[var(--border-color)] hover:bg-[var(--bg-hover)] cursor-pointer" onClick={() => openDetail(lead)}>
+                        <td className="py-2.5 px-3" onClick={e => e.stopPropagation()}><input type="checkbox" className="accent-[#e94560]" checked={selectedLeadIds.has(lead.lead_id)} onChange={() => toggleLeadSelect(lead.lead_id)} /></td>
                         <td className="py-2.5 px-3">
                           <p className={`${textPri} font-medium text-sm`}>{lead.company_name}</p>
                           <p className={`text-xs ${textMuted}`}>{lead.school_type} {lead.school_city && `| ${lead.school_city}`}</p>
@@ -1422,6 +1567,11 @@ export default function LeadsCRM() {
                   {detailLead.visit_required && <span className={`flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-orange-500/15 text-orange-400 border border-orange-500/30`} data-testid="detail-visit-required"><AlertTriangle className="h-3 w-3" /> Visit Required</span>}
                   {detailLead.is_locked && <span className="flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-[#e94560]/15 text-[#e94560] border border-[#e94560]/30" data-testid="detail-locked"><Lock className="h-3 w-3" /> Locked (order placed)</span>}
                   {(detailLead.reassignment_count || 0) > 0 && <span className={`flex items-center gap-1 text-xs px-2 py-0.5 rounded ${detailLead.reassignment_count > 2 ? 'bg-red-500/15 text-red-400 border border-red-500/30' : 'bg-blue-500/15 text-blue-400 border border-blue-500/30'}`} data-testid="detail-reassign-count"><UserCog className="h-3 w-3" /> Reassigned {detailLead.reassignment_count}×</span>}
+                  {detailLead.converted_from_contact && (
+                    <span className="flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-blue-500/15 text-blue-400 border border-blue-500/30">
+                      <UserPlus className="h-3 w-3" /> From: {detailLead.linked_contact_name || detailLead.converted_from_contact.slice(0, 10)}
+                    </span>
+                  )}
                 </div>
                 {/* Stage selector */}
                 <div className="flex gap-1 flex-wrap">
@@ -1605,6 +1755,52 @@ export default function LeadsCRM() {
                     </div>
                   </div>
                 )}
+
+                {/* Drip Sequences (P1-C) */}
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <p className={`text-xs font-medium ${textSec} flex items-center gap-1`}><Zap className="h-3 w-3" /> Drip Sequences ({leadEnrollments.length})</p>
+                    <Button size="sm" variant="outline"
+                      onClick={() => { setSelectedSequenceId(''); setEnrollDialogOpen(true); }}
+                      className={`h-6 text-xs border-[var(--border-color)] ${textSec} px-2`}>+ Enroll</Button>
+                  </div>
+                  {leadEnrollments.length > 0 ? (
+                    <div className="space-y-1">
+                      {leadEnrollments.map(enr => {
+                        const seq = dripSequencesList.find(s => s.sequence_id === enr.sequence_id);
+                        return (
+                          <div key={enr.enrollment_id} className={`flex items-center justify-between text-xs ${card} border rounded px-2.5 py-1.5`}>
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className={`${textPri} font-medium truncate`}>{seq?.name || enr.sequence_id}</span>
+                              <span className={`${textMuted} flex-shrink-0`}>Step {(enr.current_step || 0) + 1}</span>
+                              {enr.next_step_at && <span className={`${textMuted} flex-shrink-0`}>· Next: {formatDate(enr.next_step_at)}</span>}
+                            </div>
+                            <div className="flex items-center gap-1 flex-shrink-0 ml-2">
+                              <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                                enr.status === 'active' ? 'bg-green-500/20 text-green-400'
+                                : enr.status === 'completed' ? 'bg-blue-500/20 text-blue-400'
+                                : 'bg-gray-500/20 text-gray-400'
+                              }`}>{enr.status}</span>
+                              {enr.status === 'active' && (
+                                <Button size="sm" variant="ghost"
+                                  onClick={async () => {
+                                    try {
+                                      await dripSequencesApi.cancelEnrollment(enr.enrollment_id);
+                                      setLeadEnrollments(prev => prev.map(e => e.enrollment_id === enr.enrollment_id ? { ...e, status: 'cancelled' } : e));
+                                      toast.success('Enrollment cancelled');
+                                    } catch { toast.error('Failed to cancel'); }
+                                  }}
+                                  className="text-red-400 h-6 w-6 p-0">
+                                  <X className="h-3 w-3" />
+                                </Button>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : <p className={`text-xs ${textMuted}`}>Not enrolled in any sequence</p>}
+                </div>
               </div>
             </DialogContent>
           </Dialog>
@@ -1870,6 +2066,28 @@ export default function LeadsCRM() {
               </div>
               <div><Label className={`${textSec} text-xs`}>Notes</Label><Input value={contactForm.notes} onChange={e => setContactForm({...contactForm, notes: e.target.value})} className={inputCls} placeholder="Any additional info..." /></div>
               <div><Label className={`${textSec} text-xs`}>Birthday (YYYY-MM-DD)</Label><Input type="date" value={contactForm.birthday} onChange={e => setContactForm({...contactForm, birthday: e.target.value})} className={inputCls} /></div>
+              {tagsList.length > 0 && (
+                <div>
+                  <Label className={`${textSec} text-xs`}>Tags</Label>
+                  <div className="flex flex-wrap gap-1.5 mt-1">
+                    {tagsList.map(t => {
+                      const sel = (contactForm.tag_ids || []).includes(t.tag_id);
+                      return (
+                        <button key={t.tag_id} type="button"
+                          onClick={() => setContactForm(prev => ({
+                            ...prev,
+                            tag_ids: sel ? (prev.tag_ids || []).filter(id => id !== t.tag_id) : [...(prev.tag_ids || []), t.tag_id],
+                          }))}
+                          className={`flex items-center gap-1 px-2 py-1 rounded-full text-xs border transition-all ${sel ? 'text-white border-transparent' : `${textMuted} border-[var(--border-color)]`}`}
+                          style={sel ? { backgroundColor: t.color } : {}}>
+                          <span className="w-2 h-2 rounded-full" style={{ backgroundColor: t.color }} />
+                          {t.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setContactDialogOpen(false)} className={'border-[var(--border-color)] text-[var(--text-secondary)]'}>Cancel</Button>
@@ -1959,6 +2177,44 @@ export default function LeadsCRM() {
                 <input ref={contactFileRef} type="file" accept=".csv" className="hidden" data-testid="contact-import-file-input" onChange={e => { if (e.target.files?.[0]) handleContactImport(e.target.files[0]); }} />
               </div>
             </div>
+          </DialogContent>
+        </Dialog>
+
+        {/* ENROLL IN DRIP DIALOG (P1-C) */}
+        <Dialog open={enrollDialogOpen} onOpenChange={setEnrollDialogOpen}>
+          <DialogContent className={`${dlgCls} w-[calc(100vw-1rem)] sm:max-w-sm`}>
+            <DialogHeader><DialogTitle className={textPri}>Enroll in Drip Sequence</DialogTitle></DialogHeader>
+            <div className="space-y-3 py-2">
+              <Label className={`${textSec} text-xs`}>Select Sequence</Label>
+              <select value={selectedSequenceId} onChange={e => setSelectedSequenceId(e.target.value)}
+                className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`}>
+                <option value="">-- Choose sequence --</option>
+                {dripSequencesList.filter(s => s.is_active).map(s => (
+                  <option key={s.sequence_id} value={s.sequence_id}>
+                    {s.name} ({(s.steps || []).length} steps)
+                  </option>
+                ))}
+              </select>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setEnrollDialogOpen(false)} className="border-[var(--border-color)] text-[var(--text-secondary)]">Cancel</Button>
+              <Button
+                disabled={!selectedSequenceId}
+                onClick={async () => {
+                  if (!detailLead) return;
+                  try {
+                    const res = await dripSequencesApi.enroll({ sequence_id: selectedSequenceId, lead_id: detailLead.lead_id });
+                    setLeadEnrollments(prev => [res.data, ...prev]);
+                    setEnrollDialogOpen(false);
+                    toast.success('Enrolled in sequence');
+                  } catch (err) {
+                    toast.error(err.response?.data?.detail || 'Enrollment failed');
+                  }
+                }}
+                className="bg-[#e94560] hover:bg-[#f05c75] text-white">
+                Enroll
+              </Button>
+            </DialogFooter>
           </DialogContent>
         </Dialog>
 

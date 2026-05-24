@@ -10,6 +10,7 @@ import logging
 from database import db
 from auth_utils import get_current_user
 from rbac import get_team, require_teams
+from routes.drip_routes import _auto_enroll_quotation_sent
 
 router = APIRouter()
 
@@ -216,6 +217,64 @@ async def get_quotations(request: Request, sales_person_id: Optional[str] = None
     return quotations
 
 
+async def _crm_hook_quotation(quot_doc: dict):
+    """When a quotation is created/sent, advance linked leads to 'negotiation',
+    apply the 'Demo Done' tag, and start the quotation_sent drip sequence."""
+    school_name = quot_doc.get("school_name", "").strip()
+    if not school_name:
+        return
+    # Find matching school by name (case-insensitive)
+    school = await db.schools.find_one(
+        {"school_name": {"$regex": f"^{school_name}$", "$options": "i"}}, {"_id": 0, "school_id": 1}
+    )
+    school_id = school["school_id"] if school else None
+
+    # Collect active leads for this school (by school_id or company_name)
+    lead_query = {"is_deleted": {"$ne": True}, "stage": {"$nin": ["negotiation", "won", "lost"]}}
+    if school_id:
+        lead_query["$or"] = [{"school_id": school_id}, {"company_name": school_name}]
+    else:
+        lead_query["company_name"] = school_name
+
+    leads = await db.leads.find(lead_query, {"_id": 0}).to_list(100)
+    if not leads:
+        return
+
+    # Ensure "Demo Done" tag exists
+    demo_tag = await db.tags.find_one({"name": "Demo Done"}, {"_id": 0})
+    if not demo_tag:
+        demo_tag_id = f"tag_{uuid.uuid4().hex[:8]}"
+        await db.tags.insert_one({
+            "tag_id": demo_tag_id, "name": "Demo Done",
+            "color": "#8b5cf6", "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+    else:
+        demo_tag_id = demo_tag["tag_id"]
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    for lead in leads:
+        history_entry = {
+            "from_stage": lead.get("stage"),
+            "to_stage": "negotiation",
+            "by_email": "system",
+            "by_name": "Auto (Quotation)",
+            "at": now_iso,
+        }
+        await db.leads.update_one(
+            {"lead_id": lead["lead_id"]},
+            {
+                "$set": {"stage": "negotiation", "updated_at": now_iso, "last_activity_date": now_iso},
+                "$push": {"pipeline_history": history_entry},
+                "$addToSet": {"tags": demo_tag_id},
+            },
+        )
+        lead["stage"] = "negotiation"
+        try:
+            await _auto_enroll_quotation_sent(lead)
+        except Exception as e:
+            logging.warning(f"Drip enroll for quotation_sent failed on {lead['lead_id']}: {e}")
+
+
 @router.post("/quotations")
 async def create_quotation(request: Request):
     user = await get_current_user(request)
@@ -283,6 +342,10 @@ async def create_quotation(request: Request):
         await _auto_register_from_quotation(quot_doc, user["email"])
     except Exception as _e:
         logging.warning(f"Auto-register from quotation failed: {_e}")
+    try:
+        await _crm_hook_quotation(quot_doc)
+    except Exception as _e:
+        logging.warning(f"CRM hook for quotation failed: {_e}")
     return await db.quotations.find_one({"quotation_id": quotation_id}, {"_id": 0})
 
 
@@ -326,7 +389,14 @@ async def edit_quotation(quotation_id: str, request: Request):
         allowed.update(_compute_totals(lines, d1, d2, fr))
 
     await db.quotations.update_one({"quotation_id": quotation_id}, {"$set": allowed})
-    return await db.quotations.find_one({"quotation_id": quotation_id}, {"_id": 0})
+    updated = await db.quotations.find_one({"quotation_id": quotation_id}, {"_id": 0})
+    # Fire CRM hook when status changes to sent
+    if allowed.get("quotation_status") == "sent":
+        try:
+            await _crm_hook_quotation(updated)
+        except Exception as _e:
+            logging.warning(f"CRM hook for quotation edit failed: {_e}")
+    return updated
 
 
 @router.get("/quotations/{quotation_id}/history")

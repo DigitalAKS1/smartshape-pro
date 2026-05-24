@@ -342,6 +342,38 @@ async def delete_sequence(sequence_id: str, request: Request):
     return {"ok": True}
 
 
+# ── Auto-enrollment helpers ────────────────────────────────────────────────────
+
+async def _auto_enroll_quotation_sent(lead_doc: dict):
+    """Auto-enroll a lead into any sequence with trigger='quotation_sent'."""
+    seqs = await db.drip_sequences.find(
+        {"trigger": "quotation_sent", "is_active": True}, {"_id": 0}
+    ).to_list(20)
+    now = datetime.now(timezone.utc)
+    for seq in seqs:
+        if not seq.get("steps"):
+            continue
+        existing = await db.drip_enrollments.find_one(
+            {"sequence_id": seq["sequence_id"], "lead_id": lead_doc["lead_id"], "status": "active"}
+        )
+        if existing:
+            continue
+        first_delay = seq["steps"][0].get("delay_days", 0)
+        await db.drip_enrollments.insert_one({
+            "enrollment_id": f"denr_{uuid.uuid4().hex[:10]}",
+            "sequence_id": seq["sequence_id"],
+            "lead_id": lead_doc["lead_id"],
+            "current_step": 0,
+            "status": "active",
+            "enrolled_at": now.isoformat(),
+            "next_step_at": (now + timedelta(days=first_delay)).isoformat(),
+            "last_step_at": None,
+            "completed_at": None,
+            "enrolled_by": "system",
+            "trigger": "quotation_sent",
+        })
+
+
 # ── Enrollments ────────────────────────────────────────────────────────────────
 
 @router.post("/drip/enroll")

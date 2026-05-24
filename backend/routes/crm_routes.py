@@ -737,6 +737,63 @@ async def remove_contact_tag(contact_id: str, tag_id: str, request: Request):
     return await db.contacts.find_one({"contact_id": contact_id}, {"_id": 0})
 
 
+@router.get("/contacts/{contact_id}/activity")
+async def get_contact_activity(contact_id: str, request: Request):
+    """Unified activity timeline: WhatsApp campaigns, drip enrollments, greeting logs."""
+    await get_current_user(request)
+    contact = await db.contacts.find_one({"contact_id": contact_id}, {"_id": 0})
+    if not contact:
+        raise HTTPException(404, "Contact not found")
+
+    items = []
+
+    # WhatsApp campaign messages sent to this contact
+    async for msg in db.whatsapp_scheduled.find(
+        {"contact_id": contact_id}, {"_id": 0, "campaign_name": 1, "status": 1, "scheduled_at": 1, "sent_at": 1}
+    ).sort("scheduled_at", -1).limit(50):
+        items.append({
+            "type": "whatsapp",
+            "label": msg.get("campaign_name", "WhatsApp Campaign"),
+            "summary": f"Status: {msg.get('status', 'unknown')}",
+            "status": msg.get("status", ""),
+            "at": msg.get("sent_at") or msg.get("scheduled_at", ""),
+        })
+
+    # Drip enrollments via linked lead
+    lead_id = contact.get("lead_id")
+    if lead_id:
+        async for enr in db.drip_enrollments.find(
+            {"lead_id": lead_id}, {"_id": 0, "sequence_id": 1, "status": 1, "enrolled_at": 1, "current_step": 1}
+        ).sort("enrolled_at", -1).limit(20):
+            seq = await db.drip_sequences.find_one({"sequence_id": enr["sequence_id"]}, {"_id": 0, "name": 1})
+            seq_name = seq["name"] if seq else enr["sequence_id"]
+            items.append({
+                "type": "drip",
+                "label": seq_name,
+                "summary": f"Step {enr.get('current_step', 0) + 1} · {enr.get('status', '')}",
+                "status": enr.get("status", ""),
+                "at": enr.get("enrolled_at", ""),
+            })
+
+    # Greeting logs by phone
+    phone = contact.get("phone", "")
+    if phone:
+        async for gl in db.greeting_logs.find(
+            {"phone": phone}, {"_id": 0, "greeting_type": 1, "status": 1, "sent_at": 1}
+        ).sort("sent_at", -1).limit(20):
+            items.append({
+                "type": "greeting",
+                "label": gl.get("greeting_type", "Greeting"),
+                "summary": f"Status: {gl.get('status', 'unknown')}",
+                "status": gl.get("status", ""),
+                "at": gl.get("sent_at", ""),
+            })
+
+    # Sort all by `at` descending, return max 100
+    items.sort(key=lambda x: x.get("at") or "", reverse=True)
+    return items[:100]
+
+
 @router.put("/contacts/{contact_id}/restore")
 async def restore_contact(contact_id: str, request: Request):
     user = await get_current_user(request)
@@ -887,6 +944,16 @@ async def get_leads(request: Request):
     leads = await db.leads.find(query, {"_id": 0}).sort("created_at", -1).to_list(10000)
     school_cache = {}
     now = datetime.now(timezone.utc)
+
+    # Batch-fetch linked contact names (P1-B)
+    cfc_ids = [l.get("converted_from_contact") for l in leads if l.get("converted_from_contact")]
+    linked_map = {}
+    if cfc_ids:
+        async for c in db.contacts.find(
+            {"contact_id": {"$in": cfc_ids}}, {"_id": 0, "contact_id": 1, "name": 1}
+        ):
+            linked_map[c["contact_id"]] = c["name"]
+
     for lead in leads:
         sid = lead.get("school_id")
         if sid and sid not in school_cache:
@@ -899,6 +966,7 @@ async def get_leads(request: Request):
         lead["school_strength"] = school.get("school_strength", 0) if school else 0
         lead["lead_score"] = calc_lead_score(lead, school)
         lead["visit_required"] = compute_visit_required(lead, now)
+        lead["linked_contact_name"] = linked_map.get(lead.get("converted_from_contact"))
     return leads
 
 
@@ -1148,6 +1216,60 @@ async def bulk_assign_leads(request: Request):
                            details=f"-> {new_agent_name} | {reason}")
         count += 1
     return {"assigned": count}
+
+
+@router.post("/leads/bulk-tag")
+async def bulk_tag_leads(request: Request):
+    """Add or remove a tag from multiple leads at once."""
+    user = await get_current_user(request)
+    body = await request.json()
+    lead_ids = body.get("lead_ids") or []
+    tag_id = body.get("tag_id", "").strip()
+    action = body.get("action", "add")  # "add" or "remove"
+    if not lead_ids or not tag_id:
+        raise HTTPException(400, "lead_ids and tag_id are required")
+    if not await db.tags.find_one({"tag_id": tag_id}):
+        raise HTTPException(404, "Tag not found")
+    op = {"$addToSet": {"tags": tag_id}} if action == "add" else {"$pull": {"tags": tag_id}}
+    result = await db.leads.update_many({"lead_id": {"$in": lead_ids}}, op)
+    await log_activity(user["email"], f"bulk_tag_{action}", "lead", ",".join(lead_ids[:5]),
+                       details=f"tag_id={tag_id} action={action} count={result.modified_count}")
+    return {"modified": result.modified_count}
+
+
+@router.post("/leads/bulk-stage")
+async def bulk_stage_leads(request: Request):
+    """Move multiple leads to a new pipeline stage."""
+    user = await get_current_user(request)
+    body = await request.json()
+    lead_ids = body.get("lead_ids") or []
+    stage = body.get("stage", "").strip()
+    if not lead_ids or not stage:
+        raise HTTPException(400, "lead_ids and stage are required")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    count = 0
+    for lead_id in lead_ids:
+        lead = await db.leads.find_one({"lead_id": lead_id}, {"_id": 0, "stage": 1})
+        if not lead:
+            continue
+        history_entry = {
+            "from_stage": lead.get("stage"),
+            "to_stage": stage,
+            "by_email": user["email"],
+            "by_name": user.get("name", user["email"]),
+            "at": now_iso,
+        }
+        await db.leads.update_one(
+            {"lead_id": lead_id},
+            {
+                "$set": {"stage": stage, "updated_at": now_iso, "last_activity_date": now_iso},
+                "$push": {"pipeline_history": history_entry},
+            },
+        )
+        count += 1
+    await log_activity(user["email"], "bulk_stage_change", "lead", ",".join(lead_ids[:5]),
+                       details=f"-> {stage} | count={count}")
+    return {"modified": count}
 
 
 @router.post("/leads/auto-assign")
