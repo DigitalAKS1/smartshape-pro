@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import AdminLayout from '../../components/layouts/AdminLayout';
 import { useTheme } from '../../contexts/ThemeContext';
-import { contactRoles as contactRolesApi, contacts as contactsApi, dripSequences as dripApi } from '../../lib/api';
+import { contactRoles as contactRolesApi, contacts as contactsApi, dripSequences as dripApi, greetingRules as greetingsApi } from '../../lib/api';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
@@ -15,6 +15,7 @@ import {
   RefreshCw, MoreVertical, ArrowRight, Activity,
   ChevronRight, ChevronDown, Trash2, Play, Eye,
   Check, Wifi, Calendar, Key, Globe, Copy,
+  Flag, BookOpen, Heart, School, Cake,
 } from 'lucide-react';
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
@@ -111,6 +112,49 @@ const STATUS_CHIP = {
 };
 
 function pct(num, den) { return den > 0 ? Math.round((num / den) * 100) : null; }
+
+// ── Greeting rule helpers ─────────────────────────────────────────────────────
+function computeNext(mmdd) {
+  if (!mmdd) return null;
+  const [mm, dd] = mmdd.split('-').map(Number);
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const thisYear = new Date(today.getFullYear(), mm - 1, dd);
+  const target = thisYear >= today ? thisYear : new Date(today.getFullYear() + 1, mm - 1, dd);
+  return target.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+function daysTillNext(mmdd) {
+  if (!mmdd) return Infinity;
+  const [mm, dd] = mmdd.split('-').map(Number);
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const thisYear = new Date(today.getFullYear(), mm - 1, dd);
+  const target = thisYear >= today ? thisYear : new Date(today.getFullYear() + 1, mm - 1, dd);
+  return Math.round((target - today) / 86400000);
+}
+function mapRule(r) {
+  const days = r.fixed_date ? daysTillNext(r.fixed_date) : Infinity;
+  const nextLabel = r.trigger === 'birthday' ? 'Daily (each birthday)'
+    : r.trigger === 'anniversary' ? 'On school anniversary'
+    : days === 0 ? 'Today!' : days === 1 ? 'Tomorrow'
+    : days <= 30 ? `In ${days} days` : computeNext(r.fixed_date);
+  return {
+    id: r.rule_id, rule_id: r.rule_id, name: r.name,
+    type: r.type, category: r.category || 'Festival',
+    date: r.fixed_date, trigger: r.trigger,
+    active: r.is_active, audience: r.audience || 'all_contacts',
+    template_body: r.template_body || '',
+    sent_total: r.sent_total || 0, sent_this_year: r.sent_this_year || 0,
+    is_date_fixed: r.is_date_fixed, days_till: days, next: nextLabel,
+  };
+}
+
+const CAT_META = {
+  National: { col: 'text-orange-500', bg: 'bg-orange-500/15', Icon: Flag },
+  Festival:  { col: 'text-amber-500',  bg: 'bg-amber-500/15',  Icon: Gift },
+  School:    { col: 'text-blue-500',   bg: 'bg-blue-500/15',   Icon: BookOpen },
+  Global:    { col: 'text-green-500',  bg: 'bg-green-500/15',  Icon: Globe },
+  Personal:  { col: 'text-pink-500',   bg: 'bg-pink-500/15',   Icon: Heart },
+};
+function catMeta(cat) { return CAT_META[cat] || CAT_META.Festival; }
 
 // ── API → display shape mapper ────────────────────────────────────────────────
 const TRIGGER_LABELS = { lead_created: 'Lead Created', quotation_sent: 'Quotation Sent', manual: 'Manual' };
@@ -642,140 +686,209 @@ function CampaignsTab({ tk, campaigns, setCampaigns, roles, contacts }) {
 // ══════════════════════════════════════════════════════════════════════════════
 // Tab 3 — Greetings
 // ══════════════════════════════════════════════════════════════════════════════
+const GREET_CATS = ['All', 'National', 'Festival', 'School', 'Global', 'Personal'];
+const GREET_AUDIENCES = [
+  { k: 'all_contacts',   l: 'All Contacts' },
+  { k: 'role:Teacher',   l: 'Teachers Only' },
+  { k: 'role:Principal', l: 'Principals Only' },
+  { k: 'birthday_person', l: 'Birthday Person' },
+];
+const BLANK_GREET = { name: '', type: 'festival', category: 'Festival', trigger: 'fixed_date', fixed_date: '', audience: 'all_contacts', template_body: '' };
+
 function GreetingsTab({ tk, greetings, setGreetings }) {
+  const [filterCat, setFilterCat] = useState('All');
   const [showCreate, setShowCreate] = useState(false);
-  const [form, setForm] = useState({ name: '', type: 'festival', date: '', template: '' });
+  const [form, setForm] = useState(BLANK_GREET);
+  const [saving, setSaving] = useState(false);
 
-  function toggle(id) {
-    setGreetings(prev => prev.map(g => g.id === id ? { ...g, active: !g.active } : g));
+  async function toggle(g) {
+    try {
+      await greetingsApi.update(g.rule_id, { is_active: !g.active });
+      setGreetings(prev => prev.map(x => x.id === g.id ? { ...x, active: !x.active } : x));
+    } catch { toast.error('Failed to update rule'); }
   }
 
-  function create() {
-    setGreetings(prev => [...prev, {
-      id: Date.now().toString(), ...form,
-      active: true, sent_total: 0, next: form.date || 'Daily',
-    }]);
-    setShowCreate(false);
-    setForm({ name: '', type: 'festival', date: '', template: '' });
-    toast.success('Greeting rule created');
+  async function create() {
+    if (!form.name.trim()) { toast.error('Rule name is required'); return; }
+    if (form.trigger === 'fixed_date' && !form.fixed_date.trim()) { toast.error('Date (MM-DD) is required'); return; }
+    if (!form.template_body.trim()) { toast.error('Message template is required'); return; }
+    setSaving(true);
+    try {
+      const res = await greetingsApi.create({ ...form, is_active: true });
+      setGreetings(prev => [mapRule(res.data), ...prev]);
+      setShowCreate(false);
+      setForm(BLANK_GREET);
+      toast.success('Greeting rule created');
+    } catch { toast.error('Failed to create rule'); }
+    finally { setSaving(false); }
   }
 
-  const upcomingFestivals = greetings.filter(g => g.active && g.type === 'festival').slice(0, 3);
+  const upcoming = [...greetings]
+    .filter(g => g.active && g.trigger === 'fixed_date' && g.days_till < 60)
+    .sort((a, b) => a.days_till - b.days_till)
+    .slice(0, 4);
+
+  const filtered = filterCat === 'All' ? greetings
+    : greetings.filter(g => g.category === filterCat);
 
   return (
     <div className="space-y-4">
-      {/* Upcoming strip */}
-      <div className={`${tk.card} border ${tk.bdr} rounded-xl p-4`}>
-        <div className="flex items-center gap-2 mb-3">
-          <CalendarDays className={`h-4 w-4 ${tk.tm}`} />
-          <span className={`text-sm font-semibold ${tk.t1}`}>Upcoming Auto-Greetings</span>
-        </div>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          {upcomingFestivals.map(g => (
-            <div key={g.id} className="bg-[var(--bg-primary)] rounded-xl p-3 flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-400/20 to-orange-400/20 flex items-center justify-center flex-shrink-0">
-                <Calendar className="h-5 w-5 text-amber-500" />
-              </div>
-              <div className="min-w-0">
-                <p className={`text-xs font-semibold ${tk.t1} truncate`}>{g.name}</p>
-                <p className={`text-[11px] ${tk.tm}`}>{g.next}</p>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
 
-      {/* Rules list */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h3 className={`text-sm font-semibold ${tk.t1}`}>Greeting Rules</h3>
-          <p className={`text-xs ${tk.tm} mt-0.5`}>{greetings.filter(g => g.active).length} active · {greetings.filter(g => !g.active).length} paused</p>
+      {/* ── Upcoming strip ─────────────────────────────────────────────── */}
+      {upcoming.length > 0 && (
+        <div className={`${tk.card} border ${tk.bdr} rounded-xl p-4`}>
+          <div className="flex items-center gap-2 mb-3">
+            <CalendarDays className={`h-4 w-4 ${tk.tm}`} />
+            <span className={`text-sm font-semibold ${tk.t1}`}>Upcoming Auto-Greetings</span>
+            <span className="text-[11px] px-2 py-0.5 rounded-full bg-[var(--accent)]/15 text-[var(--accent)] font-medium">{upcoming.length} soon</span>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+            {upcoming.map(g => {
+              const m = catMeta(g.category);
+              const Icon = m.Icon;
+              const urgent = g.days_till <= 3;
+              return (
+                <div key={g.id} className={`bg-[var(--bg-primary)] rounded-xl p-3 ${urgent ? 'ring-1 ring-[var(--accent)]/40' : ''}`}>
+                  <div className={`w-8 h-8 rounded-lg ${m.bg} flex items-center justify-center mb-2`}>
+                    <Icon className={`h-4 w-4 ${m.col}`} />
+                  </div>
+                  <p className={`text-xs font-semibold ${tk.t1} leading-tight mb-0.5`}>{g.name}</p>
+                  <p className={`text-[10px] font-medium ${urgent ? 'text-[var(--accent)]' : tk.tm}`}>{g.next}</p>
+                </div>
+              );
+            })}
+          </div>
         </div>
-        <Button size="sm" className="h-8 gap-1 bg-[var(--accent)] hover:bg-[var(--accent)]/90 text-white text-xs"
+      )}
+
+      {/* ── Header + category filter ──────────────────────────────────────── */}
+      <div className="flex items-start sm:items-center justify-between gap-3">
+        <div>
+          <h3 className={`text-sm font-semibold ${tk.t1}`}>Greeting Rules
+            <span className={`ml-2 text-xs font-normal ${tk.tm}`}>
+              {greetings.filter(g => g.active).length} active · {greetings.filter(g => !g.active).length} paused
+            </span>
+          </h3>
+        </div>
+        <Button size="sm" className="h-8 gap-1 bg-[var(--accent)] hover:bg-[var(--accent)]/90 text-white text-xs flex-shrink-0"
           onClick={() => setShowCreate(true)}>
           <Plus className="h-3 w-3" /> Add Rule
         </Button>
       </div>
 
-      <div className={`${tk.card} border ${tk.bdr} rounded-xl divide-y divide-[var(--border-color)]`}>
-        {greetings.map(g => (
-          <div key={g.id} className="flex items-center gap-3 px-4 py-3.5">
-            <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${
-              g.type === 'birthday' ? 'bg-pink-500/15' : 'bg-amber-500/15'
+      <div className="flex gap-1.5 overflow-x-auto no-scrollbar pb-1">
+        {GREET_CATS.map(c => (
+          <button key={c} onClick={() => setFilterCat(c)}
+            className={`text-xs px-3 py-1.5 rounded-full whitespace-nowrap font-medium transition-colors flex-shrink-0 ${
+              filterCat === c
+                ? 'bg-[var(--accent)] text-white'
+                : `${tk.card} border ${tk.bdr} ${tk.t2} ${tk.hov}`
             }`}>
-              {g.type === 'birthday'
-                ? <Star className="h-4 w-4 text-pink-500" />
-                : <Gift className="h-4 w-4 text-amber-500" />}
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2">
-                <p className={`text-sm font-medium ${tk.t1} truncate`}>{g.name}</p>
-                <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${
-                  g.type === 'birthday' ? 'bg-pink-500/10 text-pink-500' : 'bg-amber-500/10 text-amber-600'
-                }`}>{g.type}</span>
-              </div>
-              <p className={`text-[11px] ${tk.tm} mt-0.5`}>
-                Template: <span className="font-mono">{g.template}</span>
-                {g.date && ` · ${g.date}`}
-                {g.sent_total > 0 && ` · Sent to ${g.sent_total}`}
-              </p>
-            </div>
-            <div className="flex items-center gap-3 flex-shrink-0">
-              <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full hidden sm:block ${
-                g.active ? 'bg-green-500/15 text-green-500' : 'bg-gray-500/15 text-gray-400'
-              }`}>
-                {g.active ? 'Active' : 'Paused'}
-              </span>
-              <Switch checked={g.active} onCheckedChange={() => toggle(g.id)} />
-            </div>
-          </div>
+            {c}
+          </button>
         ))}
       </div>
 
+      {/* ── Rules list ───────────────────────────────────────────────────── */}
+      <div className={`${tk.card} border ${tk.bdr} rounded-xl divide-y divide-[var(--border-color)]`}>
+        {filtered.length === 0 && (
+          <div className={`px-4 py-8 text-center text-sm ${tk.tm}`}>No rules in this category</div>
+        )}
+        {filtered.map(g => {
+          const m = catMeta(g.category);
+          const Icon = m.Icon;
+          return (
+            <div key={g.id} className="flex items-center gap-3 px-4 py-3.5">
+              <div className={`w-9 h-9 rounded-xl ${m.bg} flex items-center justify-center flex-shrink-0`}>
+                <Icon className={`h-4 w-4 ${m.col}`} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <p className={`text-sm font-semibold ${tk.t1}`}>{g.name}</p>
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${m.bg} ${m.col} font-medium`}>{g.category}</span>
+                  {!g.is_date_fixed && g.trigger === 'fixed_date' && (
+                    <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-yellow-500/15 text-yellow-600 font-medium">Date varies</span>
+                  )}
+                </div>
+                <div className={`text-[11px] ${tk.tm} mt-0.5 flex items-center gap-2 flex-wrap`}>
+                  <span>{g.next}</span>
+                  {g.sent_total > 0 && <span>· {g.sent_total.toLocaleString('en-IN')} sent total</span>}
+                  {g.sent_this_year > 0 && <span className="text-green-500">· {g.sent_this_year} this year</span>}
+                </div>
+              </div>
+              <div className="flex items-center gap-2.5 flex-shrink-0">
+                <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full hidden sm:block ${
+                  g.active ? 'bg-green-500/15 text-green-500' : 'bg-gray-500/15 text-gray-400'
+                }`}>{g.active ? 'Active' : 'Paused'}</span>
+                <Switch checked={g.active} onCheckedChange={() => toggle(g)} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* ── Create dialog ─────────────────────────────────────────────────── */}
       <Dialog open={showCreate} onOpenChange={setShowCreate}>
-        <DialogContent className={`${tk.card} border ${tk.bdr} w-[calc(100vw-2rem)] max-w-md`}>
+        <DialogContent className={`${tk.card} border ${tk.bdr} w-[calc(100vw-2rem)] max-w-lg`}>
           <DialogHeader>
             <DialogTitle className={tk.t1}>New Greeting Rule</DialogTitle>
-            <DialogDescription className={tk.tm}>Auto-send greetings on special occasions</DialogDescription>
+            <DialogDescription className={tk.tm}>Auto-send personalised WhatsApp greetings on special days</DialogDescription>
           </DialogHeader>
-          <div className="space-y-4 py-1">
+          <div className="space-y-4 max-h-[60vh] overflow-y-auto py-1 pr-1">
             <div>
               <Label className={`${tk.t2} text-xs mb-1.5 block`}>Rule Name</Label>
-              <Input className={`h-10 ${tk.inp}`} placeholder="e.g. Diwali Greetings"
+              <Input className={`h-10 ${tk.inp}`} placeholder="e.g. Diwali 2026 Greetings"
                 value={form.name} onChange={e => setForm(p => ({ ...p, name: e.target.value }))} />
             </div>
-            <div>
-              <Label className={`${tk.t2} text-xs mb-1.5 block`}>Type</Label>
-              <div className="flex gap-2">
-                {[{ k: 'festival', l: 'Festival / Event' }, { k: 'birthday', l: 'Birthday' }].map(t => (
-                  <button key={t.k} onClick={() => setForm(p => ({ ...p, type: t.k }))}
-                    className={`flex-1 py-2 rounded-lg text-xs font-medium border-2 transition-colors ${
-                      form.type === t.k ? 'border-[var(--accent)] bg-[var(--accent)]/5 text-[var(--accent)]' : `border-[var(--border-color)] ${tk.t2}`
-                    }`}>
-                    {t.l}
-                  </button>
-                ))}
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className={`${tk.t2} text-xs mb-1.5 block`}>Type</Label>
+                <div className="flex flex-col gap-1.5">
+                  {[{ k: 'fixed_date', l: 'Festival / Event' }, { k: 'birthday', l: 'Birthday' }].map(t => (
+                    <button key={t.k} onClick={() => setForm(p => ({ ...p, trigger: t.k, type: t.k === 'birthday' ? 'birthday' : 'festival' }))}
+                      className={`py-2 rounded-lg text-xs font-medium border-2 transition-colors ${
+                        form.trigger === t.k ? 'border-[var(--accent)] bg-[var(--accent)]/5 text-[var(--accent)]' : `border-[var(--border-color)] ${tk.t2}`
+                      }`}>
+                      {t.l}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="space-y-3">
+                {form.trigger === 'fixed_date' && (
+                  <div>
+                    <Label className={`${tk.t2} text-xs mb-1.5 block`}>Date (MM-DD)</Label>
+                    <Input className={`h-10 ${tk.inp}`} placeholder="e.g. 10-20"
+                      value={form.fixed_date} onChange={e => setForm(p => ({ ...p, fixed_date: e.target.value }))} />
+                    <p className={`text-[10px] ${tk.tm} mt-1`}>Oct 20 → 10-20</p>
+                  </div>
+                )}
+                <div>
+                  <Label className={`${tk.t2} text-xs mb-1.5 block`}>Audience</Label>
+                  <select className={`w-full h-10 rounded-lg border px-3 text-xs ${tk.inp}`}
+                    value={form.audience} onChange={e => setForm(p => ({ ...p, audience: e.target.value }))}>
+                    {GREET_AUDIENCES.map(a => <option key={a.k} value={a.k}>{a.l}</option>)}
+                  </select>
+                </div>
               </div>
             </div>
-            {form.type === 'festival' && (
-              <div>
-                <Label className={`${tk.t2} text-xs mb-1.5 block`}>Festival Date (e.g. 10-20 for Oct 20)</Label>
-                <Input className={`h-10 ${tk.inp}`} placeholder="MM-DD"
-                  value={form.date} onChange={e => setForm(p => ({ ...p, date: e.target.value }))} />
-              </div>
-            )}
             <div>
-              <Label className={`${tk.t2} text-xs mb-1.5 block`}>WhatsApp Template Name</Label>
-              <Input className={`h-10 ${tk.inp} font-mono`} placeholder="e.g. diwali_wish_2026"
-                value={form.template} onChange={e => setForm(p => ({ ...p, template: e.target.value }))} />
-              <p className={`text-[11px] ${tk.tm} mt-1`}>Must be an APPROVED template in Meta Business Manager</p>
+              <Label className={`${tk.t2} text-xs mb-1.5 block`}>Message Template</Label>
+              <textarea rows={5}
+                className={`w-full rounded-xl border px-3 py-2.5 text-xs resize-none ${tk.inp}`}
+                placeholder="Write your WhatsApp message. Use {name} for the contact's first name."
+                value={form.template_body}
+                onChange={e => setForm(p => ({ ...p, template_body: e.target.value }))} />
+              <p className={`text-[11px] ${tk.tm} mt-1`}>
+                {form.template_body.length} chars · <span className="font-mono text-[var(--accent)]">{'{name}'}</span> = contact's first name
+              </p>
             </div>
           </div>
           <DialogFooter className="gap-2">
             <Button variant="outline" size="sm" className={`border-[var(--border-color)] ${tk.t2}`}
               onClick={() => setShowCreate(false)}>Cancel</Button>
             <Button size="sm" className="bg-[var(--accent)] hover:bg-[var(--accent)]/90 text-white"
-              onClick={create}>Create Rule</Button>
+              onClick={create} disabled={saving}>{saving ? 'Creating…' : 'Create Rule'}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -1186,8 +1299,8 @@ export default function MarketingHub() {
   const [tab, setTab] = useState('overview');
   const [waConnected, setWaConnected] = useState(false);
   const [campaigns, setCampaigns] = useState(INIT_CAMPAIGNS);
-  const [greetings, setGreetings] = useState(INIT_GREETINGS);
   const [drips, setDrips] = useState([]);
+  const [greetings, setGreetings] = useState([]);
   const [roles, setRoles] = useState([]);
   const [contacts, setContacts] = useState([]);
 
@@ -1195,6 +1308,7 @@ export default function MarketingHub() {
     contactRolesApi.getAll().then(r => setRoles(r.data || [])).catch(() => {});
     contactsApi.getAll().then(r => setContacts(r.data || [])).catch(() => {});
     dripApi.getAll().then(r => setDrips((r.data || []).map(mapSeq))).catch(() => {});
+    greetingsApi.getAll().then(r => setGreetings((r.data || []).map(mapRule))).catch(() => {});
   }, []);
 
   return (

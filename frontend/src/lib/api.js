@@ -217,6 +217,15 @@ export const contactRoles = {
   delete: (id) => API.delete(`/contact-roles/${id}`),
 };
 
+// Greeting Rules
+export const greetingRules = {
+  getAll: () => API.get('/greetings/rules'),
+  create: (data) => API.post('/greetings/rules', data),
+  update: (id, data) => API.put(`/greetings/rules/${id}`, data),
+  delete: (id) => API.delete(`/greetings/rules/${id}`),
+  logs: (params) => API.get('/greetings/logs', { params }),
+};
+
 // Drip Sequences
 export const dripSequences = {
   getAll: () => API.get('/drip/sequences'),

@@ -1174,12 +1174,132 @@ async def run_auto_reminders():
                     )
                 drip_fired += 1
 
+            # ── Greeting rules auto-fire (festival + birthday WhatsApp) ─────
+            this_year = int(today[:4])
+
+            active_greeting_rules = await db.greeting_rules.find(
+                {"is_active": True, "trigger": "fixed_date", "fixed_date": today_mmdd},
+                {"_id": 0}
+            ).to_list(10)
+
+            greetings_queued = 0
+            for grule in active_greeting_rules:
+                audience = grule.get("audience", "all_contacts")
+                contact_filter = {"phone": {"$nin": ["", None]}}
+
+                if audience.startswith("role:"):
+                    role_name = audience[5:].strip().lower()
+                    matching_roles = await db.contact_roles.find(
+                        {"name": {"$regex": f"^{role_name}$", "$options": "i"}},
+                        {"_id": 0, "role_id": 1},
+                    ).to_list(5)
+                    matching_role_ids = [r["role_id"] for r in matching_roles]
+                    all_contacts_raw = await db.contacts.find(
+                        contact_filter,
+                        {"_id": 0, "contact_id": 1, "name": 1, "phone": 1,
+                         "contact_role_id": 1, "designation": 1},
+                    ).to_list(2000)
+                    grule_contacts = [
+                        c for c in all_contacts_raw
+                        if (matching_role_ids and c.get("contact_role_id") in matching_role_ids)
+                        or (c.get("designation", "").lower() == role_name)
+                    ]
+                else:
+                    grule_contacts = await db.contacts.find(
+                        contact_filter,
+                        {"_id": 0, "contact_id": 1, "name": 1, "phone": 1},
+                    ).to_list(2000)
+
+                rule_queued = 0
+                for contact in grule_contacts:
+                    already = await db.greeting_logs.find_one({
+                        "rule_id": grule["rule_id"],
+                        "contact_id": contact["contact_id"],
+                        "year": this_year,
+                    })
+                    if already:
+                        continue
+                    first_name = ((contact.get("name") or "Friend").split()[0])
+                    message = grule["template_body"].replace("{name}", first_name)
+                    now_g = datetime.now(timezone.utc).isoformat()
+                    await db.greeting_logs.insert_one({
+                        "log_id": f"glog_{uuid.uuid4().hex[:8]}",
+                        "rule_id": grule["rule_id"],
+                        "contact_id": contact["contact_id"],
+                        "year": this_year,
+                        "phone": contact["phone"],
+                        "message": message,
+                        "status": "queued",
+                        "sent_at": now_g,
+                    })
+                    await db.whatsapp_scheduled.insert_one({
+                        "schedule_id": f"greet_{uuid.uuid4().hex[:8]}",
+                        "phone": contact["phone"],
+                        "message": message,
+                        "status": "pending",
+                        "scheduled_at": now_g,
+                        "rule_id": grule["rule_id"],
+                        "contact_id": contact["contact_id"],
+                        "created_by": "system",
+                    })
+                    rule_queued += 1
+
+                if rule_queued:
+                    await db.greeting_rules.update_one(
+                        {"rule_id": grule["rule_id"]},
+                        {"$inc": {"sent_total": rule_queued}},
+                    )
+                    greetings_queued += rule_queued
+
+            # Birthday greetings via greeting_rules (WhatsApp, deduped per year)
+            bday_grule = await db.greeting_rules.find_one(
+                {"is_active": True, "trigger": "birthday"}, {"_id": 0}
+            )
+            if bday_grule:
+                bday_for_greet = await db.contacts.find(
+                    {"birthday": {"$regex": f"-{today_mmdd}$"},
+                     "phone": {"$nin": ["", None]}},
+                    {"_id": 0, "contact_id": 1, "name": 1, "phone": 1},
+                ).to_list(200)
+                for contact in bday_for_greet:
+                    already = await db.greeting_logs.find_one({
+                        "rule_id": bday_grule["rule_id"],
+                        "contact_id": contact["contact_id"],
+                        "year": this_year,
+                    })
+                    if already:
+                        continue
+                    first_name = ((contact.get("name") or "Friend").split()[0])
+                    message = bday_grule["template_body"].replace("{name}", first_name)
+                    now_b = datetime.now(timezone.utc).isoformat()
+                    await db.greeting_logs.insert_one({
+                        "log_id": f"glog_{uuid.uuid4().hex[:8]}",
+                        "rule_id": bday_grule["rule_id"],
+                        "contact_id": contact["contact_id"],
+                        "year": this_year,
+                        "phone": contact["phone"],
+                        "message": message,
+                        "status": "queued",
+                        "sent_at": now_b,
+                    })
+                    await db.whatsapp_scheduled.insert_one({
+                        "schedule_id": f"bday_{uuid.uuid4().hex[:8]}",
+                        "phone": contact["phone"],
+                        "message": message,
+                        "status": "pending",
+                        "scheduled_at": now_b,
+                        "rule_id": bday_grule["rule_id"],
+                        "contact_id": contact["contact_id"],
+                        "created_by": "system",
+                    })
+                    greetings_queued += 1
+
             import logging
             logging.info(
                 f"Auto-reminder: {len(overdue_tasks)} overdue, {len(stale_leads)} stale, "
                 f"{len(pending_quots)} pending quots, {len(birthday_contacts)} birthdays, "
                 f"{len(anniversary_schools)} anniversaries, {len(due_scheduled)} scheduled WA fired, "
-                f"{drip_fired} drip steps fired"
+                f"{drip_fired} drip steps fired, {greetings_queued} greetings queued"
             )
         except Exception as e:
             import logging
