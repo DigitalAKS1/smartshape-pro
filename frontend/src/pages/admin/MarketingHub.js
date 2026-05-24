@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import AdminLayout from '../../components/layouts/AdminLayout';
 import { useTheme } from '../../contexts/ThemeContext';
-import { contactRoles as contactRolesApi, contacts as contactsApi, dripSequences as dripApi, greetingRules as greetingsApi } from '../../lib/api';
+import { contactRoles as contactRolesApi, contacts as contactsApi, dripSequences as dripApi, greetingRules as greetingsApi, whatsApp as waApi } from '../../lib/api';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
@@ -15,7 +15,8 @@ import {
   RefreshCw, MoreVertical, ArrowRight, Activity,
   ChevronRight, ChevronDown, Trash2, Play, Eye,
   Check, Wifi, Calendar, Key, Globe, Copy,
-  Flag, BookOpen, Heart, School, Cake,
+  Flag, BookOpen, Heart, School, Cake, FileText,
+  PieChart, Target, Inbox, X,
 } from 'lucide-react';
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
@@ -32,75 +33,31 @@ function useTk() {
   };
 }
 
-// ── Mock data ─────────────────────────────────────────────────────────────────
-const INIT_CAMPAIGNS = [
-  {
-    id: '1', name: 'Diwali Special Offer 2025', status: 'completed',
-    audience_label: 'All Contacts', audience_count: 342,
-    stats: { sent: 338, delivered: 315, read: 267, failed: 4 },
-    created_at: '20 Oct 2025', scheduled_at: null,
-  },
-  {
-    id: '2', name: 'New Flower Die Collection Launch', status: 'scheduled',
-    audience_label: 'School Principals', audience_count: 186,
-    stats: { sent: 0, delivered: 0, read: 0, failed: 0 },
-    created_at: '1 Nov 2025', scheduled_at: '10 Nov 2025 · 10:00 AM',
-  },
-  {
-    id: '3', name: 'Year End Clearance Sale', status: 'draft',
-    audience_label: 'All Contacts', audience_count: 412,
-    stats: { sent: 0, delivered: 0, read: 0, failed: 0 },
-    created_at: '5 Nov 2025', scheduled_at: null,
-  },
-];
+// ── Campaign API → display format ─────────────────────────────────────────────
+function mapCampaign(c) {
+  return {
+    id: c.campaign_id,
+    campaign_id: c.campaign_id,
+    name: c.name,
+    status: c.status || 'draft',
+    audience_label: c.audience_label || 'All Contacts',
+    audience_count: c.audience_count || 0,
+    template_id: c.template_id || null,
+    message: c.message || '',
+    audience_filter: c.audience_filter || {},
+    stats: {
+      sent: c.sent_count || 0,
+      delivered: c.delivered_count || 0,
+      read: 0,
+      failed: c.failed_count || 0,
+    },
+    created_at: c.created_at
+      ? new Date(c.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+      : '',
+    scheduled_at: c.scheduled_at || null,
+  };
+}
 
-const INIT_GREETINGS = [
-  { id: '1', name: 'Birthday Greetings',  type: 'birthday', date: null,     active: true,  template: 'birthday_wish',   sent_total: 89,  next: 'Daily' },
-  { id: '2', name: 'New Year 2026',       type: 'festival', date: 'Jan 1',  active: true,  template: 'new_year_wish',   sent_total: 0,   next: 'Jan 1, 2026' },
-  { id: '3', name: 'Republic Day',        type: 'festival', date: 'Jan 26', active: false, template: 'republic_day',    sent_total: 0,   next: 'Jan 26, 2026' },
-  { id: '4', name: 'Holi Wishes',         type: 'festival', date: 'Mar 14', active: true,  template: 'holi_wish',       sent_total: 0,   next: 'Mar 14, 2026' },
-  { id: '5', name: "Teacher's Day",       type: 'festival', date: 'Sep 5',  active: true,  template: 'teachers_day',    sent_total: 0,   next: 'Sep 5, 2026' },
-  { id: '6', name: 'Diwali 2026',         type: 'festival', date: 'Oct 20', active: true,  template: 'diwali_wish',     sent_total: 0,   next: 'Oct 20, 2026' },
-  { id: '7', name: 'Christmas',           type: 'festival', date: 'Dec 25', active: true,  template: 'christmas_wish',  sent_total: 0,   next: 'Dec 25, 2026' },
-];
-
-const INIT_DRIPS = [
-  {
-    id: '1', name: 'New Lead Welcome Series', trigger: 'Lead Created',
-    steps: [
-      { n: 1, delay: 'Immediately', label: 'Welcome + Who we are' },
-      { n: 2, delay: 'Day 3',       label: 'Product catalogue link' },
-      { n: 3, delay: 'Day 7',       label: 'Special introductory offer' },
-      { n: 4, delay: 'Day 14',      label: 'Book a visit / call CTA' },
-    ],
-    enrolled: 34, completed: 12, active: true,
-  },
-  {
-    id: '2', name: 'Quotation Follow-up', trigger: 'Quotation Sent',
-    steps: [
-      { n: 1, delay: 'Day 2', label: 'Did you review our quotation?' },
-      { n: 2, delay: 'Day 5', label: 'Last reminder + extra discount' },
-    ],
-    enrolled: 18, completed: 7, active: true,
-  },
-  {
-    id: '3', name: 'Re-engagement (30-day cold)', trigger: 'Manual',
-    steps: [
-      { n: 1, delay: 'Immediately', label: "We miss you! Check new arrivals" },
-      { n: 2, delay: 'Day 5',       label: 'Exclusive comeback offer' },
-    ],
-    enrolled: 7, completed: 3, active: false,
-  },
-];
-
-const MOCK_TEMPLATES = [
-  { name: 'welcome_new_lead',  category: 'MARKETING', status: 'APPROVED', lang: 'English' },
-  { name: 'birthday_wish',     category: 'MARKETING', status: 'APPROVED', lang: 'English' },
-  { name: 'diwali_wish',       category: 'MARKETING', status: 'APPROVED', lang: 'Hindi' },
-  { name: 'catalogue_share',   category: 'UTILITY',   status: 'APPROVED', lang: 'English' },
-  { name: 'order_confirm',     category: 'UTILITY',   status: 'APPROVED', lang: 'English' },
-  { name: 'new_year_wish',     category: 'MARKETING', status: 'PENDING',  lang: 'English' },
-];
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const STATUS_CHIP = {
@@ -188,19 +145,19 @@ function mapSeq(s) {
 // ══════════════════════════════════════════════════════════════════════════════
 // Tab 1 — Overview
 // ══════════════════════════════════════════════════════════════════════════════
-function OverviewTab({ tk, campaigns, greetings, drips, waConnected, setTab }) {
-  const done  = campaigns.filter(c => c.status === 'completed');
-  const totalSent = done.reduce((s, c) => s + c.stats.sent, 0);
-  const totalRead = done.reduce((s, c) => s + c.stats.read, 0);
-  const avgRead   = pct(totalRead, totalSent);
+function OverviewTab({ tk, campaigns, greetings, drips, waConnected, setTab, analytics }) {
+  const msgSent      = analytics?.messages?.sent  ?? campaigns.filter(c => c.status === 'completed').reduce((s, c) => s + c.stats.sent, 0);
+  const msgPending   = analytics?.messages?.pending ?? 0;
+  const dripActive   = analytics?.drips?.active   ?? drips.filter(d => d.active).length;
+  const greetSent    = analytics?.greetings?.total_sent ?? 0;
 
   const kpis = [
-    { label: 'Campaigns',       value: campaigns.length,                                  icon: Megaphone,  col: 'text-purple-500',  bg: 'bg-purple-500/10' },
-    { label: 'Messages Sent',   value: totalSent ? totalSent.toLocaleString('en-IN') : '—', icon: Send,     col: 'text-blue-500',    bg: 'bg-blue-500/10' },
-    { label: 'Avg Read Rate',   value: avgRead !== null ? `${avgRead}%` : '—',             icon: Eye,        col: 'text-green-500',   bg: 'bg-green-500/10' },
-    { label: 'Active Drips',    value: drips.filter(d => d.active).length,                 icon: Zap,        col: 'text-yellow-500',  bg: 'bg-yellow-500/10' },
-    { label: 'Auto Greetings',  value: greetings.filter(g => g.active).length,             icon: Gift,       col: 'text-pink-500',    bg: 'bg-pink-500/10' },
-    { label: 'WhatsApp',        value: waConnected ? 'Connected' : 'Not Set Up',           icon: waConnected ? Wifi : WifiOff, col: waConnected ? 'text-green-500' : 'text-red-500', bg: waConnected ? 'bg-green-500/10' : 'bg-red-500/10' },
+    { label: 'Campaigns',         value: campaigns.length,                                       icon: Megaphone,  col: 'text-purple-500',  bg: 'bg-purple-500/10' },
+    { label: 'Messages Sent',     value: msgSent ? msgSent.toLocaleString('en-IN') : '—',        icon: Send,       col: 'text-blue-500',    bg: 'bg-blue-500/10' },
+    { label: 'Messages Pending',  value: msgPending || '—',                                      icon: Inbox,      col: 'text-orange-500',  bg: 'bg-orange-500/10' },
+    { label: 'Active Drips',      value: dripActive,                                             icon: Zap,        col: 'text-yellow-500',  bg: 'bg-yellow-500/10' },
+    { label: 'Greetings Sent',    value: greetSent ? greetSent.toLocaleString('en-IN') : greetings.filter(g => g.active).length + ' active', icon: Gift, col: 'text-pink-500', bg: 'bg-pink-500/10' },
+    { label: 'WhatsApp',          value: waConnected ? 'Connected' : 'Not Set Up',               icon: waConnected ? Wifi : WifiOff, col: waConnected ? 'text-green-500' : 'text-red-500', bg: waConnected ? 'bg-green-500/10' : 'bg-red-500/10' },
   ];
 
   return (
@@ -337,13 +294,17 @@ function OverviewTab({ tk, campaigns, greetings, drips, waConnected, setTab }) {
 // ══════════════════════════════════════════════════════════════════════════════
 // Tab 2 — Campaigns
 // ══════════════════════════════════════════════════════════════════════════════
-function CampaignsTab({ tk, campaigns, setCampaigns, roles, contacts }) {
+const TMPL_CAT_LABELS = { intro: 'Intro', catalogue: 'Catalogue', offer: 'Offer', followup: 'Follow-up', reengagement: 'Re-engagement', seasonal: 'Seasonal' };
+
+function CampaignsTab({ tk, campaigns, setCampaigns, roles, contacts, templates }) {
   const [filter, setFilter] = useState('all');
   const [showCreate, setShowCreate] = useState(false);
+  const [launching, setLaunching] = useState(null);
   const [step, setStep] = useState(1);
-  const [form, setForm] = useState({ name: '', audience: 'all', role_id: '', template: '', schedule: 'draft', schedule_at: '' });
+  const [saving, setSaving] = useState(false);
+  const [previewTmpl, setPreviewTmpl] = useState(null);
+  const [form, setForm] = useState({ name: '', audience: 'all', role_id: '', template_id: '', message: '', schedule: 'draft', schedule_at: '' });
 
-  // Live audience count — matches by contact_role_id OR designation text fallback
   const audienceCount = (() => {
     if (form.audience === 'all') return contacts.length;
     if (form.audience === 'role' && form.role_id) {
@@ -360,37 +321,62 @@ function CampaignsTab({ tk, campaigns, setCampaigns, roles, contacts }) {
     { key: 'all',       label: 'All',       count: campaigns.length },
     { key: 'draft',     label: 'Draft',     count: campaigns.filter(c => c.status === 'draft').length },
     { key: 'scheduled', label: 'Scheduled', count: campaigns.filter(c => c.status === 'scheduled').length },
-    { key: 'running',   label: 'Running',   count: campaigns.filter(c => c.status === 'running').length },
+    { key: 'queued',    label: 'Queued',    count: campaigns.filter(c => c.status === 'queued').length },
     { key: 'completed', label: 'Completed', count: campaigns.filter(c => c.status === 'completed').length },
   ];
 
   const filtered = filter === 'all' ? campaigns : campaigns.filter(c => c.status === filter);
 
-  function closeCreate() { setShowCreate(false); setStep(1); setForm({ name: '', audience: 'all', role_id: '', template: '', schedule: 'draft', schedule_at: '' }); }
+  function closeCreate() {
+    setShowCreate(false); setStep(1);
+    setForm({ name: '', audience: 'all', role_id: '', template_id: '', message: '', schedule: 'draft', schedule_at: '' });
+  }
 
-  function createCampaign() {
-    const roleLabel = form.audience === 'role' && form.role_id
-      ? roles.find(r => r.role_id === form.role_id)?.name || 'By Role'
-      : form.audience === 'all' ? 'All Contacts' : form.audience;
-    setCampaigns(prev => [{
-      id: Date.now().toString(),
-      name: form.name || 'Untitled Campaign',
-      status: form.schedule === 'schedule' ? 'scheduled' : 'draft',
-      audience_label: roleLabel,
-      audience_count: audienceCount,
-      stats: { sent: 0, delivered: 0, read: 0, failed: 0 },
-      created_at: new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
-      scheduled_at: form.schedule_at || null,
-    }, ...prev]);
-    closeCreate();
-    toast.success('Campaign saved as draft');
+  function pickTemplate(tmpl) {
+    setForm(p => ({ ...p, template_id: tmpl.template_id, message: tmpl.body }));
+  }
+
+  async function createCampaign() {
+    if (!form.name.trim()) { toast.error('Campaign name is required'); return; }
+    setSaving(true);
+    try {
+      const roleLabel = form.audience === 'role' && form.role_id
+        ? roles.find(r => r.role_id === form.role_id)?.name || 'By Role'
+        : 'All Contacts';
+      const audience_filter = form.audience === 'role' && form.role_id
+        ? { roles: [roles.find(r => r.role_id === form.role_id)?.name].filter(Boolean) }
+        : {};
+      const payload = {
+        name: form.name.trim(),
+        template_id: form.template_id || null,
+        message: form.message.trim(),
+        audience_filter,
+        audience_label: roleLabel,
+        scheduled_at: form.schedule === 'schedule' ? form.schedule_at : null,
+      };
+      const res = await waApi.createCampaign(payload);
+      setCampaigns(prev => [mapCampaign(res.data), ...prev]);
+      closeCreate();
+      toast.success('Campaign created as draft');
+    } catch { toast.error('Failed to create campaign'); }
+    finally { setSaving(false); }
+  }
+
+  async function launch(camp) {
+    setLaunching(camp.id);
+    try {
+      const res = await waApi.launchCampaign(camp.campaign_id);
+      const { queued, status } = res.data;
+      setCampaigns(prev => prev.map(c => c.id === camp.id ? { ...c, status, stats: { ...c.stats, sent: queued } } : c));
+      toast.success(`${queued} messages queued for ${camp.name}`);
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Failed to launch campaign');
+    } finally { setLaunching(null); }
   }
 
   const AUDIENCE_OPTS = [
-    { key: 'all',  label: 'All Contacts',      desc: `${contacts.length} contacts in your database` },
-    { key: 'role', label: 'By Designation',    desc: 'Principal, Teacher, Purchase Head, etc.' },
-    { key: 'city', label: 'By City',           desc: 'Target contacts in specific cities' },
-    { key: 'board',label: 'By School Board',   desc: 'CBSE, ICSE, State Board, etc.' },
+    { key: 'all',  label: 'All Contacts',   desc: `${contacts.length} contacts in your database` },
+    { key: 'role', label: 'By Designation', desc: 'Principal, Teacher, Purchase Head, etc.' },
   ];
 
   return (
@@ -453,9 +439,14 @@ function CampaignsTab({ tk, campaigns, setCampaigns, roles, contacts }) {
                   </div>
                   <div className="flex items-center gap-1.5 flex-shrink-0">
                     {c.status === 'draft' && (
-                      <Button size="sm" variant="outline" className={`h-7 gap-1 text-xs border-[var(--border-color)] ${tk.t2}`}
-                        onClick={() => toast.info('Backend integration needed to launch')}>
-                        <Play className="h-3 w-3" /> Launch
+                      <Button size="sm" variant="outline"
+                        className={`h-7 gap-1 text-xs border-green-500/40 text-green-600 hover:bg-green-500/10`}
+                        disabled={launching === c.id}
+                        onClick={() => launch(c)}>
+                        {launching === c.id
+                          ? <RefreshCw className="h-3 w-3 animate-spin" />
+                          : <Play className="h-3 w-3" />}
+                        {launching === c.id ? 'Launching…' : 'Launch'}
                       </Button>
                     )}
                     <button className={`h-7 w-7 rounded-lg ${tk.hov} flex items-center justify-center`}>
@@ -583,31 +574,48 @@ function CampaignsTab({ tk, campaigns, setCampaigns, roles, contacts }) {
               </>
             )}
 
-            {/* Step 2 */}
+            {/* Step 2 — Template selection */}
             {step === 2 && (
-              <div>
-                <Label className={`${tk.t2} text-xs mb-1 block`}>WhatsApp Template</Label>
-                <p className={`text-[11px] ${tk.tm} mb-3`}>Only Meta-approved templates can be used for bulk campaigns</p>
-                <div className="space-y-2">
-                  {MOCK_TEMPLATES.filter(t => t.status === 'APPROVED').map(t => (
-                    <button key={t.name} onClick={() => setForm(p => ({ ...p, template: t.name }))}
-                      className={`w-full flex items-center gap-3 p-3 rounded-xl border-2 text-left transition-colors ${
-                        form.template === t.name
-                          ? 'border-[var(--accent)] bg-[var(--accent)]/5'
-                          : `border-[var(--border-color)] ${tk.hov}`
-                      }`}>
-                      <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center flex-shrink-0 ${
-                        form.template === t.name ? 'border-[var(--accent)]' : 'border-[var(--text-muted)]'
-                      }`}>
-                        {form.template === t.name && <div className="w-2 h-2 rounded-full bg-[var(--accent)]" />}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className={`text-sm font-medium ${tk.t1} font-mono`}>{t.name}</p>
-                        <p className={`text-[11px] ${tk.tm}`}>{t.category} · {t.lang}</p>
-                      </div>
-                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-green-500/15 text-green-500 font-medium">APPROVED</span>
-                    </button>
-                  ))}
+              <div className="space-y-3">
+                <div>
+                  <Label className={`${tk.t2} text-xs mb-1 block`}>Select a Template</Label>
+                  <p className={`text-[11px] ${tk.tm} mb-2`}>Pick a SmartShape message template or write your own below</p>
+                  <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                    {templates.filter(t => t.is_active).map(t => (
+                      <button key={t.template_id} onClick={() => pickTemplate(t)}
+                        className={`w-full flex items-start gap-3 p-3 rounded-xl border-2 text-left transition-colors ${
+                          form.template_id === t.template_id
+                            ? 'border-[var(--accent)] bg-[var(--accent)]/5'
+                            : `border-[var(--border-color)] ${tk.hov}`
+                        }`}>
+                        <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center flex-shrink-0 mt-0.5 ${
+                          form.template_id === t.template_id ? 'border-[var(--accent)]' : 'border-[var(--text-muted)]'
+                        }`}>
+                          {form.template_id === t.template_id && <div className="w-2 h-2 rounded-full bg-[var(--accent)]" />}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <p className={`text-xs font-semibold ${tk.t1}`}>{t.name}</p>
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded-full bg-[var(--accent)]/10 text-[var(--accent)] font-medium capitalize`}>
+                              {TMPL_CAT_LABELS[t.category] || t.category}
+                            </span>
+                          </div>
+                          <p className={`text-[11px] ${tk.tm} mt-0.5 line-clamp-2`}>{t.body}</p>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <Label className={`${tk.t2} text-xs mb-1 block`}>
+                    Message Preview / Edit
+                    <span className={`${tk.tm} font-normal ml-1`}>(personalise before sending)</span>
+                  </Label>
+                  <textarea rows={5} className={`w-full rounded-xl border px-3 py-2.5 text-xs resize-none ${tk.inp}`}
+                    placeholder="Write your message… Use {name} and {school_name} as variables."
+                    value={form.message}
+                    onChange={e => setForm(p => ({ ...p, message: e.target.value }))} />
+                  <p className={`text-[11px] ${tk.tm} mt-0.5`}>{form.message.length} chars · <span className="font-mono text-[var(--accent)]">{'{name}'}</span> + <span className="font-mono text-[var(--accent)]">{'{school_name}'}</span> are auto-filled</p>
                 </div>
               </div>
             )}
@@ -652,7 +660,7 @@ function CampaignsTab({ tk, campaigns, setCampaigns, roles, contacts }) {
                   {[
                     { label: 'Campaign',  value: form.name || 'Untitled' },
                     { label: 'Audience',  value: `${AUDIENCE_OPTS.find(a => a.key === form.audience)?.label || form.audience}${form.audience === 'role' && form.role_id ? ` — ${roles.find(r => r.role_id === form.role_id)?.name || ''}` : ''} (~${audienceCount})` },
-                    { label: 'Template',  value: form.template || 'Not selected' },
+                    { label: 'Template',  value: form.template_id ? (templates.find(t => t.template_id === form.template_id)?.name || 'Custom') : (form.message ? 'Custom message' : 'Not selected') },
                     { label: 'Schedule',  value: form.schedule === 'draft' ? 'Save as Draft' : (form.schedule_at || 'Not set') },
                   ].map(r => (
                     <div key={r.label} className="flex items-center justify-between">
@@ -674,7 +682,9 @@ function CampaignsTab({ tk, campaigns, setCampaigns, roles, contacts }) {
               ? <Button size="sm" className="bg-[var(--accent)] hover:bg-[var(--accent)]/90 text-white"
                   onClick={() => setStep(s => s + 1)}>Continue</Button>
               : <Button size="sm" className="bg-[var(--accent)] hover:bg-[var(--accent)]/90 text-white"
-                  onClick={createCampaign}>Create Campaign</Button>
+                  disabled={saving} onClick={createCampaign}>
+                  {saving ? 'Saving…' : 'Create Campaign'}
+                </Button>
             }
           </DialogFooter>
         </DialogContent>
@@ -1132,7 +1142,329 @@ function DripsTab({ tk, drips, setDrips }) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// Tab 5 — WhatsApp Setup
+// Tab 5 — Message Templates
+// ══════════════════════════════════════════════════════════════════════════════
+const TMPL_CATS = ['All', 'intro', 'catalogue', 'offer', 'followup', 'reengagement', 'seasonal'];
+const TMPL_CAT_META = {
+  intro:        { label: 'Intro',          col: 'text-blue-500',   bg: 'bg-blue-500/15' },
+  catalogue:    { label: 'Catalogue',      col: 'text-purple-500', bg: 'bg-purple-500/15' },
+  offer:        { label: 'Offer',          col: 'text-green-500',  bg: 'bg-green-500/15' },
+  followup:     { label: 'Follow-up',      col: 'text-orange-500', bg: 'bg-orange-500/15' },
+  reengagement: { label: 'Re-engagement',  col: 'text-red-400',    bg: 'bg-red-400/15' },
+  seasonal:     { label: 'Seasonal',       col: 'text-cyan-500',   bg: 'bg-cyan-500/15' },
+};
+const BLANK_TMPL = { name: '', category: 'intro', body: '' };
+
+function TemplatesTab({ tk, templates, setTemplates }) {
+  const [filterCat, setFilterCat] = useState('All');
+  const [preview, setPreview] = useState(null);
+  const [showCreate, setShowCreate] = useState(false);
+  const [form, setForm] = useState(BLANK_TMPL);
+  const [saving, setSaving] = useState(false);
+
+  const filtered = filterCat === 'All' ? templates : templates.filter(t => t.category === filterCat);
+
+  async function create() {
+    if (!form.name.trim()) { toast.error('Template name is required'); return; }
+    if (!form.body.trim()) { toast.error('Message body is required'); return; }
+    setSaving(true);
+    try {
+      const vars = [];
+      if (form.body.includes('{name}')) vars.push('name');
+      if (form.body.includes('{school_name}')) vars.push('school_name');
+      const res = await waApi.createTemplate({ ...form, variables: vars });
+      setTemplates(prev => [...prev, res.data]);
+      setShowCreate(false);
+      setForm(BLANK_TMPL);
+      toast.success('Template saved');
+    } catch { toast.error('Failed to save template'); }
+    finally { setSaving(false); }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h3 className={`text-sm font-semibold ${tk.t1}`}>Message Templates
+            <span className={`ml-2 text-xs font-normal ${tk.tm}`}>{templates.length} total</span>
+          </h3>
+          <p className={`text-xs ${tk.tm} mt-0.5`}>Reusable WhatsApp messages — select when creating campaigns or drip steps</p>
+        </div>
+        <Button size="sm" className="h-8 gap-1 bg-[var(--accent)] hover:bg-[var(--accent)]/90 text-white text-xs flex-shrink-0"
+          onClick={() => setShowCreate(true)}>
+          <Plus className="h-3 w-3" /> New Template
+        </Button>
+      </div>
+
+      {/* Category filter */}
+      <div className="flex gap-1.5 overflow-x-auto no-scrollbar pb-1">
+        {TMPL_CATS.map(c => (
+          <button key={c} onClick={() => setFilterCat(c)}
+            className={`text-xs px-3 py-1.5 rounded-full whitespace-nowrap font-medium transition-colors flex-shrink-0 ${
+              filterCat === c
+                ? 'bg-[var(--accent)] text-white'
+                : `${tk.card} border ${tk.bdr} ${tk.t2} ${tk.hov}`
+            }`}>
+            {TMPL_CAT_META[c]?.label || c}
+          </button>
+        ))}
+      </div>
+
+      {/* Template grid */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+        {filtered.map(t => {
+          const m = TMPL_CAT_META[t.category] || { label: t.category, col: 'text-gray-400', bg: 'bg-gray-400/15' };
+          return (
+            <div key={t.template_id} className={`${tk.card} border ${tk.bdr} rounded-xl p-4 flex flex-col gap-3`}>
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex-1 min-w-0">
+                  <p className={`text-sm font-semibold ${tk.t1} leading-tight`}>{t.name}</p>
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${m.bg} ${m.col} font-medium mt-1 inline-block`}>
+                    {m.label}
+                  </span>
+                </div>
+                <button onClick={() => setPreview(t)}
+                  className={`h-7 w-7 rounded-lg ${tk.hov} flex items-center justify-center flex-shrink-0`}>
+                  <Eye className={`h-3.5 w-3.5 ${tk.tm}`} />
+                </button>
+              </div>
+              <p className={`text-[11px] ${tk.tm} leading-relaxed line-clamp-3`}>{t.body}</p>
+              <div className="flex items-center justify-between mt-auto pt-2 border-t border-[var(--border-color)]">
+                <div className="flex items-center gap-1.5">
+                  {(t.variables || []).map(v => (
+                    <span key={v} className="text-[10px] font-mono px-1.5 py-0.5 rounded-md bg-[var(--bg-primary)] border border-[var(--border-color)] text-[var(--accent)]">
+                      {'{' + v + '}'}
+                    </span>
+                  ))}
+                </div>
+                {t.usage_count > 0 && (
+                  <span className={`text-[10px] ${tk.tm}`}>Used {t.usage_count}×</span>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Preview dialog */}
+      {preview && (
+        <Dialog open={!!preview} onOpenChange={() => setPreview(null)}>
+          <DialogContent className={`${tk.card} border ${tk.bdr} w-[calc(100vw-2rem)] max-w-md`}>
+            <DialogHeader>
+              <div className="flex items-center justify-between">
+                <DialogTitle className={tk.t1}>{preview.name}</DialogTitle>
+                <span className={`text-[10px] px-2 py-0.5 rounded-full ${TMPL_CAT_META[preview.category]?.bg} ${TMPL_CAT_META[preview.category]?.col} font-medium`}>
+                  {TMPL_CAT_META[preview.category]?.label || preview.category}
+                </span>
+              </div>
+            </DialogHeader>
+            {/* WhatsApp bubble mock */}
+            <div className="bg-[#0f1117] rounded-xl p-4 my-2">
+              <div className="bg-[#1f5c37] rounded-2xl rounded-tl-sm px-4 py-3 max-w-[90%]">
+                <p className="text-white text-sm leading-relaxed whitespace-pre-wrap">
+                  {preview.body
+                    .replace('{name}', 'Ramesh')
+                    .replace('{school_name}', 'Delhi Public School')}
+                </p>
+                <p className="text-white/50 text-[10px] text-right mt-1.5">12:34 PM ✓✓</p>
+              </div>
+            </div>
+            <p className={`text-[11px] ${tk.tm}`}>Variables auto-filled with sample data for preview</p>
+            <DialogFooter>
+              <Button variant="outline" size="sm" className={`border-[var(--border-color)] ${tk.t2}`}
+                onClick={() => setPreview(null)}>Close</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {/* Create dialog */}
+      <Dialog open={showCreate} onOpenChange={setShowCreate}>
+        <DialogContent className={`${tk.card} border ${tk.bdr} w-[calc(100vw-2rem)] max-w-lg`}>
+          <DialogHeader>
+            <DialogTitle className={tk.t1}>New Message Template</DialogTitle>
+            <DialogDescription className={tk.tm}>Reusable WhatsApp message for campaigns and drip sequences</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-1">
+            <div>
+              <Label className={`${tk.t2} text-xs mb-1.5 block`}>Template Name</Label>
+              <Input className={`h-10 ${tk.inp}`} placeholder="e.g. Diwali Special Offer"
+                value={form.name} onChange={e => setForm(p => ({ ...p, name: e.target.value }))} />
+            </div>
+            <div>
+              <Label className={`${tk.t2} text-xs mb-1.5 block`}>Category</Label>
+              <div className="flex flex-wrap gap-1.5">
+                {Object.entries(TMPL_CAT_META).map(([k, m]) => (
+                  <button key={k} onClick={() => setForm(p => ({ ...p, category: k }))}
+                    className={`text-xs px-3 py-1.5 rounded-full font-medium border-2 transition-all ${
+                      form.category === k
+                        ? 'border-[var(--accent)] bg-[var(--accent)]/10 text-[var(--accent)]'
+                        : `border-[var(--border-color)] ${tk.t2}`
+                    }`}>
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <Label className={`${tk.t2} text-xs mb-1.5 block`}>Message Body</Label>
+              <textarea rows={6} className={`w-full rounded-xl border px-3 py-2.5 text-xs resize-none ${tk.inp}`}
+                placeholder="Write your WhatsApp message. Use {name} for contact's name, {school_name} for school."
+                value={form.body} onChange={e => setForm(p => ({ ...p, body: e.target.value }))} />
+              <p className={`text-[11px] ${tk.tm} mt-1`}>
+                {form.body.length} chars · <span className="font-mono text-[var(--accent)]">{'{name}'}</span> + <span className="font-mono text-[var(--accent)]">{'{school_name}'}</span>
+              </p>
+            </div>
+          </div>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" size="sm" className={`border-[var(--border-color)] ${tk.t2}`}
+              onClick={() => setShowCreate(false)}>Cancel</Button>
+            <Button size="sm" className="bg-[var(--accent)] hover:bg-[var(--accent)]/90 text-white"
+              onClick={create} disabled={saving}>{saving ? 'Saving…' : 'Save Template'}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Tab 6 — Analytics
+// ══════════════════════════════════════════════════════════════════════════════
+function AnalyticsTab({ tk, analytics, campaigns }) {
+  if (!analytics) {
+    return (
+      <div className={`${tk.card} border ${tk.bdr} rounded-xl py-16 text-center`}>
+        <RefreshCw className={`h-8 w-8 ${tk.tm} mx-auto mb-3 animate-spin`} />
+        <p className={`text-sm ${tk.t2}`}>Loading analytics…</p>
+      </div>
+    );
+  }
+
+  const { messages, drips, greetings, by_type = {} } = analytics;
+  const totalByType = Object.values(by_type).reduce((s, v) => s + v, 0);
+
+  const TYPE_META = {
+    campaign:   { label: 'Campaigns',  col: 'bg-purple-500', pct_col: 'text-purple-500' },
+    drip:       { label: 'Drip Steps', col: 'bg-blue-500',   pct_col: 'text-blue-500' },
+    greeting:   { label: 'Greetings',  col: 'bg-pink-500',   pct_col: 'text-pink-500' },
+    other:      { label: 'Other',      col: 'bg-gray-400',   pct_col: 'text-gray-400' },
+  };
+
+  const kpis = [
+    { label: 'Total Queued',        value: messages.total,   icon: Inbox,      col: 'text-blue-500',   bg: 'bg-blue-500/10' },
+    { label: 'Messages Sent',       value: messages.sent,    icon: Send,       col: 'text-green-500',  bg: 'bg-green-500/10' },
+    { label: 'Pending / In Queue',  value: messages.pending, icon: Clock,      col: 'text-orange-500', bg: 'bg-orange-500/10' },
+    { label: 'Failed',              value: messages.failed,  icon: AlertCircle,col: 'text-red-400',    bg: 'bg-red-400/10' },
+    { label: 'Active Drip Leads',   value: drips.active,     icon: Zap,        col: 'text-yellow-500', bg: 'bg-yellow-500/10' },
+    { label: 'Greetings Sent',      value: greetings.total_sent, icon: Gift,   col: 'text-pink-500',   bg: 'bg-pink-500/10' },
+  ];
+
+  return (
+    <div className="space-y-5">
+      {/* KPI grid */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+        {kpis.map(k => {
+          const Icon = k.icon;
+          return (
+            <div key={k.label} className={`${tk.card} border ${tk.bdr} rounded-xl p-4`}>
+              <div className={`w-8 h-8 rounded-lg ${k.bg} flex items-center justify-center mb-3`}>
+                <Icon className={`h-4 w-4 ${k.col}`} />
+              </div>
+              <p className={`text-xl font-bold ${tk.t1} leading-none`}>{(k.value || 0).toLocaleString('en-IN')}</p>
+              <p className={`text-[11px] ${tk.tm} mt-1 leading-tight`}>{k.label}</p>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* Message breakdown by type */}
+        <div className={`${tk.card} border ${tk.bdr} rounded-xl p-4`}>
+          <div className="flex items-center gap-2 mb-4">
+            <PieChart className={`h-4 w-4 ${tk.tm}`} />
+            <h3 className={`text-sm font-semibold ${tk.t1}`}>Messages by Channel</h3>
+          </div>
+          {totalByType === 0 ? (
+            <p className={`text-xs ${tk.tm} py-4 text-center`}>No messages queued yet</p>
+          ) : (
+            <div className="space-y-3">
+              {Object.entries(by_type).map(([type, count]) => {
+                const m = TYPE_META[type] || { label: type, col: 'bg-gray-400', pct_col: 'text-gray-400' };
+                const pctVal = Math.round((count / totalByType) * 100);
+                return (
+                  <div key={type}>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className={`text-xs font-medium ${tk.t2}`}>{m.label}</span>
+                      <span className={`text-xs font-bold ${m.pct_col}`}>{count.toLocaleString('en-IN')} · {pctVal}%</span>
+                    </div>
+                    <div className={`h-2 rounded-full bg-[var(--bg-primary)]`}>
+                      <div className={`h-2 rounded-full ${m.col} transition-all`} style={{ width: `${pctVal}%` }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* Campaign performance */}
+        <div className={`${tk.card} border ${tk.bdr} rounded-xl`}>
+          <div className={`flex items-center gap-2 px-4 py-3 border-b ${tk.bdr}`}>
+            <Target className={`h-4 w-4 ${tk.tm}`} />
+            <h3 className={`text-sm font-semibold ${tk.t1}`}>Campaign Performance</h3>
+          </div>
+          {campaigns.length === 0 ? (
+            <p className={`text-xs ${tk.tm} p-4 text-center`}>No campaigns yet</p>
+          ) : (
+            <div className={`divide-y divide-[var(--border-color)]`}>
+              {campaigns.slice(0, 6).map(c => (
+                <div key={c.id} className="px-4 py-3 flex items-center gap-3">
+                  <div className="flex-1 min-w-0">
+                    <p className={`text-xs font-medium ${tk.t1} truncate`}>{c.name}</p>
+                    <p className={`text-[11px] ${tk.tm} mt-0.5`}>{c.audience_count} contacts · {c.created_at}</p>
+                  </div>
+                  <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                    <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${STATUS_CHIP[c.status] || 'bg-gray-500/15 text-gray-400'}`}>
+                      {c.status}
+                    </span>
+                    {c.stats.sent > 0 && (
+                      <span className={`text-[10px] ${tk.tm}`}>{c.stats.sent} sent</span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Drip funnel */}
+      <div className={`${tk.card} border ${tk.bdr} rounded-xl p-4`}>
+        <div className="flex items-center gap-2 mb-4">
+          <Zap className={`h-4 w-4 ${tk.tm}`} />
+          <h3 className={`text-sm font-semibold ${tk.t1}`}>Drip Sequence Funnel</h3>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          {[
+            { label: 'Active Enrollments',   value: drips.active,     col: 'text-blue-500',   bg: 'bg-blue-500/10' },
+            { label: 'Completed',            value: drips.completed,  col: 'text-green-500',  bg: 'bg-green-500/10' },
+            { label: 'Greetings Sent',       value: greetings.total_sent, col: 'text-pink-500', bg: 'bg-pink-500/10' },
+            { label: 'Total WA Messages',    value: messages.total,   col: 'text-purple-500', bg: 'bg-purple-500/10' },
+          ].map(s => (
+            <div key={s.label} className={`${s.bg} rounded-xl p-3.5 text-center`}>
+              <p className={`text-2xl font-bold ${s.col}`}>{(s.value || 0).toLocaleString('en-IN')}</p>
+              <p className={`text-[11px] ${tk.tm} mt-1 leading-tight`}>{s.label}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Tab 7 — WhatsApp Setup
 // ══════════════════════════════════════════════════════════════════════════════
 function WhatsAppSetupTab({ tk, waConnected, setWaConnected }) {
   const [form, setForm] = useState({ phone_id: '', token: '', verify_token: '' });
@@ -1243,38 +1575,33 @@ function WhatsAppSetupTab({ tk, waConnected, setWaConnected }) {
         </div>
       </div>
 
-      {/* Templates list */}
-      <div className={`${tk.card} border ${tk.bdr} rounded-xl`}>
-        <div className={`flex items-center justify-between px-4 py-3 border-b ${tk.bdr}`}>
-          <div className="flex items-center gap-2">
-            <MessageSquare className={`h-4 w-4 ${tk.tm}`} />
-            <span className={`text-sm font-semibold ${tk.t1}`}>Message Templates</span>
-            <span className="text-[11px] px-2 py-0.5 rounded-full bg-green-500/15 text-green-500 font-medium">
-              {MOCK_TEMPLATES.filter(t => t.status === 'APPROVED').length} approved
-            </span>
-          </div>
-          <Button size="sm" variant="outline" className={`h-7 gap-1 text-xs border-[var(--border-color)] ${tk.t2}`}
-            onClick={() => toast.info('Sync requires WABA connection')}>
-            <RefreshCw className="h-3 w-3" /> Sync from Meta
-          </Button>
+      {/* Expert marketing plan summary */}
+      <div className={`${tk.card} border ${tk.bdr} rounded-xl p-4`}>
+        <div className="flex items-center gap-2 mb-4">
+          <Target className={`h-4 w-4 ${tk.tm}`} />
+          <h3 className={`text-sm font-semibold ${tk.t1}`}>WhatsApp Marketing Blueprint</h3>
         </div>
-        <div className={`divide-y divide-[var(--border-color)]`}>
-          {MOCK_TEMPLATES.map(t => (
-            <div key={t.name} className="flex items-center gap-3 px-4 py-3">
-              <div className="w-7 h-7 rounded-lg bg-[var(--accent)]/10 flex items-center justify-center flex-shrink-0">
-                <MessageSquare className="h-3.5 w-3.5 text-[var(--accent)]" />
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {[
+            { stage: '1. Awareness',      action: 'First-touch intro messages to new leads',           icon: Users,       col: 'text-blue-500',   bg: 'bg-blue-500/10',   link: 'Drip Sequences (lead_created)' },
+            { stage: '2. Interest',        action: 'Catalogue share + product showcase campaigns',      icon: MessageSquare, col: 'text-purple-500', bg: 'bg-purple-500/10', link: 'Campaigns → Catalogue templates' },
+            { stage: '3. Consideration',   action: 'Quotation follow-up sequence (2→5→10→14 days)',    icon: FileText,    col: 'text-orange-500', bg: 'bg-orange-500/10', link: 'Drip Sequences (quotation_sent)' },
+            { stage: '4. Decision',        action: 'Bulk order discount + urgency offer',              icon: Target,      col: 'text-green-500',  bg: 'bg-green-500/10',  link: 'Campaigns → Offer templates' },
+            { stage: '5. Retention',       action: 'Festival greetings + reorder reminders',           icon: Gift,        col: 'text-pink-500',   bg: 'bg-pink-500/10',   link: 'Greetings + Seasonal campaigns' },
+            { stage: '6. Re-engagement',   action: 'Cold lead revival after 30 days of silence',      icon: RefreshCw,   col: 'text-red-400',    bg: 'bg-red-400/10',    link: 'Drip Sequences (manual)' },
+          ].map(s => {
+            const Icon = s.icon;
+            return (
+              <div key={s.stage} className={`${s.bg} rounded-xl p-3.5`}>
+                <div className="flex items-center gap-2 mb-2">
+                  <Icon className={`h-4 w-4 ${s.col}`} />
+                  <span className={`text-xs font-bold ${s.col}`}>{s.stage}</span>
+                </div>
+                <p className={`text-xs ${tk.t2} leading-relaxed mb-1.5`}>{s.action}</p>
+                <p className={`text-[10px] ${tk.tm} font-medium`}>→ {s.link}</p>
               </div>
-              <div className="flex-1 min-w-0">
-                <p className={`text-sm font-medium ${tk.t1} font-mono`}>{t.name}</p>
-                <p className={`text-[11px] ${tk.tm}`}>{t.category} · {t.lang}</p>
-              </div>
-              <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${
-                t.status === 'APPROVED' ? 'bg-green-500/15 text-green-500'
-                : t.status === 'PENDING' ? 'bg-yellow-500/15 text-yellow-600'
-                : 'bg-red-500/15 text-red-400'
-              }`}>{t.status}</span>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     </div>
@@ -1287,8 +1614,10 @@ function WhatsAppSetupTab({ tk, waConnected, setWaConnected }) {
 const TABS = [
   { key: 'overview',   label: 'Overview',   Icon: BarChart2 },
   { key: 'campaigns',  label: 'Campaigns',  Icon: Megaphone },
+  { key: 'templates',  label: 'Templates',  Icon: FileText },
   { key: 'greetings',  label: 'Greetings',  Icon: Gift },
   { key: 'drips',      label: 'Drip',       Icon: Zap },
+  { key: 'analytics',  label: 'Analytics',  Icon: PieChart },
   { key: 'setup',      label: 'WhatsApp',   Icon: Smartphone },
 ];
 
@@ -1298,17 +1627,22 @@ export default function MarketingHub() {
 
   const [tab, setTab] = useState('overview');
   const [waConnected, setWaConnected] = useState(false);
-  const [campaigns, setCampaigns] = useState(INIT_CAMPAIGNS);
+  const [campaigns, setCampaigns] = useState([]);
+  const [templates, setTemplates] = useState([]);
   const [drips, setDrips] = useState([]);
   const [greetings, setGreetings] = useState([]);
   const [roles, setRoles] = useState([]);
   const [contacts, setContacts] = useState([]);
+  const [analytics, setAnalytics] = useState(null);
 
   useEffect(() => {
     contactRolesApi.getAll().then(r => setRoles(r.data || [])).catch(() => {});
     contactsApi.getAll().then(r => setContacts(r.data || [])).catch(() => {});
     dripApi.getAll().then(r => setDrips((r.data || []).map(mapSeq))).catch(() => {});
     greetingsApi.getAll().then(r => setGreetings((r.data || []).map(mapRule))).catch(() => {});
+    waApi.getCampaigns().then(r => setCampaigns((r.data || []).map(mapCampaign))).catch(() => {});
+    waApi.getTemplates().then(r => setTemplates(r.data || [])).catch(() => {});
+    waApi.getAnalytics().then(r => setAnalytics(r.data)).catch(() => {});
   }, []);
 
   return (
@@ -1346,10 +1680,12 @@ export default function MarketingHub() {
           </div>
 
           {/* Content */}
-          {tab === 'overview'  && <OverviewTab  tk={tk} campaigns={campaigns} greetings={greetings} drips={drips} waConnected={waConnected} setTab={setTab} />}
-          {tab === 'campaigns' && <CampaignsTab tk={tk} campaigns={campaigns} setCampaigns={setCampaigns} roles={roles} contacts={contacts} />}
-          {tab === 'greetings' && <GreetingsTab tk={tk} greetings={greetings} setGreetings={setGreetings} />}
-          {tab === 'drips'     && <DripsTab     tk={tk} drips={drips} setDrips={setDrips} />}
+          {tab === 'overview'  && <OverviewTab   tk={tk} campaigns={campaigns} greetings={greetings} drips={drips} waConnected={waConnected} setTab={setTab} analytics={analytics} />}
+          {tab === 'campaigns' && <CampaignsTab  tk={tk} campaigns={campaigns} setCampaigns={setCampaigns} roles={roles} contacts={contacts} templates={templates} />}
+          {tab === 'templates' && <TemplatesTab  tk={tk} templates={templates} setTemplates={setTemplates} />}
+          {tab === 'greetings' && <GreetingsTab  tk={tk} greetings={greetings} setGreetings={setGreetings} />}
+          {tab === 'drips'     && <DripsTab      tk={tk} drips={drips} setDrips={setDrips} />}
+          {tab === 'analytics' && <AnalyticsTab  tk={tk} analytics={analytics} campaigns={campaigns} />}
           {tab === 'setup'     && <WhatsAppSetupTab tk={tk} waConnected={waConnected} setWaConnected={setWaConnected} />}
         </div>
       </div>

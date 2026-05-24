@@ -226,6 +226,21 @@ export const greetingRules = {
   logs: (params) => API.get('/greetings/logs', { params }),
 };
 
+// WhatsApp Marketing
+export const whatsApp = {
+  getTemplates:   ()       => API.get('/whatsapp/templates'),
+  createTemplate: (data)   => API.post('/whatsapp/templates', data),
+  updateTemplate: (id, d)  => API.put(`/whatsapp/templates/${id}`, d),
+  deleteTemplate: (id)     => API.delete(`/whatsapp/templates/${id}`),
+  getCampaigns:   ()       => API.get('/whatsapp/campaigns'),
+  createCampaign: (data)   => API.post('/whatsapp/campaigns', data),
+  updateCampaign: (id, d)  => API.put(`/whatsapp/campaigns/${id}`, d),
+  deleteCampaign: (id)     => API.delete(`/whatsapp/campaigns/${id}`),
+  launchCampaign: (id)     => API.post(`/whatsapp/campaigns/${id}/launch`),
+  getAnalytics:   ()       => API.get('/whatsapp/analytics'),
+  getQueue:       (params) => API.get('/whatsapp/queue', { params }),
+};
+
 // Drip Sequences
 export const dripSequences = {
   getAll: () => API.get('/drip/sequences'),
