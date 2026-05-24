@@ -38,6 +38,7 @@ from routes.greeting_routes import router as greeting_router
 from routes.whatsapp_routes import router as whatsapp_router
 from routes.email_routes import router as email_router
 from routes.demo_routes import router as demo_router
+from scheduler import start_scheduler
 
 # ── App instance ───────────────────────────────────────────────────────────────
 app = FastAPI(title="SmartShape Pro API", version="1.0.0")
@@ -416,6 +417,10 @@ async def startup():
     # Start auto-reminder background task
     asyncio.create_task(run_auto_reminders())
     logging.info("Auto-reminder cron started (runs every hour)")
+
+    # Start marketing automation scheduler
+    await start_scheduler()
+    logging.info("Marketing automation scheduler started (email + WA + drip + greetings)")
 
 
 @app.on_event("shutdown")

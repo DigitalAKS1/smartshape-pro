@@ -1694,19 +1694,36 @@ function AnalyticsTab({ tk, analytics, campaigns }) {
 // Tab 7 — WhatsApp Setup
 // ══════════════════════════════════════════════════════════════════════════════
 function WhatsAppSetupTab({ tk, waConnected, setWaConnected }) {
-  const [form, setForm] = useState({ phone_id: '', token: '', verify_token: '' });
-  const [saving, setSaving] = useState(false);
-  const WEBHOOK = 'https://app.smartshape.in/api/whatsapp/webhook';
+  const PROVIDER_OPTS = [
+    { value: 'none',      label: 'Not Connected',      desc: 'Campaigns queue but are not sent' },
+    { value: 'meta',      label: 'Meta Cloud API',      desc: 'Official WABA — requires Facebook Business approval' },
+    { value: '360dialog', label: '360dialog',           desc: 'Popular WABA BSP — fast approval, INR billing available' },
+    { value: 'gupshup',   label: 'Gupshup',            desc: 'India\'s largest BSP — easy onboarding' },
+  ];
 
-  async function connect() {
-    if (!form.phone_id || !form.token) { toast.error('Phone Number ID and Access Token are required'); return; }
+  const [form, setForm] = useState({ provider: 'none', api_key: '', from_number: '', phone_number_id: '', app_name: 'SmartShape' });
+  const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    waApi.getProvider().then(r => {
+      const d = r.data || {};
+      setForm({ provider: d.provider || 'none', api_key: '', from_number: d.from_number || '', phone_number_id: d.phone_number_id || '', app_name: d.app_name || 'SmartShape' });
+      setWaConnected(d.connected || false);
+    }).catch(() => {}).finally(() => setLoading(false));
+  }, []); // eslint-disable-line
+
+  async function save() {
+    if (form.provider !== 'none' && !form.api_key) { toast.error('API key is required'); return; }
     setSaving(true);
-    await new Promise(r => setTimeout(r, 1200));
-    setWaConnected(true);
-    setSaving(false);
-    toast.success('WhatsApp connected! (Backend integration pending)');
+    try {
+      const r = await waApi.saveProvider(form);
+      setWaConnected(r.data?.connected || false);
+      toast.success(form.provider === 'none' ? 'Provider cleared' : 'WhatsApp provider saved!');
+    } catch { toast.error('Failed to save'); } finally { setSaving(false); }
   }
 
+  const WEBHOOK = 'https://app.smartshape.in/api/whatsapp/webhook';
   function copyWebhook() { navigator.clipboard.writeText(WEBHOOK); toast.success('Webhook URL copied'); }
 
   return (
@@ -1727,34 +1744,68 @@ function WhatsAppSetupTab({ tk, waConnected, setWaConnected }) {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+      {loading && <p className={`text-sm ${tk.tm} text-center py-4`}>Loading provider config…</p>}
+      {!loading && <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         {/* Credentials form */}
         <div className={`${tk.card} border ${tk.bdr} rounded-xl p-4 space-y-4`}>
           <div className="flex items-center gap-2">
             <Key className={`h-4 w-4 ${tk.tm}`} />
-            <h3 className={`text-sm font-semibold ${tk.t1}`}>API Credentials</h3>
+            <h3 className={`text-sm font-semibold ${tk.t1}`}>Provider & Credentials</h3>
           </div>
+
+          {/* Provider selector */}
           <div>
-            <Label className={`${tk.t2} text-xs mb-1.5 block`}>Phone Number ID</Label>
-            <Input className={`h-10 ${tk.inp}`} placeholder="From Meta Business Manager"
-              value={form.phone_id} onChange={e => setForm(p => ({ ...p, phone_id: e.target.value }))} />
-            <p className={`text-[11px] ${tk.tm} mt-1`}>WhatsApp → API Setup → Phone Number ID</p>
+            <Label className={`${tk.t2} text-xs mb-1.5 block`}>WhatsApp Provider</Label>
+            <div className="grid grid-cols-2 gap-2">
+              {PROVIDER_OPTS.map(opt => (
+                <button key={opt.value} onClick={() => setForm(p => ({ ...p, provider: opt.value }))}
+                  className={`text-left px-3 py-2.5 rounded-lg border text-xs transition-all ${
+                    form.provider === opt.value
+                      ? 'border-[var(--accent)] bg-[var(--accent)]/10 text-[var(--accent)]'
+                      : `${tk.bdr} ${tk.hov} ${tk.t2}`
+                  }`}>
+                  <p className="font-semibold">{opt.label}</p>
+                  <p className={`text-[10px] mt-0.5 ${form.provider === opt.value ? 'text-[var(--accent)]/70' : tk.tm}`}>{opt.desc}</p>
+                </button>
+              ))}
+            </div>
           </div>
-          <div>
-            <Label className={`${tk.t2} text-xs mb-1.5 block`}>Access Token</Label>
-            <Input type="password" className={`h-10 ${tk.inp}`} placeholder="Meta system user access token"
-              value={form.token} onChange={e => setForm(p => ({ ...p, token: e.target.value }))} />
-            <p className={`text-[11px] ${tk.tm} mt-1`}>Create a system user in Meta Business Manager → Tokens</p>
-          </div>
-          <div>
-            <Label className={`${tk.t2} text-xs mb-1.5 block`}>Webhook Verify Token</Label>
-            <Input className={`h-10 ${tk.inp}`} placeholder="Any secret string you choose"
-              value={form.verify_token} onChange={e => setForm(p => ({ ...p, verify_token: e.target.value }))} />
-            <p className={`text-[11px] ${tk.tm} mt-1`}>Paste the same string in Meta Webhook verification</p>
-          </div>
+
+          {form.provider !== 'none' && <>
+            <div>
+              <Label className={`${tk.t2} text-xs mb-1.5 block`}>API Key / Access Token</Label>
+              <Input type="password" className={`h-10 ${tk.inp}`} placeholder="Paste your API key here"
+                value={form.api_key} onChange={e => setForm(p => ({ ...p, api_key: e.target.value }))} />
+              <p className={`text-[11px] ${tk.tm} mt-1`}>
+                {form.provider === 'meta' && 'Meta system user token from Meta Business Manager → Tokens'}
+                {form.provider === '360dialog' && '360dialog API key from your 360dialog partner hub'}
+                {form.provider === 'gupshup' && 'Gupshup API key from your Gupshup account'}
+              </p>
+            </div>
+            {form.provider === 'meta' && (
+              <div>
+                <Label className={`${tk.t2} text-xs mb-1.5 block`}>Phone Number ID</Label>
+                <Input className={`h-10 ${tk.inp}`} placeholder="From Meta Business Manager → API Setup"
+                  value={form.phone_number_id} onChange={e => setForm(p => ({ ...p, phone_number_id: e.target.value }))} />
+              </div>
+            )}
+            {(form.provider === 'gupshup' || form.provider === '360dialog') && (
+              <div>
+                <Label className={`${tk.t2} text-xs mb-1.5 block`}>From Phone Number (with country code)</Label>
+                <Input className={`h-10 ${tk.inp}`} placeholder="+919876543210"
+                  value={form.from_number} onChange={e => setForm(p => ({ ...p, from_number: e.target.value }))} />
+              </div>
+            )}
+            <div>
+              <Label className={`${tk.t2} text-xs mb-1.5 block`}>Sender Name / App Name</Label>
+              <Input className={`h-10 ${tk.inp}`} placeholder="SmartShape"
+                value={form.app_name} onChange={e => setForm(p => ({ ...p, app_name: e.target.value }))} />
+            </div>
+          </>}
+
           <Button className="w-full h-10 bg-[var(--accent)] hover:bg-[var(--accent)]/90 text-white"
-            onClick={connect} disabled={saving}>
-            {saving ? 'Connecting...' : waConnected ? 'Update Credentials' : 'Connect WhatsApp'}
+            onClick={save} disabled={saving}>
+            {saving ? 'Saving…' : form.provider === 'none' ? 'Save (Disconnect)' : waConnected ? 'Update Provider' : 'Save & Connect'}
           </Button>
         </div>
 
@@ -1800,7 +1851,7 @@ function WhatsAppSetupTab({ tk, waConnected, setWaConnected }) {
             </ol>
           </div>
         </div>
-      </div>
+      </div>}
 
       {/* Expert marketing plan summary */}
       <div className={`${tk.card} border ${tk.bdr} rounded-xl p-4`}>

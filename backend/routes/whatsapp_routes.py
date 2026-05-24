@@ -508,3 +508,39 @@ async def get_queue(request: Request):
     if params.get("type"):
         filt["type"] = params["type"]
     return await db.whatsapp_scheduled.find(filt, {"_id": 0}).sort("queued_at", -1).to_list(300)
+
+
+# ── WhatsApp Provider Settings ─────────────────────────────────────────────────
+
+@router.get("/whatsapp/provider")
+async def get_wa_provider(request: Request):
+    await get_current_user(request)
+    cfg = await db.settings.find_one({"type": "whatsapp_provider"}, {"_id": 0})
+    if not cfg:
+        return {"provider": "none", "api_key": "", "from_number": "", "phone_number_id": "", "app_name": "SmartShape", "connected": False}
+    safe = {k: v for k, v in cfg.items() if k != "api_key"}
+    safe["api_key"] = "••••" + cfg.get("api_key", "")[-4:] if cfg.get("api_key") else ""
+    safe["connected"] = bool(cfg.get("api_key") and cfg.get("provider") not in (None, "none", ""))
+    return safe
+
+
+@router.post("/whatsapp/provider")
+async def save_wa_provider(request: Request):
+    await get_current_user(request)
+    body = await request.json()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    update = {
+        "type": "whatsapp_provider",
+        "provider": body.get("provider", "none"),
+        "api_key": body.get("api_key", ""),
+        "from_number": body.get("from_number", ""),
+        "phone_number_id": body.get("phone_number_id", ""),
+        "app_name": body.get("app_name", "SmartShape"),
+        "updated_at": now_iso,
+    }
+    await db.settings.update_one(
+        {"type": "whatsapp_provider"},
+        {"$set": update},
+        upsert=True,
+    )
+    return {"ok": True, "provider": update["provider"], "connected": bool(update["api_key"] and update["provider"] not in ("none", ""))}

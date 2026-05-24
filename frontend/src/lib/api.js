@@ -247,6 +247,8 @@ export const whatsApp = {
   launchCampaign: (id)     => API.post(`/whatsapp/campaigns/${id}/launch`),
   getAnalytics:   ()       => API.get('/whatsapp/analytics'),
   getQueue:       (params) => API.get('/whatsapp/queue', { params }),
+  getProvider:    ()       => API.get('/whatsapp/provider'),
+  saveProvider:   (data)   => API.post('/whatsapp/provider', data),
 };
 
 // Email Marketing
