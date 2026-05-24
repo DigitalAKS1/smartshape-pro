@@ -13,7 +13,7 @@ docker-compose down
 
 echo "==> Building fresh images..."
 docker-compose build --no-cache \
-  --build-arg REACT_APP_BACKEND_URL="${REACT_APP_BACKEND_URL:-https://yourdomain.com}"
+  --build-arg REACT_APP_BACKEND_URL="${REACT_APP_BACKEND_URL:-https://app.smartshape.in}"
 
 echo "==> Starting containers..."
 docker-compose up -d

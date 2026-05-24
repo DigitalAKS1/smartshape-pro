@@ -21,7 +21,7 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        REACT_APP_BACKEND_URL: ${REACT_APP_BACKEND_URL}
+        REACT_APP_BACKEND_URL: ${REACT_APP_BACKEND_URL:-https://app.smartshape.in}
     container_name: smartshape-frontend
     ports:
       - "3000:80"
