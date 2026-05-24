@@ -1,5 +1,5 @@
 /* SmartShape Pro Service Worker v2 — offline-first shell + background sync */
-const CACHE_VERSION = 'ssp-v2';
+const CACHE_VERSION = 'ssp-v3';
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const API_CACHE = `${CACHE_VERSION}-api`;
 const OFFLINE_URL = '/offline.html';
