@@ -147,3 +147,25 @@ html, body {
 /* ── Global transitions ──────────────────────────────────────────── */
 a { transition: color 0.15s ease; }
 button { transition: background 0.15s ease, opacity 0.15s ease; }
+
+/* ── Marketing Hub — staggered page-load animation ───────────────── */
+@keyframes mh-fade-up {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.mh-fade { opacity: 0; animation: mh-fade-up 0.4s cubic-bezier(0.22,1,0.36,1) forwards; }
+.mh-fade-1 { animation-delay: 0.04s; }
+.mh-fade-2 { animation-delay: 0.09s; }
+.mh-fade-3 { animation-delay: 0.14s; }
+.mh-fade-4 { animation-delay: 0.19s; }
+.mh-fade-5 { animation-delay: 0.24s; }
+.mh-fade-6 { animation-delay: 0.30s; }
+
+/* ── Marketing Hub — card hover lift ─────────────────────────────── */
+.mh-card-lift {
+  transition: box-shadow 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
+}
+.mh-card-lift:hover {
+  box-shadow: 0 4px 20px rgba(79,70,229,0.08), 0 1px 4px rgba(15,23,42,0.06);
+  transform: translateY(-1px);
+}

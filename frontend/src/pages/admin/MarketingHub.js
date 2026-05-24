@@ -288,106 +288,139 @@ function OverviewTab({ tk, campaigns, greetings, drips, waConnected, setTab, ana
 
       {/* KPI grid */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-        {kpis.map(k => {
-          const Icon = k.icon;
+        {kpis.map((k, i) => {
+          const KIcon = k.icon;
           return (
-            <div key={k.label} className={`${tk.card} border ${tk.bdr} rounded-xl p-4`}>
-              <div className={`w-8 h-8 rounded-lg ${k.bg} flex items-center justify-center mb-3`}>
-                <Icon className={`h-4 w-4 ${k.col}`} />
+            <div key={k.label}
+              className={`${tk.card} border ${tk.bdr} rounded-2xl p-4 relative overflow-hidden mh-card-lift mh-fade mh-fade-${Math.min(i + 1, 6)}`}>
+              <div className={`absolute top-3 right-3 w-8 h-8 rounded-xl ${k.bg} flex items-center justify-center`}>
+                <KIcon className={`h-4 w-4 ${k.col}`} />
               </div>
-              <p className={`text-xl font-bold ${tk.t1} leading-none`}>{k.value}</p>
-              <p className={`text-[11px] ${tk.tm} mt-1 leading-tight`}>{k.label}</p>
+              <p className={`text-[11px] font-semibold uppercase tracking-widest ${tk.tm} mb-2`}>{k.label}</p>
+              <p className={`text-2xl font-bold ${tk.t1} leading-none tracking-tight`}>{k.value}</p>
             </div>
           );
         })}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mh-fade mh-fade-5">
         {/* Recent Campaigns */}
-        <div className={`${tk.card} border ${tk.bdr} rounded-xl`}>
+        <div className={`${tk.card} border ${tk.bdr} rounded-2xl overflow-hidden`}>
           <div className={`flex items-center justify-between px-4 py-3 border-b ${tk.bdr}`}>
             <div className="flex items-center gap-2">
-              <Megaphone className={`h-4 w-4 ${tk.tm}`} />
-              <span className={`text-sm font-semibold ${tk.t1}`}>Recent Campaigns</span>
+              <div className="w-6 h-6 rounded-lg bg-purple-500/10 flex items-center justify-center">
+                <Megaphone className="h-3.5 w-3.5 text-purple-500" />
+              </div>
+              <span className={`text-sm font-bold ${tk.t1}`}>Recent Campaigns</span>
             </div>
             <button onClick={() => setTab('campaigns')}
-              className={`text-[11px] ${tk.tm} hover:text-[var(--accent)] flex items-center gap-0.5 transition-colors`}>
+              className="text-[11px] text-indigo-500 hover:text-indigo-700 flex items-center gap-0.5 font-semibold transition-colors">
               View all <ChevronRight className="h-3 w-3" />
             </button>
           </div>
-          <div className={`divide-y divide-[var(--border-color)]`}>
+          <div className={`divide-y divide-[var(--border-color)]/60`}>
             {campaigns.slice(0, 3).map(c => (
-              <div key={c.id} className="px-4 py-3 flex items-center gap-3">
+              <div key={c.id} className={`px-4 py-3 flex items-center gap-3 ${tk.hov} transition-colors`}>
+                <div className={`w-1 h-8 rounded-full flex-shrink-0 ${
+                  c.status === 'completed' ? 'bg-emerald-500' :
+                  c.status === 'queued'    ? 'bg-indigo-500'  : 'bg-slate-200'
+                }`} />
                 <div className="flex-1 min-w-0">
-                  <p className={`text-sm font-medium ${tk.t1} truncate`}>{c.name}</p>
+                  <p className={`text-sm font-semibold ${tk.t1} truncate`}>{c.name}</p>
                   <p className={`text-[11px] ${tk.tm} mt-0.5`}>{c.audience_label} · {c.audience_count} contacts</p>
                 </div>
-                <div className="flex flex-col items-end gap-1.5 flex-shrink-0">
-                  <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${STATUS_CHIP[c.status]}`}>
-                    {c.status.charAt(0).toUpperCase() + c.status.slice(1)}
+                <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                  <span className={`text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-lg ${STATUS_CHIP[c.status]}`}>
+                    {c.status}
                   </span>
-                  {c.status === 'completed' && (
-                    <span className={`text-[10px] ${tk.tm}`}>{pct(c.stats.read, c.stats.sent)}% read</span>
+                  {c.status === 'completed' && pct(c.stats.read, c.stats.sent) !== null && (
+                    <span className="text-[10px] text-emerald-600 font-semibold">{pct(c.stats.read, c.stats.sent)}% read</span>
                   )}
                 </div>
               </div>
             ))}
+            {campaigns.length === 0 && (
+              <div className="px-4 py-8 text-center">
+                <p className={`text-xs ${tk.tm}`}>No campaigns yet — create one above</p>
+              </div>
+            )}
           </div>
         </div>
 
-        {/* Active Greetings */}
-        <div className={`${tk.card} border ${tk.bdr} rounded-xl`}>
+        {/* Auto Greetings */}
+        <div className={`${tk.card} border ${tk.bdr} rounded-2xl overflow-hidden`}>
           <div className={`flex items-center justify-between px-4 py-3 border-b ${tk.bdr}`}>
             <div className="flex items-center gap-2">
-              <Gift className={`h-4 w-4 ${tk.tm}`} />
-              <span className={`text-sm font-semibold ${tk.t1}`}>Auto Greetings</span>
+              <div className="w-6 h-6 rounded-lg bg-amber-500/10 flex items-center justify-center">
+                <Gift className="h-3.5 w-3.5 text-amber-500" />
+              </div>
+              <span className={`text-sm font-bold ${tk.t1}`}>Auto Greetings</span>
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 font-bold">
+                {greetings.filter(g => g.active).length} active
+              </span>
             </div>
             <button onClick={() => setTab('greetings')}
-              className={`text-[11px] ${tk.tm} hover:text-[var(--accent)] flex items-center gap-0.5 transition-colors`}>
+              className="text-[11px] text-indigo-500 hover:text-indigo-700 flex items-center gap-0.5 font-semibold transition-colors">
               Manage <ChevronRight className="h-3 w-3" />
             </button>
           </div>
-          <div className={`divide-y divide-[var(--border-color)]`}>
+          <div className={`divide-y divide-[var(--border-color)]/60`}>
             {greetings.filter(g => g.active).slice(0, 5).map(g => (
-              <div key={g.id} className="px-4 py-3 flex items-center gap-3">
-                <div className={`w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 ${
-                  g.type === 'birthday' ? 'bg-pink-500/15' : 'bg-amber-500/15'
+              <div key={g.id} className={`px-4 py-3 flex items-center gap-3 ${tk.hov} transition-colors`}>
+                <div className={`w-7 h-7 rounded-xl flex items-center justify-center flex-shrink-0 ${
+                  g.type === 'birthday' ? 'bg-pink-500/12' : 'bg-amber-500/12'
                 }`}>
                   {g.type === 'birthday'
                     ? <Star className="h-3.5 w-3.5 text-pink-500" />
                     : <Calendar className="h-3.5 w-3.5 text-amber-500" />}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className={`text-sm font-medium ${tk.t1} truncate`}>{g.name}</p>
-                  <p className={`text-[11px] ${tk.tm}`}>Next: {g.next}</p>
+                  <p className={`text-sm font-semibold ${tk.t1} truncate`}>{g.name}</p>
+                  <p className={`text-[11px] ${tk.tm}`}>{g.next}</p>
                 </div>
-                <div className="w-1.5 h-1.5 rounded-full bg-green-500 flex-shrink-0" />
+                <span className="w-2 h-2 rounded-full bg-emerald-400 flex-shrink-0" />
               </div>
             ))}
           </div>
         </div>
       </div>
 
-      {/* Active Drips */}
-      <div className={`${tk.card} border ${tk.bdr} rounded-xl`}>
+      {/* Active Drip Sequences */}
+      <div className={`${tk.card} border ${tk.bdr} rounded-2xl overflow-hidden mh-fade mh-fade-6`}>
         <div className={`flex items-center justify-between px-4 py-3 border-b ${tk.bdr}`}>
           <div className="flex items-center gap-2">
-            <Zap className={`h-4 w-4 ${tk.tm}`} />
-            <span className={`text-sm font-semibold ${tk.t1}`}>Active Drip Sequences</span>
+            <div className="w-6 h-6 rounded-lg bg-yellow-500/10 flex items-center justify-center">
+              <Zap className="h-3.5 w-3.5 text-yellow-500" />
+            </div>
+            <span className={`text-sm font-bold ${tk.t1}`}>Active Drip Sequences</span>
           </div>
           <button onClick={() => setTab('drips')}
-            className={`text-[11px] ${tk.tm} hover:text-[var(--accent)] flex items-center gap-0.5 transition-colors`}>
+            className="text-[11px] text-indigo-500 hover:text-indigo-700 flex items-center gap-0.5 font-semibold transition-colors">
             View all <ChevronRight className="h-3 w-3" />
           </button>
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-3 divide-y sm:divide-y-0 sm:divide-x divide-[var(--border-color)]">
-          {drips.filter(d => d.active).map(d => (
-            <div key={d.id} className="px-4 py-4">
-              <p className={`text-sm font-semibold ${tk.t1} truncate`}>{d.name}</p>
-              <p className={`text-[11px] ${tk.tm} mt-0.5`}>{d.steps.length} steps · on {d.trigger}</p>
-              <div className="flex items-center gap-3 mt-2">
-                <span className={`text-xs ${tk.t2}`}>{d.enrolled} enrolled</span>
-                <span className={`text-[11px] ${tk.tm}`}>{d.completed} completed</span>
+        <div className="grid grid-cols-1 sm:grid-cols-3 divide-y sm:divide-y-0 sm:divide-x divide-[var(--border-color)]/60">
+          {drips.filter(d => d.active).length === 0 ? (
+            <div className="px-4 py-8 text-center col-span-3">
+              <p className={`text-xs ${tk.tm}`}>No active drip sequences — activate one in the Drip tab</p>
+            </div>
+          ) : drips.filter(d => d.active).map(d => (
+            <div key={d.id} className={`px-4 py-4 ${tk.hov} transition-colors`}>
+              <div className="flex items-center gap-2 mb-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-yellow-500 animate-pulse flex-shrink-0" />
+                <p className={`text-sm font-bold ${tk.t1} truncate`}>{d.name}</p>
+              </div>
+              <p className={`text-[11px] ${tk.tm}`}>{d.steps.length} steps · {d.trigger}</p>
+              <div className="flex items-center gap-3 mt-2.5">
+                <div className="text-center">
+                  <p className={`text-lg font-bold ${tk.t1} leading-none`}>{d.enrolled}</p>
+                  <p className={`text-[10px] ${tk.tm} mt-0.5`}>enrolled</p>
+                </div>
+                <div className="w-px h-8 bg-[var(--border-color)]" />
+                <div className="text-center">
+                  <p className="text-lg font-bold text-emerald-600 leading-none">{d.completed}</p>
+                  <p className={`text-[10px] ${tk.tm} mt-0.5`}>completed</p>
+                </div>
               </div>
             </div>
           ))}
@@ -533,64 +566,85 @@ function CampaignsTab({ tk, campaigns, setCampaigns, roles, contacts, templates,
           <p className={`text-xs ${tk.tm} mt-1`}>Create a campaign to start reaching your contacts via WhatsApp</p>
         </div>
       ) : (
-        <div className="space-y-3">
+        <div className="space-y-2.5">
           {filtered.map(c => {
             const dr = pct(c.stats.delivered, c.stats.sent);
             const rr = pct(c.stats.read, c.stats.sent);
+            const barColor =
+              c.status === 'completed' ? 'bg-emerald-500' :
+              c.status === 'scheduled' ? 'bg-blue-500'    :
+              c.status === 'queued'    ? 'bg-indigo-500'  :
+              c.status === 'running'   ? 'bg-yellow-500'  : 'bg-slate-300';
             return (
-              <div key={c.id} className={`${tk.card} border ${tk.bdr} rounded-xl p-4`}>
-                <div className="flex items-start gap-3">
-                  <div className="w-9 h-9 rounded-xl bg-[var(--accent)]/10 flex items-center justify-center flex-shrink-0">
-                    <Megaphone className="h-4 w-4 text-[var(--accent)]" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <p className={`text-sm font-semibold ${tk.t1}`}>{c.name}</p>
-                      <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${STATUS_CHIP[c.status]}`}>
-                        {c.status.charAt(0).toUpperCase() + c.status.slice(1)}
-                      </span>
+              <div key={c.id}
+                className={`${tk.card} border ${tk.bdr} rounded-2xl overflow-hidden mh-card-lift group`}>
+                <div className="flex">
+                  {/* Left status accent bar */}
+                  <div className={`w-1 flex-shrink-0 ${barColor}`} />
+                  <div className="flex-1 p-4">
+                    <div className="flex items-start gap-3">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap mb-1">
+                          <span className={`text-[10px] uppercase tracking-widest font-bold ${STATUS_CHIP[c.status]} rounded-md px-1.5 py-0.5`}>
+                            {c.status}
+                          </span>
+                          <span className={`text-[10px] ${tk.tm} font-medium`}>
+                            WA · {c.audience_count} contacts
+                          </span>
+                        </div>
+                        <p className={`text-sm font-bold ${tk.t1} leading-snug`}>{c.name}</p>
+                        <p className={`text-[11px] ${tk.tm} mt-0.5`}>
+                          {c.audience_label}
+                          {c.scheduled_at ? ` · Scheduled ${c.scheduled_at}` : c.created_at ? ` · ${c.created_at}` : ''}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-1.5 flex-shrink-0 pt-0.5">
+                        {c.status === 'draft' && (
+                          <Button size="sm"
+                            className="h-7 gap-1 text-xs bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg shadow-sm"
+                            disabled={launching === c.id} onClick={() => launch(c)}>
+                            {launching === c.id
+                              ? <RefreshCw className="h-3 w-3 animate-spin" />
+                              : <Play className="h-3 w-3" />}
+                            {launching === c.id ? '…' : 'Launch'}
+                          </Button>
+                        )}
+                        <button onClick={() => { setPreviewCamp(c); setPreviewContact(0); }}
+                          className={`h-7 w-7 rounded-lg ${tk.hov} flex items-center justify-center`} title="Preview">
+                          <Eye className={`h-3.5 w-3.5 ${tk.tm} group-hover:text-indigo-500 transition-colors`} />
+                        </button>
+                      </div>
                     </div>
-                    <p className={`text-xs ${tk.tm} mt-0.5`}>
-                      {c.audience_label} · {c.audience_count} contacts
-                      {c.scheduled_at && ` · ${c.scheduled_at}`}
-                      {!c.scheduled_at && ` · Created ${c.created_at}`}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-1.5 flex-shrink-0">
-                    {c.status === 'draft' && (
-                      <Button size="sm" variant="outline"
-                        className={`h-7 gap-1 text-xs border-green-500/40 text-green-600 hover:bg-green-500/10`}
-                        disabled={launching === c.id}
-                        onClick={() => launch(c)}>
-                        {launching === c.id
-                          ? <RefreshCw className="h-3 w-3 animate-spin" />
-                          : <Play className="h-3 w-3" />}
-                        {launching === c.id ? 'Launching…' : 'Launch'}
-                      </Button>
+
+                    {(c.status === 'completed' || c.status === 'queued') && (
+                      <div className="mt-3 pt-3 border-t border-[var(--border-color)]/60">
+                        <div className="flex items-center gap-4 text-xs mb-2">
+                          <span>
+                            <span className={`font-bold ${tk.t1}`}>{c.stats.sent}</span>
+                            <span className={`ml-1 ${tk.tm}`}>sent</span>
+                          </span>
+                          {c.stats.delivered > 0 && <span>
+                            <span className="font-bold text-emerald-600">{c.stats.delivered}</span>
+                            <span className={`ml-1 ${tk.tm}`}>delivered</span>
+                          </span>}
+                          {c.stats.read > 0 && <span>
+                            <span className="font-bold text-blue-500">{c.stats.read}</span>
+                            <span className={`ml-1 ${tk.tm}`}>read</span>
+                          </span>}
+                          {c.stats.failed > 0 && <span>
+                            <span className="font-bold text-red-500">{c.stats.failed}</span>
+                            <span className={`ml-1 ${tk.tm}`}>failed</span>
+                          </span>}
+                          {dr !== null && <span className={`ml-auto font-semibold text-emerald-600`}>{dr}% delivery</span>}
+                        </div>
+                        <div className="w-full bg-[var(--bg-primary)] rounded-full h-1.5">
+                          <div className="bg-emerald-500 h-1.5 rounded-full transition-all duration-700"
+                            style={{ width: `${dr || 0}%` }} />
+                        </div>
+                      </div>
                     )}
-                    <button onClick={() => { setPreviewCamp(c); setPreviewContact(0); }}
-                      className={`h-7 w-7 rounded-lg ${tk.hov} flex items-center justify-center`} title="Preview message">
-                      <Eye className={`h-4 w-4 ${tk.tm}`} />
-                    </button>
                   </div>
                 </div>
-
-                {c.status === 'completed' && (
-                  <div className="mt-4 grid grid-cols-4 gap-2">
-                    {[
-                      { label: 'Sent',      v: c.stats.sent,      p: null,  col: tk.t1 },
-                      { label: 'Delivered', v: c.stats.delivered, p: dr,    col: 'text-blue-500' },
-                      { label: 'Read',      v: c.stats.read,      p: rr,    col: 'text-green-500' },
-                      { label: 'Failed',    v: c.stats.failed,    p: null,  col: 'text-red-400' },
-                    ].map(s => (
-                      <div key={s.label} className="bg-[var(--bg-primary)] rounded-xl p-2.5 text-center">
-                        <p className={`text-lg font-bold ${s.col}`}>{s.v}</p>
-                        {s.p !== null && <p className={`text-[10px] font-semibold ${s.col}`}>{s.p}%</p>}
-                        <p className={`text-[10px] ${tk.tm}`}>{s.label}</p>
-                      </div>
-                    ))}
-                  </div>
-                )}
               </div>
             );
           })}
@@ -2728,33 +2782,53 @@ export default function MarketingHub() {
       <div className={`min-h-screen ${tk.page}`}>
         <div className="max-w-6xl mx-auto px-4 sm:px-6 py-6">
 
-          {/* Header */}
-          <div className="flex items-start sm:items-center justify-between gap-3 mb-6">
-            <div>
-              <h1 className={`text-xl font-bold ${tk.t1}`}>Marketing & WhatsApp</h1>
-              <p className={`text-sm ${tk.tm} mt-0.5`}>Campaigns, auto-greetings, and lead nurturing</p>
+          {/* System status row */}
+          <div className="flex items-center gap-2 flex-wrap mb-5 mh-fade mh-fade-1">
+            <div className="flex items-center gap-1.5 bg-emerald-50 border border-emerald-200/80 rounded-full px-3 py-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse flex-shrink-0" />
+              <span className="text-[11px] font-semibold text-emerald-700 tracking-tight">Automation Live</span>
             </div>
-            <span className={`text-xs px-2.5 py-1 rounded-full flex items-center gap-1.5 font-medium flex-shrink-0 ${
-              waConnected ? 'bg-green-500/15 text-green-500' : 'bg-yellow-500/15 text-yellow-600'
+            <div className="flex items-center gap-1.5 bg-sky-50 border border-sky-200/80 rounded-full px-3 py-1">
+              <Mail className="h-3 w-3 text-sky-600 flex-shrink-0" />
+              <span className="text-[11px] font-semibold text-sky-700 tracking-tight">Email Ready</span>
+            </div>
+            <div className={`flex items-center gap-1.5 rounded-full px-3 py-1 border ${
+              waConnected ? 'bg-green-50 border-green-200/80' : 'bg-amber-50 border-amber-200/80'
             }`}>
-              <span className={`w-1.5 h-1.5 rounded-full animate-pulse ${waConnected ? 'bg-green-500' : 'bg-yellow-500'}`} />
-              {waConnected ? 'WhatsApp Connected' : 'Setup Required'}
-            </span>
+              {waConnected
+                ? <Wifi className="h-3 w-3 text-green-600 flex-shrink-0" />
+                : <WifiOff className="h-3 w-3 text-amber-600 flex-shrink-0" />}
+              <span className={`text-[11px] font-semibold tracking-tight ${waConnected ? 'text-green-700' : 'text-amber-700'}`}>
+                {waConnected ? 'WhatsApp On' : 'WA: Connect Now'}
+              </span>
+            </div>
           </div>
 
-          {/* Tab bar */}
-          <div className={`flex items-center gap-0.5 p-1 ${tk.card} border ${tk.bdr} rounded-xl mb-6 overflow-x-auto no-scrollbar`}>
-            {TABS.map(({ key, label, Icon }) => (
-              <button key={key} onClick={() => setTab(key)}
-                className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap ${
-                  tab === key
-                    ? 'bg-[var(--bg-primary)] text-[var(--text-primary)] shadow-sm'
-                    : `${tk.tm} ${tk.hov} hover:text-[var(--text-secondary)]`
-                }`}>
-                <Icon className="h-3.5 w-3.5 flex-shrink-0" />
-                <span className="hidden sm:block">{label}</span>
-              </button>
-            ))}
+          {/* Page title */}
+          <div className="mb-6 mh-fade mh-fade-2">
+            <h1 className={`text-[22px] font-bold ${tk.t1} tracking-tight leading-tight`}>
+              Marketing Command Center
+            </h1>
+            <p className={`text-sm ${tk.tm} mt-1 font-medium`}>
+              Campaigns · Drip sequences · Greetings · Analytics
+            </p>
+          </div>
+
+          {/* Underline tab bar */}
+          <div className={`border-b ${tk.bdr} mb-6 mh-fade mh-fade-3`}>
+            <div className="flex items-center gap-0 overflow-x-auto no-scrollbar">
+              {TABS.map(({ key, label, Icon }) => (
+                <button key={key} onClick={() => setTab(key)}
+                  className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-semibold transition-all whitespace-nowrap border-b-2 -mb-px ${
+                    tab === key
+                      ? 'border-indigo-500 text-indigo-600'
+                      : `border-transparent ${tk.tm} hover:text-[var(--text-secondary)] hover:border-[var(--border-color)]`
+                  }`}>
+                  <Icon className="h-3.5 w-3.5 flex-shrink-0" />
+                  <span className="hidden sm:block">{label}</span>
+                </button>
+              ))}
+            </div>
           </div>
 
           {/* Content */}
