@@ -89,17 +89,18 @@ async def seed_demo_marketing(request: Request):
     principals   = [c for c in DEMO_CONTACTS if c["designation"] == "Principal"]
     teachers     = [c for c in DEMO_CONTACTS if "Teacher" in c["designation"]]
 
-    # ── 2. Campaign A — COMPLETED: Diwali Offer (all 5 contacts) ─────────────
+    # ── 2. Campaign A — COMPLETED: Diwali Demo Drive (all 5 contacts) ──────────
     camp_a_id = f"camp_{uuid.uuid4().hex[:10]}"
     diwali_msg = (
-        "Shubh Deepawali {name}! 🪔✨ SmartShape has a special Diwali offer — "
-        "20% off all craft kits for {school_name}. Place your order before Oct 25 "
-        "and get free shipping! — SmartShape Team"
+        "Shubh Deepawali {name} ji! 🪔✨ SmartShape is running a special Diwali Demo Drive — "
+        "see the SMARTS-SHAPES die-cutting machine live at your school, no obligation. "
+        "750+ schools across India are already saving ₹2–5 Lakhs/year with it. "
+        "Book your slot before Oct 25! — SmartShape Team"
     )
     await db.whatsapp_campaigns.insert_one({
         "campaign_id": camp_a_id,
-        "name": f"Diwali Special Offer 2025 {DEMO_MARKER}",
-        "description": "Festival season discount blast to all school contacts",
+        "name": f"Diwali Demo Drive 2025 {DEMO_MARKER}",
+        "description": "Festival season demo invitation blast to all school contacts",
         "template_id": None,
         "message": diwali_msg,
         "audience_filter": {},
@@ -131,18 +132,18 @@ async def seed_demo_marketing(request: Request):
         })
         created["messages"] += 1
 
-    # ── 3. Campaign B — QUEUED: New Academic Year (principals only) ───────────
+    # ── 3. Campaign B — QUEUED: New Academic Year Demo (principals only) ──────
     camp_b_id = f"camp_{uuid.uuid4().hex[:10]}"
     session_msg = (
-        "Hello {name}! 🎒 The new academic year is almost here! "
-        "Is {school_name} stocked up on craft materials for the new session? "
-        "SmartShape has everything — colours, clay, die cuts, and activity kits. "
-        "Order now for priority pre-session delivery! — SmartShape"
+        "Hello {name}! 🎒 New academic year — new opportunity for {school_name}! "
+        "Is this the session your school finally brings craft production in-house? "
+        "The SMARTS-SHAPES die-cutting machine means teachers never wait for shapes again — "
+        "everything made fresh, on demand. Book a pre-session demo now! — SmartShape"
     )
     await db.whatsapp_campaigns.insert_one({
         "campaign_id": camp_b_id,
-        "name": f"New Academic Year 2026 Launch {DEMO_MARKER}",
-        "description": "Pre-session catalogue push to school principals",
+        "name": f"New Academic Year Demo Drive 2026 {DEMO_MARKER}",
+        "description": "Pre-session demo invitation to school principals",
         "template_id": None,
         "message": session_msg,
         "audience_filter": {"roles": ["Principal"]},
@@ -173,16 +174,17 @@ async def seed_demo_marketing(request: Request):
         })
         created["messages"] += 1
 
-    # ── 4. Campaign C — DRAFT: Year End Clearance ─────────────────────────────
+    # ── 4. Campaign C — DRAFT: Annual Day Pitch ───────────────────────────────
     await db.whatsapp_campaigns.insert_one({
         "campaign_id": f"camp_{uuid.uuid4().hex[:10]}",
-        "name": f"Year End Clearance Sale {DEMO_MARKER}",
-        "description": "End-of-year stock clearance offer — ready to launch",
+        "name": f"Annual Day & Events Craft Pitch {DEMO_MARKER}",
+        "description": "Pitch SMARTS-SHAPES for school events — Annual Day, Sports Day, fairs",
         "template_id": None,
         "message": (
-            "Hello {name}! The academic year is wrapping up — a great time to audit "
-            "your craft stock and plan orders for next session! SmartShape is offering "
-            "year-end clearance prices. Want the list? — SmartShape Team"
+            "Hello {name}! 🎭 Annual Day, Sports Day, Science Fair — every school event needs "
+            "hundreds of decorations, props, and craft pieces. With SMARTS-SHAPES, your team "
+            "produces all of it in-house in hours instead of ordering for days. "
+            "Want a demo before your next big event? — SmartShape Team"
         ),
         "audience_filter": {},
         "audience_label": "All Contacts",
@@ -199,11 +201,34 @@ async def seed_demo_marketing(request: Request):
 
     # ── 5. Drip messages (type=drip in whatsapp_scheduled) ────────────────────
     drip_steps = [
-        ("Ramesh", "9876543210", "Day 0: Namaskar Ramesh ji! 🙏 I'm from SmartShape — India's premium school craft brand. May I share our catalogue and special school pricing? — SmartShape Team", "sent", 7),
-        ("Ramesh", "9876543210", "Day 3: Hello Ramesh ji! 📚 Our 2026 School Craft Catalogue is here! New die sets, eco clay, and activity kits — all school-grade. Want the full PDF? — SmartShape", "sent", 4),
-        ("Ramesh", "9876543210", "Day 7: Hello Ramesh ji! 🎉 Order above ₹10,000 this month and get a FREE Activity Craft Box (worth ₹1,500) + free shipping. Shall I call today? — SmartShape", "pending", 0),
-        ("Priya",  "9876543211", "Day 0: Hello Priya! 👋 SmartShape specialises in school-grade craft materials for CBSE/ICSE schools. Can I share our latest collection? — SmartShape", "sent", 5),
-        ("Priya",  "9876543211", "Day 3: Hello Priya! 🌟 Our new EVA Foam Die Cuts are perfect for art class — 200+ shapes. Schools love them! Want samples sent to your school? — SmartShape", "pending", 0),
+        ("Ramesh", "9876543210",
+         "Day 0: Namaskar Ramesh ji! 🙏 I'm from SmartShape (est. 1999, Faridabad). "
+         "We make the SMARTS-SHAPES die-cutting machine — 750+ schools across India use it "
+         "to save ₹2–5 Lakhs/year on craft costs. May I share how it works? — SmartShape Team",
+         "sent", 7),
+        ("Ramesh", "9876543210",
+         "Day 3: Hello Ramesh ji! 📊 A quick number: schools typically spend ₹3–6 Lakhs/year "
+         "on craft materials and outsourced cutting. With one SMARTS-SHAPES machine, that cost "
+         "drops by 60–80%. The machine pays for itself in under a year. Want the ROI sheet for "
+         "DPS Dwarka? — SmartShape",
+         "sent", 4),
+        ("Ramesh", "9876543210",
+         "Day 7: Hello Ramesh ji! 🎯 Our live demo takes just 20 minutes and always impresses "
+         "the whole school team. You'll see perfect die-cut shapes from foam, paper, and fabric "
+         "in seconds — no skill needed. Can we book a demo visit this week? — SmartShape",
+         "pending", 0),
+        ("Priya", "9876543211",
+         "Day 0: Hello Priya! 👋 I'm from SmartShape — makers of the SMARTS-SHAPES die-cutting "
+         "machine. With this one machine your school creates perfect shapes, decorations, and "
+         "craft materials for every class activity — no scissors, no waste. 1,500+ teachers "
+         "love it! Can I show you how? — SmartShape",
+         "sent", 5),
+        ("Priya", "9876543211",
+         "Day 3: Hello Priya! 🌟 Our SMARTS-SHAPES die library has 750+ designs — alphabets, "
+         "animals, festive shapes, STEM sets, borders, and more. New dies every quarter. "
+         "Teachers plan the whole year's activity calendar from it. Want the full catalogue? "
+         "— SmartShape",
+         "pending", 0),
     ]
     for name, phone, msg, status, days_ago in drip_steps:
         await db.whatsapp_scheduled.insert_one({
@@ -243,11 +268,31 @@ async def seed_demo_marketing(request: Request):
 
     # ── 7. Greeting messages (type=greeting) and greeting logs ─────────────────
     greeting_demos = [
-        ("Ramesh",  "9876543210", "Happy Teachers' Day Ramesh! 🍎 You are not just a teacher — you are a life-changer and a nation-maker. SmartShape is deeply honoured to serve you. Thank you for everything! 🙏 — SmartShape Team", "Teachers' Day", 2025, 260),
-        ("Priya",   "9876543211", "Happy Teachers' Day Priya! 🍎 You are not just a teacher — you are a life-changer and a nation-maker. SmartShape is deeply honoured to serve you. Thank you for everything! 🙏 — SmartShape Team", "Teachers' Day", 2025, 260),
-        ("Ramesh",  "9876543210", "Happy New Year Ramesh! 🎆 SmartShape wishes you, your school family and all your wonderful students a prosperous, creative and joyful New Year ahead. 🌟 — SmartShape Team", "New Year's Day", 2026, 145),
-        ("Anita",   "9876543213", "Happy New Year Anita! 🎆 SmartShape wishes you, your school family and all your wonderful students a prosperous, creative and joyful New Year ahead. 🌟 — SmartShape Team", "New Year's Day", 2026, 145),
-        ("Suresh",  "9876543214", "Happy New Year Suresh! 🎆 SmartShape wishes you, your school family and all your wonderful students a prosperous, creative and joyful New Year ahead. 🌟 — SmartShape Team", "New Year's Day", 2026, 145),
+        ("Ramesh",  "9876543210",
+         "Happy Teachers' Day Ramesh ji! 🍎 You are not just a teacher — you are a "
+         "life-changer and a nation-maker. SmartShape is deeply honoured to be part of "
+         "your school's creative journey. Thank you for everything you do! 🙏 — SmartShape Team",
+         "Teachers' Day", 2025, 260),
+        ("Priya",   "9876543211",
+         "Happy Teachers' Day Priya! 🍎 Teaching is the profession that creates all other "
+         "professions. SmartShape is proud to support the incredible work you do every day "
+         "in the classroom. Warm wishes from our whole team! 🙏 — SmartShape Team",
+         "Teachers' Day", 2025, 260),
+        ("Ramesh",  "9876543210",
+         "Happy New Year Ramesh ji! 🎆 SmartShape wishes you, DPS Dwarka, and all your "
+         "wonderful students a prosperous, creative, and joyful New Year ahead. May 2026 "
+         "bring more creativity and achievement to every classroom! 🌟 — SmartShape Team",
+         "New Year's Day", 2026, 145),
+        ("Anita",   "9876543213",
+         "Happy New Year Anita! 🎆 SmartShape wishes you, Ryan International, and all your "
+         "wonderful students a prosperous, creative, and joyful New Year ahead. May 2026 "
+         "bring more creativity and achievement to every classroom! 🌟 — SmartShape Team",
+         "New Year's Day", 2026, 145),
+        ("Suresh",  "9876543214",
+         "Happy New Year Suresh! 🎆 SmartShape wishes you, DAV Public School, and all your "
+         "wonderful students a prosperous, creative, and joyful New Year ahead. May 2026 "
+         "bring more creativity and achievement to every classroom! 🌟 — SmartShape Team",
+         "New Year's Day", 2026, 145),
     ]
     for name, phone, msg, rule_name, year, days_ago in greeting_demos:
         # Insert into whatsapp_scheduled
@@ -290,9 +335,10 @@ async def seed_demo_marketing(request: Request):
             "greeting_logs": created["greetings"],
         },
         "story": (
-            "Ramesh Kumar (DPS Principal) received a Diwali offer, was enrolled in a drip "
-            "sequence, and got New Year + Teachers' Day greetings. "
-            "2 campaigns queued for principals. 1 draft ready to launch."
+            "Ramesh Kumar (DPS Principal) received a Diwali demo invitation, was enrolled in "
+            "the Principal Machine Pitch drip sequence (₹2–5L savings pitch → ROI sheet → demo "
+            "booking), and received New Year + Teachers' Day greetings. "
+            "2 campaigns: demo drive to principals queued, Annual Day pitch in draft."
         ),
     }
 

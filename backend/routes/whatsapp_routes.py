@@ -7,7 +7,7 @@ from auth_utils import get_current_user
 
 router = APIRouter()
 
-# ── 15 expert B2B school WhatsApp message templates ───────────────────────────
+# ── 15 SmartShape SMARTS-SHAPES cutting machine WhatsApp templates ────────────
 _DEFAULT_TEMPLATES = [
     # INTRO — first-touch messages per designation
     {
@@ -15,10 +15,10 @@ _DEFAULT_TEMPLATES = [
         "category": "intro",
         "variables": ["name"],
         "body": (
-            "Namaskar {name} ji! 🙏 I'm from SmartShape — India's premium craft materials "
-            "brand for schools. We supply everything from clay and colours to 3D die sets "
-            "and activity kits to 500+ schools across India. I'd love to share our catalogue "
-            "and special school pricing with you. May I? — SmartShape Team"
+            "Namaskar {name} ji! 🙏 I'm from SmartShape (est. 1999, Faridabad). We make the "
+            "SMARTS-SHAPES die-cutting machine — used by 750+ schools across India to produce "
+            "unlimited craft shapes, charts, and activity materials in-house. Schools save "
+            "₹2–5 Lakhs every year on outsourcing. May I share how it works? — SmartShape Team"
         ),
         "is_active": True, "usage_count": 0,
     },
@@ -27,10 +27,10 @@ _DEFAULT_TEMPLATES = [
         "category": "intro",
         "variables": ["name"],
         "body": (
-            "Hello {name}! 👋 I'm reaching out from SmartShape — we specialise in school-grade "
-            "craft materials that make art & craft activities more engaging, mess-free and "
-            "curriculum-aligned. Our products are trusted by teachers across CBSE, ICSE and "
-            "State Board schools. Can I share our latest collection? — SmartShape"
+            "Hello {name}! 👋 I'm from SmartShape — makers of the SMARTS-SHAPES die-cutting "
+            "machine. With this one machine your school can create perfect die-cut shapes, "
+            "decorations, and craft materials for every class activity — no scissors, no waste, "
+            "no outsourcing. 1,500+ teachers love it! Can I show you how? — SmartShape"
         ),
         "is_active": True, "usage_count": 0,
     },
@@ -39,86 +39,91 @@ _DEFAULT_TEMPLATES = [
         "category": "intro",
         "variables": ["name"],
         "body": (
-            "Hello {name}! 🙏 I'm from SmartShape — your one-stop supplier for school craft "
-            "materials. We offer competitive bulk pricing, pan-India delivery, GST invoices, "
-            "and dedicated account support. I'd love to send our school pricing catalogue. "
-            "Shall I? — SmartShape Team"
-        ),
-        "is_active": True, "usage_count": 0,
-    },
-
-    # CATALOGUE — product showcase messages
-    {
-        "name": "Annual Catalogue Launch",
-        "category": "catalogue",
-        "variables": ["name"],
-        "body": (
-            "Hello {name}! 📚 Our 2026 School Craft Catalogue is here! ✂️🎨 New this year: "
-            "3D activity die sets, eco-friendly clay, jumbo size chart sets, and our bestselling "
-            "finger paint kits — all school-grade tested. Want me to share the full PDF catalogue? "
+            "Hello {name}! 🙏 I'm from SmartShape — we supply the SMARTS-SHAPES die-cutting "
+            "machine to 750+ schools. It replaces the ongoing cost of buying ready-made craft "
+            "materials: one machine + our die library = unlimited shapes at a fraction of the "
+            "price. GST invoice, installation, and training included. May I send the pricing? "
             "— SmartShape Team"
         ),
         "is_active": True, "usage_count": 0,
     },
+
+    # CATALOGUE — demo invitation and die showcase
     {
-        "name": "New Product Showcase",
+        "name": "Demo Invitation",
+        "category": "catalogue",
+        "variables": ["name", "school_name"],
+        "body": (
+            "Hello {name}! 📺 A live demo of the SMARTS-SHAPES machine takes just 20 minutes "
+            "and always impresses the whole team at {school_name}. You'll see it cut perfect "
+            "shapes from foam, paper, and fabric in seconds — no skill needed. Can we schedule "
+            "a demo visit this week? — SmartShape Team"
+        ),
+        "is_active": True, "usage_count": 0,
+    },
+    {
+        "name": "Die Cut Catalogue",
         "category": "catalogue",
         "variables": ["name"],
         "body": (
-            "Hello {name}! 🌟 Exciting news from SmartShape! We've just launched our new range of "
-            "EVA Foam Die Cuts — 200+ shapes perfect for art class, bulletin boards, and project "
-            "work. Schools love them! Would you like samples sent to your school? — SmartShape"
+            "Hello {name}! 🎨 Our SMARTS-SHAPES die library has 750+ designs — alphabets, "
+            "numbers, animals, festive shapes, borders, geometric sets, and curriculum-linked "
+            "activity kits. New dies added every quarter. Would you like our full die catalogue "
+            "PDF? Schools use it to plan the whole year's activity calendar! — SmartShape"
         ),
         "is_active": True, "usage_count": 0,
     },
 
-    # OFFER — discount and deal messages
+    # OFFER — ROI pitch and payment plans
     {
-        "name": "Bulk Order Discount",
+        "name": "ROI Savings Pitch",
         "category": "offer",
         "variables": ["name", "school_name"],
         "body": (
-            "Hello {name}! 🎉 Special offer for {school_name}: Order above ₹10,000 this month "
-            "and get a FREE Activity Craft Box (worth ₹1,500) + free shipping anywhere in India. "
-            "Valid for academic year stock-up orders. Interested? Reply YES and I'll call you "
-            "today! — SmartShape"
+            "Hello {name}! 💰 A quick question for {school_name}: how much does your school "
+            "currently spend on craft materials and outsourced cutting every year? Most schools "
+            "spend ₹3–6 Lakhs. With one SMARTS-SHAPES machine, they bring it all in-house and "
+            "cut that cost by 60–80%. The machine pays for itself in under a year. Want the "
+            "calculation for your school? — SmartShape"
         ),
         "is_active": True, "usage_count": 0,
     },
     {
-        "name": "Early Bird Session Offer",
+        "name": "Flexible EMI Offer",
         "category": "offer",
         "variables": ["name"],
         "body": (
-            "Hello {name}! 📣 New session, new savings! Place your academic year craft order "
-            "before June 15 and enjoy 15% off on all consumables + priority delivery before "
-            "school reopens. Stock up early and never run out mid-term! — SmartShape Team"
+            "Hello {name}! 📣 Great news — SMARTS-SHAPES is now available on easy school "
+            "budget terms: zero-cost EMI over 12 months, or a one-time price with free "
+            "installation + 1-year warranty + teacher training included. No hidden charges. "
+            "Ideal for schools planning next session's capital purchase. Want the full "
+            "breakdown? — SmartShape Team"
         ),
         "is_active": True, "usage_count": 0,
     },
     {
-        "name": "Loyalty Reorder Offer",
+        "name": "Academic Year Bundle",
         "category": "offer",
         "variables": ["name"],
         "body": (
-            "Hello {name}! 🙏 Thank you for being a valued SmartShape school partner. As our "
-            "loyal customer, you have an exclusive 12% loyalty discount waiting on your next "
-            "reorder. Your preferred items are ready to ship within 48 hours. "
-            "Shall I raise the order? — SmartShape"
+            "Hello {name}! 🎒 New session special: buy the SMARTS-SHAPES machine before "
+            "June 30 and get FREE — 50-die starter pack (₹8,000 value) + on-site teacher "
+            "training + priority installation before school reopens. Only for early-session "
+            "orders. Shall I block a slot for your school? — SmartShape Team"
         ),
         "is_active": True, "usage_count": 0,
     },
 
-    # FOLLOW-UP — post-visit, post-quotation, post-demo
+    # FOLLOW-UP — post-demo, post-quotation, post-installation
     {
-        "name": "Post-Visit Follow-up",
+        "name": "Post-Demo Follow-up",
         "category": "followup",
         "variables": ["name", "school_name"],
         "body": (
-            "Hello {name}! It was wonderful visiting {school_name} and meeting you in person. 😊 "
-            "As discussed, I'm sharing our quotation and product list. Please feel free to call "
-            "anytime with questions. Looking forward to supporting your school's craft programme! "
-            "— SmartShape"
+            "Hello {name}! Thank you for the SMARTS-SHAPES demo at {school_name} — it was "
+            "wonderful meeting your team! 😊 As promised, I'm sharing the formal quotation "
+            "and ROI sheet. The teachers seemed very excited about the die library. Please "
+            "feel free to call anytime with questions. — SmartShape"
         ),
         "is_active": True, "usage_count": 0,
     },
@@ -127,20 +132,22 @@ _DEFAULT_TEMPLATES = [
         "category": "followup",
         "variables": ["name", "school_name"],
         "body": (
-            "Hello {name}! I wanted to follow up on the quotation we sent for {school_name}. 📋 "
-            "Please let me know if you have any questions or if you'd like us to adjust quantities. "
-            "We can also arrange a delivery date that suits your school calendar. — SmartShape Team"
+            "Hello {name}! Following up on the SMARTS-SHAPES quotation for {school_name}. 📋 "
+            "We can adjust the die pack or payment plan to suit your budget. Many schools start "
+            "with our Starter Bundle and expand the die library over time. Would you like to "
+            "talk through the options? — SmartShape Team"
         ),
         "is_active": True, "usage_count": 0,
     },
     {
-        "name": "Post-Demo Check-in",
+        "name": "Post-Installation Check-in",
         "category": "followup",
-        "variables": ["name"],
+        "variables": ["name", "school_name"],
         "body": (
-            "Hello {name}! Hope you enjoyed our product demo! 😊 Our team is ready to process "
-            "your first order with complimentary first-order samples. Just reply with your preferred "
-            "quantity and we'll take it from there. — SmartShape"
+            "Hello {name}! Hope the SMARTS-SHAPES machine is running beautifully at "
+            "{school_name}! 🎉 Our team is always a call away for support. Also — our new "
+            "2026 Die Collection just launched with 80+ new designs (festive, STEM, and "
+            "activity sets). Want me to share the new catalogue? — SmartShape"
         ),
         "is_active": True, "usage_count": 0,
     },
@@ -151,10 +158,10 @@ _DEFAULT_TEMPLATES = [
         "category": "reengagement",
         "variables": ["name", "school_name"],
         "body": (
-            "Hello {name}! 👋 It's been a while since we connected. SmartShape has exciting "
-            "new products I think {school_name} would love — especially our new Activity Die Cut "
-            "range. May I share an updated catalogue? No obligations, just wanted to stay "
-            "in touch! — SmartShape"
+            "Hello {name}! 👋 It's been a while since we connected about SMARTS-SHAPES. "
+            "A lot has changed — we've added 150+ new dies and a school near {school_name} "
+            "just installed their machine last month. They're already saving on craft costs. "
+            "Would you like to see how it's working for them? — SmartShape"
         ),
         "is_active": True, "usage_count": 0,
     },
@@ -163,34 +170,38 @@ _DEFAULT_TEMPLATES = [
         "category": "reengagement",
         "variables": ["name", "school_name"],
         "body": (
-            "Hello {name}! We haven't heard from you in a while and just wanted to check in! 🙂 "
-            "SmartShape has grown a lot — new products, better pricing, faster delivery. Would "
-            "love to reconnect and see how we can support {school_name} this year. — SmartShape Team"
+            "Hello {name}! We haven't connected in a while and wanted to check in! 🙂 "
+            "750+ schools are now using SMARTS-SHAPES — saving lakhs and empowering teachers "
+            "to create richer activities. We'd love to show {school_name} what's possible now. "
+            "Even a 20-minute call could be eye-opening! — SmartShape Team"
         ),
         "is_active": True, "usage_count": 0,
     },
 
     # SEASONAL — academic calendar touchpoints
     {
-        "name": "New Academic Year Launch",
+        "name": "New Academic Year Demo",
         "category": "seasonal",
         "variables": ["name", "school_name"],
         "body": (
-            "Hello {name}! 🎒 The new academic year is almost here! Is {school_name} stocked up "
-            "on craft materials for the new session? SmartShape has everything you need — colours, "
-            "clay, paper, scissors, die cuts, and activity kits. Order now for priority "
-            "pre-session delivery! — SmartShape"
+            "Hello {name}! 🎒 New academic year — new opportunities for {school_name}! "
+            "Is this the session your school finally brings craft production in-house? "
+            "The SMARTS-SHAPES machine means teachers never have to order or wait for "
+            "shapes again — everything made fresh, on demand. Book a pre-session demo now! "
+            "— SmartShape"
         ),
         "is_active": True, "usage_count": 0,
     },
     {
-        "name": "Session-End Order Reminder",
+        "name": "Annual Day & Events Pitch",
         "category": "seasonal",
         "variables": ["name"],
         "body": (
-            "Hello {name}! The academic year is wrapping up — a great time to audit your craft "
-            "material stock and plan orders for next session! SmartShape is offering year-end "
-            "clearance prices on selected items. Want the list? — SmartShape Team"
+            "Hello {name}! 🎭 Annual Day, Sports Day, Science Fair — every school event needs "
+            "hundreds of decorations, props, and craft pieces. With SMARTS-SHAPES, your team "
+            "can produce all of it in-house in hours instead of days. Schools that have the "
+            "machine say it transforms how they plan events. Want a demo before your next big "
+            "event? — SmartShape Team"
         ),
         "is_active": True, "usage_count": 0,
     },
@@ -198,13 +209,23 @@ _DEFAULT_TEMPLATES = [
 
 
 async def _seed_templates():
-    count = await db.whatsapp_templates.count_documents({})
-    if count >= len(_DEFAULT_TEMPLATES):
-        return
     now = datetime.now(timezone.utc).isoformat()
+    current_names = [t["name"] for t in _DEFAULT_TEMPLATES]
     for tmpl in _DEFAULT_TEMPLATES:
-        exists = await db.whatsapp_templates.find_one({"name": tmpl["name"]})
-        if not exists:
+        existing = await db.whatsapp_templates.find_one(
+            {"name": tmpl["name"], "created_by": "system"}
+        )
+        if existing:
+            await db.whatsapp_templates.update_one(
+                {"name": tmpl["name"], "created_by": "system"},
+                {"$set": {
+                    "body": tmpl["body"],
+                    "category": tmpl["category"],
+                    "variables": tmpl["variables"],
+                    "updated_at": now,
+                }}
+            )
+        else:
             await db.whatsapp_templates.insert_one({
                 "template_id": f"tmpl_{uuid.uuid4().hex[:10]}",
                 **tmpl,
@@ -212,6 +233,9 @@ async def _seed_templates():
                 "created_at": now,
                 "updated_at": now,
             })
+    await db.whatsapp_templates.delete_many({
+        "created_by": "system", "name": {"$nin": current_names}
+    })
 
 
 # ── Audience resolution helpers ────────────────────────────────────────────────
