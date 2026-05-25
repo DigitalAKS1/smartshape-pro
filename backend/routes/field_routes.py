@@ -65,6 +65,76 @@ async def log_activity(user_email: str, action: str, entity_type: str, entity_id
     })
 
 
+async def _visit_completion_hooks(lead_id: str | None, school_name: str, outcome: str, assigned_to: str, now_iso: str):
+    """Advance lead stage and auto-create follow-up task after visit completion."""
+    from datetime import timedelta as _td
+
+    lead = None
+    if lead_id:
+        lead = await db.leads.find_one({"lead_id": lead_id}, {"_id": 0})
+    elif school_name:
+        lead = await db.leads.find_one(
+            {"company_name": school_name, "stage": {"$nin": ["won", "lost"]}},
+            {"_id": 0},
+        )
+    if not lead:
+        return
+
+    lead_id = lead["lead_id"]
+    current_stage = lead.get("stage", "new")
+
+    STAGE_ADVANCE = {"demo_booked": "demo", "already_purchased": "won"}
+    FOLLOWUP_DAYS = {
+        "interested": 3,
+        "follow_up": 3,
+        "callback_requested": 1,
+        "demo_booked": 1,
+        "not_interested": 7,
+    }
+    FOLLOWUP_NOTES = {
+        "interested": "Prospect expressed interest during visit. Schedule a demo.",
+        "follow_up": "Follow up as requested during school visit.",
+        "callback_requested": "Callback requested during school visit.",
+        "demo_booked": "Confirm demo details and prepare materials.",
+        "not_interested": "Not interested now. Re-engage after a week.",
+    }
+
+    new_stage = STAGE_ADVANCE.get(outcome)
+    if new_stage and new_stage != current_stage:
+        history_entry = {
+            "from_stage": current_stage,
+            "to_stage": new_stage,
+            "changed_at": now_iso,
+            "changed_by": assigned_to,
+            "changed_by_name": "Auto (Visit)",
+        }
+        await db.leads.update_one(
+            {"lead_id": lead_id},
+            {"$set": {"stage": new_stage, "last_activity_date": now_iso},
+             "$push": {"pipeline_history": history_entry}},
+        )
+
+    days = FOLLOWUP_DAYS.get(outcome)
+    if days:
+        fu_date = (datetime.fromisoformat(now_iso[:10]) + _td(days=days)).strftime("%Y-%m-%d")
+        fu_type = "demo" if outcome == "demo_booked" else "call"
+        fid = f"fu_{uuid.uuid4().hex[:12]}"
+        await db.followups.insert_one({
+            "followup_id": fid,
+            "lead_id": lead_id,
+            "followup_date": fu_date,
+            "followup_time": "10:00",
+            "followup_type": fu_type,
+            "notes": FOLLOWUP_NOTES.get(outcome, "Post-visit follow up."),
+            "outcome": "",
+            "status": "pending",
+            "assigned_to": assigned_to,
+            "created_by": assigned_to,
+            "source": "visit_auto",
+            "created_at": now_iso,
+        })
+
+
 # ==================== MODELS ====================
 
 class AttendanceCheckIn(BaseModel):
@@ -546,6 +616,15 @@ async def update_visit(visit_id: str, request: Request):
             {"visit_id": visit_id, "sales_person_email": user["email"]},
             {"$set": safe},
         )
+        if safe.get("status") == "completed":
+            outcome = safe.get("outcome", "")
+            await _visit_completion_hooks(
+                lead_id=None,
+                school_name=visit.get("school_name", ""),
+                outcome=outcome,
+                assigned_to=user["email"],
+                now_iso=now_iso,
+            )
         return await db.field_visits.find_one({"visit_id": visit_id}, {"_id": 0})
 
     # Try admin-assigned visit plan
@@ -581,6 +660,14 @@ async def update_visit(visit_id: str, request: Request):
                 await touch_last_activity("school", plan["school_id"])
             await log_activity(user["email"], "visit_complete", "visit_plan", visit_id,
                                details=f"Completed visit at {plan.get('school_name','')}")
+            outcome = body.get("outcome", "")
+            await _visit_completion_hooks(
+                lead_id=plan.get("lead_id"),
+                school_name=plan.get("school_name", ""),
+                outcome=outcome,
+                assigned_to=user["email"],
+                now_iso=now_iso,
+            )
         return await db.visit_plans.find_one({"plan_id": visit_id}, {"_id": 0})
 
     raise HTTPException(status_code=404, detail="Visit not found")
