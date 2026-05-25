@@ -8,6 +8,7 @@ import {
   Plus, MapPin, Check, Calendar, Navigation, Clock, X,
   Search, Link2, MapPinned, ChevronDown, ChevronUp,
   Phone, Info, Clipboard, ExternalLink, ArrowRight, Loader2, Target,
+  Camera, ScanLine, Upload,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -561,6 +562,12 @@ export default function SalesVisits() {
   const [addContactVisit, setAddContactVisit] = useState(null);
   const [contactForm, setContactForm] = useState({ name: '', phone: '', email: '', role: 'principal', school_name: '' });
   const [savingContact, setSavingContact] = useState(false);
+  // Business card scanner
+  const [scanOpen, setScanOpen]         = useState(false);
+  const [scanPreview, setScanPreview]   = useState(null); // data URL
+  const [scanLoading, setScanLoading]   = useState(false);
+  const [scanResult, setScanResult]     = useState(null); // extracted fields
+  const scanFileRef                     = useRef(null);
   // Complete Visit sheet
   const [completeVisit, setCompleteVisit] = useState(null); // visit object
   const [completing, setCompleting]       = useState(false);
@@ -658,6 +665,42 @@ export default function SalesVisits() {
     return Math.round(R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)));
   }
 
+  const handleScanImage = async (file) => {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      const dataUrl = e.target.result;
+      setScanPreview(dataUrl);
+      setScanLoading(true);
+      setScanResult(null);
+      try {
+        // Extract base64 data (strip "data:image/jpeg;base64," prefix)
+        const [header, b64] = dataUrl.split(',');
+        const mediaType = header.match(/data:(.*?);/)?.[1] || 'image/jpeg';
+        const res = await visitsApi.scanCard(b64, mediaType);
+        setScanResult(res.data);
+      } catch { toast.error('Card scan failed — try a clearer photo'); }
+      finally { setScanLoading(false); }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const applyScanResult = () => {
+    if (!scanResult) return;
+    setContactForm({
+      name: scanResult.name || '',
+      phone: scanResult.phone || '',
+      email: scanResult.email || '',
+      role: scanResult.role || 'principal',
+      school_name: scanResult.school_name || '',
+    });
+    setScanOpen(false);
+    setScanPreview(null);
+    setScanResult(null);
+    setAddContactVisit({ contact_person: scanResult.name, school_name: scanResult.school_name, contact_phone: scanResult.phone });
+    toast.success('Contact details extracted! Review and save.');
+  };
+
   const openAddContact = (visit) => {
     setAddContactVisit(visit);
     setContactForm({
@@ -744,10 +787,16 @@ export default function SalesVisits() {
             <h2 className={`text-lg font-bold ${tPri}`}>Field Visits</h2>
             <p className={`text-xs ${tMuted}`}>{todayVisits.length} today · {upcomingVisits.length} upcoming</p>
           </div>
-          <button onClick={() => setPlanOpen(true)}
-            className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-[#e94560] text-white text-sm font-bold shadow-lg shadow-[#e94560]/20 active:opacity-80">
-            <Plus className="h-4 w-4" /> Plan Visit
-          </button>
+          <div className="flex gap-2">
+            <button onClick={() => { setScanOpen(true); setScanPreview(null); setScanResult(null); }}
+              className="flex items-center gap-1.5 px-3 py-2.5 rounded-xl bg-blue-500/10 border border-blue-500/25 text-blue-400 text-sm font-bold active:opacity-80">
+              <ScanLine className="h-4 w-4" />
+            </button>
+            <button onClick={() => setPlanOpen(true)}
+              className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-[#e94560] text-white text-sm font-bold shadow-lg shadow-[#e94560]/20 active:opacity-80">
+              <Plus className="h-4 w-4" /> Plan Visit
+            </button>
+          </div>
         </div>
 
         {/* Route planner (today, 2+ GPS stops) */}
@@ -814,6 +863,69 @@ export default function SalesVisits() {
         )}
 
       </div>
+
+      {/* ── Business Card Scanner Sheet ──────────────────────── */}
+      <BottomSheet
+        open={scanOpen}
+        onClose={() => setScanOpen(false)}
+        title="Scan Business Card"
+        footer={scanResult ? (
+          <button onClick={applyScanResult}
+            className="w-full py-3.5 rounded-xl bg-[#e94560] text-white text-sm font-bold">
+            Use These Details
+          </button>
+        ) : null}
+      >
+        <div className="px-4 py-4 space-y-4">
+          {/* Camera / file input */}
+          <input ref={scanFileRef} type="file" accept="image/*" capture="environment"
+            className="hidden" onChange={e => handleScanImage(e.target.files?.[0])} />
+          <button onClick={() => scanFileRef.current?.click()}
+            className={`w-full py-12 rounded-2xl border-2 border-dashed flex flex-col items-center justify-center gap-2 transition-all ${scanPreview ? 'border-blue-400/40 bg-blue-500/5' : 'border-[var(--border-color)] bg-[var(--bg-primary)]'}`}>
+            {scanPreview
+              ? <img src={scanPreview} alt="card" className="max-h-40 rounded-lg object-contain" />
+              : <>
+                  <Camera className="h-8 w-8 text-[var(--text-muted)]" />
+                  <p className={`text-sm font-semibold ${tSec}`}>Tap to take photo or choose image</p>
+                  <p className={`text-xs ${tMuted}`}>JPEG, PNG, HEIC supported</p>
+                </>
+            }
+          </button>
+
+          {scanLoading && (
+            <div className="flex flex-col items-center gap-2 py-4">
+              <Loader2 className="h-7 w-7 text-blue-400 animate-spin" />
+              <p className={`text-sm ${tSec}`}>Extracting contact details…</p>
+            </div>
+          )}
+
+          {scanResult && !scanLoading && (
+            <div className="rounded-2xl border border-emerald-500/25 bg-emerald-500/5 p-4 space-y-2">
+              <p className="text-xs font-bold text-emerald-400 uppercase tracking-wide mb-3">Extracted Details</p>
+              {[
+                { label: 'Name', value: scanResult.name },
+                { label: 'Phone', value: scanResult.phone },
+                { label: 'Email', value: scanResult.email },
+                { label: 'School / Org', value: scanResult.school_name },
+                { label: 'Role', value: scanResult.role },
+                { label: 'Website', value: scanResult.website },
+              ].filter(f => f.value).map(f => (
+                <div key={f.label} className="flex items-start gap-2">
+                  <span className={`text-xs ${tMuted} w-20 shrink-0`}>{f.label}</span>
+                  <span className={`text-xs ${tSec} font-medium`}>{f.value}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {scanPreview && !scanLoading && !scanResult && (
+            <button onClick={() => scanFileRef.current?.click()}
+              className="w-full text-center text-sm text-[#e94560] font-semibold py-2">
+              Try a different photo
+            </button>
+          )}
+        </div>
+      </BottomSheet>
 
       {/* ── Add Contact from Visit Sheet ─────────────────────── */}
       <BottomSheet

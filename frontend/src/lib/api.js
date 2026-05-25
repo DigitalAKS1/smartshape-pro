@@ -387,6 +387,7 @@ export const visits = {
   create: (data) => API.post('/sales/visits', data),
   checkIn: (id, lat, lng) => API.post(`/sales/visits/${id}/check-in`, null, { params: { lat, lng } }),
   update: (id, data) => API.put(`/sales/visits/${id}`, data),
+  scanCard: (image_base64, media_type) => API.post('/sales/scan-card', { image_base64, media_type }),
 };
 
 // Sales - Expenses

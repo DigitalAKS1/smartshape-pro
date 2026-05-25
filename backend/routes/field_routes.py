@@ -1225,3 +1225,69 @@ async def set_sales_target(request: Request):
         upsert=True,
     )
     return doc
+
+
+# ==================== BUSINESS CARD SCANNER ====================
+
+@router.post("/sales/scan-card")
+async def scan_business_card(request: Request):
+    """
+    Accept a base64 image of a business card and return extracted contact fields
+    using Claude vision. Returns: name, phone, email, school_name, role, website.
+    """
+    import anthropic as _anthropic
+    import os as _os
+    import json as _json
+
+    await get_current_user(request)
+    body = await request.json()
+    image_b64 = body.get("image_base64", "")
+    media_type = body.get("media_type", "image/jpeg")
+
+    if not image_b64:
+        raise HTTPException(status_code=400, detail="image_base64 is required")
+
+    api_key = _os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=503, detail="AI not configured — ANTHROPIC_API_KEY missing")
+
+    client = _anthropic.Anthropic(api_key=api_key)
+    msg = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=512,
+        messages=[{
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": media_type, "data": image_b64},
+                },
+                {
+                    "type": "text",
+                    "text": (
+                        "Extract contact information from this business card image. "
+                        "Return ONLY a JSON object with these exact keys "
+                        "(use empty string if not found): "
+                        "{\"name\": \"\", \"phone\": \"\", \"email\": \"\", "
+                        "\"school_name\": \"\", \"role\": \"\", \"website\": \"\", \"address\": \"\"}. "
+                        "For 'role' use one of: principal, vice_principal, director, coordinator, "
+                        "admin, teacher, purchase — pick the closest match or leave empty. "
+                        "Return only the JSON, no explanation."
+                    ),
+                },
+            ],
+        }],
+    )
+
+    raw = msg.content[0].text.strip()
+    try:
+        # Strip markdown fences if present
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        data = _json.loads(raw)
+    except Exception:
+        data = {"name": "", "phone": "", "email": "", "school_name": "", "role": "", "website": "", "address": ""}
+
+    return data
