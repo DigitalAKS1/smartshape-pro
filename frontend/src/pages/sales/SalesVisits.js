@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import SalesLayout from '../../components/layouts/SalesLayout';
-import { visits as visitsApi, leads as leadsApi, schools as schoolsApi, salesTargets } from '../../lib/api';
+import { visits as visitsApi, leads as leadsApi, schools as schoolsApi, salesTargets, contacts as contactsApi } from '../../lib/api';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
@@ -411,7 +411,7 @@ function PlanVisitForm({ onSaved, onClose, saving, setSaving }) {
 }
 
 // ── Visit Card ─────────────────────────────────────────────
-function VisitCard({ visit, onCheckIn, onOpenComplete, checkingIn }) {
+function VisitCard({ visit, onCheckIn, onOpenComplete, onAddContact, checkingIn }) {
   const [expanded, setExpanded] = useState(false);
 
   function navigate() {
@@ -534,6 +534,12 @@ function VisitCard({ visit, onCheckIn, onOpenComplete, checkingIn }) {
           {visit.notes && (
             <p className={`text-xs ${tMuted}`}>Notes: <span className={tSec}>{visit.notes}</span></p>
           )}
+          {visit.status === 'completed' && onAddContact && (
+            <button onClick={() => onAddContact(visit)}
+              className="mt-1 w-full flex items-center justify-center gap-1.5 py-2 rounded-lg border border-dashed border-[var(--border-color)] text-xs text-blue-400 hover:border-blue-400/50 hover:bg-blue-500/5 transition-all">
+              <Plus className="h-3.5 w-3.5" /> Add Contact from this Visit
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -551,6 +557,10 @@ export default function SalesVisits() {
   const [saving, setSaving]         = useState(false);
   const [filter, setFilter]         = useState('today');
   const [targetProgress, setTargetProgress] = useState(null);
+  // Add Contact sheet
+  const [addContactVisit, setAddContactVisit] = useState(null);
+  const [contactForm, setContactForm] = useState({ name: '', phone: '', email: '', role: 'principal', school_name: '' });
+  const [savingContact, setSavingContact] = useState(false);
   // Complete Visit sheet
   const [completeVisit, setCompleteVisit] = useState(null); // visit object
   const [completing, setCompleting]       = useState(false);
@@ -647,6 +657,28 @@ export default function SalesVisits() {
     const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLng/2)**2;
     return Math.round(R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)));
   }
+
+  const openAddContact = (visit) => {
+    setAddContactVisit(visit);
+    setContactForm({
+      name: visit.contact_person || '',
+      phone: visit.contact_phone || '',
+      email: '',
+      role: 'principal',
+      school_name: visit.school_name || '',
+    });
+  };
+
+  const submitAddContact = async () => {
+    if (!contactForm.name.trim()) { toast.error('Name is required'); return; }
+    setSavingContact(true);
+    try {
+      await contactsApi.create(contactForm);
+      toast.success('Contact added!');
+      setAddContactVisit(null);
+    } catch { toast.error('Failed to save contact'); }
+    finally { setSavingContact(false); }
+  };
 
   const todayVisits    = visits.filter(v => v.visit_date === today);
   const upcomingVisits = visits.filter(v => v.visit_date > today);
@@ -775,12 +807,62 @@ export default function SalesVisits() {
           <div className="space-y-3">
             {shown.map(v => (
               <VisitCard key={v.visit_id} visit={v}
-                onCheckIn={handleCheckIn} onOpenComplete={openCompleteSheet} checkingIn={checkingIn} />
+                onCheckIn={handleCheckIn} onOpenComplete={openCompleteSheet}
+                onAddContact={openAddContact} checkingIn={checkingIn} />
             ))}
           </div>
         )}
 
       </div>
+
+      {/* ── Add Contact from Visit Sheet ─────────────────────── */}
+      <BottomSheet
+        open={!!addContactVisit}
+        onClose={() => setAddContactVisit(null)}
+        title="Add Contact"
+        footer={
+          <button onClick={submitAddContact} disabled={savingContact}
+            className="w-full py-3.5 rounded-xl bg-[#e94560] text-white text-sm font-bold disabled:opacity-50">
+            {savingContact ? 'Saving…' : 'Save Contact'}
+          </button>
+        }
+      >
+        <div className="px-4 py-4 space-y-3.5">
+          <div>
+            <label className={`text-xs font-semibold ${tMuted} uppercase tracking-wide`}>School</label>
+            <input value={contactForm.school_name} onChange={e => setContactForm(f => ({ ...f, school_name: e.target.value }))}
+              className={`mt-1 w-full px-3 py-2.5 rounded-xl border border-[var(--border-color)] bg-[var(--bg-primary)] ${tPri} text-sm focus:outline-none focus:ring-2 focus:ring-[#e94560]/40`}
+              placeholder="School name" />
+          </div>
+          <div>
+            <label className={`text-xs font-semibold ${tMuted} uppercase tracking-wide`}>Name <span className="text-[#e94560]">*</span></label>
+            <input value={contactForm.name} onChange={e => setContactForm(f => ({ ...f, name: e.target.value }))}
+              className={`mt-1 w-full px-3 py-2.5 rounded-xl border border-[var(--border-color)] bg-[var(--bg-primary)] ${tPri} text-sm focus:outline-none focus:ring-2 focus:ring-[#e94560]/40`}
+              placeholder="Contact person name" />
+          </div>
+          <div>
+            <label className={`text-xs font-semibold ${tMuted} uppercase tracking-wide`}>Phone</label>
+            <input value={contactForm.phone} onChange={e => setContactForm(f => ({ ...f, phone: e.target.value }))}
+              type="tel" className={`mt-1 w-full px-3 py-2.5 rounded-xl border border-[var(--border-color)] bg-[var(--bg-primary)] ${tPri} text-sm focus:outline-none focus:ring-2 focus:ring-[#e94560]/40`}
+              placeholder="+91 98765 43210" />
+          </div>
+          <div>
+            <label className={`text-xs font-semibold ${tMuted} uppercase tracking-wide`}>Email</label>
+            <input value={contactForm.email} onChange={e => setContactForm(f => ({ ...f, email: e.target.value }))}
+              type="email" className={`mt-1 w-full px-3 py-2.5 rounded-xl border border-[var(--border-color)] bg-[var(--bg-primary)] ${tPri} text-sm focus:outline-none focus:ring-2 focus:ring-[#e94560]/40`}
+              placeholder="email@school.in" />
+          </div>
+          <div>
+            <label className={`text-xs font-semibold ${tMuted} uppercase tracking-wide`}>Role</label>
+            <select value={contactForm.role} onChange={e => setContactForm(f => ({ ...f, role: e.target.value }))}
+              className={`mt-1 w-full px-3 py-2.5 rounded-xl border border-[var(--border-color)] bg-[var(--bg-primary)] ${tPri} text-sm focus:outline-none focus:ring-2 focus:ring-[#e94560]/40`}>
+              {['principal', 'vice_principal', 'director', 'coordinator', 'admin', 'teacher', 'purchase'].map(r => (
+                <option key={r} value={r}>{r.replace(/_/g, ' ')}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+      </BottomSheet>
 
       {/* ── Complete Visit Sheet ─────────────────────────────── */}
       <BottomSheet
