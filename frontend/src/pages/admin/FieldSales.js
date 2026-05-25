@@ -78,7 +78,7 @@ export default function FieldSales() {
         API.get('/admin/users'),
         salesTargets.getAll(month),
       ]);
-      const reps = (usersRes.data || []).filter(u => u.role === 'sales' || u.team === 'sales');
+      const reps = (usersRes.data || []).filter(u => u.role === 'sales_person' || u.role === 'sales' || u.team === 'sales');
       setSalesReps(reps);
       const rows = {};
       reps.forEach(r => { rows[r.email] = { visits_target: 0, leads_target: 0, demos_target: 0 }; });

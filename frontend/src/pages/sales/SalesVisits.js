@@ -560,7 +560,7 @@ export default function SalesVisits() {
   const [targetProgress, setTargetProgress] = useState(null);
   // Add Contact sheet
   const [addContactVisit, setAddContactVisit] = useState(null);
-  const [contactForm, setContactForm] = useState({ name: '', phone: '', email: '', role: 'principal', school_name: '' });
+  const [contactForm, setContactForm] = useState({ name: '', phone: '', email: '', designation: 'Principal', company: '' });
   const [savingContact, setSavingContact] = useState(false);
   // Business card scanner
   const [scanOpen, setScanOpen]         = useState(false);
@@ -691,8 +691,8 @@ export default function SalesVisits() {
       name: scanResult.name || '',
       phone: scanResult.phone || '',
       email: scanResult.email || '',
-      role: scanResult.role || 'principal',
-      school_name: scanResult.school_name || '',
+      designation: scanResult.role || 'Principal',
+      company: scanResult.school_name || '',
     });
     setScanOpen(false);
     setScanPreview(null);
@@ -707,13 +707,14 @@ export default function SalesVisits() {
       name: visit.contact_person || '',
       phone: visit.contact_phone || '',
       email: '',
-      role: 'principal',
-      school_name: visit.school_name || '',
+      designation: 'Principal',
+      company: visit.school_name || '',
     });
   };
 
   const submitAddContact = async () => {
     if (!contactForm.name.trim()) { toast.error('Name is required'); return; }
+    if (!contactForm.phone.trim()) { toast.error('Phone is required'); return; }
     setSavingContact(true);
     try {
       await contactsApi.create(contactForm);
@@ -941,8 +942,8 @@ export default function SalesVisits() {
       >
         <div className="px-4 py-4 space-y-3.5">
           <div>
-            <label className={`text-xs font-semibold ${tMuted} uppercase tracking-wide`}>School</label>
-            <input value={contactForm.school_name} onChange={e => setContactForm(f => ({ ...f, school_name: e.target.value }))}
+            <label className={`text-xs font-semibold ${tMuted} uppercase tracking-wide`}>School / Organisation</label>
+            <input value={contactForm.company} onChange={e => setContactForm(f => ({ ...f, company: e.target.value }))}
               className={`mt-1 w-full px-3 py-2.5 rounded-xl border border-[var(--border-color)] bg-[var(--bg-primary)] ${tPri} text-sm focus:outline-none focus:ring-2 focus:ring-[#e94560]/40`}
               placeholder="School name" />
           </div>
@@ -953,7 +954,7 @@ export default function SalesVisits() {
               placeholder="Contact person name" />
           </div>
           <div>
-            <label className={`text-xs font-semibold ${tMuted} uppercase tracking-wide`}>Phone</label>
+            <label className={`text-xs font-semibold ${tMuted} uppercase tracking-wide`}>Phone <span className="text-[#e94560]">*</span></label>
             <input value={contactForm.phone} onChange={e => setContactForm(f => ({ ...f, phone: e.target.value }))}
               type="tel" className={`mt-1 w-full px-3 py-2.5 rounded-xl border border-[var(--border-color)] bg-[var(--bg-primary)] ${tPri} text-sm focus:outline-none focus:ring-2 focus:ring-[#e94560]/40`}
               placeholder="+91 98765 43210" />
@@ -965,11 +966,11 @@ export default function SalesVisits() {
               placeholder="email@school.in" />
           </div>
           <div>
-            <label className={`text-xs font-semibold ${tMuted} uppercase tracking-wide`}>Role</label>
-            <select value={contactForm.role} onChange={e => setContactForm(f => ({ ...f, role: e.target.value }))}
+            <label className={`text-xs font-semibold ${tMuted} uppercase tracking-wide`}>Designation</label>
+            <select value={contactForm.designation} onChange={e => setContactForm(f => ({ ...f, designation: e.target.value }))}
               className={`mt-1 w-full px-3 py-2.5 rounded-xl border border-[var(--border-color)] bg-[var(--bg-primary)] ${tPri} text-sm focus:outline-none focus:ring-2 focus:ring-[#e94560]/40`}>
-              {['principal', 'vice_principal', 'director', 'coordinator', 'admin', 'teacher', 'purchase'].map(r => (
-                <option key={r} value={r}>{r.replace(/_/g, ' ')}</option>
+              {['Principal', 'Vice Principal', 'Director', 'Coordinator', 'Admin', 'Teacher', 'Purchase Manager'].map(r => (
+                <option key={r} value={r}>{r}</option>
               ))}
             </select>
           </div>
