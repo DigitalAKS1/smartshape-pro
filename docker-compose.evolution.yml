@@ -41,6 +41,10 @@ services:
     environment:
       TOR_HOST: tor
       TOR_PORT: "9050"
+      PROXY_HOST: ${PROXY_HOST:-}
+      PROXY_PORT: ${PROXY_PORT:-10001}
+      PROXY_USER: ${PROXY_USER:-}
+      PROXY_PASS: ${PROXY_PASS:-}
     depends_on:
       evolution-api:
         condition: service_started

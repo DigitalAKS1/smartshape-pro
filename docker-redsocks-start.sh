@@ -1,28 +1,50 @@
 #!/bin/bash
-# Transparent Tor proxy sidecar for Evolution API
+# Transparent SOCKS5 proxy sidecar for Evolution API
 # Shares Evolution API's network namespace — iptables OUTPUT rules here
 # affect all TCP leaving the Evolution container.
+#
+# Set PROXY_HOST in .env.evolution to use a residential proxy instead of Tor:
+#   PROXY_HOST=gate.smartproxy.com
+#   PROXY_PORT=10001
+#   PROXY_USER=spuser12345
+#   PROXY_PASS=hunter2
 
 set -e
 
-TOR_HOST="${TOR_HOST:-tor}"
-TOR_PORT="${TOR_PORT:-9050}"
+PROXY_HOST="${PROXY_HOST:-}"
+PROXY_PORT="${PROXY_PORT:-10001}"
+PROXY_USER="${PROXY_USER:-}"
+PROXY_PASS="${PROXY_PASS:-}"
 
-# ── 1. Resolve Tor container hostname → IP ───────────────────────────────────
-echo "==> Waiting for Tor container ($TOR_HOST)..."
-for i in $(seq 1 60); do
-    TOR_IP=$(getent hosts "$TOR_HOST" 2>/dev/null | awk '{print $1}' | head -1)
-    [ -n "$TOR_IP" ] && break
-    sleep 2
-done
-
-if [ -z "$TOR_IP" ]; then
-    echo "ERROR: Could not resolve '$TOR_HOST' — is the tor service running?"
-    exit 1
+# ── Decide: residential proxy or Tor fallback ─────────────────────────────────
+if [ -n "$PROXY_HOST" ]; then
+    SOCKS_HOST="$PROXY_HOST"
+    SOCKS_PORT="$PROXY_PORT"
+    echo "==> Using residential proxy: $PROXY_HOST:$PROXY_PORT"
+    AUTH_CONF=""
+    if [ -n "$PROXY_USER" ]; then
+        AUTH_CONF="    login    = \"$PROXY_USER\";
+    password = \"$PROXY_PASS\";"
+        echo "    Auth: $PROXY_USER"
+    fi
+else
+    echo "==> No PROXY_HOST set — falling back to Tor container"
+    echo "==> Waiting for Tor container..."
+    for i in $(seq 1 60); do
+        SOCKS_HOST=$(getent hosts tor 2>/dev/null | awk '{print $1}' | head -1)
+        [ -n "$SOCKS_HOST" ] && break
+        sleep 2
+    done
+    if [ -z "$SOCKS_HOST" ]; then
+        echo "ERROR: Could not resolve 'tor' — is the tor service running?"
+        exit 1
+    fi
+    SOCKS_PORT="9050"
+    AUTH_CONF=""
+    echo "    Tor IP: $SOCKS_HOST"
 fi
-echo "    Tor IP: $TOR_IP"
 
-# ── 2. Write redsocks config ──────────────────────────────────────────────────
+# ── Write redsocks config ─────────────────────────────────────────────────────
 cat > /tmp/redsocks.conf << EOF
 base {
     log_debug  = off;
@@ -35,36 +57,36 @@ base {
 redsocks {
     local_ip   = 127.0.0.1;
     local_port = 12345;
-    ip         = $TOR_IP;
-    port       = $TOR_PORT;
+    ip         = $SOCKS_HOST;
+    port       = $SOCKS_PORT;
     type       = socks5;
+$AUTH_CONF
 }
 EOF
 
-# ── 3. Clear any stale iptables rules from a previous run ────────────────────
-iptables -t nat -D OUTPUT -p tcp -j SMARTSHAPE_TOR 2>/dev/null || true
-iptables -t nat -F SMARTSHAPE_TOR 2>/dev/null || true
-iptables -t nat -X SMARTSHAPE_TOR 2>/dev/null || true
+# ── Clear any stale iptables rules ───────────────────────────────────────────
+iptables -t nat -D OUTPUT -p tcp -j SMARTSHAPE_PROXY 2>/dev/null || true
+iptables -t nat -F SMARTSHAPE_PROXY 2>/dev/null || true
+iptables -t nat -X SMARTSHAPE_PROXY 2>/dev/null || true
 
-# ── 4. Start redsocks in the background ──────────────────────────────────────
+# ── Start redsocks ────────────────────────────────────────────────────────────
 redsocks -c /tmp/redsocks.conf &
 REDSOCKS_PID=$!
-sleep 1   # Give redsocks time to bind :12345
+sleep 1
 
-# ── 5. iptables OUTPUT rules (affect entire shared network namespace) ─────────
-iptables -t nat -N SMARTSHAPE_TOR
+# ── iptables OUTPUT rules ─────────────────────────────────────────────────────
+iptables -t nat -N SMARTSHAPE_PROXY
 
-# Private ranges → bypass (postgres, redis, other Docker services)
-iptables -t nat -A SMARTSHAPE_TOR -d 127.0.0.0/8    -j RETURN
-iptables -t nat -A SMARTSHAPE_TOR -d 10.0.0.0/8     -j RETURN
-iptables -t nat -A SMARTSHAPE_TOR -d 172.16.0.0/12  -j RETURN
-iptables -t nat -A SMARTSHAPE_TOR -d 192.168.0.0/16 -j RETURN
+# Private ranges → bypass (postgres, redis, Docker internals, VPS loopback)
+iptables -t nat -A SMARTSHAPE_PROXY -d 127.0.0.0/8    -j RETURN
+iptables -t nat -A SMARTSHAPE_PROXY -d 10.0.0.0/8     -j RETURN
+iptables -t nat -A SMARTSHAPE_PROXY -d 172.16.0.0/12  -j RETURN
+iptables -t nat -A SMARTSHAPE_PROXY -d 192.168.0.0/16 -j RETURN
 
-# Everything else → redsocks → Tor
-iptables -t nat -A SMARTSHAPE_TOR -p tcp -j REDIRECT --to-port 12345
-iptables -t nat -A OUTPUT -p tcp -j SMARTSHAPE_TOR
+# All other TCP → redsocks → proxy
+iptables -t nat -A SMARTSHAPE_PROXY -p tcp -j REDIRECT --to-port 12345
+iptables -t nat -A OUTPUT -p tcp -j SMARTSHAPE_PROXY
 
-echo "✅ Transparent Tor proxy active — all Evolution API TCP exits via Tor"
+echo "✅ Transparent proxy active → $SOCKS_HOST:$SOCKS_PORT"
 
-# ── 6. Keep container alive (exit when redsocks exits) ───────────────────────
 wait $REDSOCKS_PID
