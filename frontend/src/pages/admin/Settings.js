@@ -396,15 +396,15 @@ SmartShape Pro Team`
               {/* Provider cards */}
               <div className="bg-[var(--bg-card)] border border-[var(--border-color)] rounded-md p-6 space-y-5">
                 <div>
-                  <h2 className="text-xl font-medium text-[var(--text-primary)] mb-1">Residential SOCKS5 Proxy</h2>
-                  <p className="text-sm text-[var(--text-secondary)]">Buy from any provider below, then paste credentials here.</p>
+                  <h2 className="text-xl font-medium text-[var(--text-primary)] mb-1">Mobile / Residential SOCKS5 Proxy</h2>
+                  <p className="text-sm text-[var(--text-secondary)]">Mobile proxies (4G/5G IPs) work best for WhatsApp. Buy below, then paste credentials here.</p>
                 </div>
 
                 {/* Provider options */}
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   {[
-                    { name: 'SmartProxy', price: '~$2.50/GB', host: 'gate.smartproxy.com', port: '10001', url: 'https://smartproxy.com', badge: 'Recommended', badgeColor: 'bg-green-500/15 text-green-600' },
-                    { name: 'ProxyScrape', price: '~$2/GB', host: 'rotating.proxyscrape.com', port: '6000', url: 'https://proxyscrape.com', badge: 'Budget', badgeColor: 'bg-blue-500/15 text-blue-600' },
+                    { name: 'Decodo Mobile', price: '~$3.75/GB', host: 'gate.decodo.com', port: '10000', url: 'https://decodo.com/proxies/mobile', badge: 'Best for WhatsApp', badgeColor: 'bg-green-500/15 text-green-600' },
+                    { name: 'Decodo Residential', price: '~$2.50/GB', host: 'gate.decodo.com', port: '10001', url: 'https://decodo.com', badge: 'Budget', badgeColor: 'bg-blue-500/15 text-blue-600' },
                     { name: 'Bright Data', price: '~$10/GB', host: 'brd.superproxy.io', port: '22225', url: 'https://brightdata.com', badge: 'Enterprise', badgeColor: 'bg-purple-500/15 text-purple-600' },
                   ].map(p => (
                     <button key={p.name} type="button"
@@ -441,7 +441,7 @@ SmartShape Pro Team`
                           value={proxy.host}
                           onChange={e => setProxy(p => ({ ...p, host: e.target.value }))}
                           className="bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)] font-mono text-sm mt-1"
-                          placeholder="gate.smartproxy.com"
+                          placeholder="gate.decodo.com"
                         />
                       </div>
                       <div>
