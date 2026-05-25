@@ -62,6 +62,7 @@ export default function LeadsCRM() {
   const [fuForm, setFuForm] = useState({ followup_date: '', followup_time: '', followup_type: 'call', notes: '' });
   const [physicalDispatches, setPhysicalDispatches] = useState([]);
   const [pdForm, setPdForm] = useState({ material_type: 'brochure', description: '', courier_name: '', tracking_number: '', sent_date: '' });
+  const [leadVisits, setLeadVisits] = useState([]);
   const [taskDialogOpen, setTaskDialogOpen] = useState(false);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const fileRef = useRef(null);
@@ -186,19 +187,22 @@ export default function LeadsCRM() {
   const openDetail = async (lead) => {
     setDetailLead(lead);
     setPhysicalDispatches([]);
+    setLeadVisits([]);
     setPdForm({ material_type: 'brochure', description: '', courier_name: '', tracking_number: '', sent_date: new Date().toISOString().slice(0, 10) });
     try {
-      const [nr, fr, pdRes, enrollRes] = await Promise.all([
+      const [nr, fr, pdRes, enrollRes, visitsRes] = await Promise.all([
         leadsApi.getNotes(lead.lead_id),
         fuApi.getAll(lead.lead_id),
         fetch(`${process.env.REACT_APP_BACKEND_URL}/api/physical-dispatches?lead_id=${lead.lead_id}`, { credentials: 'include' }).then(r => r.json()).catch(() => []),
         dripSequencesApi.enrollments({ lead_id: lead.lead_id }).catch(() => ({ data: [] })),
+        fetch(`${process.env.REACT_APP_BACKEND_URL}/api/leads/${lead.lead_id}/visit-history`, { credentials: 'include' }).then(r => r.json()).catch(() => []),
       ]);
       setNotes(nr.data);
       setLeadFollowups(fr.data);
       setPhysicalDispatches(Array.isArray(pdRes) ? pdRes : []);
       setLeadEnrollments(Array.isArray(enrollRes.data) ? enrollRes.data : []);
-    } catch { setNotes([]); setLeadFollowups([]); setLeadEnrollments([]); }
+      setLeadVisits(Array.isArray(visitsRes) ? visitsRes : []);
+    } catch { setNotes([]); setLeadFollowups([]); setLeadEnrollments([]); setLeadVisits([]); }
   };
 
   const addPhysicalDispatch = async () => {
@@ -1651,6 +1655,36 @@ export default function LeadsCRM() {
                             <span className={`text-xs px-1.5 py-0.5 rounded ${fu.status === 'completed' ? 'bg-green-500/20 text-green-400' : fu.status === 'missed' ? 'bg-red-500/20 text-red-400' : 'bg-yellow-500/20 text-yellow-400'}`}>{fu.status}</span>
                             {fu.status === 'pending' && <Button size="sm" variant="ghost" onClick={() => completeFollowup(fu.followup_id)} className="text-green-400 h-6"><CheckCircle className="h-3 w-3" /></Button>}
                           </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {/* Visit History */}
+                {leadVisits.length > 0 && (
+                  <div>
+                    <p className={`text-xs font-medium ${textSec} mb-2`}>Visit History ({leadVisits.length})</p>
+                    <div className="space-y-1.5">
+                      {leadVisits.map((v, i) => (
+                        <div key={v.visit_id || i} className={`${card} border rounded-md p-2.5 space-y-0.5`}>
+                          <div className="flex items-center justify-between gap-2">
+                            <span className={`text-xs font-semibold ${textPri}`}>{v.visit_date}{v.visit_time ? ` · ${v.visit_time}` : ''}</span>
+                            <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${
+                              v.status === 'completed' ? 'bg-emerald-500/15 text-emerald-400' :
+                              v.status === 'checked_in' ? 'bg-blue-500/15 text-blue-400' :
+                              v.status === 'cancelled' ? 'bg-red-500/15 text-red-400' :
+                              'bg-amber-500/15 text-amber-400'
+                            }`}>{v.status}</span>
+                          </div>
+                          {v.rep_name && <p className={`text-xs ${textMuted}`}>Rep: {v.rep_name}</p>}
+                          {v.purpose  && <p className={`text-xs ${textMuted}`}>Purpose: {v.purpose}</p>}
+                          {v.outcome  && <p className={`text-xs ${textMuted}`}>Outcome: {v.outcome}</p>}
+                          {v.check_in_time && (
+                            <p className={`text-xs ${textMuted}`}>
+                              Checked in: {new Date(v.check_in_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
+                              {v.check_out_time && ` → ${new Date(v.check_out_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}`}
+                            </p>
+                          )}
                         </div>
                       ))}
                     </div>

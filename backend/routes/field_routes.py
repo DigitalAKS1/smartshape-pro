@@ -575,6 +575,45 @@ async def update_visit(visit_id: str, request: Request):
     raise HTTPException(status_code=404, detail="Visit not found")
 
 
+@router.get("/leads/{lead_id}/visit-history")
+async def lead_visit_history(lead_id: str, request: Request):
+    """Return all visits for a lead from both visit_plans and field_visits."""
+    await get_current_user(request)
+    lead = await db.leads.find_one({"lead_id": lead_id}, {"_id": 0, "company_name": 1, "school_name": 1})
+    school_name = (lead or {}).get("company_name") or (lead or {}).get("school_name") or ""
+
+    vp_list = await db.visit_plans.find({"lead_id": lead_id}, {"_id": 0}).sort("visit_date", -1).to_list(None)
+    fv_list = await db.field_visits.find({"school_name": school_name}, {"_id": 0}).sort("visit_date", -1).to_list(None) if school_name else []
+
+    def _norm_vp(v):
+        status = v.get("status", "planned")
+        if status == "in_progress": status = "checked_in"
+        return {
+            "visit_id": v.get("plan_id"), "source": "visit_plan",
+            "visit_date": v.get("visit_date"), "visit_time": v.get("visit_time"),
+            "status": status, "purpose": v.get("purpose"), "outcome": v.get("outcome"),
+            "notes": v.get("visit_notes"), "rep_name": v.get("assigned_name"),
+            "check_in_time": v.get("check_in_time"), "check_out_time": v.get("check_out_time"),
+        }
+    def _norm_fv(v):
+        status = v.get("status", "planned")
+        if status == "visited": status = "checked_in"
+        return {
+            "visit_id": v.get("visit_id"), "source": "field_visit",
+            "visit_date": v.get("visit_date"), "visit_time": v.get("visit_time"),
+            "status": status, "purpose": v.get("purpose"), "outcome": v.get("outcome"),
+            "notes": v.get("notes"), "rep_name": v.get("sales_person_name"),
+            "check_in_time": v.get("check_in_time") or v.get("checked_in_at"),
+            "check_out_time": v.get("check_out_time"),
+        }
+
+    all_visits = sorted(
+        [_norm_vp(v) for v in vp_list] + [_norm_fv(v) for v in fv_list],
+        key=lambda v: (v.get("visit_date") or ""), reverse=True
+    )
+    return all_visits
+
+
 # ==================== TRAVEL EXPENSES ====================
 
 @router.post("/sales/expenses")

@@ -519,7 +519,38 @@ async def get_school_profile(school_id: str, request: Request):
          "grand_total": 1, "currency_symbol": 1, "created_at": 1, "created_by_name": 1, "items": 1}
     ).sort("created_at", -1).to_list(None)
 
-    visits = await db.visit_plans.find({"school_id": school_id}, {"_id": 0}).sort("visit_date", -1).to_list(None)
+    # Fetch from visit_plans (admin-scheduled, have school_id)
+    vp_list = await db.visit_plans.find({"school_id": school_id}, {"_id": 0}).sort("visit_date", -1).to_list(None)
+    # Also fetch self-created field_visits by school_name match (reps who didn't have a plan)
+    fv_list = await db.field_visits.find({"school_name": school_name}, {"_id": 0}).sort("visit_date", -1).to_list(None)
+    # Normalize both to a unified schema for the frontend
+    def _norm_vp(v):
+        status = v.get("status", "planned")
+        if status == "in_progress": status = "checked_in"
+        return {
+            "visit_id": v.get("plan_id"), "source": "visit_plan",
+            "visit_date": v.get("visit_date"), "visit_time": v.get("visit_time"),
+            "status": status, "purpose": v.get("purpose"), "outcome": v.get("outcome"),
+            "notes": v.get("visit_notes"), "rep_name": v.get("assigned_name"),
+            "check_in_time": v.get("check_in_time"), "check_out_time": v.get("check_out_time"),
+            "check_in_address": v.get("check_in_address"), "school_name": v.get("school_name"),
+        }
+    def _norm_fv(v):
+        status = v.get("status", "planned")
+        if status == "visited": status = "checked_in"
+        return {
+            "visit_id": v.get("visit_id"), "source": "field_visit",
+            "visit_date": v.get("visit_date"), "visit_time": v.get("visit_time"),
+            "status": status, "purpose": v.get("purpose"), "outcome": v.get("outcome"),
+            "notes": v.get("notes"), "rep_name": v.get("sales_person_name"),
+            "check_in_time": v.get("check_in_time") or v.get("checked_in_at"),
+            "check_out_time": v.get("check_out_time"), "check_in_address": None,
+            "school_name": v.get("school_name"),
+        }
+    visits = sorted(
+        [_norm_vp(v) for v in vp_list] + [_norm_fv(v) for v in fv_list],
+        key=lambda v: (v.get("visit_date") or ""), reverse=True
+    )
 
     call_notes = []
     meetings = []

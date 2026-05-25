@@ -570,6 +570,12 @@ export default function SchoolProfile() {
 
           {/* ─── VISITS & MEETINGS ────────────────────────────────────────── */}
           {activeTab === 'visits' && (() => {
+            const STATUS_CLS = {
+              planned:    'bg-amber-50 text-amber-700',
+              checked_in: 'bg-blue-50 text-blue-700',
+              completed:  'bg-emerald-50 text-emerald-700',
+              cancelled:  'bg-red-50 text-red-600',
+            };
             const items = [
               ...visits.map(v => ({ ...v, _type: 'visit', _date: v.visit_date })),
               ...meetings.map(m => ({ ...m, _type: 'meeting', _date: m.followup_date })),
@@ -582,19 +588,35 @@ export default function SchoolProfile() {
                       <div key={i} className="px-5 py-4 flex items-start gap-4">
                         <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 mt-1.5 ${item._type === 'visit' ? 'bg-blue-400' : 'bg-violet-400'}`} />
                         <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <Badge label={item._type} cls={item._type === 'visit' ? 'bg-blue-50 text-blue-700' : 'bg-violet-50 text-violet-700'} />
-                            <span className={`text-xs ${tk.tm}`}>{fmt(item._date)}</span>
-                          </div>
                           {item._type === 'visit' ? (
                             <>
-                              {item.executive_name && <p className={`text-sm font-medium ${tk.t1} mt-1`}>{item.executive_name}</p>}
-                              {item.purpose        && <p className={`text-xs ${tk.tm} mt-0.5`}>{item.purpose}</p>}
-                              {item.outcome        && <p className={`text-xs ${tk.tm}`}>Outcome: {item.outcome}</p>}
+                              <div className="flex items-center gap-2 flex-wrap mb-1">
+                                <span className={`text-sm font-semibold ${tk.t1}`}>{fmt(item._date)}{item.visit_time ? ` · ${item.visit_time}` : ''}</span>
+                                {item.status && <Badge label={item.status.replace('_', ' ')} cls={STATUS_CLS[item.status] || 'bg-slate-100 text-slate-600'} />}
+                                {item.source === 'field_visit' && <Badge label="Self-booked" cls="bg-slate-100 text-slate-500" />}
+                              </div>
+                              {(item.rep_name || item.assigned_name) && (
+                                <p className={`text-xs font-medium ${tk.t2}`}>
+                                  Rep: {item.rep_name || item.assigned_name}
+                                </p>
+                              )}
+                              {item.purpose && <p className={`text-xs ${tk.tm} mt-0.5`}>{item.purpose}</p>}
+                              {item.outcome && <p className={`text-xs ${tk.tm}`}>Outcome: {item.outcome}</p>}
+                              {item.notes   && <p className={`text-xs ${tk.tm}`}>Notes: {item.notes}</p>}
+                              {item.check_in_time && (
+                                <p className={`text-xs ${tk.tm}`}>
+                                  In: {new Date(item.check_in_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
+                                  {item.check_out_time && ` → Out: ${new Date(item.check_out_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}`}
+                                </p>
+                              )}
                             </>
                           ) : (
                             <>
-                              {item.assigned_to && <p className={`text-sm font-medium ${tk.t1} mt-1`}>{item.assigned_to}</p>}
+                              <div className="flex items-center gap-2 mb-1">
+                                <Badge label="Meeting" cls="bg-violet-50 text-violet-700" />
+                                <span className={`text-xs ${tk.tm}`}>{fmt(item._date)}</span>
+                              </div>
+                              {item.assigned_to && <p className={`text-sm font-medium ${tk.t1}`}>{item.assigned_to}</p>}
                               {item.notes       && <p className={`text-xs ${tk.tm} mt-0.5`}>{item.notes}</p>}
                             </>
                           )}
