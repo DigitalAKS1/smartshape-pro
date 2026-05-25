@@ -150,8 +150,21 @@ async def login(input: LoginInput, response: Response, request: Request):
     attempt = await db.login_attempts.find_one({"identifier": identifier})
     if attempt and attempt.get("count", 0) >= 5:
         lockout_until = attempt.get("lockout_until")
-        if lockout_until and datetime.fromisoformat(lockout_until) > datetime.now(timezone.utc):
-            raise HTTPException(status_code=429, detail="Too many failed attempts. Try again later.")
+        if lockout_until:
+            unlock_dt = datetime.fromisoformat(lockout_until)
+            now_utc   = datetime.now(timezone.utc)
+            if unlock_dt > now_utc:
+                mins_left = max(1, int((unlock_dt - now_utc).total_seconds() / 60) + 1)
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"Account temporarily locked after too many failed attempts. "
+                           f"Please wait {mins_left} minute{'s' if mins_left != 1 else ''} and try again, "
+                           f"or contact your administrator."
+                )
+            else:
+                # Lockout expired — auto-clear it
+                await db.login_attempts.delete_one({"identifier": identifier})
+                attempt = None
 
     user = await db.users.find_one({"email": email})
     if not user or not verify_password(input.password, user["password_hash"]):
