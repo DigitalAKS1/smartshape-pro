@@ -7,7 +7,7 @@ import { Label } from '../../components/ui/label';
 import {
   Plus, MapPin, Check, Calendar, Navigation, Clock, X,
   Search, Link2, MapPinned, ChevronDown, ChevronUp,
-  Phone, Info, Clipboard, ExternalLink, ArrowRight,
+  Phone, Info, Clipboard, ExternalLink, ArrowRight, Loader2,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -411,7 +411,7 @@ function PlanVisitForm({ onSaved, onClose, saving, setSaving }) {
 }
 
 // ── Visit Card ─────────────────────────────────────────────
-function VisitCard({ visit, onCheckIn, onComplete, checkingIn }) {
+function VisitCard({ visit, onCheckIn, onOpenComplete, checkingIn }) {
   const [expanded, setExpanded] = useState(false);
 
   function navigate() {
@@ -480,7 +480,7 @@ function VisitCard({ visit, onCheckIn, onComplete, checkingIn }) {
             </button>
           )}
           {visit.status === 'checked_in' && (
-            <button onClick={() => onComplete(visit.visit_id)}
+            <button onClick={() => onOpenComplete(visit)}
               className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-emerald-500/10 text-emerald-400 text-xs font-semibold active:opacity-70 transition-opacity">
               <Check className="h-3.5 w-3.5" /> Complete
             </button>
@@ -519,6 +519,18 @@ function VisitCard({ visit, onCheckIn, onComplete, checkingIn }) {
           {visit.check_out_time && (
             <p className={`text-xs ${tMuted}`}>Checked out: <span className={tSec}>{new Date(visit.check_out_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}</span></p>
           )}
+          {visit.check_out_lat && visit.check_out_lng && (
+            <p className={`text-xs ${tMuted}`}>
+              Exit GPS: <span className="text-emerald-400 font-mono text-[11px]">{visit.check_out_lat?.toFixed(5)}, {visit.check_out_lng?.toFixed(5)}</span>
+              <a href={`https://www.google.com/maps?q=${visit.check_out_lat},${visit.check_out_lng}`} target="_blank" rel="noreferrer"
+                className="ml-2 text-blue-400 inline-flex items-center gap-0.5">
+                <ExternalLink className="h-2.5 w-2.5" /> View
+              </a>
+            </p>
+          )}
+          {visit.outcome && (
+            <p className={`text-xs ${tMuted}`}>Outcome: <span className={tSec}>{visit.outcome}</span></p>
+          )}
           {visit.notes && (
             <p className={`text-xs ${tMuted}`}>Notes: <span className={tSec}>{visit.notes}</span></p>
           )}
@@ -538,6 +550,11 @@ export default function SalesVisits() {
   const [planOpen, setPlanOpen]     = useState(false);
   const [saving, setSaving]         = useState(false);
   const [filter, setFilter]         = useState('today');
+  // Complete Visit sheet
+  const [completeVisit, setCompleteVisit] = useState(null); // visit object
+  const [completing, setCompleting]       = useState(false);
+  const [completeForm, setCompleteForm]   = useState({ outcome: '', notes: '' });
+  const [gpsState, setGpsState]           = useState({ loading: true, lat: null, lng: null, address: null, error: null });
 
   useEffect(() => { fetchVisits(); }, []);
 
@@ -564,13 +581,64 @@ export default function SalesVisits() {
     finally { setCheckingIn(false); }
   };
 
-  const handleComplete = async (visitId) => {
-    try {
-      await visitsApi.update(visitId, { status: 'completed' });
-      toast.success('Visit marked complete!');
-      fetchVisits();
-    } catch { toast.error('Failed to mark complete'); }
+  const openCompleteSheet = (visit) => {
+    setCompleteVisit(visit);
+    setCompleteForm({ outcome: '', notes: '' });
+    setGpsState({ loading: true, lat: null, lng: null, address: null, error: null });
+    // Start GPS capture immediately
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        async (pos) => {
+          const { latitude: lat, longitude: lng } = pos.coords;
+          try {
+            const r = await fetch(
+              `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`,
+              { headers: { 'User-Agent': 'SmartShapePro/1.0' } }
+            );
+            const d = await r.json();
+            setGpsState({ loading: false, lat, lng, address: d.display_name || `${lat.toFixed(5)}, ${lng.toFixed(5)}`, error: null });
+          } catch {
+            setGpsState({ loading: false, lat, lng, address: `${lat.toFixed(5)}, ${lng.toFixed(5)}`, error: null });
+          }
+        },
+        (err) => setGpsState({ loading: false, lat: null, lng: null, address: null, error: err.message }),
+        { enableHighAccuracy: true, timeout: 12000 }
+      );
+    } else {
+      setGpsState({ loading: false, lat: null, lng: null, address: null, error: 'GPS not supported on this device' });
+    }
   };
+
+  const submitComplete = async () => {
+    if (!completeVisit) return;
+    setCompleting(true);
+    try {
+      const payload = {
+        status: 'completed',
+        outcome: completeForm.outcome,
+        notes: completeForm.notes,
+      };
+      if (gpsState.lat && gpsState.lng) {
+        payload.check_out_lat     = gpsState.lat;
+        payload.check_out_lng     = gpsState.lng;
+        payload.check_out_address = gpsState.address;
+      }
+      await visitsApi.update(completeVisit.visit_id, payload);
+      toast.success('Visit completed! Location saved.');
+      setCompleteVisit(null);
+      fetchVisits();
+    } catch { toast.error('Failed to complete visit'); }
+    finally { setCompleting(false); }
+  };
+
+  // Distance from check-in to check-out (haversine, metres)
+  function distanceBetween(lat1, lng1, lat2, lng2) {
+    const R = 6371000;
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLng = (lng2 - lng1) * Math.PI / 180;
+    const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLng/2)**2;
+    return Math.round(R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)));
+  }
 
   const todayVisits    = visits.filter(v => v.visit_date === today);
   const upcomingVisits = visits.filter(v => v.visit_date > today);
@@ -671,12 +739,91 @@ export default function SalesVisits() {
           <div className="space-y-3">
             {shown.map(v => (
               <VisitCard key={v.visit_id} visit={v}
-                onCheckIn={handleCheckIn} onComplete={handleComplete} checkingIn={checkingIn} />
+                onCheckIn={handleCheckIn} onOpenComplete={openCompleteSheet} checkingIn={checkingIn} />
             ))}
           </div>
         )}
 
       </div>
+
+      {/* ── Complete Visit Sheet ─────────────────────────────── */}
+      <BottomSheet
+        open={!!completeVisit}
+        onClose={() => !completing && setCompleteVisit(null)}
+        title="Complete Visit"
+        footer={
+          <button onClick={submitComplete} disabled={completing || gpsState.loading}
+            className="w-full py-3.5 rounded-xl bg-emerald-500 text-white font-bold text-sm shadow-lg shadow-emerald-500/20 disabled:opacity-40 active:opacity-80 transition-opacity">
+            {completing ? 'Saving…' : 'Mark Complete & Save Location'}
+          </button>
+        }
+      >
+        <div className="px-4 pt-3 pb-4 space-y-4">
+          {/* GPS Status */}
+          <div className={`rounded-2xl border p-4 space-y-2 ${
+            gpsState.error ? 'border-red-500/30 bg-red-500/5' :
+            gpsState.loading ? 'border-amber-500/30 bg-amber-500/5' :
+            'border-emerald-500/30 bg-emerald-500/5'
+          }`}>
+            <div className="flex items-center gap-2">
+              {gpsState.loading ? (
+                <><Loader2 className="h-4 w-4 animate-spin text-amber-400" /><span className={`text-xs font-semibold text-amber-400`}>Getting your location…</span></>
+              ) : gpsState.error ? (
+                <><MapPin className="h-4 w-4 text-red-400" /><span className="text-xs font-semibold text-red-400">GPS unavailable</span></>
+              ) : (
+                <><MapPin className="h-4 w-4 text-emerald-400" /><span className="text-xs font-semibold text-emerald-400">Location captured</span></>
+              )}
+            </div>
+            {gpsState.lat && gpsState.lng && (
+              <>
+                <p className={`text-[11px] ${tMuted} font-mono`}>{gpsState.lat.toFixed(6)}, {gpsState.lng.toFixed(6)}</p>
+                {gpsState.address && <p className={`text-[11px] ${tSec} leading-snug`}>{gpsState.address}</p>}
+                <a href={`https://www.google.com/maps?q=${gpsState.lat},${gpsState.lng}`}
+                  target="_blank" rel="noreferrer"
+                  className="inline-flex items-center gap-1 text-[11px] text-blue-400 font-semibold">
+                  <ExternalLink className="h-3 w-3" /> Verify on Maps
+                </a>
+                {/* Distance from check-in if available */}
+                {completeVisit?.lat && completeVisit?.lng && gpsState.lat && (() => {
+                  const d = distanceBetween(completeVisit.lat, completeVisit.lng, gpsState.lat, gpsState.lng);
+                  return (
+                    <p className={`text-[11px] ${d > 500 ? 'text-amber-400' : tMuted}`}>
+                      {d > 500 ? '⚠ ' : ''}{d}m from planned location
+                    </p>
+                  );
+                })()}
+              </>
+            )}
+            {gpsState.error && <p className={`text-[11px] text-red-400`}>{gpsState.error} — visit will be saved without GPS.</p>}
+          </div>
+
+          {/* Outcome */}
+          <div>
+            <Label className={`text-xs font-semibold ${tSec} mb-1.5 block`}>Visit Outcome</Label>
+            <select value={completeForm.outcome}
+              onChange={e => setCompleteForm(f => ({ ...f, outcome: e.target.value }))}
+              className={`w-full h-11 px-3 rounded-xl border border-[var(--border-color)] bg-[var(--bg-primary)] ${tPri} text-sm`}>
+              <option value="">— Select outcome —</option>
+              <option value="interested">Interested — wants demo/quote</option>
+              <option value="demo_booked">Demo booked</option>
+              <option value="follow_up">Needs follow-up</option>
+              <option value="callback_requested">Callback requested</option>
+              <option value="not_interested">Not interested</option>
+              <option value="already_purchased">Already purchased elsewhere</option>
+            </select>
+          </div>
+
+          {/* Notes */}
+          <div>
+            <Label className={`text-xs font-semibold ${tSec} mb-1.5 block`}>Visit Notes</Label>
+            <textarea value={completeForm.notes}
+              onChange={e => setCompleteForm(f => ({ ...f, notes: e.target.value }))}
+              rows={3}
+              className={`w-full px-3 py-2.5 rounded-xl border border-[var(--border-color)] bg-[var(--bg-primary)] ${tPri} text-sm resize-none`}
+              placeholder="What happened? Any key points discussed…" />
+          </div>
+        </div>
+      </BottomSheet>
 
       {/* Plan Visit Bottom Sheet with sticky submit */}
       <BottomSheet

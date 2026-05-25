@@ -534,10 +534,14 @@ async def update_visit(visit_id: str, request: Request):
         {"visit_id": visit_id, "sales_person_email": user["email"]}
     )
     if visit:
-        safe = {k: v for k, v in body.items()
-                if k in ("status", "notes", "outcome", "check_out_time", "check_in_time")}
+        allowed = ("status", "notes", "outcome", "check_out_time", "check_in_time",
+                   "check_out_lat", "check_out_lng", "check_out_address")
+        safe = {k: v for k, v in body.items() if k in allowed}
         if safe.get("status") == "completed" and not safe.get("check_out_time"):
             safe["check_out_time"] = now_iso
+        # Reverse-geocode check-out coords if address not provided
+        if safe.get("check_out_lat") and safe.get("check_out_lng") and not safe.get("check_out_address"):
+            safe["check_out_address"] = reverse_geocode(safe["check_out_lat"], safe["check_out_lng"])
         await db.field_visits.update_one(
             {"visit_id": visit_id, "sales_person_email": user["email"]},
             {"$set": safe},
@@ -552,6 +556,13 @@ async def update_visit(visit_id: str, request: Request):
         if status == "completed":
             safe["status"]         = "completed"
             safe["check_out_time"] = now_iso
+            # Capture check-out GPS for visit_plans too
+            if body.get("check_out_lat") and body.get("check_out_lng"):
+                safe["check_out_lat"] = float(body["check_out_lat"])
+                safe["check_out_lng"] = float(body["check_out_lng"])
+                safe["check_out_address"] = body.get("check_out_address") or reverse_geocode(
+                    safe["check_out_lat"], safe["check_out_lng"]
+                )
         elif status == "checked_in":
             safe["status"] = "in_progress"
         if "notes" in body:
