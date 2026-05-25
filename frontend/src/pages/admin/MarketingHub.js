@@ -19,6 +19,7 @@ import {
   Flag, BookOpen, Heart, School, Cake, FileText,
   PieChart, Target, Inbox, X, Mail, AtSign,
   Paperclip, Brain, Upload, Smartphone as PhoneIcon, QrCode, Loader2,
+  Pencil, ImageIcon,
 } from 'lucide-react';
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
@@ -137,6 +138,7 @@ function mapSeq(s) {
     trigger: `${tLabel}${fLabel}`,
     filter_designation: s.filter_designation || '',
     sequence_id: s.sequence_id,
+    trigger_raw: s.trigger,
     steps: (s.steps || []).map(st => {
       const plain = st.message_template
         ? st.message_template.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
@@ -148,6 +150,9 @@ function mapSeq(s) {
         delay_days: st.delay_days,
         message_template: st.message_template,
         message_type: st.message_type,
+        attachment_id: st.attachment_id || null,
+        attachment_url: st.attachment_url || null,
+        attachment_name: st.attachment_name || null,
       };
     }),
     enrolled: s.enrollment_count || 0,
@@ -1390,14 +1395,22 @@ function GreetingsTab({ tk, greetings, setGreetings }) {
 // ══════════════════════════════════════════════════════════════════════════════
 // Tab 4 — Drip Sequences
 // ══════════════════════════════════════════════════════════════════════════════
-const BLANK_FORM = { name: '', description: '', trigger: 'lead_created', filter_designation: '', steps: [{ message_template: '', delay_days: 0 }] };
+const BLANK_FORM = { name: '', description: '', trigger: 'lead_created', filter_designation: '', steps: [{ message_template: '', delay_days: 0, attachment_id: null }] };
 
 function DripsTab({ tk, drips, setDrips }) {
-  const [expanded, setExpanded] = useState(null);
-  const [showCreate, setShowCreate] = useState(false);
-  const [form, setForm] = useState(BLANK_FORM);
-  const [saving, setSaving] = useState(false);
+  const [expanded, setExpanded]     = useState(null);
+  const [showCreate, setShowCreate]  = useState(false);
+  const [editingSeq, setEditingSeq]  = useState(null);
+  const [deleteSeq, setDeleteSeq]    = useState(null);
+  const [deleting, setDeleting]      = useState(false);
+  const [form, setForm]              = useState(BLANK_FORM);
+  const [saving, setSaving]          = useState(false);
+  const [attachments, setAttachments]      = useState([]);
+  const [pickingFor, setPickingFor]        = useState(null);
+  const [loadingAttach, setLoadingAttach]  = useState(false);
+  const [uploadingAttach, setUploadingAttach] = useState(false);
 
+  // ── helpers ─────────────────────────────────────────────────────────────────
   async function toggle(d) {
     try {
       await dripApi.update(d.sequence_id, { is_active: !d.active });
@@ -1408,15 +1421,90 @@ function DripsTab({ tk, drips, setDrips }) {
   }
 
   function addStep() {
-    const nextDay = form.steps.length === 0 ? 0 : form.steps[form.steps.length - 1].delay_days + 3;
-    setForm(p => ({ ...p, steps: [...p.steps, { message_template: '', delay_days: nextDay }] }));
+    const nextDay = form.steps.length === 0 ? 0 : (parseInt(form.steps[form.steps.length - 1].delay_days) || 0) + 3;
+    setForm(p => ({ ...p, steps: [...p.steps, { message_template: '', delay_days: nextDay, attachment_id: null }] }));
   }
 
   function removeStep(i) {
     setForm(p => ({ ...p, steps: p.steps.filter((_, ii) => ii !== i) }));
   }
 
-  async function create() {
+  function closeDialog() {
+    setShowCreate(false);
+    setEditingSeq(null);
+    setForm(BLANK_FORM);
+  }
+
+  function startEdit(d) {
+    setForm({
+      name: d.name,
+      description: d.description || '',
+      trigger: d.trigger_raw || 'lead_created',
+      filter_designation: d.filter_designation || '',
+      steps: d.steps.map(s => ({
+        message_template: s.message_template || '',
+        delay_days: s.delay_days,
+        attachment_id: s.attachment_id || null,
+      })),
+    });
+    setEditingSeq(d);
+    setShowCreate(true);
+  }
+
+  async function openAttachPicker(stepIndex) {
+    setPickingFor(stepIndex);
+    if (attachments.length === 0) {
+      setLoadingAttach(true);
+      try {
+        const res = await waApi.listAttachments();
+        setAttachments(res.data || []);
+      } catch {
+        toast.error('Failed to load attachments');
+      } finally {
+        setLoadingAttach(false);
+      }
+    }
+  }
+
+  function pickAttachment(attachId) {
+    setForm(p => ({
+      ...p,
+      steps: p.steps.map((ss, ii) => ii === pickingFor ? { ...ss, attachment_id: attachId } : ss),
+    }));
+    setPickingFor(null);
+  }
+
+  function clearAttachment(stepIndex) {
+    setForm(p => ({
+      ...p,
+      steps: p.steps.map((ss, ii) => ii === stepIndex ? { ...ss, attachment_id: null } : ss),
+    }));
+  }
+
+  async function uploadNewAttachment(file) {
+    if (!file) return;
+    setUploadingAttach(true);
+    try {
+      const res = await waApi.uploadAttachment(file);
+      const newAttach = res.data;
+      setAttachments(prev => [newAttach, ...prev]);
+      if (pickingFor !== null) {
+        setForm(p => ({
+          ...p,
+          steps: p.steps.map((ss, ii) => ii === pickingFor ? { ...ss, attachment_id: newAttach.attachment_id } : ss),
+        }));
+        setPickingFor(null);
+      }
+      toast.success('Attachment uploaded');
+    } catch {
+      toast.error('Upload failed');
+    } finally {
+      setUploadingAttach(false);
+    }
+  }
+
+  // ── save (create or update) ──────────────────────────────────────────────────
+  async function save() {
     if (!form.name.trim()) { toast.error('Sequence name is required'); return; }
     if (form.steps.length === 0) { toast.error('Add at least one step'); return; }
     setSaving(true);
@@ -1426,7 +1514,7 @@ function DripsTab({ tk, drips, setDrips }) {
         description: form.description.trim(),
         trigger: form.trigger,
         filter_designation: form.filter_designation.trim() || null,
-        is_active: true,
+        is_active: editingSeq ? editingSeq.active : true,
         steps: form.steps.map((s, i) => {
           const plain = s.message_template
             ? s.message_template.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
@@ -1437,18 +1525,41 @@ function DripsTab({ tk, drips, setDrips }) {
             message_type: 'whatsapp',
             message_template: s.message_template || `Step ${i + 1}`,
             message_plain: plain,
+            ...(s.attachment_id ? { attachment_id: s.attachment_id } : {}),
           };
         }),
       };
-      const res = await dripApi.create(payload);
-      setDrips(prev => [mapSeq(res.data), ...prev]);
-      setShowCreate(false);
-      setForm(BLANK_FORM);
-      toast.success('Drip sequence created');
+
+      if (editingSeq) {
+        const res = await dripApi.update(editingSeq.sequence_id, payload);
+        setDrips(prev => prev.map(x => x.id === editingSeq.id ? mapSeq(res.data) : x));
+        toast.success('Sequence updated');
+      } else {
+        const res = await dripApi.create(payload);
+        setDrips(prev => [mapSeq(res.data), ...prev]);
+        toast.success('Drip sequence created');
+      }
+      closeDialog();
     } catch {
-      toast.error('Failed to create sequence');
+      toast.error(editingSeq ? 'Failed to update sequence' : 'Failed to create sequence');
     } finally {
       setSaving(false);
+    }
+  }
+
+  // ── delete ───────────────────────────────────────────────────────────────────
+  async function confirmDelete() {
+    if (!deleteSeq) return;
+    setDeleting(true);
+    try {
+      await dripApi.delete(deleteSeq.sequence_id);
+      setDrips(prev => prev.filter(x => x.id !== deleteSeq.id));
+      toast.success('Sequence deleted');
+      setDeleteSeq(null);
+    } catch {
+      toast.error('Failed to delete sequence');
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -1458,6 +1569,9 @@ function DripsTab({ tk, drips, setDrips }) {
     { k: 'manual',         l: 'Manual Only',      d: 'Enroll contacts manually' },
   ];
 
+  // find an attachment object by id
+  function findAttach(id) { return attachments.find(a => a.attachment_id === id); }
+
   return (
     <div className="space-y-4">
       <div className="flex items-start sm:items-center justify-between gap-3">
@@ -1466,7 +1580,7 @@ function DripsTab({ tk, drips, setDrips }) {
           <p className={`text-xs ${tk.tm} mt-0.5`}>Automated message series triggered by lead actions</p>
         </div>
         <Button size="sm" className="h-8 gap-1 bg-[var(--accent)] hover:bg-[var(--accent)]/90 text-white text-xs flex-shrink-0"
-          onClick={() => setShowCreate(true)}>
+          onClick={() => { setEditingSeq(null); setForm(BLANK_FORM); setShowCreate(true); }}>
           <Plus className="h-3 w-3" /> New Sequence
         </Button>
       </div>
@@ -1474,6 +1588,7 @@ function DripsTab({ tk, drips, setDrips }) {
       <div className="space-y-3">
         {drips.map(d => (
           <div key={d.id} className={`${tk.card} border ${tk.bdr} rounded-xl overflow-hidden`}>
+            {/* ── Card header ─────────────────────────────────────────────── */}
             <div className="px-4 py-3.5 flex items-center gap-3">
               <div className="w-9 h-9 rounded-xl bg-[var(--accent)]/10 flex items-center justify-center flex-shrink-0">
                 <Zap className="h-4 w-4 text-[var(--accent)]" />
@@ -1486,19 +1601,34 @@ function DripsTab({ tk, drips, setDrips }) {
                   }`}>{d.active ? 'Active' : 'Paused'}</span>
                 </div>
                 <p className={`text-xs ${tk.tm} mt-0.5`}>
-                  {d.steps.length} steps · Trigger: {d.trigger}
+                  {d.steps.length} step{d.steps.length !== 1 ? 's' : ''} · {d.trigger}
                 </p>
               </div>
-              <div className="flex items-center gap-2 flex-shrink-0">
-                <div className="text-right hidden sm:block">
+              <div className="flex items-center gap-1.5 flex-shrink-0">
+                <div className="text-right hidden sm:block mr-1">
                   <p className={`text-xs font-semibold ${tk.t1}`}>{d.enrolled}</p>
                   <p className={`text-[10px] ${tk.tm}`}>enrolled</p>
                 </div>
-                <div className="text-right hidden sm:block">
+                <div className="text-right hidden sm:block mr-2">
                   <p className={`text-xs font-semibold ${tk.t1}`}>{d.completed}</p>
                   <p className={`text-[10px] ${tk.tm}`}>done</p>
                 </div>
                 <Switch checked={d.active} onCheckedChange={() => toggle(d)} />
+                {/* Edit */}
+                <button
+                  onClick={() => startEdit(d)}
+                  title="Edit sequence"
+                  className={`h-7 w-7 rounded-lg ${tk.hov} flex items-center justify-center`}>
+                  <Pencil className={`h-3.5 w-3.5 ${tk.tm}`} />
+                </button>
+                {/* Delete */}
+                <button
+                  onClick={() => setDeleteSeq(d)}
+                  title="Delete sequence"
+                  className="h-7 w-7 rounded-lg hover:bg-red-500/10 flex items-center justify-center">
+                  <Trash2 className="h-3.5 w-3.5 text-red-400" />
+                </button>
+                {/* Expand */}
                 <button onClick={() => setExpanded(expanded === d.id ? null : d.id)}
                   className={`h-7 w-7 rounded-lg ${tk.hov} flex items-center justify-center`}>
                   <ChevronDown className={`h-4 w-4 ${tk.tm} transition-transform duration-200 ${expanded === d.id ? 'rotate-180' : ''}`} />
@@ -1506,6 +1636,7 @@ function DripsTab({ tk, drips, setDrips }) {
               </div>
             </div>
 
+            {/* ── Expanded steps ──────────────────────────────────────────── */}
             {expanded === d.id && (
               <div className={`border-t ${tk.bdr} bg-[var(--bg-primary)] px-4 py-4`}>
                 <div className="space-y-0">
@@ -1520,9 +1651,14 @@ function DripsTab({ tk, drips, setDrips }) {
                         )}
                       </div>
                       <div className="flex-1 pb-3">
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 flex-wrap">
                           <span className={`text-sm font-medium ${tk.t1}`}>{s.label}</span>
-                          <span className={`text-[10px] px-2 py-0.5 rounded-full bg-[var(--accent)]/10 text-[var(--accent)]`}>{s.delay}</span>
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-[var(--accent)]/10 text-[var(--accent)]">{s.delay}</span>
+                          {s.attachment_id && (
+                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 flex items-center gap-1">
+                              <Paperclip className="h-2.5 w-2.5" /> Attachment
+                            </span>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -1532,13 +1668,23 @@ function DripsTab({ tk, drips, setDrips }) {
             )}
           </div>
         ))}
+        {drips.length === 0 && (
+          <div className={`${tk.card} border ${tk.bdr} rounded-xl px-6 py-10 text-center`}>
+            <Zap className={`h-8 w-8 ${tk.tm} mx-auto mb-2`} />
+            <p className={`text-sm font-medium ${tk.t2}`}>No drip sequences yet</p>
+            <p className={`text-xs ${tk.tm} mt-1`}>Create your first automated sequence to start nurturing leads</p>
+          </div>
+        )}
       </div>
 
-      <Dialog open={showCreate} onOpenChange={setShowCreate}>
+      {/* ── Create / Edit dialog ─────────────────────────────────────────────── */}
+      <Dialog open={showCreate} onOpenChange={open => { if (!open) closeDialog(); }}>
         <DialogContent className={`${tk.card} border ${tk.bdr} w-[calc(100vw-2rem)] max-w-lg`}>
           <DialogHeader>
-            <DialogTitle className={tk.t1}>New Drip Sequence</DialogTitle>
-            <DialogDescription className={tk.tm}>Build an automated message series triggered by lead activity</DialogDescription>
+            <DialogTitle className={tk.t1}>{editingSeq ? 'Edit Drip Sequence' : 'New Drip Sequence'}</DialogTitle>
+            <DialogDescription className={tk.tm}>
+              {editingSeq ? 'Update the sequence name, trigger, and steps' : 'Build an automated message series triggered by lead activity'}
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 max-h-[60vh] overflow-y-auto py-1 pr-1">
             <div>
@@ -1583,17 +1729,18 @@ function DripsTab({ tk, drips, setDrips }) {
                   <Plus className="h-3 w-3" /> Add step
                 </button>
               </div>
-              <div className="space-y-3">
+              <div className="space-y-4">
                 {form.steps.map((s, i) => (
-                  <div key={i} className="space-y-1.5">
-                    <div className="flex items-center gap-2">
+                  <div key={i} className={`rounded-xl border ${tk.bdr} overflow-hidden`}>
+                    {/* Step header */}
+                    <div className={`flex items-center gap-2 px-3 py-2 bg-[var(--bg-primary)]`}>
                       <div className="w-6 h-6 rounded-full bg-[var(--accent)]/15 flex items-center justify-center flex-shrink-0">
                         <span className="text-[10px] font-bold text-[var(--accent)]">{i + 1}</span>
                       </div>
                       <span className={`text-xs ${tk.t2} flex-1`}>
                         {i === 0 ? 'Send immediately (Day 0)' : (
                           <span className="flex items-center gap-1.5">
-                            Send on day
+                            Day
                             <input type="number" min="1" className={`h-6 w-14 rounded-md border px-2 text-xs ${tk.inp}`}
                               value={s.delay_days}
                               onChange={e => setForm(p => ({ ...p, steps: p.steps.map((ss, ii) => ii === i ? { ...ss, delay_days: e.target.value } : ss) }))} />
@@ -1601,6 +1748,27 @@ function DripsTab({ tk, drips, setDrips }) {
                           </span>
                         )}
                       </span>
+                      {/* Attach button */}
+                      <button
+                        type="button"
+                        title={s.attachment_id ? 'Change attachment' : 'Add attachment'}
+                        onClick={() => openAttachPicker(i)}
+                        className={`h-6 px-2 rounded-md flex items-center gap-1 text-[11px] transition-colors ${
+                          s.attachment_id
+                            ? 'bg-blue-500/15 text-blue-400 hover:bg-blue-500/25'
+                            : `${tk.hov} ${tk.tm} border ${tk.bdr}`
+                        }`}>
+                        <Paperclip className="h-3 w-3" />
+                        {s.attachment_id ? 'Attached' : 'Attach'}
+                      </button>
+                      {/* Clear attachment */}
+                      {s.attachment_id && (
+                        <button type="button" onClick={() => clearAttachment(i)}
+                          title="Remove attachment"
+                          className={`h-6 w-6 rounded-md ${tk.hov} flex items-center justify-center`}>
+                          <X className="h-3 w-3 text-red-400" />
+                        </button>
+                      )}
                       {i > 0 && (
                         <button onClick={() => removeStep(i)}
                           className={`h-6 w-6 rounded-lg ${tk.hov} flex items-center justify-center flex-shrink-0`}>
@@ -1608,6 +1776,7 @@ function DripsTab({ tk, drips, setDrips }) {
                         </button>
                       )}
                     </div>
+                    {/* Message editor */}
                     <RichMessageEditor
                       value={s.message_template}
                       onChange={html => setForm(p => ({ ...p, steps: p.steps.map((ss, ii) => ii === i ? { ...ss, message_template: html } : ss) }))}
@@ -1620,9 +1789,92 @@ function DripsTab({ tk, drips, setDrips }) {
           </div>
           <DialogFooter className="gap-2">
             <Button variant="outline" size="sm" className={`border-[var(--border-color)] ${tk.t2}`}
-              onClick={() => setShowCreate(false)}>Cancel</Button>
+              onClick={closeDialog}>Cancel</Button>
             <Button size="sm" className="bg-[var(--accent)] hover:bg-[var(--accent)]/90 text-white"
-              onClick={create} disabled={saving}>{saving ? 'Creating…' : 'Create Sequence'}</Button>
+              onClick={save} disabled={saving}>
+              {saving ? (editingSeq ? 'Saving…' : 'Creating…') : (editingSeq ? 'Save Changes' : 'Create Sequence')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Delete confirmation dialog ───────────────────────────────────────── */}
+      <Dialog open={!!deleteSeq} onOpenChange={open => { if (!open) setDeleteSeq(null); }}>
+        <DialogContent className={`${tk.card} border ${tk.bdr} w-[calc(100vw-2rem)] max-w-sm`}>
+          <DialogHeader>
+            <DialogTitle className={tk.t1}>Delete Sequence?</DialogTitle>
+            <DialogDescription className={tk.tm}>
+              <span className="font-medium text-[var(--text-primary)]">"{deleteSeq?.name}"</span> will be permanently deleted.
+              Active enrollments will be cancelled.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 mt-2">
+            <Button variant="outline" size="sm" className={`border-[var(--border-color)] ${tk.t2}`}
+              onClick={() => setDeleteSeq(null)}>Cancel</Button>
+            <Button size="sm" className="bg-red-500 hover:bg-red-600 text-white"
+              onClick={confirmDelete} disabled={deleting}>
+              {deleting ? 'Deleting…' : 'Delete'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Attachment picker dialog ─────────────────────────────────────────── */}
+      <Dialog open={pickingFor !== null} onOpenChange={open => { if (!open) setPickingFor(null); }}>
+        <DialogContent className={`${tk.card} border ${tk.bdr} w-[calc(100vw-2rem)] max-w-md`}>
+          <DialogHeader>
+            <DialogTitle className={tk.t1}>Choose Attachment</DialogTitle>
+            <DialogDescription className={tk.tm}>Pick an existing file or upload a new one for Step {pickingFor != null ? pickingFor + 1 : ''}</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            {/* Upload new */}
+            <label className={`flex items-center gap-3 p-3 rounded-xl border-2 border-dashed ${tk.bdr} cursor-pointer ${tk.hov} transition-colors`}>
+              <input type="file" className="sr-only" accept="image/*,.pdf,.doc,.docx"
+                onChange={e => uploadNewAttachment(e.target.files?.[0])} />
+              {uploadingAttach
+                ? <Loader2 className="h-5 w-5 text-[var(--accent)] animate-spin" />
+                : <Upload className="h-5 w-5 text-[var(--accent)]" />}
+              <div>
+                <p className={`text-sm font-medium ${tk.t1}`}>{uploadingAttach ? 'Uploading…' : 'Upload new file'}</p>
+                <p className={`text-[11px] ${tk.tm}`}>Images, PDFs, Word documents</p>
+              </div>
+            </label>
+
+            {/* Existing attachments */}
+            {loadingAttach ? (
+              <div className="flex items-center justify-center py-6">
+                <Loader2 className="h-5 w-5 animate-spin text-[var(--accent)]" />
+              </div>
+            ) : attachments.length > 0 ? (
+              <div className="max-h-56 overflow-y-auto space-y-1.5">
+                <p className={`text-[11px] font-medium ${tk.tm} px-1`}>Existing files ({attachments.length})</p>
+                {attachments.map(a => {
+                  const isImg = a.attachment_type === 'image' || /\.(jpg|jpeg|png|gif|webp)$/i.test(a.filename || '');
+                  return (
+                    <button key={a.attachment_id}
+                      onClick={() => pickAttachment(a.attachment_id)}
+                      className={`w-full flex items-center gap-3 p-2.5 rounded-xl border ${tk.bdr} text-left ${tk.hov} transition-colors`}>
+                      <div className="w-9 h-9 rounded-lg bg-[var(--bg-primary)] border border-[var(--border-color)] flex items-center justify-center flex-shrink-0 overflow-hidden">
+                        {isImg && a.url
+                          ? <img src={a.url} alt="" className="w-full h-full object-cover" />
+                          : <FileText className="h-4 w-4 text-[var(--text-muted)]" />}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className={`text-sm font-medium ${tk.t1} truncate`}>{a.filename || a.attachment_id}</p>
+                        <p className={`text-[11px] ${tk.tm} capitalize`}>{a.attachment_type || 'file'}</p>
+                      </div>
+                      <Check className="h-4 w-4 text-[var(--accent)] opacity-0 group-hover:opacity-100" />
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className={`text-xs ${tk.tm} text-center py-4`}>No attachments uploaded yet — use the button above</p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" size="sm" className={`border-[var(--border-color)] ${tk.t2}`}
+              onClick={() => setPickingFor(null)}>Cancel</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

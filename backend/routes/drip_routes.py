@@ -261,12 +261,16 @@ async def _seed_defaults():
 def _normalise_steps(raw_steps: list) -> list:
     steps = []
     for i, s in enumerate(raw_steps):
-        steps.append({
+        step = {
             "step_number": i + 1,
             "delay_days": max(0, int(s.get("delay_days", 0))),
             "message_type": s.get("message_type", "whatsapp"),
             "message_template": s.get("message_template", ""),
-        })
+            "message_plain": s.get("message_plain", ""),
+        }
+        if s.get("attachment_id"):
+            step["attachment_id"] = s["attachment_id"]
+        steps.append(step)
     return steps
 
 
