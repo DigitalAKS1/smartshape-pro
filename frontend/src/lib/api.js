@@ -112,6 +112,13 @@ export const fieldAdmin = {
   loginLogs: () => API.get('/admin/login-logs'),
 };
 
+// Sales targets (monthly quotas)
+export const salesTargets = {
+  myProgress:  (month_year) => API.get('/sales/targets/progress', { params: { month_year } }),
+  getAll:      (month_year) => API.get('/admin/sales-targets', { params: { month_year } }),
+  set:         (data)       => API.post('/admin/sales-targets', data),
+};
+
 // Auth location update (post-login geo ping)
 export const authLocationUpdate = (lat, lng) => API.post('/auth/login-location', { lat, lng });
 

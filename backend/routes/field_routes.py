@@ -1141,3 +1141,87 @@ async def get_punch_report(
         })
 
     return report
+
+
+# ==================== SALES TARGETS ====================
+
+@router.get("/sales/targets/progress")
+async def get_target_progress(request: Request, month_year: Optional[str] = None):
+    """Return current user's visits/leads progress vs their monthly target."""
+    user = await get_current_user(request)
+    my = month_year or datetime.now(timezone.utc).strftime("%Y-%m")
+
+    target = await db.sales_targets.find_one(
+        {"email": user["email"], "month_year": my}, {"_id": 0}
+    ) or {}
+
+    visits_done = await db.field_visits.count_documents({
+        "sales_person_email": user["email"],
+        "status": "visited",
+        "visit_date": {"$regex": f"^{my}"},
+    })
+    plans_done = await db.visit_plans.count_documents({
+        "assigned_to": user["email"],
+        "status": "completed",
+        "visit_date": {"$regex": f"^{my}"},
+    })
+
+    leads_converted = await db.leads.count_documents({
+        "assigned_to": user["email"],
+        "stage": {"$in": ["demo", "negotiation", "won"]},
+        "created_at": {"$regex": f"^{my}"},
+    })
+
+    return {
+        "month_year": my,
+        "visits_done": visits_done + plans_done,
+        "visits_target": target.get("visits_target", 0),
+        "leads_converted": leads_converted,
+        "leads_target": target.get("leads_target", 0),
+        "demos_done": await db.visit_plans.count_documents({
+            "assigned_to": user["email"],
+            "purpose": {"$regex": "demo", "$options": "i"},
+            "status": "completed",
+            "visit_date": {"$regex": f"^{my}"},
+        }),
+        "demos_target": target.get("demos_target", 0),
+    }
+
+
+@router.get("/admin/sales-targets")
+async def get_all_sales_targets(request: Request, month_year: Optional[str] = None):
+    user = await get_current_user(request)
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    my = month_year or datetime.now(timezone.utc).strftime("%Y-%m")
+    targets = await db.sales_targets.find({"month_year": my}, {"_id": 0}).to_list(200)
+    return targets
+
+
+@router.post("/admin/sales-targets")
+async def set_sales_target(request: Request):
+    user = await get_current_user(request)
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    body = await request.json()
+    required = ("email", "month_year")
+    for f in required:
+        if not body.get(f):
+            raise HTTPException(status_code=400, detail=f"{f} is required")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    doc = {
+        "email": body["email"],
+        "name": body.get("name", ""),
+        "month_year": body["month_year"],
+        "visits_target": int(body.get("visits_target", 0)),
+        "leads_target": int(body.get("leads_target", 0)),
+        "demos_target": int(body.get("demos_target", 0)),
+        "set_by": user["email"],
+        "updated_at": now_iso,
+    }
+    await db.sales_targets.update_one(
+        {"email": body["email"], "month_year": body["month_year"]},
+        {"$set": doc},
+        upsert=True,
+    )
+    return doc

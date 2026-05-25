@@ -1,13 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
 import SalesLayout from '../../components/layouts/SalesLayout';
-import { visits as visitsApi, leads as leadsApi, schools as schoolsApi } from '../../lib/api';
+import { visits as visitsApi, leads as leadsApi, schools as schoolsApi, salesTargets } from '../../lib/api';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
 import {
   Plus, MapPin, Check, Calendar, Navigation, Clock, X,
   Search, Link2, MapPinned, ChevronDown, ChevronUp,
-  Phone, Info, Clipboard, ExternalLink, ArrowRight, Loader2,
+  Phone, Info, Clipboard, ExternalLink, ArrowRight, Loader2, Target,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -550,13 +550,14 @@ export default function SalesVisits() {
   const [planOpen, setPlanOpen]     = useState(false);
   const [saving, setSaving]         = useState(false);
   const [filter, setFilter]         = useState('today');
+  const [targetProgress, setTargetProgress] = useState(null);
   // Complete Visit sheet
   const [completeVisit, setCompleteVisit] = useState(null); // visit object
   const [completing, setCompleting]       = useState(false);
   const [completeForm, setCompleteForm]   = useState({ outcome: '', notes: '' });
   const [gpsState, setGpsState]           = useState({ loading: true, lat: null, lng: null, address: null, error: null });
 
-  useEffect(() => { fetchVisits(); }, []);
+  useEffect(() => { fetchVisits(); fetchProgress(); }, []);
 
   const fetchVisits = async () => {
     try {
@@ -564,6 +565,13 @@ export default function SalesVisits() {
       setVisits(res.data || []);
     } catch { toast.error('Failed to load visits'); }
     finally { setLoading(false); }
+  };
+
+  const fetchProgress = async () => {
+    try {
+      const res = await salesTargets.myProgress();
+      setTargetProgress(res.data);
+    } catch { /* no target set yet — hide widget */ }
   };
 
   const handleCheckIn = async (visitId) => {
@@ -669,6 +677,34 @@ export default function SalesVisits() {
   return (
     <SalesLayout title="Visits" showBack>
       <div className="pb-28 space-y-4">
+
+        {/* Monthly Target Progress */}
+        {targetProgress && targetProgress.visits_target > 0 && (() => {
+          const pct = Math.min(100, Math.round((targetProgress.visits_done / targetProgress.visits_target) * 100));
+          const barColor = pct >= 100 ? 'bg-emerald-400' : pct >= 60 ? 'bg-blue-400' : 'bg-amber-400';
+          return (
+            <div className={`${card} rounded-2xl p-3.5`}>
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-1.5">
+                  <Target className="h-3.5 w-3.5 text-[#e94560]" />
+                  <span className={`text-xs font-semibold ${tSec}`}>Monthly Target — {targetProgress.month_year}</span>
+                </div>
+                <span className={`text-xs font-bold ${pct >= 100 ? 'text-emerald-400' : tPri}`}>
+                  {targetProgress.visits_done}/{targetProgress.visits_target} visits · {pct}%
+                </span>
+              </div>
+              <div className="h-2 rounded-full bg-[var(--bg-primary)] overflow-hidden">
+                <div className={`h-full rounded-full transition-all duration-500 ${barColor}`} style={{ width: `${pct}%` }} />
+              </div>
+              {targetProgress.demos_target > 0 && (
+                <div className={`flex items-center justify-between mt-2 text-[11px] ${tMuted}`}>
+                  <span>Demos: {targetProgress.demos_done}/{targetProgress.demos_target}</span>
+                  {targetProgress.leads_target > 0 && <span>Leads: {targetProgress.leads_converted}/{targetProgress.leads_target}</span>}
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
         {/* Header */}
         <div className="flex items-center justify-between">
