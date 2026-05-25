@@ -436,7 +436,14 @@ function VisitCard({ visit, onCheckIn, onComplete, checkingIn }) {
         {/* Title row */}
         <div className="flex items-start justify-between gap-2 mb-1.5">
           <div className="min-w-0 flex-1">
-            <p className={`text-sm font-bold ${tPri} truncate`}>{visit.school_name}</p>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <p className={`text-sm font-bold ${tPri} truncate`}>{visit.school_name}</p>
+              {visit.is_admin_assigned && (
+                <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-violet-500/15 text-violet-400 font-bold shrink-0 border border-violet-500/20">
+                  Assigned
+                </span>
+              )}
+            </div>
             {visit.contact_person && (
               <p className={`text-xs ${tMuted} truncate`}>
                 {visit.contact_person}{visit.contact_phone ? ` · ${visit.contact_phone}` : ''}

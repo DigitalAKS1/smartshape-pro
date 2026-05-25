@@ -383,34 +383,65 @@ async def visit_distance(plan_id: str, lat: float, lng: float, request: Request)
 
 # ==================== FIELD VISITS (Sales Portal) ====================
 
+def _normalize_plan(plan: dict) -> dict:
+    """Map visit_plans document to the same shape as field_visits for the sales portal."""
+    status = plan.get("status", "planned")
+    if status == "in_progress":
+        status = "checked_in"
+    return {
+        "visit_id":           plan["plan_id"],
+        "plan_id":            plan["plan_id"],
+        "sales_person_email": plan.get("assigned_to", ""),
+        "sales_person_name":  plan.get("assigned_name", ""),
+        "school_name":        plan.get("school_name", ""),
+        "school_id":          plan.get("school_id", ""),
+        "lead_id":            plan.get("lead_id", ""),
+        "contact_person":     plan.get("contact_person", ""),
+        "contact_phone":      plan.get("contact_phone", ""),
+        "visit_date":         plan.get("visit_date", ""),
+        "visit_time":         plan.get("visit_time", ""),
+        "status":             status,
+        "purpose":            plan.get("purpose", ""),
+        "planned_address":    plan.get("planned_address", ""),
+        "lat":                plan.get("planned_lat"),
+        "lng":                plan.get("planned_lng"),
+        "check_in_time":      plan.get("check_in_time"),
+        "check_out_time":     plan.get("check_out_time"),
+        "notes":              plan.get("visit_notes", ""),
+        "outcome":            plan.get("outcome", ""),
+        "is_admin_assigned":  True,
+        "assigned_by":        plan.get("created_by", ""),
+    }
+
+
 @router.post("/sales/visits")
 async def create_visit(visit_input: FieldVisitCreate, request: Request):
     user = await get_current_user(request)
-
     visit_id = f"visit_{uuid.uuid4().hex[:12]}"
     address = None
     if visit_input.lat and visit_input.lng:
         address = reverse_geocode(visit_input.lat, visit_input.lng)
-
     visit_doc = {
-        "visit_id": visit_id,
+        "visit_id":           visit_id,
         "sales_person_email": user["email"],
-        "sales_person_name": user["name"],
-        "school_name": visit_input.school_name,
-        "contact_person": visit_input.contact_person,
-        "contact_phone": visit_input.contact_phone,
-        "visit_date": visit_input.visit_date,
-        "visit_time": visit_input.visit_time,
-        "status": "planned",
-        "purpose": visit_input.purpose,
-        "planned_lat": visit_input.lat,
-        "planned_lng": visit_input.lng,
-        "planned_address": address,
-        "visited_lat": None,
-        "visited_lng": None,
-        "visited_address": None,
-        "checked_in_at": None,
-        "outcome": None,
+        "sales_person_name":  user["name"],
+        "school_name":        visit_input.school_name,
+        "contact_person":     visit_input.contact_person,
+        "contact_phone":      visit_input.contact_phone,
+        "visit_date":         visit_input.visit_date,
+        "visit_time":         visit_input.visit_time,
+        "status":             "planned",
+        "purpose":            visit_input.purpose,
+        "planned_lat":        visit_input.lat,
+        "planned_lng":        visit_input.lng,
+        "planned_address":    address,
+        "lat":                visit_input.lat,
+        "lng":                visit_input.lng,
+        "check_in_time":      None,
+        "check_out_time":     None,
+        "notes":              None,
+        "outcome":            None,
+        "is_admin_assigned":  False,
     }
     await db.field_visits.insert_one(visit_doc)
     return await db.field_visits.find_one({"visit_id": visit_id}, {"_id": 0})
@@ -419,43 +450,129 @@ async def create_visit(visit_input: FieldVisitCreate, request: Request):
 @router.get("/sales/visits")
 async def get_visits(request: Request):
     user = await get_current_user(request)
-    visits = await db.field_visits.find(
+    # Own self-created field visits
+    own = await db.field_visits.find(
         {"sales_person_email": user["email"]}, {"_id": 0}
     ).sort("visit_date", -1).to_list(1000)
-    return visits
+    # Ensure lat/lng populated from planned_lat/lng for legacy records
+    for v in own:
+        if v.get("lat") is None:
+            v["lat"] = v.get("planned_lat")
+        if v.get("lng") is None:
+            v["lng"] = v.get("planned_lng")
+        if v.get("check_in_time") is None:
+            v["check_in_time"] = v.get("checked_in_at")
+        if v.get("status") == "visited":
+            v["status"] = "checked_in"
+    # Admin-assigned visit plans
+    plans = await db.visit_plans.find(
+        {"assigned_to": user["email"]}, {"_id": 0}
+    ).sort("visit_date", -1).to_list(1000)
+    normalized = [_normalize_plan(p) for p in plans]
+    # Merge — sort by visit_date desc, put today's first
+    all_visits = own + normalized
+    all_visits.sort(key=lambda v: (v.get("visit_date") or ""), reverse=True)
+    return all_visits
 
 
 @router.post("/sales/visits/{visit_id}/check-in")
 async def check_in_visit(visit_id: str, lat: float, lng: float, request: Request):
     user = await get_current_user(request)
+    now_iso = datetime.now(timezone.utc).isoformat()
 
-    visit = await db.field_visits.find_one({"visit_id": visit_id, "sales_person_email": user["email"]})
-    if not visit:
-        raise HTTPException(status_code=404, detail="Visit not found")
-
-    address = reverse_geocode(lat, lng)
-
-    await db.field_visits.update_one(
-        {"visit_id": visit_id},
-        {"$set": {
-            "status": "visited",
-            "visited_lat": lat,
-            "visited_lng": lng,
-            "visited_address": address,
-            "checked_in_at": datetime.now(timezone.utc).isoformat(),
-        }},
+    # Try own field_visits first
+    visit = await db.field_visits.find_one(
+        {"visit_id": visit_id, "sales_person_email": user["email"]}
     )
-    return {"message": "Checked in at visit", "visit_id": visit_id}
+    if visit:
+        address = reverse_geocode(lat, lng) if lat and lng else None
+        await db.field_visits.update_one(
+            {"visit_id": visit_id},
+            {"$set": {
+                "status":        "checked_in",
+                "lat":           lat,
+                "lng":           lng,
+                "check_in_time": now_iso,
+                "planned_address": address or visit.get("planned_address"),
+            }},
+        )
+        return {"message": "Checked in", "visit_id": visit_id}
+
+    # Try admin-assigned visit plan
+    plan = await db.visit_plans.find_one({"plan_id": visit_id, "assigned_to": user["email"]})
+    if plan:
+        if plan.get("check_in_time"):
+            raise HTTPException(status_code=400, detail="Already checked in")
+        update = {"check_in_time": now_iso, "status": "in_progress", "work_type": "field"}
+        if lat is not None and lng is not None:
+            update["check_in_lat"]     = float(lat)
+            update["check_in_lng"]     = float(lng)
+            update["check_in_address"] = reverse_geocode(float(lat), float(lng))
+        await db.visit_plans.update_one({"plan_id": visit_id}, {"$set": update})
+        if plan.get("lead_id"):
+            await db.leads.update_one(
+                {"lead_id": plan["lead_id"]},
+                {"$set": {"last_activity_date": now_iso, "last_visit_date": now_iso}},
+            )
+        if plan.get("school_id"):
+            await touch_last_activity("school", plan["school_id"])
+        await log_activity(user["email"], "visit_check_in", "visit_plan", visit_id,
+                           details=f"Field check-in for {plan.get('school_name','')}")
+        return {"message": "Checked in", "visit_id": visit_id}
+
+    raise HTTPException(status_code=404, detail="Visit not found")
 
 
 @router.put("/sales/visits/{visit_id}")
-async def update_visit(visit_id: str, updates: dict, request: Request):
+async def update_visit(visit_id: str, request: Request):
     user = await get_current_user(request)
-    await db.field_visits.update_one(
-        {"visit_id": visit_id, "sales_person_email": user["email"]},
-        {"$set": updates},
+    body = await request.json()
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    # Try own field_visits first
+    visit = await db.field_visits.find_one(
+        {"visit_id": visit_id, "sales_person_email": user["email"]}
     )
-    return await db.field_visits.find_one({"visit_id": visit_id}, {"_id": 0})
+    if visit:
+        safe = {k: v for k, v in body.items()
+                if k in ("status", "notes", "outcome", "check_out_time", "check_in_time")}
+        if safe.get("status") == "completed" and not safe.get("check_out_time"):
+            safe["check_out_time"] = now_iso
+        await db.field_visits.update_one(
+            {"visit_id": visit_id, "sales_person_email": user["email"]},
+            {"$set": safe},
+        )
+        return await db.field_visits.find_one({"visit_id": visit_id}, {"_id": 0})
+
+    # Try admin-assigned visit plan
+    plan = await db.visit_plans.find_one({"plan_id": visit_id, "assigned_to": user["email"]})
+    if plan:
+        safe = {}
+        status = body.get("status")
+        if status == "completed":
+            safe["status"]         = "completed"
+            safe["check_out_time"] = now_iso
+        elif status == "checked_in":
+            safe["status"] = "in_progress"
+        if "notes" in body:
+            safe["visit_notes"] = body["notes"]
+        if "outcome" in body:
+            safe["outcome"] = body["outcome"]
+        if safe:
+            await db.visit_plans.update_one({"plan_id": visit_id}, {"$set": safe})
+        if status == "completed":
+            if plan.get("lead_id"):
+                await db.leads.update_one(
+                    {"lead_id": plan["lead_id"]},
+                    {"$set": {"last_activity_date": now_iso, "last_visit_date": now_iso}},
+                )
+            if plan.get("school_id"):
+                await touch_last_activity("school", plan["school_id"])
+            await log_activity(user["email"], "visit_complete", "visit_plan", visit_id,
+                               details=f"Completed visit at {plan.get('school_name','')}")
+        return await db.visit_plans.find_one({"plan_id": visit_id}, {"_id": 0})
+
+    raise HTTPException(status_code=404, detail="Visit not found")
 
 
 # ==================== TRAVEL EXPENSES ====================
