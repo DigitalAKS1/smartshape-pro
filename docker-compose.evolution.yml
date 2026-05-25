@@ -17,38 +17,51 @@ version: '3.8'
 
 services:
 
-  # ── Tor SOCKS5 proxy ───────────────────────────────────────────────
-  tor:
-    build:
-      context: .
-      dockerfile: Dockerfile.tor
-    container_name: smartshape_tor
+  # ── Cloudflare WARP proxy (free, bypasses WhatsApp VPS block) ──────
+  # Uses Cloudflare's legitimate network IPs — not blocked by WhatsApp.
+  # Falls back to residential proxy if PROXY_HOST is set in .env.evolution.
+  warp:
+    image: caomingjun/warp
+    container_name: smartshape_warp
     restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=0
+      - net.ipv4.conf.all.src_valid_mark=1
     networks:
       - smartshape_net
+    healthcheck:
+      test: ["CMD", "curl", "-sx", "socks5h://127.0.0.1:1080", "https://ifconfig.io"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
 
   # ── Transparent proxy sidecar ─────────────────────────────────────
   # Shares Evolution API's network namespace. Sets iptables OUTPUT
-  # rules so all Evolution TCP goes through redsocks → Tor.
+  # rules so all Evolution TCP goes through redsocks → WARP / residential proxy.
   tor-sidecar:
     build:
       context: .
       dockerfile: Dockerfile.redsocks
     container_name: smartshape_tor_sidecar
-    network_mode: "service:evolution-api"   # shares Evolution's netns
+    network_mode: "service:evolution-api"
     cap_add:
       - NET_ADMIN
     environment:
-      TOR_HOST: tor
-      TOR_PORT: "9050"
+      # Residential proxy credentials (from .env.evolution) — if set, used instead of WARP
       PROXY_HOST: ${PROXY_HOST:-}
       PROXY_PORT: ${PROXY_PORT:-10001}
       PROXY_USER: ${PROXY_USER:-}
       PROXY_PASS: ${PROXY_PASS:-}
+      # WARP fallback (used when PROXY_HOST is empty)
+      TOR_HOST: warp
+      TOR_PORT: "1080"
     depends_on:
       evolution-api:
         condition: service_started
-      tor:
+      warp:
         condition: service_healthy
     restart: unless-stopped
 
