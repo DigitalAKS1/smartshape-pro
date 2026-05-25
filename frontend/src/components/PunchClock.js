@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { toast } from 'sonner';
-import { LogIn, LogOut, Clock, MapPin, RefreshCw } from 'lucide-react';
-import { punchApi } from '../lib/api';
+import { LogIn, LogOut, Clock, MapPin, RefreshCw, Home, CheckCircle } from 'lucide-react';
+import { punchApi, wfhApi } from '../lib/api';
 
 const fmt = (iso) => iso ? new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—';
 const fmtDuration = (ms) => {
@@ -19,10 +19,12 @@ const EFFICIENCY = {
 };
 
 export default function PunchClock() {
-  const [punches,  setPunches]  = useState([]);
-  const [loading,  setLoading]  = useState(true);
-  const [punching, setPunching] = useState(false);
-  const [tick,     setTick]     = useState(Date.now());
+  const [punches,     setPunches]     = useState([]);
+  const [loading,     setLoading]     = useState(true);
+  const [punching,    setPunching]    = useState(false);
+  const [tick,        setTick]        = useState(Date.now());
+  const [wfhSaved,    setWfhSaved]    = useState(false);   // true if home location already set
+  const [savingWfh,   setSavingWfh]   = useState(false);
 
   // Refresh clock every minute
   useEffect(() => {
@@ -39,6 +41,30 @@ export default function PunchClock() {
   }, []);
 
   useEffect(() => { loadPunches(); }, [loadPunches]);
+
+  // Check if user already has a WFH location saved
+  useEffect(() => {
+    wfhApi.get()
+      .then(r => setWfhSaved(!!(r.data?.wfh_lat && r.data?.wfh_lng)))
+      .catch(() => {});
+  }, []);
+
+  const saveHomeLocation = useCallback(async () => {
+    setSavingWfh(true);
+    try {
+      const pos = await new Promise((res, rej) =>
+        navigator.geolocation
+          ? navigator.geolocation.getCurrentPosition(res, rej, { enableHighAccuracy: true, timeout: 10000 })
+          : rej(new Error('GPS not supported'))
+      );
+      await wfhApi.set({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+      setWfhSaved(true);
+      toast.success('Home location saved — you can now work from home safely.');
+    } catch {
+      toast.error('Could not get your location. Please allow GPS access.');
+    }
+    setSavingWfh(false);
+  }, []);
 
   const lastPunch  = punches[punches.length - 1];
   const isPunchedIn = lastPunch?.type === 'in';
@@ -195,6 +221,34 @@ export default function PunchClock() {
             ))}
           </div>
         )}
+
+        {/* WFH Home Location */}
+        <div className="mt-4 pt-3 border-t border-[var(--border-color)]">
+          {wfhSaved ? (
+            <div className="flex items-center gap-2 text-xs text-green-400">
+              <CheckCircle className="h-3.5 w-3.5 flex-shrink-0" />
+              <span>Home location saved — geofence active for WFH days</span>
+              <button
+                onClick={saveHomeLocation}
+                disabled={savingWfh}
+                className="ml-auto text-[10px] text-[var(--text-muted)] hover:text-[var(--text-secondary)] underline"
+              >
+                Update
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={saveHomeLocation}
+              disabled={savingWfh}
+              className="w-full flex items-center justify-center gap-2 py-2 rounded-xl border border-dashed border-[var(--border-color)] text-xs text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:border-[var(--text-muted)] transition-colors disabled:opacity-50"
+            >
+              {savingWfh
+                ? <div className="w-3.5 h-3.5 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                : <Home className="h-3.5 w-3.5" />}
+              {savingWfh ? 'Saving…' : 'Save current location as Home (WFH)'}
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );

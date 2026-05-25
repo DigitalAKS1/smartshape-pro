@@ -124,10 +124,16 @@ export const authLocationUpdate = (lat, lng) => API.post('/auth/login-location',
 
 // Punch Clock
 export const punchApi = {
-  punch:         (data)   => API.post('/attendance/punch', data),
-  todayPunches:  ()       => API.get('/attendance/today-punches'),
-  geofenceExit:  (data)   => API.post('/attendance/geofence-exit', data),
-  punchReport:   (params) => API.get('/admin/punch-report', { params }),
+  punch:              (data)   => API.post('/attendance/punch', data),
+  todayPunches:       ()       => API.get('/attendance/today-punches'),
+  geofenceExit:       (data)   => API.post('/attendance/geofence-exit', data),
+  geofenceFieldAlert: (data)   => API.post('/attendance/geofence-field-alert', data),
+  punchReport:        (params) => API.get('/admin/punch-report', { params }),
+};
+
+export const wfhApi = {
+  get: ()     => API.get('/profile/wfh-location'),
+  set: (data) => API.put('/profile/wfh-location', data),
 };
 
 // Trusted Device Management (admin)

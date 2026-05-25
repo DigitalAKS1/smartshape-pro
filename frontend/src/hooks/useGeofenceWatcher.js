@@ -14,17 +14,18 @@ function haversineKm(lat1, lon1, lat2, lon2) {
 
 /**
  * Continuously watches the user's position via the browser Geolocation API.
- * When they are outside radiusM metres of the office for 60 continuous seconds,
- * it calls onExit(lat, lng, distanceMetres).
  *
  * Props:
- *   enabled   – false → watcher is inactive (skip for admins or when office not configured)
- *   offLat    – office latitude  (float)
- *   offLng    – office longitude (float)
- *   radiusM   – geofence radius in metres
- *   onExit    – async fn(lat, lng, distM) called on confirmed exit
+ *   enabled     – false → watcher is inactive
+ *   offLat      – office latitude  (float)
+ *   offLng      – office longitude (float)
+ *   radiusM     – geofence radius in metres (applies to both zones)
+ *   onExit      – async fn(lat, lng, distM) called when confirmed outside ALL zones for 60s
+ *   silentMode  – when true, no toasts shown to the user (for field sales reps)
+ *   altLat      – optional secondary zone latitude (e.g. WFH home location)
+ *   altLng      – optional secondary zone longitude
  */
-export function useGeofenceWatcher({ enabled, offLat, offLng, radiusM, onExit }) {
+export function useGeofenceWatcher({ enabled, offLat, offLng, radiusM, onExit, silentMode = false, altLat, altLng }) {
   const watchIdRef  = useRef(null);
   const timerRef    = useRef(null);
   const toastIdRef  = useRef(null);
@@ -40,7 +41,6 @@ export function useGeofenceWatcher({ enabled, offLat, offLng, radiusM, onExit })
     secsLeftRef.current = 60;
   }, []);
 
-  // stable ref so we can call without re-creating the effect
   const onExitRef = useRef(onExit);
   useEffect(() => { onExitRef.current = onExit; }, [onExit]);
 
@@ -49,36 +49,49 @@ export function useGeofenceWatcher({ enabled, offLat, offLng, radiusM, onExit })
 
     const handlePos = (pos) => {
       const { latitude, longitude } = pos.coords;
-      const distM = haversineKm(latitude, longitude, offLat, offLng) * 1000;
+      const distOffice = haversineKm(latitude, longitude, offLat, offLng) * 1000;
 
-      if (distM > radiusM) {
+      // Check secondary zone (WFH) if available
+      const distAlt = (altLat && altLng)
+        ? haversineKm(latitude, longitude, altLat, altLng) * 1000
+        : Infinity;
+
+      // Safe if within either zone
+      const outsideAll = distOffice > radiusM && distAlt > radiusM;
+      const nearestDist = Math.min(distOffice, distAlt === Infinity ? distOffice : distAlt);
+
+      if (outsideAll) {
         if (!outsideRef.current) {
           outsideRef.current  = true;
           secsLeftRef.current = 60;
 
-          toastIdRef.current = toast.warning(
-            `⚠️ You've left the office zone (${Math.round(distM)}m away). Auto-logout in 60s if you don't return.`,
-            { duration: 65000, id: 'geo-warn' }
-          );
-
-          // live countdown update every second
-          tickRef.current = setInterval(() => {
-            secsLeftRef.current -= 1;
-            toast.warning(
-              `⚠️ Outside office zone (${Math.round(distM)}m). Auto-logout in ${secsLeftRef.current}s.`,
-              { id: 'geo-warn', duration: secsLeftRef.current * 1000 + 5000 }
+          if (!silentMode) {
+            const zoneLabel = altLat && altLng ? 'office or home zone' : 'office zone';
+            toastIdRef.current = toast.warning(
+              `⚠️ You've left the ${zoneLabel} (${Math.round(nearestDist)}m away). Auto-logout in 60s if you don't return.`,
+              { duration: 65000, id: 'geo-warn' }
             );
-          }, 1000);
+
+            tickRef.current = setInterval(() => {
+              secsLeftRef.current -= 1;
+              toast.warning(
+                `⚠️ Outside zone (${Math.round(nearestDist)}m). Auto-logout in ${secsLeftRef.current}s.`,
+                { id: 'geo-warn', duration: secsLeftRef.current * 1000 + 5000 }
+              );
+            }, 1000);
+          }
 
           timerRef.current = setTimeout(async () => {
             cancelCountdown();
-            await onExitRef.current(latitude, longitude, Math.round(distM));
+            await onExitRef.current(latitude, longitude, Math.round(nearestDist));
           }, 60000);
         }
       } else {
         if (outsideRef.current) {
           cancelCountdown();
-          toast.success('✅ Back in office zone — auto-logout cancelled.', { duration: 4000 });
+          if (!silentMode) {
+            toast.success('✅ Back in zone — auto-logout cancelled.', { duration: 4000 });
+          }
         }
       }
     };
@@ -96,5 +109,5 @@ export function useGeofenceWatcher({ enabled, offLat, offLng, radiusM, onExit })
       }
       cancelCountdown();
     };
-  }, [enabled, offLat, offLng, radiusM, cancelCountdown]);
+  }, [enabled, offLat, offLng, radiusM, silentMode, altLat, altLng, cancelCountdown]);
 }

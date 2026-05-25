@@ -1066,6 +1066,128 @@ async def geofence_exit(request: Request):
     return {"message": "Geofence exit logged and notifications sent", "punch": punch_doc}
 
 
+@router.post("/attendance/geofence-field-alert")
+async def geofence_field_alert(request: Request):
+    """
+    Silent geofence alert for field sales reps — no punch-out, no logout.
+    If they have a visit plan or active self-visit today, skip entirely.
+    Otherwise log alert and email admin/HR that rep is outside without a visit plan.
+    """
+    user = await get_current_user(request)
+    body       = await request.json()
+    lat        = body.get("lat")
+    lng        = body.get("lng")
+    distance_m = body.get("distance_m")
+
+    now   = datetime.now(timezone.utc)
+    today = now.strftime("%Y-%m-%d")
+
+    # Skip if rep has a planned or in-progress visit today
+    has_plan = await db.visit_plans.find_one({
+        "assigned_to": user["email"],
+        "visit_date":  today,
+        "status":      {"$in": ["planned", "in_progress"]},
+    })
+    if not has_plan:
+        has_plan = await db.field_visits.find_one({
+            "created_by": user["email"],
+            "visit_date": today,
+            "status":     {"$in": ["planned", "in_progress"]},
+        })
+    if has_plan:
+        return {"action": "skip", "reason": "has_visit_plan"}
+
+    address  = None
+    if lat is not None and lng is not None:
+        address = reverse_geocode(float(lat), float(lng))
+
+    office   = await db.settings.find_one({"type": "field_settings"}, {"_id": 0}) or {}
+    radius_m = float(office.get("office_radius_m", 300))
+
+    await db.geofence_alerts.insert_one({
+        "alert_id":               f"ga_{uuid.uuid4().hex[:12]}",
+        "user_email":             user["email"],
+        "user_name":              user["name"],
+        "alert_type":             "sales_outside_without_visit_plan",
+        "lat":                    lat,
+        "lng":                    lng,
+        "address":                address,
+        "distance_from_office_m": distance_m,
+        "office_radius_m":        radius_m,
+        "triggered_at":           now.isoformat(),
+        "is_read":                False,
+    })
+
+    # Notify admin + HR silently
+    try:
+        import smtplib
+        from email.mime.text import MIMEText
+        from email.mime.multipart import MIMEMultipart
+
+        email_cfg = await db.settings.find_one({"type": "email"}, {"_id": 0})
+        admins    = await db.users.find(
+            {"role": {"$in": ["admin", "hr"]}, "is_active": True}, {"email": 1, "_id": 0}
+        ).to_list(20)
+        to_list = [a["email"] for a in admins if a.get("email")]
+
+        if email_cfg and email_cfg.get("enabled") and email_cfg.get("sender_email") and to_list:
+            msg = MIMEMultipart("alternative")
+            msg["Subject"] = f"📍 Field Alert: {user['name']} is outside office (no visit plan today)"
+            msg["From"]    = email_cfg["sender_email"]
+            msg["To"]      = ", ".join(to_list)
+            html = f"""
+            <div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:20px;">
+              <h2 style="color:#f59e0b;margin-top:0;">📍 Sales Rep Outside Office — No Visit Plan</h2>
+              <p><strong>{user['name']}</strong> ({user['email']}) is outside the office zone with no visit scheduled today.</p>
+              <p style="color:#888;font-size:13px;">The rep was <strong>not logged out</strong>. This is an informational alert only.</p>
+              <table style="width:100%;border-collapse:collapse;margin-top:12px;">
+                <tr style="background:#f9f9f9;"><td style="padding:8px;color:#555;border:1px solid #eee;">Time</td>
+                    <td style="padding:8px;font-weight:bold;border:1px solid #eee;">{now.strftime('%d %b %Y %H:%M:%S UTC')}</td></tr>
+                <tr><td style="padding:8px;color:#555;border:1px solid #eee;">Distance from Office</td>
+                    <td style="padding:8px;font-weight:bold;color:#f59e0b;border:1px solid #eee;">{distance_m}m away (radius: {radius_m}m)</td></tr>
+                <tr style="background:#f9f9f9;"><td style="padding:8px;color:#555;border:1px solid #eee;">Location</td>
+                    <td style="padding:8px;border:1px solid #eee;">{address or 'Unknown'}</td></tr>
+              </table>
+              <p style="color:#888;font-size:12px;margin-top:16px;">View alerts → SmartShape Pro → Field Sales → Geo Alerts</p>
+            </div>"""
+            msg.attach(MIMEText(html, "html"))
+            with smtplib.SMTP("smtp.gmail.com", 587) as smtp:
+                smtp.ehlo(); smtp.starttls()
+                smtp.login(email_cfg["sender_email"], email_cfg.get("gmail_app_password", ""))
+                smtp.sendmail(email_cfg["sender_email"], to_list, msg.as_string())
+    except Exception:
+        pass
+
+    return {"action": "alert_sent"}
+
+
+@router.get("/profile/wfh-location")
+async def get_wfh_location(request: Request):
+    """Return the current user's saved WFH (home) GPS location."""
+    user = await get_current_user(request)
+    doc  = await db.users.find_one({"email": user["email"]}, {"_id": 0, "wfh_lat": 1, "wfh_lng": 1})
+    return {
+        "wfh_lat": doc.get("wfh_lat") if doc else None,
+        "wfh_lng": doc.get("wfh_lng") if doc else None,
+    }
+
+
+@router.put("/profile/wfh-location")
+async def set_wfh_location(request: Request):
+    """Save or update the current user's WFH home GPS location."""
+    user = await get_current_user(request)
+    body = await request.json()
+    lat  = body.get("lat")
+    lng  = body.get("lng")
+    if lat is None or lng is None:
+        raise HTTPException(400, "lat and lng are required")
+    await db.users.update_one(
+        {"email": user["email"]},
+        {"$set": {"wfh_lat": float(lat), "wfh_lng": float(lng)}},
+    )
+    return {"message": "WFH location saved", "wfh_lat": float(lat), "wfh_lng": float(lng)}
+
+
 @router.get("/admin/punch-report")
 async def get_punch_report(
     request: Request,
