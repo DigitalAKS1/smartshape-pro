@@ -3292,7 +3292,7 @@ export default function MarketingHub() {
                   <p className={`text-[11px] ${tk.tm} leading-relaxed`}>
                     WhatsApp rejects connections from datacenter IPs. Configure a <strong>residential SOCKS5 proxy</strong> to fix this.
                   </p>
-                  <a href="/admin/settings" className="text-[11px] px-3 py-1.5 rounded-lg bg-amber-500/15 text-amber-600 hover:bg-amber-500/25 transition-colors font-medium">
+                  <a href="/settings" className="text-[11px] px-3 py-1.5 rounded-lg bg-amber-500/15 text-amber-600 hover:bg-amber-500/25 transition-colors font-medium">
                     Go to Settings → WhatsApp →
                   </a>
                 </div>
