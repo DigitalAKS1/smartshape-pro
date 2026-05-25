@@ -1569,7 +1569,6 @@ function DripsTab({ tk, drips, setDrips }) {
     { k: 'manual',         l: 'Manual Only',      d: 'Enroll contacts manually' },
   ];
 
-  // find an attachment object by id
   function findAttach(id) { return attachments.find(a => a.attachment_id === id); }
 
   return (
@@ -1639,31 +1638,43 @@ function DripsTab({ tk, drips, setDrips }) {
             {/* ── Expanded steps ──────────────────────────────────────────── */}
             {expanded === d.id && (
               <div className={`border-t ${tk.bdr} bg-[var(--bg-primary)] px-4 py-4`}>
+                {d.description && (
+                  <p className={`text-xs ${tk.tm} mb-3 italic`}>{d.description}</p>
+                )}
                 <div className="space-y-0">
-                  {d.steps.map((s, i) => (
-                    <div key={i} className="flex gap-3">
-                      <div className="flex flex-col items-center">
-                        <div className="w-7 h-7 rounded-full bg-[var(--accent)]/15 border-2 border-[var(--accent)]/30 flex items-center justify-center flex-shrink-0 z-10">
-                          <span className="text-[10px] font-bold text-[var(--accent)]">{s.n}</span>
-                        </div>
-                        {i < d.steps.length - 1 && (
-                          <div className="w-px flex-1 bg-[var(--border-color)] my-0.5" style={{ minHeight: 16 }} />
-                        )}
-                      </div>
-                      <div className="flex-1 pb-3">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className={`text-sm font-medium ${tk.t1}`}>{s.label}</span>
-                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-[var(--accent)]/10 text-[var(--accent)]">{s.delay}</span>
-                          {s.attachment_id && (
-                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 flex items-center gap-1">
-                              <Paperclip className="h-2.5 w-2.5" /> Attachment
-                            </span>
+                  {d.steps.map((s, i) => {
+                    const attach = s.attachment_id ? findAttach(s.attachment_id) : null;
+                    return (
+                      <div key={i} className="flex gap-3">
+                        <div className="flex flex-col items-center">
+                          <div className="w-7 h-7 rounded-full bg-[var(--accent)]/15 border-2 border-[var(--accent)]/30 flex items-center justify-center flex-shrink-0 z-10">
+                            <span className="text-[10px] font-bold text-[var(--accent)]">{s.n}</span>
+                          </div>
+                          {i < d.steps.length - 1 && (
+                            <div className="w-px flex-1 bg-[var(--border-color)] my-0.5" style={{ minHeight: 16 }} />
                           )}
                         </div>
+                        <div className="flex-1 pb-3">
+                          <div className="flex items-center gap-2 flex-wrap mb-0.5">
+                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-[var(--accent)]/10 text-[var(--accent)] font-medium">{s.delay}</span>
+                            {s.attachment_id && (
+                              <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 flex items-center gap-1">
+                                <Paperclip className="h-2.5 w-2.5" />
+                                {attach ? attach.filename : 'Attachment'}
+                              </span>
+                            )}
+                          </div>
+                          <p className={`text-sm ${tk.t1}`}>{s.label}</p>
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
+                <button
+                  onClick={() => startEdit(d)}
+                  className={`mt-3 w-full h-8 rounded-lg border ${tk.bdr} text-xs ${tk.tm} ${tk.hov} flex items-center justify-center gap-1.5 transition-colors`}>
+                  <Pencil className="h-3 w-3" /> Edit sequence
+                </button>
               </div>
             )}
           </div>
@@ -1688,9 +1699,17 @@ function DripsTab({ tk, drips, setDrips }) {
           </DialogHeader>
           <div className="space-y-4 max-h-[60vh] overflow-y-auto py-1 pr-1">
             <div>
-              <Label className={`${tk.t2} text-xs mb-1.5 block`}>Sequence Name</Label>
+              <Label className={`${tk.t2} text-xs mb-1.5 block`}>Sequence Name <span className="text-red-400">*</span></Label>
               <Input className={`h-10 ${tk.inp}`} placeholder="e.g. Teacher Welcome Series"
-                value={form.name} onChange={e => setForm(p => ({ ...p, name: e.target.value }))} />
+                value={form.name}
+                onChange={e => setForm(p => ({ ...p, name: e.target.value }))}
+                onKeyDown={e => { if (e.key === 'Enter') save(); }} />
+            </div>
+            <div>
+              <Label className={`${tk.t2} text-xs mb-1.5 block`}>Description <span className={`${tk.tm} font-normal`}>(optional)</span></Label>
+              <Input className={`h-9 ${tk.inp}`} placeholder="Short note about what this sequence does…"
+                value={form.description}
+                onChange={e => setForm(p => ({ ...p, description: e.target.value }))} />
             </div>
             <div>
               <Label className={`${tk.t2} text-xs mb-1.5 block`}>Trigger</Label>
@@ -1824,52 +1843,82 @@ function DripsTab({ tk, drips, setDrips }) {
         <DialogContent className={`${tk.card} border ${tk.bdr} w-[calc(100vw-2rem)] max-w-md`}>
           <DialogHeader>
             <DialogTitle className={tk.t1}>Choose Attachment</DialogTitle>
-            <DialogDescription className={tk.tm}>Pick an existing file or upload a new one for Step {pickingFor != null ? pickingFor + 1 : ''}</DialogDescription>
+            <DialogDescription className={tk.tm}>
+              For Step {pickingFor != null ? pickingFor + 1 : ''} — pick an existing file or upload a new one
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
             {/* Upload new */}
-            <label className={`flex items-center gap-3 p-3 rounded-xl border-2 border-dashed ${tk.bdr} cursor-pointer ${tk.hov} transition-colors`}>
+            <label className={`flex items-center gap-3 p-3 rounded-xl border-2 border-dashed cursor-pointer transition-colors ${
+              uploadingAttach ? `${tk.bdr} opacity-60` : `border-[var(--accent)]/30 hover:border-[var(--accent)]/60 hover:bg-[var(--accent)]/5`
+            }`}>
               <input type="file" className="sr-only" accept="image/*,.pdf,.doc,.docx"
+                disabled={uploadingAttach}
                 onChange={e => uploadNewAttachment(e.target.files?.[0])} />
               {uploadingAttach
-                ? <Loader2 className="h-5 w-5 text-[var(--accent)] animate-spin" />
-                : <Upload className="h-5 w-5 text-[var(--accent)]" />}
+                ? <Loader2 className="h-5 w-5 text-[var(--accent)] animate-spin flex-shrink-0" />
+                : <Upload className="h-5 w-5 text-[var(--accent)] flex-shrink-0" />}
               <div>
                 <p className={`text-sm font-medium ${tk.t1}`}>{uploadingAttach ? 'Uploading…' : 'Upload new file'}</p>
-                <p className={`text-[11px] ${tk.tm}`}>Images, PDFs, Word documents</p>
+                <p className={`text-[11px] ${tk.tm}`}>Images, PDFs, Word documents (max 16 MB)</p>
               </div>
             </label>
 
             {/* Existing attachments */}
             {loadingAttach ? (
-              <div className="flex items-center justify-center py-6">
+              <div className="flex items-center justify-center py-8">
                 <Loader2 className="h-5 w-5 animate-spin text-[var(--accent)]" />
               </div>
             ) : attachments.length > 0 ? (
-              <div className="max-h-56 overflow-y-auto space-y-1.5">
-                <p className={`text-[11px] font-medium ${tk.tm} px-1`}>Existing files ({attachments.length})</p>
-                {attachments.map(a => {
-                  const isImg = a.attachment_type === 'image' || /\.(jpg|jpeg|png|gif|webp)$/i.test(a.filename || '');
-                  return (
-                    <button key={a.attachment_id}
-                      onClick={() => pickAttachment(a.attachment_id)}
-                      className={`w-full flex items-center gap-3 p-2.5 rounded-xl border ${tk.bdr} text-left ${tk.hov} transition-colors`}>
-                      <div className="w-9 h-9 rounded-lg bg-[var(--bg-primary)] border border-[var(--border-color)] flex items-center justify-center flex-shrink-0 overflow-hidden">
-                        {isImg && a.url
-                          ? <img src={a.url} alt="" className="w-full h-full object-cover" />
-                          : <FileText className="h-4 w-4 text-[var(--text-muted)]" />}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className={`text-sm font-medium ${tk.t1} truncate`}>{a.filename || a.attachment_id}</p>
-                        <p className={`text-[11px] ${tk.tm} capitalize`}>{a.attachment_type || 'file'}</p>
-                      </div>
-                      <Check className="h-4 w-4 text-[var(--accent)] opacity-0 group-hover:opacity-100" />
-                    </button>
-                  );
-                })}
+              <div className="space-y-1">
+                <div className="flex items-center justify-between px-1">
+                  <p className={`text-[11px] font-medium ${tk.tm}`}>Existing files ({attachments.length})</p>
+                  <button
+                    onClick={async () => {
+                      setLoadingAttach(true);
+                      try { const r = await waApi.listAttachments(); setAttachments(r.data || []); }
+                      catch { toast.error('Refresh failed'); }
+                      finally { setLoadingAttach(false); }
+                    }}
+                    className={`text-[11px] ${tk.tm} hover:text-[var(--accent)] flex items-center gap-1`}>
+                    <RefreshCw className="h-3 w-3" /> Refresh
+                  </button>
+                </div>
+                <div className="max-h-60 overflow-y-auto space-y-1.5 pr-0.5">
+                  {attachments.map(a => {
+                    const isImg = a.attachment_type === 'image' || /\.(jpg|jpeg|png|gif|webp)$/i.test(a.filename || '');
+                    const isSelected = pickingFor !== null && form.steps[pickingFor]?.attachment_id === a.attachment_id;
+                    return (
+                      <button key={a.attachment_id}
+                        onClick={() => pickAttachment(a.attachment_id)}
+                        className={`w-full flex items-center gap-3 p-2.5 rounded-xl border text-left transition-colors ${
+                          isSelected
+                            ? 'border-[var(--accent)] bg-[var(--accent)]/10'
+                            : `${tk.bdr} ${tk.hov}`
+                        }`}>
+                        <div className="w-9 h-9 rounded-lg bg-[var(--bg-primary)] border border-[var(--border-color)] flex items-center justify-center flex-shrink-0 overflow-hidden">
+                          {isImg && a.url
+                            ? <img src={a.url} alt="" className="w-full h-full object-cover" onError={e => { e.target.style.display='none'; }} />
+                            : <FileText className="h-4 w-4 text-[var(--text-muted)]" />}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className={`text-sm font-medium ${tk.t1} truncate`}>{a.filename || a.attachment_id}</p>
+                          <p className={`text-[11px] ${tk.tm} capitalize`}>{a.attachment_type || 'file'}</p>
+                        </div>
+                        {isSelected
+                          ? <Check className="h-4 w-4 text-[var(--accent)] flex-shrink-0" />
+                          : <ChevronRight className="h-4 w-4 text-[var(--text-muted)] flex-shrink-0" />}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             ) : (
-              <p className={`text-xs ${tk.tm} text-center py-4`}>No attachments uploaded yet — use the button above</p>
+              <div className={`text-center py-6 rounded-xl border ${tk.bdr}`}>
+                <Paperclip className={`h-6 w-6 ${tk.tm} mx-auto mb-1.5`} />
+                <p className={`text-xs font-medium ${tk.t2}`}>No attachments uploaded yet</p>
+                <p className={`text-[11px] ${tk.tm} mt-0.5`}>Use the upload button above to add your first file</p>
+              </div>
             )}
           </div>
           <DialogFooter>
