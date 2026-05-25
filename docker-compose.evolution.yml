@@ -1,20 +1,54 @@
 version: '3.8'
 
 # ────────────────────────────────────────────────────────────────────
-# SmartShape — Evolution API WhatsApp Stack
+# SmartShape — Evolution API WhatsApp Stack (with built-in Tor proxy)
+#
 # Usage:
 #   1. Copy .env.evolution.example → .env.evolution and fill in values
-#   2. docker compose -f docker-compose.evolution.yml up -d
-#   3. (First time only) bash setup_tor_proxy.sh   ← routes Evolution
-#      traffic through Tor so WhatsApp accepts the VPS connection
-#   4. Open SmartShape → Marketing → WhatsApp → Connect → scan QR
+#   2. docker compose -f docker-compose.evolution.yml up -d --build
+#   3. Open SmartShape → Marketing → WhatsApp Setup → Connect → scan QR
 #
-# If QR still fails after step 3:
-#   docker compose -f docker-compose.evolution.yml restart evolution-api
+# Tor routes Baileys through a non-datacenter IP so WhatsApp accepts it.
+# No SSH proxy scripts needed — Tor runs as a container in this stack.
+#
+# To use a paid residential proxy instead (Settings → WhatsApp tab):
+#   Simply configure it in the app — it overrides the Tor routing.
 # ────────────────────────────────────────────────────────────────────
 
 services:
 
+  # ── Tor SOCKS5 proxy ───────────────────────────────────────────────
+  tor:
+    build:
+      context: .
+      dockerfile: Dockerfile.tor
+    container_name: smartshape_tor
+    restart: unless-stopped
+    networks:
+      - smartshape_net
+
+  # ── Transparent proxy sidecar ─────────────────────────────────────
+  # Shares Evolution API's network namespace. Sets iptables OUTPUT
+  # rules so all Evolution TCP goes through redsocks → Tor.
+  tor-sidecar:
+    build:
+      context: .
+      dockerfile: Dockerfile.redsocks
+    container_name: smartshape_tor_sidecar
+    network_mode: "service:evolution-api"   # shares Evolution's netns
+    cap_add:
+      - NET_ADMIN
+    environment:
+      TOR_HOST: tor
+      TOR_PORT: "9050"
+    depends_on:
+      evolution-api:
+        condition: service_started
+      tor:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Evolution API ─────────────────────────────────────────────────
   evolution-api:
     image: atendai/evolution-api:v2.2.3
     container_name: smartshape_evolution
@@ -40,6 +74,7 @@ services:
       retries: 5
       start_period: 20s
 
+  # ── Redis ─────────────────────────────────────────────────────────
   redis:
     image: redis:7-alpine
     container_name: smartshape_redis_wa
@@ -55,6 +90,7 @@ services:
       timeout: 5s
       retries: 3
 
+  # ── PostgreSQL ────────────────────────────────────────────────────
   postgres:
     image: postgres:15-alpine
     container_name: smartshape_postgres_wa
