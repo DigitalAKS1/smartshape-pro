@@ -1413,3 +1413,233 @@ async def scan_business_card(request: Request):
         data = {"name": "", "phone": "", "email": "", "school_name": "", "role": "", "website": "", "address": ""}
 
     return data
+
+
+# ==================== FIELD JOURNEY TRACKER ====================
+
+@router.post("/sales/journey/start")
+async def start_journey(request: Request):
+    """Start a new field journey for today. Only one active journey allowed per user per day."""
+    user = await get_current_user(request)
+    body       = await request.json()
+    start_type = body.get("start_type", "office")   # "office" or "home"
+    lat        = body.get("lat")
+    lng        = body.get("lng")
+
+    now   = datetime.now(timezone.utc)
+    today = now.strftime("%Y-%m-%d")
+
+    existing = await db.field_journeys.find_one(
+        {"user_email": user["email"], "date": today, "status": "active"}, {"_id": 0}
+    )
+    if existing:
+        return existing
+
+    address = None
+    if lat is not None and lng is not None:
+        address = reverse_geocode(float(lat), float(lng))
+
+    journey = {
+        "journey_id":    f"jrn_{uuid.uuid4().hex[:12]}",
+        "user_email":    user["email"],
+        "user_name":     user["name"],
+        "date":          today,
+        "status":        "active",
+        "start_type":    start_type,
+        "start_lat":     lat,
+        "start_lng":     lng,
+        "start_address": address,
+        "start_time":    now.isoformat(),
+        "end_lat":       None,
+        "end_lng":       None,
+        "end_time":      None,
+        "total_km":      0.0,
+        "stops":         [],
+    }
+    await db.field_journeys.insert_one(journey)
+    journey.pop("_id", None)
+    return journey
+
+
+@router.get("/sales/journey/active")
+async def get_active_journey(request: Request):
+    """Return today's active journey for the current user, or empty dict if none."""
+    user  = await get_current_user(request)
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    doc   = await db.field_journeys.find_one(
+        {"user_email": user["email"], "date": today, "status": "active"}, {"_id": 0}
+    )
+    return doc or {}
+
+
+@router.post("/sales/journey/{journey_id}/arrive")
+async def arrive_at_stop(journey_id: str, request: Request):
+    """
+    Mark arrival at next stop. Auto-calculates km from previous stop or journey start.
+    Optionally links to an existing visit by visit_id — auto-triggers check-in.
+    """
+    user = await get_current_user(request)
+    body        = await request.json()
+    lat         = float(body.get("lat"))
+    lng         = float(body.get("lng"))
+    school_name = body.get("school_name", "")
+    visit_id    = body.get("visit_id")
+
+    journey = await db.field_journeys.find_one(
+        {"journey_id": journey_id, "user_email": user["email"]}, {"_id": 0}
+    )
+    if not journey:
+        raise HTTPException(404, "Journey not found")
+    if journey["status"] != "active":
+        raise HTTPException(400, "Journey is not active")
+
+    stops = journey.get("stops", [])
+    if stops:
+        prev_lat, prev_lng = float(stops[-1]["lat"]), float(stops[-1]["lng"])
+    else:
+        prev_lat = float(journey["start_lat"])
+        prev_lng = float(journey["start_lng"])
+
+    km_from_prev = round(haversine_distance(prev_lat, prev_lng, lat, lng), 2)
+    now          = datetime.now(timezone.utc)
+    address      = reverse_geocode(lat, lng)
+
+    stop = {
+        "stop_num":     len(stops) + 1,
+        "school_name":  school_name,
+        "visit_id":     visit_id,
+        "arrived_at":   now.isoformat(),
+        "departed_at":  None,
+        "lat":          lat,
+        "lng":          lng,
+        "address":      address,
+        "km_from_prev": km_from_prev,
+        "status":       "arrived",
+    }
+    new_total = round(journey.get("total_km", 0) + km_from_prev, 2)
+
+    await db.field_journeys.update_one(
+        {"journey_id": journey_id},
+        {"$push": {"stops": stop}, "$set": {"total_km": new_total}}
+    )
+
+    # Auto check-in the linked visit
+    if visit_id:
+        try:
+            check_in_data = {"status": "in_progress", "check_in_time": now.isoformat(),
+                             "check_in_lat": lat, "check_in_lng": lng}
+            r = await db.visit_plans.update_one({"plan_id": visit_id}, {"$set": check_in_data})
+            if r.matched_count == 0:
+                await db.field_visits.update_one({"visit_id": visit_id}, {"$set": check_in_data})
+        except Exception:
+            pass
+
+    return {"stop": stop, "total_km": new_total}
+
+
+@router.post("/sales/journey/{journey_id}/depart")
+async def depart_stop(journey_id: str, request: Request):
+    """Mark departure from the current (latest) stop. Optionally records visit outcome."""
+    user = await get_current_user(request)
+    body    = await request.json()
+    outcome = body.get("outcome")
+
+    journey = await db.field_journeys.find_one(
+        {"journey_id": journey_id, "user_email": user["email"]}, {"_id": 0}
+    )
+    if not journey:
+        raise HTTPException(404, "Journey not found")
+
+    stops = journey.get("stops", [])
+    if not stops:
+        raise HTTPException(400, "No stops to depart from")
+
+    now       = datetime.now(timezone.utc)
+    last_stop = stops[-1]
+    idx       = len(stops) - 1
+
+    await db.field_journeys.update_one(
+        {"journey_id": journey_id},
+        {"$set": {
+            f"stops.{idx}.departed_at": now.isoformat(),
+            f"stops.{idx}.status":      "completed",
+            **({"stops." + str(idx) + ".outcome": outcome} if outcome else {}),
+        }}
+    )
+
+    # Auto check-out the linked visit
+    if last_stop.get("visit_id"):
+        try:
+            checkout = {"status": "completed", "check_out_time": now.isoformat(),
+                        **({"outcome": outcome} if outcome else {})}
+            r = await db.visit_plans.update_one({"plan_id": last_stop["visit_id"]}, {"$set": checkout})
+            if r.matched_count == 0:
+                await db.field_visits.update_one({"visit_id": last_stop["visit_id"]}, {"$set": checkout})
+        except Exception:
+            pass
+
+    return {"departed_at": now.isoformat()}
+
+
+@router.post("/sales/journey/{journey_id}/end")
+async def end_journey(journey_id: str, request: Request):
+    """
+    End the journey. Calculates return km from last stop back to base.
+    Returns full journey summary.
+    """
+    user = await get_current_user(request)
+    body = await request.json()
+    lat  = body.get("lat")
+    lng  = body.get("lng")
+
+    journey = await db.field_journeys.find_one(
+        {"journey_id": journey_id, "user_email": user["email"]}, {"_id": 0}
+    )
+    if not journey:
+        raise HTTPException(404, "Journey not found")
+
+    now       = datetime.now(timezone.utc)
+    stops     = journey.get("stops", [])
+    return_km = 0.0
+
+    if lat is not None and lng is not None:
+        if stops:
+            return_km = round(haversine_distance(
+                float(stops[-1]["lat"]), float(stops[-1]["lng"]), float(lat), float(lng)
+            ), 2)
+        elif journey.get("start_lat"):
+            return_km = round(haversine_distance(
+                float(journey["start_lat"]), float(journey["start_lng"]), float(lat), float(lng)
+            ), 2)
+
+    total_km = round(journey.get("total_km", 0) + return_km, 2)
+    address  = reverse_geocode(float(lat), float(lng)) if lat and lng else None
+
+    await db.field_journeys.update_one(
+        {"journey_id": journey_id},
+        {"$set": {
+            "status":      "completed",
+            "end_lat":     lat,
+            "end_lng":     lng,
+            "end_address": address,
+            "end_time":    now.isoformat(),
+            "return_km":   return_km,
+            "total_km":    total_km,
+        }}
+    )
+
+    journey.update({"status": "completed", "total_km": total_km,
+                    "return_km": return_km, "end_time": now.isoformat()})
+    journey.pop("_id", None)
+    return journey
+
+
+@router.get("/sales/journeys")
+async def list_journeys(request: Request, date: str = ""):
+    """Return the current user's journey history (most recent 30)."""
+    user  = await get_current_user(request)
+    query: dict = {"user_email": user["email"]}
+    if date:
+        query["date"] = date
+    docs = await db.field_journeys.find(query, {"_id": 0}).sort("date", -1).to_list(30)
+    return docs

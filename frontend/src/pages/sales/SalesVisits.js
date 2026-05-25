@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import SalesLayout from '../../components/layouts/SalesLayout';
+import JourneyTracker from '../../components/JourneyTracker';
 import { visits as visitsApi, leads as leadsApi, schools as schoolsApi, salesTargets, contacts as contactsApi } from '../../lib/api';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
@@ -753,6 +754,9 @@ export default function SalesVisits() {
   return (
     <SalesLayout title="Visits" showBack>
       <div className="pb-28 space-y-4">
+
+        {/* Field Journey Tracker */}
+        <JourneyTracker todayVisits={todayVisits} />
 
         {/* Monthly Target Progress */}
         {targetProgress && targetProgress.visits_target > 0 && (() => {

@@ -396,6 +396,15 @@ export const visits = {
   scanCard: (image_base64, media_type) => API.post('/sales/scan-card', { image_base64, media_type }),
 };
 
+export const journeyApi = {
+  start:   (data)              => API.post('/sales/journey/start', data),
+  active:  ()                  => API.get('/sales/journey/active'),
+  arrive:  (id, data)          => API.post(`/sales/journey/${id}/arrive`, data),
+  depart:  (id, data)          => API.post(`/sales/journey/${id}/depart`, data),
+  end:     (id, data)          => API.post(`/sales/journey/${id}/end`, data),
+  history: (date = '')         => API.get('/sales/journeys', { params: date ? { date } : {} }),
+};
+
 // Sales - Expenses
 export const expenses = {
   getAll: (monthYear) => API.get('/sales/expenses', { params: { month_year: monthYear } }),
