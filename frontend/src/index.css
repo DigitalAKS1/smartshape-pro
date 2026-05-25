@@ -4,6 +4,33 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ── Rich Message Editor (Tiptap) ───────────────────────────────── */
+.rich-editor-content .ProseMirror {
+  min-height: 100px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 10px 12px;
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  color: var(--text-primary);
+  outline: none;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.rich-editor-content .ProseMirror p { margin: 0 0 4px; }
+.rich-editor-content .ProseMirror p:last-child { margin-bottom: 0; }
+.rich-editor-content .ProseMirror strong { font-weight: 700; }
+.rich-editor-content .ProseMirror em { font-style: italic; }
+.rich-editor-content .ProseMirror u { text-decoration: underline; }
+.rich-editor-content .ProseMirror s { text-decoration: line-through; }
+.rich-editor-content .ProseMirror .is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  color: var(--text-muted);
+  float: left;
+  pointer-events: none;
+  height: 0;
+}
+
 /* ── Light theme (default / enterprise) ─────────────────────────── */
 :root, [data-theme="light"] {
   --bg-primary:    #f8fafc;

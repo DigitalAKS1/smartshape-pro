@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import AdminLayout from '../../components/layouts/AdminLayout';
+import RichMessageEditor from '../../components/RichMessageEditor';
 import { useTheme } from '../../contexts/ThemeContext';
 import { contactRoles as contactRolesApi, contacts as contactsApi, dripSequences as dripApi, greetingRules as greetingsApi, whatsApp as waApi, email as emailApi, demo as demoApi, tags as tagsApi } from '../../lib/api';
 import { Button } from '../../components/ui/button';
@@ -136,16 +137,19 @@ function mapSeq(s) {
     trigger: `${tLabel}${fLabel}`,
     filter_designation: s.filter_designation || '',
     sequence_id: s.sequence_id,
-    steps: (s.steps || []).map(st => ({
-      n: st.step_number,
-      delay: st.delay_days === 0 ? 'Immediately' : `Day ${st.delay_days}`,
-      label: st.message_template
-        ? st.message_template.substring(0, 80) + (st.message_template.length > 80 ? '…' : '')
-        : `Step ${st.step_number}`,
-      delay_days: st.delay_days,
-      message_template: st.message_template,
-      message_type: st.message_type,
-    })),
+    steps: (s.steps || []).map(st => {
+      const plain = st.message_template
+        ? st.message_template.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
+        : '';
+      return {
+        n: st.step_number,
+        delay: st.delay_days === 0 ? 'Immediately' : `Day ${st.delay_days}`,
+        label: plain ? plain.substring(0, 80) + (plain.length > 80 ? '…' : '') : `Step ${st.step_number}`,
+        delay_days: st.delay_days,
+        message_template: st.message_template,
+        message_type: st.message_type,
+      };
+    }),
     enrolled: s.enrollment_count || 0,
     completed: s.completed_count || 0,
     active: s.is_active,
@@ -1423,12 +1427,18 @@ function DripsTab({ tk, drips, setDrips }) {
         trigger: form.trigger,
         filter_designation: form.filter_designation.trim() || null,
         is_active: true,
-        steps: form.steps.map((s, i) => ({
-          step_number: i + 1,
-          delay_days: parseInt(s.delay_days) || 0,
-          message_type: 'whatsapp',
-          message_template: s.message_template.trim() || `Step ${i + 1}`,
-        })),
+        steps: form.steps.map((s, i) => {
+          const plain = s.message_template
+            ? s.message_template.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
+            : '';
+          return {
+            step_number: i + 1,
+            delay_days: parseInt(s.delay_days) || 0,
+            message_type: 'whatsapp',
+            message_template: s.message_template || `Step ${i + 1}`,
+            message_plain: plain,
+          };
+        }),
       };
       const res = await dripApi.create(payload);
       setDrips(prev => [mapSeq(res.data), ...prev]);
@@ -1598,9 +1608,11 @@ function DripsTab({ tk, drips, setDrips }) {
                         </button>
                       )}
                     </div>
-                    <Input className={`h-8 text-xs ${tk.inp}`} placeholder="WhatsApp message template text…"
+                    <RichMessageEditor
                       value={s.message_template}
-                      onChange={e => setForm(p => ({ ...p, steps: p.steps.map((ss, ii) => ii === i ? { ...ss, message_template: e.target.value } : ss) }))} />
+                      onChange={html => setForm(p => ({ ...p, steps: p.steps.map((ss, ii) => ii === i ? { ...ss, message_template: html } : ss) }))}
+                      placeholder="Write your drip message — paste from ChatGPT, Claude, or type directly…"
+                    />
                   </div>
                 ))}
               </div>
@@ -1785,12 +1797,11 @@ function TemplatesTab({ tk, templates, setTemplates }) {
             </div>
             <div>
               <Label className={`${tk.t2} text-xs mb-1.5 block`}>Message Body</Label>
-              <textarea rows={6} className={`w-full rounded-xl border px-3 py-2.5 text-xs resize-none ${tk.inp}`}
-                placeholder="Write your WhatsApp message. Use {name} for contact's name, {school_name} for school."
-                value={form.body} onChange={e => setForm(p => ({ ...p, body: e.target.value }))} />
-              <p className={`text-[11px] ${tk.tm} mt-1`}>
-                {form.body.length} chars · <span className="font-mono text-[var(--accent)]">{'{name}'}</span> + <span className="font-mono text-[var(--accent)]">{'{school_name}'}</span>
-              </p>
+              <RichMessageEditor
+                value={form.body}
+                onChange={html => setForm(p => ({ ...p, body: html }))}
+                placeholder="Write your WhatsApp message. Paste from ChatGPT or Claude — bold, emojis and formatting preserved."
+              />
             </div>
           </div>
           <DialogFooter className="gap-2">
