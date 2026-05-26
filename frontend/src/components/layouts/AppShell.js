@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { Home, Target, MapPin, Package, FileText, CalendarDays, Megaphone, Wifi, WifiOff, Download, Bell } from 'lucide-react';
+import { Home, Target, MapPin, Package, FileText, CalendarDays, Megaphone, Wifi, WifiOff, Download, Bell, X } from 'lucide-react';
 import AdminLayout from './AdminLayout';
 import SalesLayout from './SalesLayout';
 import { useAuth } from '../../contexts/AuthContext';
@@ -11,6 +11,9 @@ function urlB64ToUint8Array(b64) {
   const raw = window.atob((b64 + pad).replace(/-/g, '+').replace(/_/g, '/'));
   return Uint8Array.from([...raw].map(c => c.charCodeAt(0)));
 }
+
+const isIOS = typeof navigator !== 'undefined' && /iPad|iPhone|iPod/.test(navigator.userAgent);
+const isStandalone = typeof window !== 'undefined' && !!window.navigator.standalone;
 
 /**
  * Adaptive shell — uses mobile-first layout (top header + bottom nav) on small screens,
@@ -27,6 +30,7 @@ export default function AppShell({ children }) {
   const [unreadCount, setUnreadCount] = useState(0);
   const [pushSubscribed, setPushSubscribed] = useState(false);
   const [pushEnabling, setPushEnabling] = useState(false);
+  const [showIosInstall, setShowIosInstall] = useState(false);
 
   const pushSupported = typeof window !== 'undefined' && 'PushManager' in window && 'Notification' in window;
 
@@ -81,6 +85,13 @@ export default function AppShell({ children }) {
     const h = (e) => { e.preventDefault(); setDeferredPrompt(e); setShowInstall(true); };
     window.addEventListener('beforeinstallprompt', h);
     return () => window.removeEventListener('beforeinstallprompt', h);
+  }, []);
+
+  useEffect(() => {
+    if (isIOS && !isStandalone && !localStorage.getItem('ios-install-dismissed')) {
+      const t = setTimeout(() => setShowIosInstall(true), 2000);
+      return () => clearTimeout(t);
+    }
   }, []);
 
   const promptInstall = async () => {
@@ -159,6 +170,23 @@ export default function AppShell({ children }) {
       {!online && (
         <div className="bg-red-500/15 border-b border-red-500/30 text-red-400 text-xs py-1.5 px-3 text-center" data-testid="offline-banner">
           You are offline — actions will sync when you reconnect.
+        </div>
+      )}
+
+      {/* iOS Add to Home Screen banner */}
+      {showIosInstall && (
+        <div className="bg-blue-500/8 border-b border-blue-500/20 px-3 py-2.5 flex items-center gap-3">
+          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-[#e94560] to-[#f05c75] flex items-center justify-center text-white font-black text-[9px] shrink-0 shadow-sm">SS</div>
+          <div className="flex-1 min-w-0">
+            <p className="text-xs font-bold text-[var(--text-primary)]">Install SmartShape Pro</p>
+            <p className="text-[10px] text-[var(--text-muted)] leading-tight mt-0.5">
+              Tap <span className="text-blue-400 font-semibold">Share ↑</span> in Safari → <span className="text-blue-400 font-semibold">"Add to Home Screen"</span>
+            </p>
+          </div>
+          <button onClick={() => { localStorage.setItem('ios-install-dismissed', '1'); setShowIosInstall(false); }}
+            className="shrink-0 p-1.5 text-[var(--text-muted)]">
+            <X className="h-3.5 w-3.5" />
+          </button>
         </div>
       )}
 

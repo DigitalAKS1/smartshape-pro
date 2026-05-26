@@ -10,6 +10,7 @@ import {
   Search, Link2, MapPinned, ChevronDown, ChevronUp,
   Phone, Info, Clipboard, ExternalLink, ArrowRight, Loader2, Target,
   Camera, ScanLine, Upload,
+  ThumbsUp, ThumbsDown, RotateCcw, ShoppingCart,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -1034,18 +1035,30 @@ export default function SalesVisits() {
 
           {/* Outcome */}
           <div>
-            <Label className={`text-xs font-semibold ${tSec} mb-1.5 block`}>Visit Outcome</Label>
-            <select value={completeForm.outcome}
-              onChange={e => setCompleteForm(f => ({ ...f, outcome: e.target.value }))}
-              className={`w-full h-11 px-3 rounded-xl border border-[var(--border-color)] bg-[var(--bg-primary)] ${tPri} text-sm`}>
-              <option value="">— Select outcome —</option>
-              <option value="interested">Interested — wants demo/quote</option>
-              <option value="demo_booked">Demo booked</option>
-              <option value="follow_up">Needs follow-up</option>
-              <option value="callback_requested">Callback requested</option>
-              <option value="not_interested">Not interested</option>
-              <option value="already_purchased">Already purchased elsewhere</option>
-            </select>
+            <Label className={`text-xs font-semibold ${tSec} mb-2 block`}>Visit Outcome</Label>
+            <div className="grid grid-cols-2 gap-2">
+              {[
+                { value: 'interested',         label: 'Interested',     icon: ThumbsUp,     bg: 'bg-emerald-500/15', border: 'border-emerald-500/35', text: 'text-emerald-400' },
+                { value: 'demo_booked',        label: 'Demo Booked',    icon: Calendar,     bg: 'bg-purple-500/15',  border: 'border-purple-500/35',  text: 'text-purple-400' },
+                { value: 'follow_up',          label: 'Follow Up',      icon: RotateCcw,    bg: 'bg-blue-500/15',    border: 'border-blue-500/35',    text: 'text-blue-400'   },
+                { value: 'callback_requested', label: 'Callback',       icon: Phone,        bg: 'bg-amber-500/15',   border: 'border-amber-500/35',   text: 'text-amber-400'  },
+                { value: 'not_interested',     label: 'Not Interested', icon: ThumbsDown,   bg: 'bg-red-500/15',     border: 'border-red-500/35',     text: 'text-red-400'    },
+                { value: 'already_purchased',  label: 'Already Bought', icon: ShoppingCart, bg: 'bg-slate-500/15',   border: 'border-slate-500/35',   text: 'text-slate-400'  },
+              ].map(o => {
+                const OIcon = o.icon;
+                const sel = completeForm.outcome === o.value;
+                return (
+                  <button key={o.value} type="button"
+                    onClick={() => setCompleteForm(f => ({ ...f, outcome: sel ? '' : o.value }))}
+                    className={`flex items-center gap-2.5 px-3 py-3 rounded-xl border text-sm font-medium transition-all active:scale-95 ${
+                      sel ? `${o.bg} ${o.border} ${o.text}` : `bg-[var(--bg-primary)] border-[var(--border-color)] ${tMuted}`
+                    }`}>
+                    <OIcon className={`h-4 w-4 shrink-0 ${sel ? o.text : tMuted}`} />
+                    <span className={`text-xs font-semibold ${sel ? o.text : tSec}`}>{o.label}</span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
           {/* Notes */}

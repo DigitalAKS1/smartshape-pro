@@ -3,6 +3,7 @@ import { toast } from 'sonner';
 import {
   Navigation, MapPin, CheckCircle2, Clock, Flag, ChevronRight,
   Building2, Home, Loader2, Play, Square, Plus, ReceiptText,
+  ThumbsUp, ThumbsDown, RotateCcw, CalendarDays, Phone, ShoppingCart,
 } from 'lucide-react';
 import { journeyApi, visits as visitsApi, expenses } from '../lib/api';
 
@@ -16,12 +17,12 @@ const fmtDuration = (fromIso, toIso) => {
 };
 
 const OUTCOMES = [
-  { value: 'interested',          label: 'Interested' },
-  { value: 'follow_up',           label: 'Follow Up' },
-  { value: 'demo_booked',         label: 'Demo Booked' },
-  { value: 'not_interested',      label: 'Not Interested' },
-  { value: 'callback_requested',  label: 'Callback Requested' },
-  { value: 'already_purchased',   label: 'Already Purchased' },
+  { value: 'interested',         label: 'Interested',     icon: ThumbsUp,     bg: 'bg-emerald-500/15', border: 'border-emerald-500/35', text: 'text-emerald-400' },
+  { value: 'follow_up',          label: 'Follow Up',      icon: RotateCcw,    bg: 'bg-blue-500/15',    border: 'border-blue-500/35',    text: 'text-blue-400'   },
+  { value: 'demo_booked',        label: 'Demo Booked',    icon: CalendarDays, bg: 'bg-purple-500/15',  border: 'border-purple-500/35',  text: 'text-purple-400' },
+  { value: 'not_interested',     label: 'Not Interested', icon: ThumbsDown,   bg: 'bg-red-500/15',     border: 'border-red-500/35',     text: 'text-red-400'    },
+  { value: 'callback_requested', label: 'Callback',       icon: Phone,        bg: 'bg-amber-500/15',   border: 'border-amber-500/35',   text: 'text-amber-400'  },
+  { value: 'already_purchased',  label: 'Purchased',      icon: ShoppingCart, bg: 'bg-slate-500/15',   border: 'border-slate-500/35',   text: 'text-slate-400'  },
 ];
 
 function getGps() {
@@ -67,6 +68,9 @@ export default function JourneyTracker({ todayVisits = [] }) {
 
   // Add-expense prompt after journey end
   const [expensePrompt, setExpensePrompt] = useState(null);   // journey doc when ended
+
+  // End journey confirmation modal
+  const [confirmEndOpen, setConfirmEndOpen] = useState(false);
 
   const tickRef = useRef(null);
   const [tick, setTick] = useState(0);
@@ -156,7 +160,6 @@ export default function JourneyTracker({ todayVisits = [] }) {
   };
 
   const endJourney = async () => {
-    if (!window.confirm('End today\'s field journey?')) return;
     setBusy(true);
     try {
       const pos = await getGps().catch(() => null);
@@ -362,8 +365,8 @@ export default function JourneyTracker({ todayVisits = [] }) {
                 <CheckCircle2 className="h-4 w-4" /> Visit Done — Next Stop
               </button>
             )}
-            <button onClick={endJourney} disabled={busy}
-              className="px-3 py-2.5 rounded-xl border border-[var(--border-color)] text-[var(--text-muted)] hover:text-[var(--text-secondary)] text-xs">
+            <button onClick={() => setConfirmEndOpen(true)} disabled={busy}
+              className="px-3 py-2.5 rounded-xl border border-[var(--border-color)] text-[var(--text-muted)] hover:text-[var(--text-secondary)] text-xs active:opacity-70">
               <Square className="h-4 w-4" />
             </button>
           </div>
@@ -436,31 +439,76 @@ export default function JourneyTracker({ todayVisits = [] }) {
 
       {/* ── Depart sheet ──────────────────────────────────────────── */}
       {departOpen && (
-        <div className="fixed inset-0 z-50 flex items-end" onClick={() => setDepartOpen(false)}>
-          <div className="absolute inset-0 bg-black/50" />
-          <div className="relative w-full bg-[var(--bg-card)] rounded-t-2xl p-5 pb-8 space-y-4"
-               onClick={e => e.stopPropagation()}>
-            <div className="w-10 h-1 bg-[var(--border-color)] rounded-full mx-auto mb-1" />
-            <p className="text-base font-semibold text-[var(--text-primary)]">
-              Done at {lastStop?.school_name} — how did it go?
-            </p>
-            <div className="grid grid-cols-2 gap-2">
-              {OUTCOMES.map(o => (
-                <button key={o.value} onClick={() => setOutcome(o.value)}
-                  className={`py-2.5 rounded-xl border text-sm font-medium transition-all ${
-                    outcome === o.value
-                      ? 'bg-[#e94560]/15 border-[#e94560]/50 text-[#e94560]'
-                      : 'border-[var(--border-color)] text-[var(--text-muted)] hover:border-[var(--text-muted)]'
-                  }`}>
-                  {o.label}
-                </button>
-              ))}
+        <div className="fixed inset-0 z-50 flex items-end" onClick={() => !busy && setDepartOpen(false)}>
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
+          <div className="relative w-full bg-[var(--bg-card)] rounded-t-3xl" onClick={e => e.stopPropagation()}>
+            {/* Drag handle */}
+            <div className="flex justify-center pt-3 pb-1">
+              <div className="w-10 h-1 bg-[var(--border-color)] rounded-full" />
             </div>
-            <button onClick={depart} disabled={busy}
-              className="w-full py-3 rounded-xl bg-green-500/20 text-green-400 border border-green-500/40 font-semibold text-sm disabled:opacity-50 flex items-center justify-center gap-2">
-              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Flag className="h-4 w-4" />}
-              {busy ? '…' : outcome ? 'Done — Head to Next' : 'Done (skip outcome)'}
-            </button>
+            {/* Header */}
+            <div className="px-5 pb-3">
+              <p className="text-[10px] text-[var(--text-muted)] uppercase tracking-widest font-semibold">Done at</p>
+              <p className="text-lg font-bold text-[var(--text-primary)] leading-tight truncate">{lastStop?.school_name}</p>
+              <p className="text-xs text-[var(--text-muted)] mt-0.5">How did the visit go?</p>
+            </div>
+            {/* Outcome 3-col icon grid */}
+            <div className="px-4 pb-3 grid grid-cols-3 gap-2.5">
+              {OUTCOMES.map(o => {
+                const OIcon = o.icon;
+                const sel = outcome === o.value;
+                return (
+                  <button key={o.value} onClick={() => setOutcome(sel ? '' : o.value)}
+                    className={`flex flex-col items-center justify-center gap-2 py-4 rounded-2xl border transition-all active:scale-95 ${
+                      sel
+                        ? `${o.bg} ${o.border} ${o.text}`
+                        : 'bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-muted)]'
+                    }`}>
+                    <OIcon className={`h-5 w-5 ${sel ? o.text : 'text-[var(--text-muted)]'}`} />
+                    <span className={`text-[10px] font-bold text-center leading-tight px-1 ${sel ? o.text : 'text-[var(--text-secondary)]'}`}>{o.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+            {/* Done button */}
+            <div className="px-4" style={{ paddingBottom: 'max(24px, env(safe-area-inset-bottom))' }}>
+              <button onClick={depart} disabled={busy}
+                className={`w-full py-3.5 rounded-xl font-bold text-sm disabled:opacity-50 flex items-center justify-center gap-2 transition-all ${
+                  outcome
+                    ? 'bg-[#e94560] text-white shadow-lg shadow-[#e94560]/25'
+                    : 'bg-[var(--bg-primary)] border border-[var(--border-color)] text-[var(--text-muted)]'
+                }`}>
+                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Flag className="h-4 w-4" />}
+                {busy ? '…' : outcome ? `Done · ${OUTCOMES.find(o2 => o2.value === outcome)?.label || ''}` : 'Done (skip outcome)'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── End Journey Confirmation ─────────────────────────────── */}
+      {confirmEndOpen && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center px-5">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => !busy && setConfirmEndOpen(false)} />
+          <div className="relative bg-[var(--bg-card)] rounded-3xl p-6 w-full max-w-xs shadow-2xl">
+            <div className="w-14 h-14 rounded-2xl bg-[#e94560]/10 flex items-center justify-center mx-auto mb-4">
+              <Square className="h-6 w-6 text-[#e94560]" />
+            </div>
+            <h3 className="text-base font-bold text-[var(--text-primary)] text-center mb-1.5">End Field Journey?</h3>
+            <p className="text-sm text-[var(--text-muted)] text-center mb-6 leading-relaxed">
+              Your total KM will be recorded and today's journey will close.
+            </p>
+            <div className="flex gap-3">
+              <button onClick={() => setConfirmEndOpen(false)}
+                className="flex-1 py-3 rounded-xl border border-[var(--border-color)] text-[var(--text-secondary)] text-sm font-semibold active:opacity-70">
+                Cancel
+              </button>
+              <button onClick={async () => { setConfirmEndOpen(false); await endJourney(); }} disabled={busy}
+                className="flex-1 py-3 rounded-xl bg-[#e94560] text-white text-sm font-bold disabled:opacity-60 active:opacity-80 flex items-center justify-center gap-1.5">
+                {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+                End Journey
+              </button>
+            </div>
           </div>
         </div>
       )}
