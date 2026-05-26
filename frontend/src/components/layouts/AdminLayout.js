@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { useTheme } from '../../contexts/ThemeContext';
@@ -7,11 +7,185 @@ import {
   Warehouse, ClipboardList, DollarSign, Users, LogOut, Menu, X,
   Smartphone, Layers, IndianRupee, UserCog, Store, MapPin, Target,
   Sun, Moon, CalendarDays, Calendar, ShoppingCart, Upload, Activity,
-  Home, MoreHorizontal, Megaphone, Zap, Heart,
+  Home, MoreHorizontal, Megaphone, Zap, Heart, Bell, BellOff,
 } from 'lucide-react';
 import HelpButton from '../HelpButton';
 import GuidedTour from '../GuidedTour';
 import KeyboardShortcuts from '../KeyboardShortcuts';
+import { notificationsApi, pushApi } from '../../lib/api';
+
+// ── VAPID base64 → Uint8Array ─────────────────────────────────────────────────
+function urlB64ToUint8Array(b64) {
+  const pad = '='.repeat((4 - b64.length % 4) % 4);
+  const raw = window.atob((b64 + pad).replace(/-/g, '+').replace(/_/g, '/'));
+  return Uint8Array.from([...raw].map(c => c.charCodeAt(0)));
+}
+
+const NOTIF_META = {
+  overdue_task:      { icon: '⚠️', url: '/today' },
+  stale_lead:        { icon: '💤', url: '/leads' },
+  pending_quotation: { icon: '📋', url: '/quotations' },
+  birthday_today:    { icon: '🎂', url: '/leads' },
+  anniversary_today: { icon: '🎉', url: '/leads' },
+};
+
+// ── Self-contained notification bell + push panel ────────────────────────────
+function NotificationBell() {
+  const [notifs, setNotifs]           = useState([]);
+  const [open, setOpen]               = useState(false);
+  const [subscribed, setSubscribed]   = useState(false);
+  const [permDenied, setPermDenied]   = useState(false);
+  const [enabling, setEnabling]       = useState(false);
+  const panelRef = useRef(null);
+
+  const pushSupported = typeof window !== 'undefined' && 'PushManager' in window && 'Notification' in window;
+  const unread = notifs.filter(n => !n.is_read).length;
+
+  const fetchNotifs = useCallback(async () => {
+    try { const r = await notificationsApi.getAll(); setNotifs(r.data || []); } catch {}
+  }, []);
+
+  useEffect(() => {
+    fetchNotifs();
+    const t = setInterval(fetchNotifs, 30000);
+    return () => clearInterval(t);
+  }, [fetchNotifs]);
+
+  useEffect(() => {
+    if (!pushSupported) return;
+    setPermDenied(Notification.permission === 'denied');
+    navigator.serviceWorker.ready.then(reg =>
+      reg.pushManager.getSubscription().then(s => setSubscribed(!!s))
+    );
+  }, [pushSupported]);
+
+  useEffect(() => {
+    const handler = e => { if (panelRef.current && !panelRef.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const markAllRead = async () => {
+    try { await notificationsApi.markAllRead(); setNotifs(n => n.map(x => ({ ...x, is_read: true }))); } catch {}
+  };
+
+  const enablePush = async () => {
+    setEnabling(true);
+    try {
+      const perm = await Notification.requestPermission();
+      setPermDenied(perm === 'denied');
+      if (perm !== 'granted') return;
+      const { data } = await pushApi.getPublicKey();
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlB64ToUint8Array(data.public_key) });
+      await pushApi.subscribe(sub.toJSON());
+      setSubscribed(true);
+    } catch (e) { console.error('[push]', e); }
+    finally { setEnabling(false); }
+  };
+
+  const disablePush = async () => {
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.getSubscription();
+      if (sub) { await pushApi.unsubscribe(sub.endpoint); await sub.unsubscribe(); }
+      setSubscribed(false);
+    } catch {}
+  };
+
+  const testPush = async () => { try { await pushApi.test(); } catch {} };
+
+  return (
+    <div className="relative" ref={panelRef}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="relative w-8 h-8 rounded-lg flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors"
+        title="Notifications"
+      >
+        <Bell className="h-3.5 w-3.5" />
+        {unread > 0 && (
+          <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-0.5 bg-[#e94560] text-white text-[9px] font-bold rounded-full flex items-center justify-center leading-none">
+            {unread > 9 ? '9+' : unread}
+          </span>
+        )}
+      </button>
+
+      {open && (
+        <div className="absolute right-0 top-full mt-2 w-[320px] bg-[var(--bg-card)] border border-[var(--border-color)] rounded-xl shadow-2xl z-[60] overflow-hidden">
+
+          {/* Header */}
+          <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--border-color)]">
+            <span className="text-sm font-semibold text-[var(--text-primary)]">Notifications</span>
+            <div className="flex items-center gap-2">
+              {unread > 0 && (
+                <button onClick={markAllRead} className="text-xs text-[var(--accent)] hover:underline">Mark all read</button>
+              )}
+              <button onClick={() => setOpen(false)} className="text-[var(--text-muted)] hover:text-[var(--text-primary)]">
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
+
+          {/* Push toggle row */}
+          {pushSupported && (
+            <div className={`px-4 py-2.5 flex items-center justify-between gap-3 border-b border-[var(--border-color)] ${subscribed ? 'bg-green-500/5' : 'bg-[var(--bg-hover)]'}`}>
+              <div className="min-w-0">
+                <p className="text-xs font-semibold text-[var(--text-primary)] flex items-center gap-1.5">
+                  {subscribed ? <Bell className="h-3 w-3 text-green-500" /> : <BellOff className="h-3 w-3 text-[var(--text-muted)]" />}
+                  {subscribed ? 'Push alerts enabled' : 'Enable push alerts'}
+                </p>
+                <p className="text-[10px] text-[var(--text-muted)] mt-0.5 leading-tight">
+                  {permDenied ? 'Blocked — allow in browser settings' : subscribed ? 'You get alerts when app is closed' : 'Like WhatsApp — alerts even when closed'}
+                </p>
+              </div>
+              <div className="flex items-center gap-1.5 flex-shrink-0">
+                {subscribed && (
+                  <button onClick={testPush}
+                    className="text-[10px] px-2 py-1 rounded border border-[var(--border-color)] text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors">
+                    Test
+                  </button>
+                )}
+                <button
+                  disabled={enabling || permDenied}
+                  onClick={subscribed ? disablePush : enablePush}
+                  className={`text-[10px] px-2.5 py-1.5 rounded-md font-semibold transition-colors disabled:opacity-40 ${
+                    subscribed ? 'bg-red-500/15 text-red-400 hover:bg-red-500/25' : 'bg-[#e94560] text-white hover:bg-[#f05c75]'
+                  }`}>
+                  {enabling ? '…' : subscribed ? 'Disable' : 'Enable'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Notification list */}
+          <div className="max-h-[320px] overflow-y-auto divide-y divide-[var(--border-color)]">
+            {notifs.length === 0 ? (
+              <div className="py-8 text-center">
+                <Bell className="h-6 w-6 mx-auto mb-2 text-[var(--text-muted)] opacity-40" />
+                <p className="text-xs text-[var(--text-muted)]">No notifications yet</p>
+              </div>
+            ) : notifs.slice(0, 20).map((n, i) => {
+              const meta = NOTIF_META[n.type] || { icon: '🔔', url: '/today' };
+              return (
+                <div key={i} className={`px-4 py-3 ${!n.is_read ? 'bg-[var(--accent-bg)]' : ''}`}>
+                  <div className="flex items-start gap-2.5">
+                    <span className="text-sm flex-shrink-0 mt-0.5">{meta.icon}</span>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-semibold text-[var(--text-primary)] leading-snug">{n.title}</p>
+                      <p className="text-[11px] text-[var(--text-muted)] mt-0.5 leading-snug line-clamp-2">{n.message}</p>
+                      <p className="text-[10px] text-[var(--text-muted)] mt-1 opacity-70">{n.created_at?.slice(0, 16).replace('T', ' ')}</p>
+                    </div>
+                    {!n.is_read && <span className="w-2 h-2 rounded-full bg-[#e94560] flex-shrink-0 mt-1.5" />}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 const MODULE_ROUTE_MAP = {
   dashboard: [
@@ -142,6 +316,7 @@ export default function AdminLayout({ children }) {
           </div>
         </div>
         <div className="flex items-center gap-1">
+          <NotificationBell />
           <button
             onClick={toggleTheme}
             className="w-8 h-8 rounded-lg flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors"

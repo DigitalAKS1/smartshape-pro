@@ -649,4 +649,18 @@ export const adminApi = {
   clearCache: (categories) => API.post('/admin/cache/clear', { categories }),
 };
 
+// In-app notifications
+export const notificationsApi = {
+  getAll: () => API.get('/notifications'),
+  markAllRead: () => API.put('/notifications/read-all'),
+};
+
+// Web Push (PWA)
+export const pushApi = {
+  getPublicKey: () => API.get('/push/public-key'),
+  subscribe: (subscription) => API.post('/push/subscribe', { subscription }),
+  unsubscribe: (endpoint) => API.delete('/push/unsubscribe', { data: { endpoint } }),
+  test: () => API.post('/push/test'),
+};
+
 export default API;

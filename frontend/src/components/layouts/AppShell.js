@@ -1,9 +1,16 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { Home, Target, MapPin, Package, FileText, CalendarDays, Megaphone, Wifi, WifiOff, Download } from 'lucide-react';
+import { Home, Target, MapPin, Package, FileText, CalendarDays, Megaphone, Wifi, WifiOff, Download, Bell } from 'lucide-react';
 import AdminLayout from './AdminLayout';
 import SalesLayout from './SalesLayout';
 import { useAuth } from '../../contexts/AuthContext';
+import { notificationsApi, pushApi } from '../../lib/api';
+
+function urlB64ToUint8Array(b64) {
+  const pad = '='.repeat((4 - b64.length % 4) % 4);
+  const raw = window.atob((b64 + pad).replace(/-/g, '+').replace(/_/g, '/'));
+  return Uint8Array.from([...raw].map(c => c.charCodeAt(0)));
+}
 
 /**
  * Adaptive shell — uses mobile-first layout (top header + bottom nav) on small screens,
@@ -17,6 +24,43 @@ export default function AppShell({ children }) {
   const [online, setOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
   const [showInstall, setShowInstall] = useState(false);
   const [deferredPrompt, setDeferredPrompt] = useState(null);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [pushSubscribed, setPushSubscribed] = useState(false);
+  const [pushEnabling, setPushEnabling] = useState(false);
+
+  const pushSupported = typeof window !== 'undefined' && 'PushManager' in window && 'Notification' in window;
+
+  const fetchUnread = useCallback(async () => {
+    try { const r = await notificationsApi.getAll(); setUnreadCount((r.data || []).filter(n => !n.is_read).length); } catch {}
+  }, []);
+
+  useEffect(() => {
+    fetchUnread();
+    const t = setInterval(fetchUnread, 30000);
+    return () => clearInterval(t);
+  }, [fetchUnread]);
+
+  useEffect(() => {
+    if (!pushSupported) return;
+    navigator.serviceWorker.ready.then(reg =>
+      reg.pushManager.getSubscription().then(s => setPushSubscribed(!!s))
+    );
+  }, [pushSupported]);
+
+  const enablePush = async () => {
+    if (!pushSupported || pushEnabling) return;
+    setPushEnabling(true);
+    try {
+      const perm = await Notification.requestPermission();
+      if (perm !== 'granted') return;
+      const { data } = await pushApi.getPublicKey();
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlB64ToUint8Array(data.public_key) });
+      await pushApi.subscribe(sub.toJSON());
+      setPushSubscribed(true);
+    } catch (e) { console.error('[push]', e); }
+    finally { setPushEnabling(false); }
+  };
 
   useEffect(() => {
     const onResize = () => setIsMobile(window.innerWidth < 768);
@@ -80,12 +124,33 @@ export default function AppShell({ children }) {
             <p className="text-[10px] text-[var(--text-muted)] leading-tight">{user?.name}</p>
           </div>
         </div>
-        <div className="flex items-center gap-1">
-          {showInstall && (
-            <button onClick={promptInstall} className="h-9 px-2 rounded-full bg-[#e94560] text-white text-xs inline-flex items-center gap-1" data-testid="install-pwa-btn">
-              <Download className="h-3.5 w-3.5" /> Install
+        <div className="flex items-center gap-1.5">
+          {/* Push enable — shown only if not yet subscribed */}
+          {pushSupported && !pushSubscribed && Notification.permission !== 'denied' && (
+            <button
+              onClick={enablePush}
+              disabled={pushEnabling}
+              className="h-8 px-2.5 rounded-full bg-[#e94560] text-white text-[11px] font-semibold inline-flex items-center gap-1 disabled:opacity-60"
+              title="Enable push notifications"
+            >
+              <Bell className="h-3 w-3" /> {pushEnabling ? '…' : 'Alerts'}
             </button>
           )}
+          {/* Install button */}
+          {showInstall && (
+            <button onClick={promptInstall} className="h-8 px-2.5 rounded-full bg-[var(--bg-hover)] border border-[var(--border-color)] text-[var(--text-secondary)] text-[11px] font-semibold inline-flex items-center gap-1" data-testid="install-pwa-btn">
+              <Download className="h-3 w-3" /> Install
+            </button>
+          )}
+          {/* Notification bell with unread badge */}
+          <div className="relative">
+            <Bell className="h-5 w-5 text-[var(--text-muted)]" />
+            {unreadCount > 0 && (
+              <span className="absolute -top-1 -right-1 min-w-[14px] h-3.5 px-0.5 bg-[#e94560] text-white text-[8px] font-bold rounded-full flex items-center justify-center leading-none">
+                {unreadCount > 9 ? '9+' : unreadCount}
+              </span>
+            )}
+          </div>
           {online ? <Wifi className="h-4 w-4 text-green-400" /> : <WifiOff className="h-4 w-4 text-red-400" />}
         </div>
       </header>

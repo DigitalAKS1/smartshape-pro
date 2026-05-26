@@ -109,3 +109,43 @@ async function staleWhileRevalidate(req) {
   }).catch(() => cached || new Response('', { status: 503, statusText: 'Offline' }));
   return cached || networkPromise;
 }
+
+// ── Push notification receiver ─────────────────────────────────────────────
+self.addEventListener('push', (event) => {
+  let data = {};
+  try { data = event.data ? event.data.json() : {}; } catch { data = {}; }
+  const title = data.title || 'SmartShape Pro';
+  const options = {
+    body: data.body || '',
+    icon: '/icons/icon-192.png',
+    badge: '/icons/icon-192.png',
+    data: { url: data.url || '/today' },
+    tag: data.tag || 'ssp-general',
+    renotify: true,
+    vibrate: [200, 100, 200],
+    requireInteraction: false,
+    actions: [
+      { action: 'open', title: 'Open App' },
+      { action: 'dismiss', title: 'Dismiss' },
+    ],
+  };
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+
+// ── Notification tap → open / focus the app at the right URL ──────────────
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  if (event.action === 'dismiss') return;
+  const url = (event.notification.data && event.notification.data.url) || '/today';
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((wcs) => {
+      for (const c of wcs) {
+        if (c.url.startsWith(self.location.origin) && 'focus' in c) {
+          c.navigate(url);
+          return c.focus();
+        }
+      }
+      return self.clients.openWindow(url);
+    })
+  );
+});

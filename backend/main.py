@@ -41,6 +41,7 @@ from routes.greeting_routes import router as greeting_router
 from routes.whatsapp_routes import router as whatsapp_router
 from routes.email_routes import router as email_router
 from routes.demo_routes import router as demo_router
+from routes.push_routes import router as push_router
 from scheduler import start_scheduler
 
 # ── App instance ───────────────────────────────────────────────────────────────
@@ -83,6 +84,7 @@ app.include_router(greeting_router, prefix="/api")
 app.include_router(whatsapp_router, prefix="/api")
 app.include_router(email_router, prefix="/api")
 app.include_router(demo_router, prefix="/api")
+app.include_router(push_router, prefix="/api")
 
 # ── Static files — uploaded WhatsApp attachments served publicly ───────────────
 _WA_UPLOADS = os.path.join(os.path.dirname(__file__), "uploads", "whatsapp")

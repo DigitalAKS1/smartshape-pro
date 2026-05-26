@@ -11,6 +11,21 @@ from database import db
 from auth_utils import get_current_user, hash_password
 from rbac import get_team, require_admin, require_teams
 
+# Lazy import to avoid circular dependency — push_routes imports from database only
+async def _push(email, title, body, url="/today", tag="general"):
+    try:
+        from routes.push_routes import send_push_to_user
+        await send_push_to_user(email, title, body, url, tag)
+    except Exception:
+        pass
+
+async def _push_admins(title, body, url="/today", tag="admin"):
+    try:
+        from routes.push_routes import send_push_to_all_admins
+        await send_push_to_all_admins(title, body, url, tag)
+    except Exception:
+        pass
+
 router = APIRouter()
 
 
@@ -988,6 +1003,8 @@ async def run_auto_reminders():
                     }},
                     upsert=True,
                 )
+                if task.get("assigned_to"):
+                    await _push(task["assigned_to"], f"⚠️ Overdue Task", task["title"], "/today", "overdue_task")
 
             week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
             stale_leads = await db.leads.find({
@@ -1009,6 +1026,8 @@ async def run_auto_reminders():
                     }},
                     upsert=True,
                 )
+                if lead.get("assigned_to"):
+                    await _push(lead["assigned_to"], "💤 Stale Lead", f"No activity on {lead['company_name']}", "/leads", "stale_lead")
 
             three_days_ago = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
             pending_quots = await db.quotations.find({
@@ -1030,6 +1049,8 @@ async def run_auto_reminders():
                     }},
                     upsert=True,
                 )
+                if q.get("sales_person_email"):
+                    await _push(q["sales_person_email"], "📋 Pending Quotation", f"{q['quote_number']} for {q['school_name']}", "/quotations", "pending_quotation")
 
             # ── Birthday & Anniversary reminders ──────────────────────────────
             today_mmdd = datetime.now(timezone.utc).strftime("%m-%d")
@@ -1052,6 +1073,7 @@ async def run_auto_reminders():
                     }},
                     upsert=True,
                 )
+                await _push_admins("🎂 Birthday Today", f"{c['name']} — {c.get('company', '')}", "/leads", "birthday")
 
             anniversary_schools = await db.schools.find(
                 {"anniversary": {"$regex": f"-{today_mmdd}$"}},
@@ -1071,6 +1093,7 @@ async def run_auto_reminders():
                     }},
                     upsert=True,
                 )
+                await _push_admins("🎉 School Anniversary", s["school_name"], "/leads", "anniversary")
 
             # ── Scheduled WhatsApp messages ──────────────────────────────
             now_iso_full = datetime.now(timezone.utc).isoformat()
