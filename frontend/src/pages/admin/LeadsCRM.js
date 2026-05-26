@@ -11,7 +11,7 @@ import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../../components/ui/dialog';
 import { toast } from 'sonner';
-import { Plus, Phone, MessageSquare, Mail, Calendar, Clock, CheckCircle, AlertTriangle, User, UserCog, Trash2, Edit2, Upload, Search, Target, ChevronRight, Building2, MapPin, UserPlus, ArrowRightCircle, Download, ChevronLeft, LayoutGrid, Lock, Package, MoreHorizontal, X, Eye, Zap } from 'lucide-react';
+import { Plus, Phone, MessageSquare, Mail, Calendar, Clock, CheckCircle, AlertTriangle, User, UserCog, Trash2, Edit2, Upload, Search, Target, ChevronRight, Building2, MapPin, UserPlus, ArrowRightCircle, Download, ChevronLeft, LayoutGrid, Lock, Package, MoreHorizontal, X, Eye, Zap, FileText } from 'lucide-react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../../components/ui/dropdown-menu';
 import WhatsAppSendDialog from '../../components/WhatsAppSendDialog';
 import KanbanBoard, { ageColor, AgeBadge } from '../../components/KanbanBoard';
@@ -84,6 +84,11 @@ export default function LeadsCRM() {
   const [convertNewSchool, setConvertNewSchool] = useState({ school_name: '', school_type: 'CBSE', city: '', phone: '', school_strength: 0 });
   const [contactImportOpen, setContactImportOpen] = useState(false);
   const contactFileRef = useRef(null);
+  const [importFile, setImportFile] = useState(null);
+  const [importTags, setImportTags] = useState([]);
+  const [importNotes, setImportNotes] = useState('');
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState(null);
   const [filterRole, setFilterRole] = useState('');
   const [filterContactTag, setFilterContactTag] = useState('');
   // Drip enrollment state (P1-C)
@@ -447,12 +452,28 @@ export default function LeadsCRM() {
       setConvertDialogOpen(false); fetchData();
     } catch (err) { toast.error(err.response?.data?.detail || 'Failed to convert'); }
   };
-  const handleContactImport = async (file) => {
+  const handleContactImport = async () => {
+    if (!importFile) return;
+    setImporting(true);
     try {
-      const res = await contactsApi.importCsv(file);
-      toast.success(`Imported: ${res.data.created} created, ${res.data.duplicates} duplicates`);
-      setContactImportOpen(false); fetchData();
+      const res = await contactsApi.importCsv(importFile, { tagIds: importTags, globalNotes: importNotes });
+      setImportResult(res.data);
+      fetchData();
     } catch { toast.error('Import failed'); }
+    finally { setImporting(false); }
+  };
+
+  const resetImportDialog = () => {
+    setImportFile(null); setImportTags([]); setImportNotes(''); setImportResult(null);
+  };
+
+  const downloadSampleCsv = () => {
+    const cols = ['name','phone','email','company','designation','source','notes'];
+    const row1 = ['Rajesh Kumar','9876543210','rajesh@school.edu','Delhi Public School','Principal','Referral','Met at education expo 2024'];
+    const row2 = ['Priya Sharma','9123456780','priya@abc.edu','ABC Academy','Purchase Head','Exhibition',''];
+    const blob = new Blob([[cols, row1, row2].map(r => r.join(',')).join('\n')], { type: 'text/csv' });
+    const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: 'contacts_sample.csv' });
+    a.click(); URL.revokeObjectURL(a.href);
   };
   const handleContactExport = () => {
     exportData.download('contacts');
@@ -2199,18 +2220,153 @@ export default function LeadsCRM() {
           </DialogContent>
         </Dialog>
         {/* CONTACT IMPORT DIALOG */}
-        <Dialog open={contactImportOpen} onOpenChange={setContactImportOpen}>
-          <DialogContent className={`${dlgCls} w-[calc(100vw-1rem)] sm:max-w-md`}>
-            <DialogHeader><DialogTitle className={textPri}>Import Contacts from CSV</DialogTitle></DialogHeader>
-            <div className="py-4 space-y-3">
-              <p className={`text-sm ${textSec}`}>CSV columns: name, phone, email, company, designation, source, notes</p>
-              <p className={`text-xs ${textMuted}`}>Duplicates (same name + phone) will be skipped.</p>
-              <div className={'bg-[var(--bg-primary)] border-[var(--border-color)] border-2 border-dashed rounded-md p-8 text-center cursor-pointer'} onClick={() => contactFileRef.current?.click()}>
-                <Upload className={`h-8 w-8 mx-auto mb-2 ${textMuted}`} />
-                <p className={textSec}>Click to upload CSV file</p>
-                <input ref={contactFileRef} type="file" accept=".csv" className="hidden" data-testid="contact-import-file-input" onChange={e => { if (e.target.files?.[0]) handleContactImport(e.target.files[0]); }} />
+        <Dialog open={contactImportOpen} onOpenChange={(open) => { if (!open) resetImportDialog(); setContactImportOpen(open); }}>
+          <DialogContent className={`${dlgCls} w-[calc(100vw-1rem)] sm:max-w-lg`}>
+            <DialogHeader>
+              <DialogTitle className={textPri}>Import Contacts from CSV</DialogTitle>
+            </DialogHeader>
+
+            {importResult ? (
+              /* ── Result view ── */
+              <div className="py-4 space-y-4">
+                <div className="text-center space-y-2">
+                  <div className="w-14 h-14 rounded-full bg-green-500/15 flex items-center justify-center mx-auto">
+                    <CheckCircle className="h-7 w-7 text-green-500" />
+                  </div>
+                  <p className={`text-base font-semibold ${textPri}`}>Import Complete</p>
+                </div>
+                <div className="grid grid-cols-3 gap-3">
+                  <div className={`bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-lg p-3 text-center`}>
+                    <p className="text-2xl font-bold text-green-500">{importResult.created}</p>
+                    <p className={`text-xs ${textMuted} mt-0.5`}>Created</p>
+                  </div>
+                  <div className={`bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-lg p-3 text-center`}>
+                    <p className="text-2xl font-bold text-yellow-500">{importResult.duplicates}</p>
+                    <p className={`text-xs ${textMuted} mt-0.5`}>Skipped</p>
+                  </div>
+                  <div className={`bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-lg p-3 text-center`}>
+                    <p className={`text-2xl font-bold ${importResult.errors?.length ? 'text-red-500' : textMuted}`}>{importResult.errors?.length || 0}</p>
+                    <p className={`text-xs ${textMuted} mt-0.5`}>Errors</p>
+                  </div>
+                </div>
+                {importResult.errors?.length > 0 && (
+                  <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3 space-y-1">
+                    <p className="text-xs font-semibold text-red-400">Row errors:</p>
+                    {importResult.errors.slice(0, 5).map((e, i) => (
+                      <p key={i} className="text-xs text-red-400">• {e}</p>
+                    ))}
+                  </div>
+                )}
+                <Button onClick={() => { setContactImportOpen(false); resetImportDialog(); }}
+                  className="w-full bg-[#e94560] hover:bg-[#f05c75] text-white">
+                  Done
+                </Button>
               </div>
-            </div>
+            ) : (
+              /* ── Upload form ── */
+              <div className="space-y-4 py-2">
+                {/* Column guide + sample download */}
+                <div className={`bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-lg p-3 flex items-start justify-between gap-3`}>
+                  <div>
+                    <p className={`text-xs font-semibold ${textSec} mb-1`}>CSV columns</p>
+                    <p className={`text-xs font-mono ${textMuted} leading-relaxed`}>name · phone · email · company<br />designation · source · notes</p>
+                  </div>
+                  <button onClick={downloadSampleCsv}
+                    className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-md border border-[var(--border-color)] ${textSec} hover:bg-[var(--bg-hover)] whitespace-nowrap flex-shrink-0 transition-colors`}>
+                    <Download className="h-3 w-3" /> Sample CSV
+                  </button>
+                </div>
+
+                {/* Drop zone */}
+                <div
+                  className={`border-2 border-dashed rounded-lg p-6 text-center cursor-pointer transition-all ${
+                    importFile
+                      ? 'border-[var(--accent)] bg-[var(--accent-bg)]'
+                      : 'border-[var(--border-color)] hover:border-[var(--accent)]/50 hover:bg-[var(--bg-hover)]'
+                  }`}
+                  onClick={() => !importFile && contactFileRef.current?.click()}
+                  onDragOver={e => e.preventDefault()}
+                  onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f?.name.endsWith('.csv')) setImportFile(f); }}
+                >
+                  {importFile ? (
+                    <div className="flex items-center justify-center gap-3">
+                      <FileText className="h-5 w-5 text-[var(--accent)] flex-shrink-0" />
+                      <div className="text-left">
+                        <p className={`text-sm font-medium ${textPri}`}>{importFile.name}</p>
+                        <p className={`text-xs ${textMuted}`}>{(importFile.size / 1024).toFixed(1)} KB</p>
+                      </div>
+                      <button onClick={e => { e.stopPropagation(); setImportFile(null); contactFileRef.current.value = ''; }}
+                        className={`ml-1 ${textMuted} hover:text-red-500 transition-colors`}>
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <Upload className={`h-7 w-7 mx-auto mb-2 ${textMuted}`} />
+                      <p className={`text-sm font-medium ${textSec}`}>Drag & drop or click to browse</p>
+                      <p className={`text-xs ${textMuted} mt-0.5`}>.CSV files only</p>
+                    </>
+                  )}
+                  <input ref={contactFileRef} type="file" accept=".csv" className="hidden"
+                    data-testid="contact-import-file-input"
+                    onChange={e => { if (e.target.files?.[0]) setImportFile(e.target.files[0]); }} />
+                </div>
+
+                {/* Tag selector */}
+                <div>
+                  <p className={`text-xs font-semibold ${textSec} mb-2`}>
+                    Apply Tags to All Imported Contacts <span className={`font-normal ${textMuted}`}>(optional)</span>
+                  </p>
+                  {tagsList.length > 0 ? (
+                    <div className="flex flex-wrap gap-1.5">
+                      {tagsList.map(tag => {
+                        const sel = importTags.includes(tag.tag_id);
+                        return (
+                          <button key={tag.tag_id}
+                            onClick={() => setImportTags(prev => sel ? prev.filter(id => id !== tag.tag_id) : [...prev, tag.tag_id])}
+                            className={`text-xs px-2.5 py-1 rounded-full border transition-all ${sel ? 'border-transparent text-white' : `border-[var(--border-color)] ${textSec} hover:border-[var(--accent)]/50`}`}
+                            style={sel ? { backgroundColor: tag.color || '#e94560' } : {}}>
+                            {sel ? '✓ ' : ''}{tag.name}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <p className={`text-xs ${textMuted}`}>No tags defined — create tags in CRM Masters first.</p>
+                  )}
+                </div>
+
+                {/* Global notes */}
+                <div>
+                  <p className={`text-xs font-semibold ${textSec} mb-1.5`}>
+                    Additional Notes <span className={`font-normal ${textMuted}`}>(appended to all contacts)</span>
+                  </p>
+                  <textarea value={importNotes} onChange={e => setImportNotes(e.target.value)}
+                    placeholder="e.g. Imported from Education Expo 2024 — Delhi"
+                    rows={2}
+                    className={`w-full px-3 py-2 rounded-md text-sm resize-none border ${inputCls}`}
+                  />
+                </div>
+
+                <p className={`text-xs ${textMuted} flex items-center gap-1.5`}>
+                  <AlertTriangle className="h-3 w-3 flex-shrink-0" />
+                  Rows with the same name + phone as existing contacts will be skipped.
+                </p>
+              </div>
+            )}
+
+            {!importResult && (
+              <DialogFooter>
+                <Button variant="outline" onClick={() => { setContactImportOpen(false); resetImportDialog(); }}
+                  className={`border-[var(--border-color)] ${textSec}`}>
+                  Cancel
+                </Button>
+                <Button disabled={!importFile || importing} onClick={handleContactImport}
+                  className="bg-[#e94560] hover:bg-[#f05c75] text-white">
+                  {importing ? 'Importing…' : <><Upload className="mr-1.5 h-3.5 w-3.5" />Import Contacts</>}
+                </Button>
+              </DialogFooter>
+            )}
           </DialogContent>
         </Dialog>
 

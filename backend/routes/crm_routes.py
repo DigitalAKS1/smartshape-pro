@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Request, UploadFile, File
+from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form
 from typing import Optional
 from datetime import datetime, timezone, timedelta
 import uuid
@@ -912,9 +912,16 @@ async def convert_contact_to_lead(contact_id: str, request: Request):
 
 
 @router.post("/contacts/import")
-async def import_contacts_csv(file: UploadFile = File(...), request: Request = None):
+async def import_contacts_csv(
+    file: UploadFile = File(...),
+    tag_ids: Optional[str] = Form(None),
+    global_notes: Optional[str] = Form(None),
+    request: Request = None,
+):
     if request:
         user = await get_current_user(request)
+    tag_id_list = [t.strip() for t in (tag_ids or "").split(",") if t.strip()]
+    extra_note = (global_notes or "").strip()
     content = await file.read()
     try:
         text = content.decode("utf-8-sig")
@@ -939,6 +946,8 @@ async def import_contacts_csv(file: UploadFile = File(...), request: Request = N
                 duplicates += 1
                 continue
             contact_id = f"con_{uuid.uuid4().hex[:12]}"
+            csv_notes = row.get("notes", "").strip()
+            notes_combined = f"{csv_notes}\n{extra_note}".strip() if csv_notes and extra_note else (extra_note or csv_notes)
             await db.contacts.insert_one({
                 "contact_id": contact_id,
                 "name": name,
@@ -947,7 +956,8 @@ async def import_contacts_csv(file: UploadFile = File(...), request: Request = N
                 "company": row.get("company", "").strip(),
                 "designation": row.get("designation", "").strip(),
                 "source": row.get("source", "").strip(),
-                "notes": row.get("notes", "").strip(),
+                "notes": notes_combined,
+                "tag_ids": tag_id_list,
                 "status": "active",
                 "converted_to_lead": False,
                 "lead_id": None,

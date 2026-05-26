@@ -202,9 +202,11 @@ export const contacts = {
   addTag: (contactId, tagId) => API.post(`/contacts/${contactId}/tags`, { tag_id: tagId }),
   removeTag: (contactId, tagId) => API.delete(`/contacts/${contactId}/tags/${tagId}`),
   getActivity: (id) => API.get(`/contacts/${id}/activity`),
-  importCsv: (file) => {
+  importCsv: (file, { tagIds = [], globalNotes = '' } = {}) => {
     const fd = new FormData();
     fd.append('file', file);
+    if (tagIds.length > 0) fd.append('tag_ids', tagIds.join(','));
+    if (globalNotes) fd.append('global_notes', globalNotes);
     return API.post('/contacts/import', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
   },
 };
