@@ -1372,45 +1372,52 @@ async def clear_cache(request: Request):
     user = await get_current_user(request)
     if user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
+    body = await request.json()
+    cats = set(body.get("categories", []))  # only clear what frontend selects
+    if not cats:
+        return {"ok": True, "cleared": {}}
+
     now_utc = datetime.now(timezone.utc)
     now_iso = now_utc.isoformat()
+    result = {}
 
-    # 1. Expired login lockouts (lockout_until is past, or no lockout set)
-    r1 = await db.login_attempts.delete_many({
-        "$or": [
-            {"lockout_until": {"$lt": now_iso}},
-            {"lockout_until": {"$exists": False}},
-        ]
-    })
+    if "expired_lockouts" in cats:
+        r = await db.login_attempts.delete_many({
+            "$or": [
+                {"lockout_until": {"$lt": now_iso}},
+                {"lockout_until": {"$exists": False}},
+            ]
+        })
+        result["expired_lockouts"] = r.deleted_count
 
-    # 2. Old greeting logs (> 90 days)
-    cutoff_90 = (now_utc - timedelta(days=90)).isoformat()
-    r2 = await db.greeting_logs.delete_many({"sent_at": {"$lt": cutoff_90}})
+    if "old_greeting_logs" in cats:
+        cutoff = (now_utc - timedelta(days=90)).isoformat()
+        r = await db.greeting_logs.delete_many({"sent_at": {"$lt": cutoff}})
+        result["old_greeting_logs"] = r.deleted_count
 
-    # 3. Old completed/cancelled drip enrollments (> 60 days)
-    cutoff_60 = (now_utc - timedelta(days=60)).isoformat()
-    r3 = await db.drip_enrollments.delete_many({
-        "status": {"$in": ["completed", "cancelled"]},
-        "completed_at": {"$lt": cutoff_60}
-    })
+    if "old_drip_enrollments" in cats:
+        cutoff = (now_utc - timedelta(days=60)).isoformat()
+        r = await db.drip_enrollments.delete_many({
+            "status": {"$in": ["completed", "cancelled"]},
+            "completed_at": {"$lt": cutoff}
+        })
+        result["old_drip_enrollments"] = r.deleted_count
 
-    # 4. Old geofence alerts (> 30 days)
-    cutoff_30 = (now_utc - timedelta(days=30)).isoformat()
-    r4 = await db.geofence_alerts.delete_many({"created_at": {"$lt": cutoff_30}})
+    if "old_geofence_alerts" in cats:
+        cutoff = (now_utc - timedelta(days=30)).isoformat()
+        r = await db.geofence_alerts.delete_many({"created_at": {"$lt": cutoff}})
+        result["old_geofence_alerts"] = r.deleted_count
 
-    # 5. Old completed field journeys (> 60 days)
-    r5 = await db.field_journeys.delete_many({
-        "status": "completed",
-        "date": {"$lt": cutoff_60[:10]}
-    })
+    if "old_field_journeys" in cats:
+        cutoff = (now_utc - timedelta(days=60)).isoformat()
+        r = await db.field_journeys.delete_many({
+            "status": "completed",
+            "date": {"$lt": cutoff[:10]}
+        })
+        result["old_field_journeys"] = r.deleted_count
 
     return {
         "ok": True,
-        "cleared": {
-            "expired_lockouts": r1.deleted_count,
-            "old_greeting_logs": r2.deleted_count,
-            "old_drip_enrollments": r3.deleted_count,
-            "old_geofence_alerts": r4.deleted_count,
-            "old_field_journeys": r5.deleted_count,
+        "cleared": result,
         }
     }

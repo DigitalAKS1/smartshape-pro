@@ -544,6 +544,7 @@ function SecurityTab() {
   const [revokingEmail, setRevokingEmail] = useState(null);
   const [clearing, setClearing] = useState(false);
   const [clearResult, setClearResult] = useState(null);
+  const [selectedCats, setSelectedCats] = useState(new Set());
 
   async function fetchLockouts() {
     setLoadingLockouts(true);
@@ -583,15 +584,25 @@ function SecurityTab() {
     }
   }
 
+  function toggleCat(key) {
+    setSelectedCats(prev => {
+      const next = new Set(prev);
+      next.has(key) ? next.delete(key) : next.add(key);
+      return next;
+    });
+  }
+
   async function runCacheClear() {
+    if (selectedCats.size === 0) { toast.error('Select at least one category to clean'); return; }
     setClearing(true);
     setClearResult(null);
     try {
-      const res = await adminApi.clearCache();
+      const res = await adminApi.clearCache([...selectedCats]);
       const c = res.data?.cleared || {};
       setClearResult(c);
       const total = Object.values(c).reduce((s, v) => s + v, 0);
-      toast.success(`Cache cleaned — ${total} stale records removed`);
+      toast.success(`Done — ${total} record${total !== 1 ? 's' : ''} removed`);
+      setSelectedCats(new Set());
     } catch {
       toast.error('Cache clear failed');
     } finally {
@@ -699,56 +710,70 @@ function SecurityTab() {
           </div>
         </div>
         <div className="px-6 py-5 space-y-4">
-          {/* What gets cleared */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          <p className="text-xs text-[var(--text-muted)]">
+            Select what you want to remove, then click Clean Selected.
+          </p>
+
+          {/* Selectable category cards */}
+          <div className="space-y-2">
             {[
-              { icon: Lock,     label: 'Expired login lockouts',       desc: 'Auto-clears 15-min windows that have passed' },
-              { icon: Bell,     label: 'Old greeting logs',            desc: 'Greeting records older than 90 days' },
-              { icon: RefreshCw,label: 'Old drip enrollments',         desc: 'Completed / cancelled older than 60 days' },
-              { icon: Shield,   label: 'Old geofence alerts',          desc: 'Location alerts older than 30 days' },
-              { icon: Globe,    label: 'Old field journey records',     desc: 'Completed journeys older than 60 days' },
-            ].map(({ icon: Icon, label, desc }) => (
-              <div key={label} className="flex items-start gap-2.5 p-3 rounded-lg border border-[var(--border-color)] bg-[var(--bg-primary)]">
-                <Icon className="h-3.5 w-3.5 text-[var(--text-muted)] mt-0.5 flex-shrink-0" />
-                <div>
-                  <p className="text-xs font-medium text-[var(--text-secondary)]">{label}</p>
-                  <p className="text-[11px] text-[var(--text-muted)] mt-0.5">{desc}</p>
-                </div>
-              </div>
-            ))}
+              { key: 'expired_lockouts',    icon: Lock,      label: 'Expired login lockouts',     desc: 'Login attempt records whose 15-min lockout window has already passed' },
+              { key: 'old_greeting_logs',   icon: Bell,      label: 'Old greeting logs',          desc: 'Greeting send records older than 90 days' },
+              { key: 'old_drip_enrollments',icon: RefreshCw, label: 'Old drip enrollments',       desc: 'Completed or cancelled drip records older than 60 days' },
+              { key: 'old_geofence_alerts', icon: Shield,    label: 'Old geofence alerts',        desc: 'Location alert logs older than 30 days' },
+              { key: 'old_field_journeys',  icon: Globe,     label: 'Old field journey records',  desc: 'Completed field journeys older than 60 days' },
+            ].map(({ key, icon: Icon, label, desc }) => {
+              const selected = selectedCats.has(key);
+              const result   = clearResult?.[key];
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => toggleCat(key)}
+                  className={`w-full flex items-center gap-3 p-3.5 rounded-xl border-2 text-left transition-all ${
+                    selected
+                      ? 'border-[var(--accent)] bg-[var(--accent)]/5'
+                      : 'border-[var(--border-color)] hover:border-[var(--accent)]/40 bg-[var(--bg-primary)]'
+                  }`}>
+                  {/* Checkbox */}
+                  <div className={`w-5 h-5 rounded-md border-2 flex items-center justify-center flex-shrink-0 transition-colors ${
+                    selected ? 'border-[var(--accent)] bg-[var(--accent)]' : 'border-[var(--text-muted)]'
+                  }`}>
+                    {selected && <CheckCircle2 className="h-3 w-3 text-white" />}
+                  </div>
+                  <Icon className={`h-4 w-4 flex-shrink-0 ${selected ? 'text-[var(--accent)]' : 'text-[var(--text-muted)]'}`} />
+                  <div className="flex-1 min-w-0">
+                    <p className={`text-sm font-medium ${selected ? 'text-[var(--text-primary)]' : 'text-[var(--text-secondary)]'}`}>{label}</p>
+                    <p className="text-[11px] text-[var(--text-muted)] mt-0.5">{desc}</p>
+                  </div>
+                  {result != null && (
+                    <span className="text-[11px] font-semibold text-green-600 flex-shrink-0 bg-green-500/10 px-2 py-0.5 rounded-full">
+                      {result} removed
+                    </span>
+                  )}
+                </button>
+              );
+            })}
           </div>
 
-          {/* Result */}
-          {clearResult && (
-            <div className="p-4 rounded-xl bg-green-500/8 border border-green-500/25">
-              <p className="text-xs font-semibold text-green-600 mb-2 flex items-center gap-1.5">
-                <CheckCircle2 className="h-3.5 w-3.5" /> Last cleanup result
-              </p>
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                {[
-                  { k: 'expired_lockouts',     l: 'Lockouts' },
-                  { k: 'old_greeting_logs',    l: 'Greeting logs' },
-                  { k: 'old_drip_enrollments', l: 'Drip records' },
-                  { k: 'old_geofence_alerts',  l: 'Geofence alerts' },
-                  { k: 'old_field_journeys',   l: 'Field journeys' },
-                ].map(({ k, l }) => (
-                  <div key={k} className="flex items-center justify-between">
-                    <span className="text-[11px] text-[var(--text-muted)]">{l}</span>
-                    <span className="text-[11px] font-semibold text-green-600">{clearResult[k] ?? 0} cleared</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          <button
-            onClick={runCacheClear}
-            disabled={clearing}
-            className="h-9 px-5 rounded-lg text-sm font-semibold bg-blue-500 hover:bg-blue-600 text-white transition-colors flex items-center gap-2 disabled:opacity-60">
-            {clearing
-              ? <><Loader2 className="h-4 w-4 animate-spin" /> Cleaning…</>
-              : <><Trash2 className="h-4 w-4" /> Run Cleanup Now</>}
-          </button>
+          {/* Action row */}
+          <div className="flex items-center gap-3 pt-1">
+            <button
+              onClick={runCacheClear}
+              disabled={clearing || selectedCats.size === 0}
+              className="h-9 px-5 rounded-lg text-sm font-semibold bg-[var(--accent)] hover:bg-[var(--accent)]/90 text-white transition-colors flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed">
+              {clearing
+                ? <><Loader2 className="h-4 w-4 animate-spin" /> Cleaning…</>
+                : <><Trash2 className="h-4 w-4" /> Clean Selected {selectedCats.size > 0 ? `(${selectedCats.size})` : ''}</>}
+            </button>
+            {selectedCats.size > 0 && !clearing && (
+              <button
+                onClick={() => setSelectedCats(new Set())}
+                className="text-xs text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-colors">
+                Clear selection
+              </button>
+            )}
+          </div>
         </div>
       </div>
 

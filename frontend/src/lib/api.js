@@ -644,7 +644,7 @@ export const broadcastApi = {
 export const adminApi = {
   getLockouts: () => API.get('/admin/lockouts'),
   revokeLockout: (email) => API.delete(`/admin/lockouts/${encodeURIComponent(email)}`),
-  clearCache: () => API.post('/admin/cache/clear'),
+  clearCache: (categories) => API.post('/admin/cache/clear', { categories }),
 };
 
 export default API;
