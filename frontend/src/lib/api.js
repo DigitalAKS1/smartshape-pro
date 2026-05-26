@@ -640,4 +640,11 @@ export const broadcastApi = {
   emailByTag: (data) => API.post('/email/broadcast-by-tag', data),
 };
 
+// Admin — Security & System
+export const adminApi = {
+  getLockouts: () => API.get('/admin/lockouts'),
+  revokeLockout: (email) => API.delete(`/admin/lockouts/${encodeURIComponent(email)}`),
+  clearCache: () => API.post('/admin/cache/clear'),
+};
+
 export default API;

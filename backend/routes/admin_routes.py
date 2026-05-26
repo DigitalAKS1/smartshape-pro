@@ -1306,3 +1306,111 @@ async def run_auto_reminders():
             logging.error(f"Auto-reminder error: {e}")
 
         await asyncio.sleep(60)
+
+
+# ==================== SECURITY — LOCKOUT MANAGEMENT ====================
+
+@router.get("/admin/lockouts")
+async def list_lockouts(request: Request):
+    user = await get_current_user(request)
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    now_utc = datetime.now(timezone.utc)
+    now_iso = now_utc.isoformat()
+    locked = await db.login_attempts.find(
+        {"lockout_until": {"$gt": now_iso}}, {"_id": 0}
+    ).sort("lockout_until", -1).to_list(200)
+    result = []
+    for a in locked:
+        ident = a.get("identifier", "")
+        parts = ident.split(":", 1)
+        ip    = parts[0] if len(parts) == 2 else ""
+        email = parts[1] if len(parts) == 2 else ident
+        lu = a.get("lockout_until", "")
+        try:
+            unlock_dt = datetime.fromisoformat(lu)
+            if unlock_dt.tzinfo is None:
+                from datetime import timezone as tz
+                unlock_dt = unlock_dt.replace(tzinfo=tz.utc)
+            secs_left = max(0, int((unlock_dt - now_utc).total_seconds()))
+            mins_left = max(1, (secs_left + 59) // 60)
+        except Exception:
+            mins_left = 0
+            secs_left = 0
+        result.append({
+            "identifier": ident,
+            "email": email,
+            "ip": ip,
+            "attempts": a.get("count", 0),
+            "locked_until": lu,
+            "mins_left": mins_left,
+        })
+    return result
+
+
+@router.delete("/admin/lockouts/{email:path}")
+async def revoke_lockout(email: str, request: Request):
+    user = await get_current_user(request)
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    import re as _re
+    pattern = _re.compile(f":{_re.escape(email)}$")
+    all_attempts = await db.login_attempts.find({}, {"_id": 0, "identifier": 1}).to_list(500)
+    ids_to_delete = [a["identifier"] for a in all_attempts if pattern.search(a["identifier"])]
+    if ids_to_delete:
+        res = await db.login_attempts.delete_many({"identifier": {"$in": ids_to_delete}})
+        cleared = res.deleted_count
+    else:
+        cleared = 0
+    return {"ok": True, "cleared": cleared, "email": email}
+
+
+# ==================== SYSTEM CACHE CLEANUP ====================
+
+@router.post("/admin/cache/clear")
+async def clear_cache(request: Request):
+    user = await get_current_user(request)
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    now_utc = datetime.now(timezone.utc)
+    now_iso = now_utc.isoformat()
+
+    # 1. Expired login lockouts (lockout_until is past, or no lockout set)
+    r1 = await db.login_attempts.delete_many({
+        "$or": [
+            {"lockout_until": {"$lt": now_iso}},
+            {"lockout_until": {"$exists": False}},
+        ]
+    })
+
+    # 2. Old greeting logs (> 90 days)
+    cutoff_90 = (now_utc - timedelta(days=90)).isoformat()
+    r2 = await db.greeting_logs.delete_many({"sent_at": {"$lt": cutoff_90}})
+
+    # 3. Old completed/cancelled drip enrollments (> 60 days)
+    cutoff_60 = (now_utc - timedelta(days=60)).isoformat()
+    r3 = await db.drip_enrollments.delete_many({
+        "status": {"$in": ["completed", "cancelled"]},
+        "completed_at": {"$lt": cutoff_60}
+    })
+
+    # 4. Old geofence alerts (> 30 days)
+    cutoff_30 = (now_utc - timedelta(days=30)).isoformat()
+    r4 = await db.geofence_alerts.delete_many({"created_at": {"$lt": cutoff_30}})
+
+    # 5. Old completed field journeys (> 60 days)
+    r5 = await db.field_journeys.delete_many({
+        "status": "completed",
+        "date": {"$lt": cutoff_60[:10]}
+    })
+
+    return {
+        "ok": True,
+        "cleared": {
+            "expired_lockouts": r1.deleted_count,
+            "old_greeting_logs": r2.deleted_count,
+            "old_drip_enrollments": r3.deleted_count,
+            "old_geofence_alerts": r4.deleted_count,
+            "old_field_journeys": r5.deleted_count,
+        }
+    }
