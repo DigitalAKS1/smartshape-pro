@@ -1419,5 +1419,4 @@ async def clear_cache(request: Request):
     return {
         "ok": True,
         "cleared": result,
-        }
     }
