@@ -7,7 +7,7 @@ import {
   Warehouse, ClipboardList, DollarSign, Users, LogOut, Menu, X,
   Smartphone, Layers, IndianRupee, UserCog, Store, MapPin, Target,
   Sun, Moon, CalendarDays, Calendar, ShoppingCart, Upload, Activity,
-  Home, MoreHorizontal, Megaphone, ChevronRight, Zap, Heart,
+  Home, MoreHorizontal, Megaphone, Zap, Heart,
 } from 'lucide-react';
 import HelpButton from '../HelpButton';
 import GuidedTour from '../GuidedTour';
@@ -159,15 +159,19 @@ export default function AdminLayout({ children }) {
       </div>
 
       {/* Nav */}
-      <nav className="flex-1 overflow-y-auto py-3 px-3 space-y-0.5" data-testid="admin-sidebar">
+      <nav className="flex-1 overflow-y-auto py-2 px-3" data-testid="admin-sidebar">
         {sidebarGroups.map((group, gi) => (
-          <div key={gi} className={gi > 0 ? 'pt-3' : ''}>
+          <div key={gi}>
+            {/* Visual separator between groups */}
+            {gi > 0 && (
+              <div className="h-px bg-[var(--border-color)] mx-1 my-2" />
+            )}
             {group.label && (
-              <p className="px-2.5 pb-1.5 text-[9px] font-bold uppercase tracking-[0.13em] text-[var(--text-muted)]">
+              <p className="px-2 pt-1 pb-1.5 text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--text-muted)]">
                 {group.label}
               </p>
             )}
-            <div className="space-y-px">
+            <div className="space-y-0.5">
               {group.items.map((item) => {
                 const Icon = item.icon;
                 const isActive = location.pathname === item.path
@@ -178,12 +182,15 @@ export default function AdminLayout({ children }) {
                     to={item.path}
                     onClick={() => setSidebarOpen(false)}
                     data-testid={`admin-sidebar-${item.label.toLowerCase().replace(/ /g, '-')}-link`}
-                    className={`group flex items-center gap-2.5 px-2.5 py-[7px] rounded-lg text-[13px] font-medium transition-all ${
+                    className={`group relative flex items-center gap-2.5 px-2 py-[7px] rounded-lg text-[13px] font-medium transition-all ${
                       isActive
                         ? 'bg-[var(--accent-bg)] text-[var(--accent)]'
                         : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]'
                     }`}
                   >
+                    {isActive && (
+                      <span className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-r-full bg-[var(--accent)]" />
+                    )}
                     <Icon
                       className={`h-[15px] w-[15px] flex-shrink-0 transition-colors ${
                         isActive ? 'text-[var(--accent)]' : 'text-[var(--text-muted)] group-hover:text-[var(--text-secondary)]'
@@ -191,9 +198,6 @@ export default function AdminLayout({ children }) {
                       strokeWidth={isActive ? 2 : 1.7}
                     />
                     <span className="truncate leading-none">{item.label}</span>
-                    {isActive && (
-                      <ChevronRight className="h-3 w-3 ml-auto text-[var(--accent)] opacity-50 flex-shrink-0" />
-                    )}
                   </Link>
                 );
               })}
@@ -204,13 +208,13 @@ export default function AdminLayout({ children }) {
 
       {/* User footer */}
       <div className="flex-shrink-0 px-3 py-3 border-t border-[var(--border-color)]">
-        <div className="flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-[var(--bg-hover)] transition-colors">
+        <div className="flex items-center gap-2.5 px-2 py-2 rounded-lg hover:bg-[var(--bg-hover)] transition-colors">
           <div className="w-7 h-7 rounded-full bg-[var(--accent-bg)] flex items-center justify-center flex-shrink-0">
             <span className="text-[11px] font-bold text-[var(--accent)]">{initials}</span>
           </div>
           <div className="flex-1 min-w-0">
             <p className="text-[12px] font-semibold text-[var(--text-primary)] truncate leading-tight">{user?.name}</p>
-            <p className="text-[10px] text-[var(--text-muted)] truncate leading-tight">{user?.email}</p>
+            <p className="text-[10px] text-[var(--text-muted)] truncate leading-tight capitalize">{user?.role || 'Admin'}</p>
           </div>
           <button
             onClick={handleLogout}
