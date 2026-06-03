@@ -76,10 +76,13 @@ async def create_die(die_input: DieCreate, request: Request):
 
 
 @router.put("/dies/{die_id}")
-async def update_die(die_id: str, updates: dict, request: Request):
+async def update_die(die_id: str, request: Request):
     user = await get_current_user(request)
     require_teams(user, "admin", "store")
-    await db.dies.update_one({"die_id": die_id}, {"$set": updates})
+    updates = await request.json()
+    safe = {k: v for k, v in updates.items() if k not in ("die_id", "_id")}
+    if safe:
+        await db.dies.update_one({"die_id": die_id}, {"$set": safe})
     return await db.dies.find_one({"die_id": die_id}, {"_id": 0})
 
 
@@ -108,9 +111,9 @@ async def delete_die(die_id: str, request: Request):
 
 
 @router.post("/dies/{die_id}/upload-image")
-async def upload_die_image(die_id: str, file: UploadFile = File(...), request: Request = None):
-    if request:
-        await get_current_user(request)
+async def upload_die_image(die_id: str, request: Request, file: UploadFile = File(...)):
+    user = await get_current_user(request)
+    require_teams(user, "admin", "store")
     die = await db.dies.find_one({"die_id": die_id}, {"_id": 0})
     if not die:
         raise HTTPException(status_code=404, detail="Die not found")
@@ -186,13 +189,16 @@ async def upload_file(file: UploadFile = File(...), request: Request = None):
     return {"url": f"/api/files/{path}"}
 
 
+_EXTRA_MIME = {".jfif": "image/jpeg", ".webp": "image/webp", ".avif": "image/avif"}
+
 @router.get("/files/{path:path}")
 async def get_file(path: str):
     full_path = os.path.join(UPLOADS_DIR, path)
     if not os.path.isfile(full_path):
         raise HTTPException(status_code=404, detail="File not found")
-    media_type, _ = mimetypes.guess_type(full_path)
-    return FileResponse(full_path, media_type=media_type or "application/octet-stream")
+    ext = os.path.splitext(full_path)[1].lower()
+    media_type = _EXTRA_MIME.get(ext) or mimetypes.guess_type(full_path)[0] or "application/octet-stream"
+    return FileResponse(full_path, media_type=media_type)
 
 
 # ==================== PACKAGE ENDPOINTS ====================

@@ -44,6 +44,7 @@ const ROUTE_MODULE_MAP = {
   '/sales/expenses': 'sales_portal',
   '/today': 'dashboard',
   '/admin-control': 'analytics',
+  '/delegation': 'delegation',
 };
 
 export default function ProtectedRoute({ children }) {

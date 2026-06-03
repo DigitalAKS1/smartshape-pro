@@ -142,7 +142,8 @@ async def process_email_queue():
     now_iso = datetime.now(timezone.utc).isoformat()
 
     for msg in pending:
-        to_email = (msg.get("to_email") or "").strip()
+        # field stored by email_routes is "email"; legacy records may use "to_email"
+        to_email = (msg.get("email") or msg.get("to_email") or "").strip()
         if not to_email or "@" not in to_email:
             await db.email_scheduled.update_one(
                 {"scheduled_id": msg["scheduled_id"]},
@@ -153,12 +154,15 @@ async def process_email_queue():
             )
             continue
 
+        # field stored by email_routes is "message"; legacy records may use "body"
+        body_text = msg.get("message") or msg.get("body") or ""
+
         try:
             await asyncio.to_thread(
                 _smtp_send, sender_email, app_password, sender_name,
                 to_email,
                 msg.get("subject", "Message from SmartShape"),
-                msg.get("body", ""),
+                body_text,
             )
             await db.email_scheduled.update_one(
                 {"scheduled_id": msg["scheduled_id"]},
@@ -206,7 +210,8 @@ async def process_wa_queue():
     log.info(f"[wa] processing {len(pending)} messages")
 
     for msg in pending:
-        to_phone = (msg.get("to_phone") or "").strip()
+        # field stored by whatsapp_routes is "phone"; legacy records may use "to_phone"
+        to_phone = (msg.get("phone") or msg.get("to_phone") or "").strip()
         if not to_phone:
             await db.whatsapp_scheduled.update_one(
                 {"scheduled_id": msg["scheduled_id"]},
@@ -337,7 +342,8 @@ async def run_drip_executor():
                 if email_addr and "@" in email_addr:
                     try:
                         se, ap, sn = email_cfg
-                        await asyncio.to_thread(_smtp_send, se, ap, sn, email_addr, "SmartShape", text)
+                        subject = seq.get("name", "SmartShape") or "SmartShape"
+                        await asyncio.to_thread(_smtp_send, se, ap, sn, email_addr, subject, text)
                         sent = True
                     except Exception as e:
                         err_detail = str(e)[:200]
@@ -430,14 +436,17 @@ async def run_greeting_sender():
             )
             text = rule.get("template_body", "").replace("{name}", first_name)
 
+            delivered = False
             if wa_cfg and contact.get("phone"):
                 try:
                     await _send_wa(wa_cfg, contact["phone"], text)
                     sent_count += 1
+                    delivered = True
                     await asyncio.sleep(0.8)
                 except Exception as exc:
                     log.warning(f"[greet] WA → {contact['phone']}: {exc}")
-            elif email_cfg and "@" in (contact.get("email") or ""):
+            # Always fall back to email if WA not delivered and contact has email
+            if not delivered and email_cfg and "@" in (contact.get("email") or ""):
                 try:
                     se, ap, sn = email_cfg
                     await asyncio.to_thread(_smtp_send, se, ap, sn, contact["email"], rule["name"], text)

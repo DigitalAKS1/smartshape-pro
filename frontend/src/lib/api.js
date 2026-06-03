@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { emitChange } from './dataSync';
 
 const API = axios.create({
   baseURL: `${process.env.REACT_APP_BACKEND_URL}/api`,
@@ -6,6 +7,24 @@ const API = axios.create({
   headers: {
     'Content-Type': 'application/json',
   },
+});
+
+// ── Auto-emit domain change after any successful mutation ──────────────────
+API.interceptors.response.use((res) => {
+  const method = res.config?.method?.toLowerCase();
+  if (method && ['post', 'put', 'delete', 'patch'].includes(method)) {
+    const url = res.config?.url || '';
+    let domain = 'all';
+    if (/\/(dies|packages|stock)/.test(url))       domain = 'inventory';
+    else if (/\/delegation/.test(url))             domain = 'delegation';
+    else if (/\/(leads|contacts|schools)/.test(url)) domain = 'crm';
+    else if (/\/quotations/.test(url))             domain = 'quotations';
+    else if (/\/visit-plans/.test(url))            domain = 'visits';
+    else if (/\/settings/.test(url))               domain = 'settings';
+    else if (/\/(tasks|actions)/.test(url))        domain = 'today';
+    emitChange(domain);
+  }
+  return res;
 });
 
 // Auto-refresh on 401
@@ -76,9 +95,7 @@ export const dies = {
   uploadImage: (id, file) => {
     const formData = new FormData();
     formData.append('file', file);
-    return API.post(`/dies/${id}/upload-image`, formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    });
+    return API.post(`/dies/${id}/upload-image`, formData, { headers: { 'Content-Type': 'multipart/form-data' } });
   },
   importCsv: (file) => {
     const fd = new FormData();
@@ -181,6 +198,7 @@ export const quotations = {
       .then(r => r.blob())
       .then(blob => { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `Quotation_${id}.pdf`; document.body.appendChild(a); a.click(); document.body.removeChild(a); });
   },
+  backfillLeads: () => API.post('/quotations/backfill-leads'),
 };
 
 // Schools
@@ -377,8 +395,9 @@ export const alerts = {
 
 // Analytics
 export const analytics = {
-  getDashboard: () => API.get('/analytics/dashboard'),
-  getCharts: () => API.get('/analytics/charts'),
+  getDashboard:  () => API.get('/analytics/dashboard'),
+  getCharts:     () => API.get('/analytics/charts'),
+  getConversion: () => API.get('/analytics/conversion'),
 };
 
 // Sales - Attendance
@@ -524,6 +543,10 @@ export const settingsApi = {
   saveEmail: (data) => API.post('/settings/email', data),
   getWhatsApp: () => API.get('/settings/whatsapp'),
   saveWhatsApp: (data) => API.post('/settings/whatsapp', data),
+  getAI: () => API.get('/settings/ai'),
+  saveAI: (data) => API.post('/settings/ai', data),
+  getDialler: () => API.get('/settings/ai-dialler'),
+  saveDialler: (data) => API.put('/settings/ai-dialler', data),
 };
 
 // WhatsApp Send
@@ -574,6 +597,70 @@ export const adminUsers = {
   create: (data) => API.post('/admin/users', data),
   update: (userId, data) => API.put(`/admin/users/${userId}`, data),
   delete: (userId) => API.delete(`/admin/users/${userId}`),
+};
+
+// Flow Management System
+export const fms = {
+  dashboard:       (p)    => API.get('/fms/dashboard', { params: p }),
+  createFlow:      (d)    => API.post('/fms/flows', d),
+  listFlows:       (p)    => API.get('/fms/flows', { params: p }),
+  getFlow:         (id)   => API.get(`/fms/flows/${id}`),
+  completeStage:   (id,d) => API.post(`/fms/stages/${id}/complete`, d),
+  approveStage:    (id)   => API.post(`/fms/stages/${id}/approve`, {}),
+  rejectStage:     (id,d) => API.post(`/fms/stages/${id}/reject`, d),
+  submitQC:        (d)    => API.post('/fms/qc', d),
+  getChecklist:    (fid)  => API.get(`/fms/checklist/${fid}`),
+  submitChecklist: (d)    => API.post('/fms/checklist', d),
+  getPayments:     (fid)  => API.get(`/fms/payments/${fid}`),
+  addPayment:      (d)    => API.post('/fms/payments', d),
+  scores:          ()     => API.get('/fms/reports/scores'),
+  settings:        ()     => API.get('/fms/settings'),
+  updateSettings:  (d)    => API.put('/fms/settings', d),
+  calendar:        (p)    => API.get('/fms/calendar', { params: p }),
+  templates: {
+    list:   ()     => API.get('/fms/templates'),
+    create: (d)    => API.post('/fms/templates', d),
+    update: (id,d) => API.put(`/fms/templates/${id}`, d),
+    delete: (id)   => API.delete(`/fms/templates/${id}`),
+  },
+};
+
+// Delegation System
+export const delegation = {
+  departments: {
+    list:   ()       => API.get('/delegation/departments'),
+    create: (data)   => API.post('/delegation/departments', data),
+    update: (id, d)  => API.put(`/delegation/departments/${id}`, d),
+    delete: (id)     => API.delete(`/delegation/departments/${id}`),
+  },
+  employees: {
+    list:   ()       => API.get('/delegation/employees'),
+    create: (data)   => API.post('/delegation/employees', data),
+    update: (id, d)  => API.put(`/delegation/employees/${id}`, d),
+    delete: (id)     => API.delete(`/delegation/employees/${id}`),
+  },
+  syncUsers:   ()    => API.post('/delegation/sync-users', {}),
+  teamSummary: ()    => API.get('/delegation/team-summary'),
+  tasks: {
+    list:       (p)    => API.get('/delegation/tasks', { params: p }),
+    create:     (data) => API.post('/delegation/tasks', data),
+    bulkCreate: (arr)  => API.post('/delegation/tasks/bulk', arr),
+    update:     (id,d) => API.put(`/delegation/tasks/${id}`, d),
+    delete:     (id)   => API.delete(`/delegation/tasks/${id}`),
+  },
+  instances: {
+    list:             (p)    => API.get('/delegation/instances', { params: p }),
+    complete:         (id,d) => API.post(`/delegation/instances/${id}/complete`, d),
+    completeWithImage:(id,fd)=> API.post(`/delegation/instances/${id}/complete-with-image`, fd),
+    verify:           (id)   => API.post(`/delegation/instances/${id}/verify`, {}),
+    reopen:           (id)   => API.post(`/delegation/instances/${id}/reopen`, {}),
+    bulkComplete:     (data) => API.post('/delegation/instances/bulk-complete', data),
+    team:             (id)   => API.get(`/delegation/instances/${id}/team`),
+  },
+  calendar:   (p)  => API.get('/delegation/calendar', { params: p }),
+  dashboard:  (p)  => API.get('/delegation/dashboard', { params: p }),
+  reports:    (p)  => API.get('/delegation/reports', { params: p }),
+  myContext:  ()   => API.get('/delegation/my-context'),
 };
 
 // Export (CSV download)
@@ -647,12 +734,15 @@ export const adminApi = {
   getLockouts: () => API.get('/admin/lockouts'),
   revokeLockout: (email) => API.delete(`/admin/lockouts/${encodeURIComponent(email)}`),
   clearCache: (categories) => API.post('/admin/cache/clear', { categories }),
+  backfillSchools: () => API.post('/admin/backfill-schools'),
+  dbIntegrity: () => API.post('/admin/db-integrity'),
 };
 
 // In-app notifications
 export const notificationsApi = {
   getAll: () => API.get('/notifications'),
   markAllRead: () => API.put('/notifications/read-all'),
+  markOneRead: (id) => API.put(`/notifications/${id}/read`),
 };
 
 // Web Push (PWA)

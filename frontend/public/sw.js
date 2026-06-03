@@ -1,5 +1,5 @@
 /* SmartShape Pro Service Worker v2 — offline-first shell + background sync */
-const CACHE_VERSION = 'ssp-v3';
+const CACHE_VERSION = 'ssp-v9';
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const API_CACHE = `${CACHE_VERSION}-api`;
 const OFFLINE_URL = '/offline.html';
@@ -30,6 +30,8 @@ self.addEventListener('activate', (event) => {
         keys.filter((k) => !k.startsWith(CACHE_VERSION)).map((k) => caches.delete(k))
       ))
       .then(() => self.clients.claim())
+      .then(() => self.clients.matchAll({ type: 'window' }))
+      .then((clients) => clients.forEach((c) => c.navigate(c.url)))
   );
 });
 
@@ -52,9 +54,21 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // API GETs → stale-while-revalidate (show cached instantly, refresh in bg)
+  // API GETs → network-first; fall back to cache ONLY for non-auth endpoints
   if (url.pathname.startsWith('/api/')) {
-    event.respondWith(staleWhileRevalidate(req));
+    const authSensitive = ['/api/auth/', '/api/notifications', '/api/analytics/', '/api/today/'];
+    const isAuthSensitive = authSensitive.some(p => url.pathname.startsWith(p));
+    if (isAuthSensitive) {
+      // Pass straight to network — never cache auth/notification data
+      // On network failure, let it fail naturally (don't return synthetic 503)
+      event.respondWith(
+        fetch(req).catch(() => new Response(JSON.stringify({ detail: 'Offline' }), {
+          status: 503, headers: { 'Content-Type': 'application/json' }
+        }))
+      );
+    } else {
+      event.respondWith(staleWhileRevalidate(req));
+    }
     return;
   }
 
@@ -64,10 +78,9 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  // Let non-API, non-asset requests fail naturally — no synthetic 503
   event.respondWith(
-    fetch(req).catch(() =>
-      caches.match(req).then((r) => r || new Response('', { status: 503, statusText: 'Offline' }))
-    )
+    fetch(req).catch(() => caches.match(req).then(r => r || fetch(req)))
   );
 });
 
@@ -105,8 +118,12 @@ async function staleWhileRevalidate(req) {
   const cached = await cache.match(req);
   const networkPromise = fetch(req).then((res) => {
     if (res && res.ok) cache.put(req, res.clone()).catch(() => {});
+    // Don't hide real HTTP errors — return them so the app handles auth/errors
     return res;
-  }).catch(() => cached || new Response('', { status: 503, statusText: 'Offline' }));
+  }).catch(() => {
+    // Only use stale cache on genuine network failure (no internet)
+    return cached || fetch(req); // retry once, then let it fail naturally
+  });
   return cached || networkPromise;
 }
 

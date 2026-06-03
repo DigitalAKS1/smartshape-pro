@@ -285,6 +285,9 @@ async def get_conversion_analytics(request: Request):
         ).to_list(1000)
         sp_revenue = sum(q.get("grand_total", 0) for q in won_quots)
 
+        sp_visits = await db.visits.count_documents({"assigned_to": sp["email"]})
+        sp_calls = await db.call_notes.count_documents({"created_by": sp["email"]})
+
         sp_conversion.append({
             "name": sp["name"],
             "email": sp["email"],
@@ -294,6 +297,8 @@ async def get_conversion_analytics(request: Request):
             "active": sp_active,
             "quotations": sp_quots,
             "revenue": sp_revenue,
+            "visits": sp_visits,
+            "calls": sp_calls,
             "conversion_rate": (sp_won / sp_total * 100) if sp_total > 0 else 0,
         })
 
@@ -665,6 +670,16 @@ async def mark_all_read(request: Request):
     return {"message": "All notifications marked as read"}
 
 
+@router.put("/notifications/{notif_id}/read")
+async def mark_one_read(notif_id: str, request: Request):
+    user = await get_current_user(request)
+    query = {"$or": [{"task_id": notif_id}, {"lead_id": notif_id}, {"quotation_id": notif_id}]}
+    if user.get("role") != "admin":
+        query["assigned_to"] = user["email"]
+    await db.notifications.update_many(query, {"$set": {"is_read": True}})
+    return {"ok": True}
+
+
 # ==================== IMPORT ====================
 
 @router.post("/import/preview")
@@ -925,14 +940,22 @@ async def export_users(request: Request):
 async def export_contacts(request: Request):
     await get_current_user(request)
     contacts_list = await db.contacts.find({}, {"_id": 0}).sort("created_at", -1).to_list(10000)
+    # Batch-fetch tag names for export
+    all_tag_ids = list({tid for c in contacts_list for tid in (c.get("tag_ids") or [])})
+    tag_name_map = {}
+    if all_tag_ids:
+        async for t in db.tags.find({"tag_id": {"$in": all_tag_ids}}, {"_id": 0, "tag_id": 1, "name": 1}):
+            tag_name_map[t["tag_id"]] = t["name"]
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["Name", "Phone", "Email", "Company", "Designation", "Source", "Notes", "Status", "Converted", "Lead ID", "Created At"])
+    writer.writerow(["contact_id", "name", "phone", "email", "company", "school_id", "designation", "source", "notes", "birthday", "assigned_to", "tags", "status", "converted", "lead_id", "created_at"])
     for c in contacts_list:
+        tag_names = "|".join(tag_name_map.get(tid, tid) for tid in (c.get("tag_ids") or []))
         writer.writerow([
-            c.get("name"), c.get("phone"), c.get("email"),
-            c.get("company"), c.get("designation"), c.get("source"),
-            c.get("notes"), c.get("status", "active"),
+            c.get("contact_id", ""), c.get("name"), c.get("phone"), c.get("email"),
+            c.get("company"), c.get("school_id", ""), c.get("designation"), c.get("source"),
+            c.get("notes"), c.get("birthday", ""), c.get("assigned_to", ""),
+            tag_names, c.get("status", "active"),
             "Yes" if c.get("converted_to_lead") else "No",
             c.get("lead_id", ""), c.get("created_at", ""),
         ])
@@ -1317,12 +1340,33 @@ async def run_auto_reminders():
                     })
                     greetings_queued += 1
 
+            # ── Delegation overdue instance notifications ─────────────────
+            del_overdue = await db.del_task_instances.find({
+                "status": "pending", "due_date": {"$lt": today},
+            }, {"_id": 0, "instance_id": 1, "task_title": 1, "emp_name": 1, "due_date": 1}).to_list(200)
+            if del_overdue:
+                await db.notifications.update_one(
+                    {"type": "delegation_overdue", "date": today},
+                    {"$set": {
+                        "type": "delegation_overdue", "date": today,
+                        "title": f"{len(del_overdue)} Overdue Delegation Task(s)",
+                        "message": ", ".join(
+                            f"{i['task_title']} ({i['emp_name']})" for i in del_overdue[:3]
+                        ) + ("…" if len(del_overdue) > 3 else ""),
+                        "is_read": False,
+                        "created_at": datetime.now(timezone.utc).isoformat(),
+                    }},
+                    upsert=True,
+                )
+                await _push_admins("⚠️ Delegation Overdue", f"{len(del_overdue)} task(s) past due", "/delegation", "delegation_overdue")
+
             import logging
             logging.info(
                 f"Auto-reminder: {len(overdue_tasks)} overdue, {len(stale_leads)} stale, "
                 f"{len(pending_quots)} pending quots, {len(birthday_contacts)} birthdays, "
                 f"{len(anniversary_schools)} anniversaries, {len(due_scheduled)} scheduled WA fired, "
-                f"{drip_fired} drip steps fired, {greetings_queued} greetings queued"
+                f"{drip_fired} drip steps fired, {greetings_queued} greetings queued, "
+                f"{len(del_overdue)} delegation overdue"
             )
         except Exception as e:
             import logging
@@ -1443,3 +1487,285 @@ async def clear_cache(request: Request):
         "ok": True,
         "cleared": result,
     }
+
+
+# ── App Install Tracking ───────────────────────────────────────────────────────
+
+_VALID_PLATFORMS = {"ios", "android", "desktop", "unknown"}
+_VALID_ACTIONS   = {"view", "install"}
+
+@router.post("/app-installs")
+async def track_app_install(request: Request):
+    """Public — no auth. Tracks PWA page views and installs by platform."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    platform = body.get("platform", "unknown")
+    action   = body.get("action",   "view")
+    # Whitelist to prevent arbitrary string injection
+    if platform not in _VALID_PLATFORMS:
+        platform = "unknown"
+    if action not in _VALID_ACTIONS:
+        action = "view"
+    from datetime import timezone as _tz
+    await db.app_installs.insert_one({
+        "platform":   platform,
+        "action":     action,
+        "user_agent": request.headers.get("user-agent", "")[:300],
+        "ip":         request.client.host if request.client else "",
+        "at":         datetime.now(_tz.utc).isoformat(),
+    })
+    return {"ok": True}
+
+
+@router.get("/app-installs/stats")
+async def get_install_stats(request: Request):
+    """Admin only — returns install + page-view counts grouped by platform."""
+    await get_current_user(request)
+    pipeline = [
+        {"$group": {
+            "_id": {"platform": "$platform", "action": "$action"},
+            "count": {"$sum": 1}
+        }}
+    ]
+    rows = await db.app_installs.aggregate(pipeline).to_list(None)
+    result: dict = {}
+    for row in rows:
+        p = row["_id"]["platform"]
+        a = row["_id"]["action"]
+        result.setdefault(p, {})
+        result[p][a] = row["count"]
+    total_installs = sum(v.get("install", 0) for v in result.values())
+    total_views    = sum(v.get("view", 0) for v in result.values())
+    return {"total_installs": total_installs, "total_views": total_views, "by_platform": result}
+
+
+# ==================== BACKFILL SCHOOLS FROM CONTACTS ====================
+
+@router.post("/admin/backfill-schools")
+async def backfill_schools_from_contacts(request: Request):
+    """Scan contacts with a school name (company field) but no school_id, create missing school records, and link them."""
+    user = await get_current_user(request)
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+
+    schools = await db.schools.find(
+        {"is_deleted": {"$ne": True}}, {"_id": 0, "school_id": 1, "school_name": 1}
+    ).to_list(None)
+    school_map = {s["school_name"].strip().lower(): s["school_id"] for s in schools}
+    valid_school_ids = {s["school_id"] for s in schools}
+
+    contacts = await db.contacts.find(
+        {"company": {"$nin": ["", None]}, "is_deleted": {"$ne": True}},
+        {"_id": 0, "contact_id": 1, "company": 1, "school_id": 1, "phone": 1, "email": 1, "designation": 1}
+    ).to_list(None)
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    created_schools = 0
+    linked_contacts = 0
+
+    company_groups: dict = {}
+    for c in contacts:
+        company = (c.get("company") or "").strip()
+        if not company:
+            continue
+        if c.get("school_id") and c["school_id"] in valid_school_ids:
+            continue
+        key = company.lower()
+        if key not in company_groups:
+            company_groups[key] = {"name": company, "contacts": []}
+        company_groups[key]["contacts"].append(c)
+
+    for key, group in company_groups.items():
+        company_name = group["name"]
+        if key in school_map:
+            school_id = school_map[key]
+        else:
+            school_id = f"sch_{uuid.uuid4().hex[:12]}"
+            seed = group["contacts"][0]
+            await db.schools.insert_one({
+                "school_id": school_id, "school_name": company_name,
+                "school_type": "CBSE",
+                "phone": seed.get("phone", ""), "email": seed.get("email", ""),
+                "city": "", "state": "", "pincode": "", "address": "",
+                "primary_contact_name": "", "designation": seed.get("designation", ""),
+                "school_strength": 0, "number_of_branches": 1,
+                "annual_budget_range": "", "existing_vendor": "",
+                "social_profiles": {}, "linkedin_url": "", "instagram_url": "",
+                "last_activity_date": now_iso, "created_by": "system_backfill", "created_at": now_iso,
+            })
+            school_map[key] = school_id
+            created_schools += 1
+
+        contact_ids = [c["contact_id"] for c in group["contacts"]]
+        result = await db.contacts.update_many(
+            {"contact_id": {"$in": contact_ids}},
+            {"$set": {"school_id": school_id, "last_activity_date": now_iso}}
+        )
+        linked_contacts += result.modified_count
+
+    return {
+        "created_schools": created_schools,
+        "linked_contacts": linked_contacts,
+        "groups_processed": len(company_groups),
+        "message": f"Created {created_schools} new schools, linked {linked_contacts} contacts"
+    }
+
+
+# ==================== DB INTEGRITY CHECK & REPAIR ====================
+
+@router.post("/admin/db-integrity")
+async def run_db_integrity(request: Request):
+    """
+    Admin-only endpoint. Scans all FK relationships and fixes orphan references.
+    Returns a report of what was found and fixed.
+    """
+    user = await get_current_user(request)
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+
+    report = {"fixed": {}, "found": {}}
+
+    # ── 1. Contacts pointing to deleted/missing schools ──────────────────────
+    valid_school_ids = {
+        s["school_id"] async for s in db.schools.find(
+            {"is_deleted": {"$ne": True}}, {"_id": 0, "school_id": 1}
+        )
+    }
+    contacts_bad_school = await db.contacts.count_documents({
+        "school_id": {"$nin": list(valid_school_ids), "$ne": None},
+        "is_deleted": {"$ne": True}
+    })
+    if contacts_bad_school:
+        await db.contacts.update_many(
+            {"school_id": {"$nin": list(valid_school_ids), "$ne": None}, "is_deleted": {"$ne": True}},
+            {"$set": {"school_id": None}}
+        )
+    report["found"]["contacts_orphan_school"] = contacts_bad_school
+    report["fixed"]["contacts_orphan_school"] = contacts_bad_school
+
+    # ── 2. Leads pointing to deleted/missing schools ─────────────────────────
+    leads_bad_school = await db.leads.count_documents({
+        "school_id": {"$nin": list(valid_school_ids), "$ne": None},
+        "is_deleted": {"$ne": True}
+    })
+    if leads_bad_school:
+        await db.leads.update_many(
+            {"school_id": {"$nin": list(valid_school_ids), "$ne": None}, "is_deleted": {"$ne": True}},
+            {"$set": {"school_id": None}}
+        )
+    report["found"]["leads_orphan_school"] = leads_bad_school
+    report["fixed"]["leads_orphan_school"] = leads_bad_school
+
+    # ── 3. Contacts with stale lead_id (lead deleted or not converted) ───────
+    valid_lead_ids = {
+        l["lead_id"] async for l in db.leads.find(
+            {"is_deleted": {"$ne": True}}, {"_id": 0, "lead_id": 1}
+        )
+    }
+    contacts_bad_lead = await db.contacts.count_documents({
+        "lead_id": {"$nin": list(valid_lead_ids), "$ne": None},
+        "converted_to_lead": True
+    })
+    if contacts_bad_lead:
+        await db.contacts.update_many(
+            {"lead_id": {"$nin": list(valid_lead_ids), "$ne": None}, "converted_to_lead": True},
+            {"$set": {"converted_to_lead": False, "lead_id": None}}
+        )
+    report["found"]["contacts_stale_lead"] = contacts_bad_lead
+    report["fixed"]["contacts_stale_lead"] = contacts_bad_lead
+
+    # ── 4. Leads with stale converted_from_contact ───────────────────────────
+    valid_contact_ids = {
+        c["contact_id"] async for c in db.contacts.find(
+            {"is_deleted": {"$ne": True}}, {"_id": 0, "contact_id": 1}
+        )
+    }
+    leads_bad_cfc = await db.leads.count_documents({
+        "converted_from_contact": {"$nin": list(valid_contact_ids), "$ne": None},
+        "is_deleted": {"$ne": True}
+    })
+    if leads_bad_cfc:
+        await db.leads.update_many(
+            {"converted_from_contact": {"$nin": list(valid_contact_ids), "$ne": None}, "is_deleted": {"$ne": True}},
+            {"$unset": {"converted_from_contact": ""}}
+        )
+    report["found"]["leads_stale_converted_from_contact"] = leads_bad_cfc
+    report["fixed"]["leads_stale_converted_from_contact"] = leads_bad_cfc
+
+    # ── 5. Leads with stale referred_by_contact_id ───────────────────────────
+    leads_bad_ref = await db.leads.count_documents({
+        "referred_by_contact_id": {"$nin": list(valid_contact_ids), "$ne": None},
+        "is_deleted": {"$ne": True}
+    })
+    if leads_bad_ref:
+        await db.leads.update_many(
+            {"referred_by_contact_id": {"$nin": list(valid_contact_ids), "$ne": None}, "is_deleted": {"$ne": True}},
+            {"$unset": {"referred_by_contact_id": ""}}
+        )
+    report["found"]["leads_stale_referral"] = leads_bad_ref
+    report["fixed"]["leads_stale_referral"] = leads_bad_ref
+
+    # ── 6. Quotations pointing to deleted/missing leads ──────────────────────
+    quots_bad_lead = await db.quotations.count_documents({
+        "lead_id": {"$nin": list(valid_lead_ids), "$ne": None}
+    })
+    if quots_bad_lead:
+        await db.quotations.update_many(
+            {"lead_id": {"$nin": list(valid_lead_ids), "$ne": None}},
+            {"$set": {"lead_id": None}}
+        )
+    report["found"]["quotations_orphan_lead"] = quots_bad_lead
+    report["fixed"]["quotations_orphan_lead"] = quots_bad_lead
+
+    # ── 7. Orphaned followups/call_notes/tasks/physical_dispatches ──────────
+    for coll_name, id_field in [
+        ("followups", "lead_id"),
+        ("call_notes", "lead_id"),
+        ("tasks", "lead_id"),
+        ("physical_dispatches", "lead_id"),
+        ("drip_enrollments", "lead_id"),
+    ]:
+        coll = db[coll_name]
+        orphan_count = await coll.count_documents({
+            id_field: {"$nin": list(valid_lead_ids), "$ne": None}
+        })
+        if orphan_count:
+            await coll.delete_many({id_field: {"$nin": list(valid_lead_ids), "$ne": None}})
+        report["found"][f"{coll_name}_orphan"] = orphan_count
+        report["fixed"][f"{coll_name}_orphan"] = orphan_count
+
+    # ── 8. Order_items / order_timeline / payments orphaned from orders ──────
+    valid_order_ids = {
+        o["order_id"] async for o in db.orders.find({}, {"_id": 0, "order_id": 1})
+    }
+    for coll_name, id_field in [
+        ("order_items", "order_id"),
+        ("order_timeline", "order_id"),
+        ("payments", "order_id"),
+    ]:
+        coll = db[coll_name]
+        orphan_count = await coll.count_documents({
+            id_field: {"$nin": list(valid_order_ids)}
+        })
+        if orphan_count:
+            await coll.delete_many({id_field: {"$nin": list(valid_order_ids)}})
+        report["found"][f"{coll_name}_orphan"] = orphan_count
+        report["fixed"][f"{coll_name}_orphan"] = orphan_count
+
+    # ── 9. Greeting logs with stale contact_id ───────────────────────────────
+    stale_greeting_logs = await db.greeting_logs.count_documents({
+        "contact_id": {"$nin": list(valid_contact_ids), "$ne": None}
+    })
+    report["found"]["greeting_logs_stale_contact"] = stale_greeting_logs
+    # Don't delete greeting logs — just report (historical data)
+
+    # ── Summary ──────────────────────────────────────────────────────────────
+    total_fixed = sum(report["fixed"].values())
+    report["summary"] = {
+        "total_issues_found": sum(report["found"].values()),
+        "total_fixed": total_fixed,
+        "status": "clean" if total_fixed == 0 else "repaired"
+    }
+    return report

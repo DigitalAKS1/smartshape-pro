@@ -84,7 +84,7 @@ export default function OfflineBanner() {
 
   // Offline
   return (
-    <div className="fixed bottom-0 left-0 right-0 z-50 bg-[#1a1a2e] border-t border-[#e94560]/30 px-4 py-2 flex items-center justify-between text-sm">
+    <div className="fixed left-0 right-0 z-[60] bottom-16 md:bottom-0 bg-[#1a1a2e] border-t border-[#e94560]/30 px-4 py-2 flex items-center justify-between text-sm">
       <div className="flex items-center gap-2 text-[#f87171]">
         <WifiOff className="h-4 w-4" />
         <span className="font-medium">You're offline</span>

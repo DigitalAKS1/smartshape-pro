@@ -44,9 +44,13 @@ async def save_company_settings(request: Request):
 async def get_company_settings():
     settings = await db.settings.find_one({"type": "company"}, {"_id": 0})
     defaults = {
-        "company_name": "SmartShape Pro", "logo_url": "", "address": "", "phone": "", "email": "",
-        "gst_number": "", "pan": "", "website": "", "contact_person": "", "city": "", "state": "",
-        "pincode": "", "industry": "", "bank_details": "", "terms_conditions": ""
+        "company_name": "Divine Computers Private Limited",
+        "address": "1st Floor 601, Sector 16A Road, Nearby Rama Palace",
+        "city": "Faridabad", "state": "Haryana", "pincode": "121002",
+        "gst_number": "06AABCD6116E1Z5",
+        "logo_url": "", "phone": "", "email": "",
+        "pan": "", "website": "", "contact_person": "",
+        "industry": "", "bank_details": "", "terms_conditions": ""
     }
     if not settings:
         return defaults
@@ -139,6 +143,83 @@ async def save_sheets_settings(request: Request):
         upsert=True
     )
     return {"message": "Sheets settings saved"}
+
+
+@router.get("/settings/ai")
+async def get_ai_settings(request: Request):
+    await get_current_user(request)
+    doc = await db.settings.find_one({"type": "ai"}, {"_id": 0}) or {}
+    key = doc.get("gemini_api_key", "")
+    # Mask the key — show only last 6 chars
+    masked = ("*" * (len(key) - 6) + key[-6:]) if len(key) > 6 else ("*" * len(key))
+    return {"gemini_api_key_set": bool(key), "gemini_api_key_masked": masked}
+
+
+@router.post("/settings/ai")
+async def save_ai_settings(request: Request):
+    user = await get_current_user(request)
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    body = await request.json()
+    key = (body.get("gemini_api_key") or "").strip()
+    if not key:
+        raise HTTPException(status_code=400, detail="gemini_api_key is required")
+    await db.settings.update_one(
+        {"type": "ai"},
+        {"$set": {"type": "ai", "gemini_api_key": key, "updated_at": datetime.now(timezone.utc).isoformat()}},
+        upsert=True,
+    )
+    return {"message": "AI settings saved"}
+
+
+# ── AI Dialler ────────────────────────────────────────────────────────────────
+
+_DIALLER_DEFAULT = {
+    "enabled": False,
+    "vapi_api_key": "",
+    "caller_phone": "",
+    "modules": {
+        "fms":             {"enabled": False, "trigger_minutes": 30,  "escalation_minutes": 120},
+        "delegation":      {"enabled": False, "trigger_minutes": 30,  "escalation_minutes": 120, "high_priority_only": False},
+        "task_management": {"enabled": False, "trigger_minutes": 60,  "escalation_minutes": 180},
+    },
+    "customer_calls": {
+        "enabled": False,
+        "payment_overdue_days": 3,
+        "quotation_followup_days": 2,
+    },
+}
+
+@router.get("/settings/ai-dialler")
+async def get_dialler_settings(request: Request):
+    await get_current_user(request)
+    doc = await db.settings.find_one({"type": "ai_dialler"}, {"_id": 0}) or {}
+    result = {**_DIALLER_DEFAULT, **{k: v for k, v in doc.items() if k != "type"}}
+    # Mask VAPI key
+    key = result.get("vapi_api_key", "")
+    result["vapi_key_set"] = bool(key)
+    result["vapi_key_masked"] = ("*" * max(0, len(key) - 4) + key[-4:]) if len(key) > 4 else "*" * len(key)
+    if key:
+        result["vapi_api_key"] = ""   # never send key to frontend
+    return result
+
+@router.put("/settings/ai-dialler")
+async def save_dialler_settings(request: Request):
+    user = await get_current_user(request)
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    body = await request.json()
+    safe = {k: v for k, v in body.items() if k in (
+        "enabled", "caller_phone", "modules", "customer_calls"
+    )}
+    # Only update VAPI key if a new non-empty key is provided
+    new_key = (body.get("vapi_api_key") or "").strip()
+    if new_key:
+        safe["vapi_api_key"] = new_key
+    safe["type"] = "ai_dialler"
+    safe["updated_at"] = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()
+    await db.settings.update_one({"type": "ai_dialler"}, {"$set": safe}, upsert=True)
+    return {"message": "AI Dialler settings saved"}
 
 
 @router.post("/settings/notifications")

@@ -315,6 +315,8 @@ async def create_visit_plan(request: Request):
         "lead_name": body.get("lead_name", ""),
         "school_name": body.get("school_name", ""),
         "school_id": body.get("school_id", ""),
+        "contact_person": body.get("contact_person", ""),
+        "contact_phone": body.get("contact_phone", ""),
         "assigned_to": body.get("assigned_to", user["email"]),
         "assigned_name": body.get("assigned_name", user["name"]),
         "visit_date": body.get("visit_date", ""),
@@ -335,6 +337,54 @@ async def create_visit_plan(request: Request):
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.visit_plans.insert_one(plan_doc)
+
+    # Auto-create a delegation task for the assigned sales rep
+    try:
+        assigned_email = plan_doc.get("assigned_to", "")
+        if assigned_email and plan_doc.get("visit_date"):
+            del_emp = await db.del_employees.find_one(
+                {"email": assigned_email, "is_active": True}, {"_id": 0}
+            )
+            if del_emp:
+                from datetime import timezone as _tz
+                task_id = f"task_{__import__('uuid').uuid4().hex[:10]}"
+                task_number = f"VISIT-{plan_id[-6:].upper()}"
+                inst_id = f"inst_{__import__('uuid').uuid4().hex[:10]}"
+                _now = datetime.now(_tz.utc).isoformat()
+                task_doc = {
+                    "task_id": task_id, "task_number": task_number,
+                    "title": f"Visit: {plan_doc.get('school_name', 'School')}",
+                    "description": plan_doc.get("purpose", ""),
+                    "task_type": "onetime", "frequency": "onetime",
+                    "target_date": plan_doc["visit_date"],
+                    "priority": "high", "assignee_ids": [del_emp["emp_id"]],
+                    "assignees": [del_emp], "delegator_id": None,
+                    "delegator_name": plan_doc.get("assigned_name", ""),
+                    "score": 0, "require_verification": False,
+                    "requires_image": False,
+                    "linked_entity_id": plan_id,
+                    "linked_entity_type": "visit_plan",
+                    "status": "active", "is_active": True, "created_at": _now,
+                }
+                await db.del_tasks.insert_one(task_doc)
+                await db.del_task_instances.insert_one({
+                    "instance_id": inst_id, "task_id": task_id,
+                    "task_title": task_doc["title"], "task_number": task_number,
+                    "emp_id": del_emp["emp_id"], "emp_name": del_emp["name"],
+                    "department_id": del_emp.get("department_id", ""),
+                    "department_name": del_emp.get("department_name", ""),
+                    "delegator_id": None, "delegator_name": "",
+                    "due_date": plan_doc["visit_date"], "frequency": "onetime",
+                    "priority": "high", "score": 0,
+                    "require_verification": False, "requires_image": False,
+                    "linked_entity_id": plan_id, "linked_entity_type": "visit_plan",
+                    "status": "pending", "completed_at": None, "verified_at": None,
+                    "verified_by": None, "completion_note": "", "completion_image_url": None,
+                    "created_at": _now,
+                })
+    except Exception:
+        pass  # never block visit plan creation if delegation fails
+
     return await db.visit_plans.find_one({"plan_id": plan_id}, {"_id": 0})
 
 
@@ -466,7 +516,7 @@ def _normalize_plan(plan: dict) -> dict:
         "school_name":        plan.get("school_name", ""),
         "school_id":          plan.get("school_id", ""),
         "lead_id":            plan.get("lead_id", ""),
-        "contact_person":     plan.get("contact_person", ""),
+        "contact_person":     plan.get("contact_person") or plan.get("lead_name", ""),
         "contact_phone":      plan.get("contact_phone", ""),
         "visit_date":         plan.get("visit_date", ""),
         "visit_time":         plan.get("visit_time", ""),
@@ -489,7 +539,7 @@ async def create_visit(visit_input: FieldVisitCreate, request: Request):
     user = await get_current_user(request)
     visit_id = f"visit_{uuid.uuid4().hex[:12]}"
     address = None
-    if visit_input.lat and visit_input.lng:
+    if visit_input.lat is not None and visit_input.lng is not None:
         address = reverse_geocode(visit_input.lat, visit_input.lng)
     visit_doc = {
         "visit_id":           visit_id,
@@ -555,7 +605,7 @@ async def check_in_visit(visit_id: str, lat: float, lng: float, request: Request
         {"visit_id": visit_id, "sales_person_email": user["email"]}
     )
     if visit:
-        address = reverse_geocode(lat, lng) if lat and lng else None
+        address = reverse_geocode(lat, lng) if lat is not None and lng is not None else None
         await db.field_visits.update_one(
             {"visit_id": visit_id},
             {"$set": {
@@ -1351,64 +1401,96 @@ async def set_sales_target(request: Request):
 
 # ==================== BUSINESS CARD SCANNER ====================
 
+_CARD_SUPPORTED_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
+
+_CARD_PROMPT = (
+    "Extract contact information from this business card image. "
+    "Return ONLY a JSON object with these exact keys "
+    "(use empty string if a field is not found on the card): "
+    "{\"name\": \"\", \"phone\": \"\", \"email\": \"\", "
+    "\"school_name\": \"\", \"role\": \"\", \"website\": \"\", \"address\": \"\"}. "
+    "For 'role' pick the closest from: principal, vice_principal, director, "
+    "coordinator, admin, teacher, purchase — or leave empty if unclear. "
+    "For 'phone' include country code if visible. "
+    "Return ONLY the JSON object, no markdown fences, no explanation."
+)
+
+
+def _gemini_scan_sync(api_key: str, image_b64: str):
+    """Synchronous Gemini call — runs in a thread pool via asyncio.to_thread."""
+    import base64 as _b64
+    import io as _io
+    import google.generativeai as genai
+    import PIL.Image as PILImage
+
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel("gemini-2.0-flash")
+
+    img_bytes = _b64.b64decode(image_b64)
+    img = PILImage.open(_io.BytesIO(img_bytes))
+
+    response = model.generate_content([img, _CARD_PROMPT])
+    return response.text
+
+
 @router.post("/sales/scan-card")
 async def scan_business_card(request: Request):
     """
     Accept a base64 image of a business card and return extracted contact fields
-    using Claude vision. Returns: name, phone, email, school_name, role, website.
+    using Gemini 1.5 Flash vision.
     """
-    import anthropic as _anthropic
+    import asyncio as _asyncio
     import os as _os
     import json as _json
+    import re as _re
 
     await get_current_user(request)
     body = await request.json()
     image_b64 = body.get("image_base64", "")
-    media_type = body.get("media_type", "image/jpeg")
+    media_type = (body.get("media_type") or "image/jpeg").lower().strip()
 
     if not image_b64:
         raise HTTPException(status_code=400, detail="image_base64 is required")
 
-    api_key = _os.environ.get("ANTHROPIC_API_KEY")
+    if media_type == "image/jpg":
+        media_type = "image/jpeg"
+
+    if media_type not in _CARD_SUPPORTED_TYPES:
+        raise HTTPException(
+            status_code=415,
+            detail=(
+                f"Image format '{media_type}' is not supported. "
+                "Use JPEG, PNG, or WebP. On iPhone go to Settings → Camera → Formats → Most Compatible."
+            ),
+        )
+
+    # Read key from DB settings first; fall back to environment variable
+    ai_doc = await db.settings.find_one({"type": "ai"}, {"_id": 0}) or {}
+    api_key = ai_doc.get("gemini_api_key", "").strip() or _os.environ.get("GEMINI_API_KEY", "").strip()
     if not api_key:
-        raise HTTPException(status_code=503, detail="AI not configured — ANTHROPIC_API_KEY missing")
+        raise HTTPException(
+            status_code=503,
+            detail="AI scanning not configured. Add your Gemini API key in App Settings → AI.",
+        )
 
-    client = _anthropic.Anthropic(api_key=api_key)
-    msg = client.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=512,
-        messages=[{
-            "role": "user",
-            "content": [
-                {
-                    "type": "image",
-                    "source": {"type": "base64", "media_type": media_type, "data": image_b64},
-                },
-                {
-                    "type": "text",
-                    "text": (
-                        "Extract contact information from this business card image. "
-                        "Return ONLY a JSON object with these exact keys "
-                        "(use empty string if not found): "
-                        "{\"name\": \"\", \"phone\": \"\", \"email\": \"\", "
-                        "\"school_name\": \"\", \"role\": \"\", \"website\": \"\", \"address\": \"\"}. "
-                        "For 'role' use one of: principal, vice_principal, director, coordinator, "
-                        "admin, teacher, purchase — pick the closest match or leave empty. "
-                        "Return only the JSON, no explanation."
-                    ),
-                },
-            ],
-        }],
-    )
-
-    raw = msg.content[0].text.strip()
     try:
-        # Strip markdown fences if present
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
+        raw = await _asyncio.to_thread(_gemini_scan_sync, api_key, image_b64)
+    except Exception as e:
+        err = str(e)
+        if "API_KEY_INVALID" in err or "invalid" in err.lower() and "key" in err.lower():
+            raise HTTPException(status_code=503, detail="Gemini API key is invalid. Check GEMINI_API_KEY in backend/.env")
+        raise HTTPException(status_code=502, detail=f"AI service error: {err[:200]}")
+
+    # Strip markdown fences if model adds them
+    raw = raw.strip()
+    raw = _re.sub(r"^```(?:json)?\s*", "", raw, flags=_re.MULTILINE)
+    raw = _re.sub(r"\s*```\s*$", "", raw, flags=_re.MULTILINE)
+    raw = raw.strip()
+
+    try:
         data = _json.loads(raw)
+        defaults = {"name": "", "phone": "", "email": "", "school_name": "", "role": "", "website": "", "address": ""}
+        data = {**defaults, **{k: (v or "") for k, v in data.items()}}
     except Exception:
         data = {"name": "", "phone": "", "email": "", "school_name": "", "role": "", "website": "", "address": ""}
 
@@ -1479,11 +1561,16 @@ async def arrive_at_stop(journey_id: str, request: Request):
     Optionally links to an existing visit by visit_id — auto-triggers check-in.
     """
     user = await get_current_user(request)
-    body        = await request.json()
-    lat         = float(body.get("lat"))
-    lng         = float(body.get("lng"))
-    school_name = body.get("school_name", "")
-    visit_id    = body.get("visit_id")
+    body                 = await request.json()
+    lat                  = float(body.get("lat"))
+    lng                  = float(body.get("lng"))
+    school_name          = body.get("school_name", "")
+    school_id            = body.get("school_id", "")
+    visit_id             = body.get("visit_id")
+    contact_name         = body.get("contact_name", "")
+    contact_designation  = body.get("contact_designation", "")
+    contact_phone        = body.get("contact_phone", "")
+    contact_id           = body.get("contact_id", "")
 
     journey = await db.field_journeys.find_one(
         {"journey_id": journey_id, "user_email": user["email"]}, {"_id": 0}
@@ -1505,17 +1592,29 @@ async def arrive_at_stop(journey_id: str, request: Request):
     address      = reverse_geocode(lat, lng)
 
     stop = {
-        "stop_num":     len(stops) + 1,
-        "school_name":  school_name,
-        "visit_id":     visit_id,
-        "arrived_at":   now.isoformat(),
-        "departed_at":  None,
-        "lat":          lat,
-        "lng":          lng,
-        "address":      address,
-        "km_from_prev": km_from_prev,
-        "status":       "arrived",
+        "stop_num":            len(stops) + 1,
+        "school_name":         school_name,
+        "school_id":           school_id,
+        "visit_id":            visit_id,
+        "contact_name":        contact_name,
+        "contact_designation": contact_designation,
+        "contact_phone":       contact_phone,
+        "contact_id":          contact_id,
+        "arrived_at":          now.isoformat(),
+        "departed_at":         None,
+        "lat":                 lat,
+        "lng":                 lng,
+        "address":             address,
+        "km_from_prev":        km_from_prev,
+        "status":              "arrived",
     }
+
+    # Touch school + contact last_activity in background
+    if school_id:
+        try:
+            await touch_last_activity("school", school_id)
+        except Exception:
+            pass
     new_total = round(journey.get("total_km", 0) + km_from_prev, 2)
 
     await db.field_journeys.update_one(

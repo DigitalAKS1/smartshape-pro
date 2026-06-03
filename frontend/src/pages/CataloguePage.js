@@ -44,9 +44,25 @@ export default function CataloguePage() {
     </div>
   );
 
-  const { quotation, package: pkg, dies } = data;
-  const stdLimit = pkg?.std_die_qty || 0;
-  const largeLimit = pkg?.large_die_qty || 0;
+  const { quotation, package: pkg, dies, logo_url: logoUrl } = data;
+
+  // Derive actual limits from quotation lines (what was quoted, not package defaults)
+  const lines = quotation.lines || [];
+  const stdLine  = lines.find(l => l.description?.toLowerCase().includes('standard die'));
+  const largeLine = lines.find(l => l.description?.toLowerCase().includes('large die'));
+  const stdQtyFromQuote   = stdLine?.qty  || 0;
+  const largeQtyFromQuote = largeLine?.qty || 0;
+
+  // Use quotation quantities as limits; fall back to package defaults
+  const stdLimit   = stdQtyFromQuote   || pkg?.std_die_qty   || 0;
+  const largeLimit = largeQtyFromQuote || pkg?.large_die_qty || 0;
+
+  // If quoted quantities differ from package defaults → Custom Package
+  const isCustom = pkg && (
+    (stdQtyFromQuote   > 0 && stdQtyFromQuote   !== pkg.std_die_qty) ||
+    (largeQtyFromQuote > 0 && largeQtyFromQuote !== pkg.large_die_qty)
+  );
+  const packageLabel = isCustom ? 'CUSTOM PACKAGE' : (pkg?.display_name || '');
 
   // Group dies by category
   const grouped = {};
@@ -64,9 +80,24 @@ export default function CataloguePage() {
       {/* Hero */}
       <div className="bg-gradient-to-b from-[#1a1a2e] to-[#0a0a12] py-12 px-4">
         <div className="max-w-6xl mx-auto text-center">
-          <h1 className="text-4xl sm:text-5xl font-bold text-white mb-3" data-testid="catalogue-title">SmartShape Dies Catalogue</h1>
+          {/* Company Logo */}
+          {logoUrl && (
+            <div className="mb-6">
+              <img
+                src={logoUrl}
+                alt="SMARTS-SHAPES"
+                className="h-16 mx-auto object-contain"
+                style={{ filter: 'brightness(0) invert(1)' }}
+              />
+            </div>
+          )}
+          <h1 className="text-4xl sm:text-5xl font-bold text-white mb-3" data-testid="catalogue-title">Dies Catalogue</h1>
           <p className="text-xl text-[#e94560] font-medium">{quotation.school_name}</p>
-          {pkg && <p className="text-[#a0a0b0] mt-2">{pkg.display_name}</p>}
+          {packageLabel && (
+            <p className={`mt-2 text-sm font-semibold tracking-widest uppercase ${isCustom ? 'text-[#e94560]' : 'text-[#a0a0b0]'}`}>
+              {packageLabel}
+            </p>
+          )}
         </div>
       </div>
 

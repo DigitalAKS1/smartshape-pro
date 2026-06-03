@@ -1,8 +1,11 @@
-import React, { useEffect, useState, useCallback } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
-import { Home, Target, MapPin, Package, FileText, CalendarDays, Megaphone, Wifi, WifiOff, Download, Bell, X } from 'lucide-react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
+import { toast } from 'sonner';
+import { useNavigate } from 'react-router-dom';
 import AdminLayout from './AdminLayout';
 import SalesLayout from './SalesLayout';
+import AppShellHeader from './AppShellHeader';
+import AppShellNav from './AppShellNav';
+import AppShellNotifDrawer from './AppShellNotifDrawer';
 import { useAuth } from '../../contexts/AuthContext';
 import { notificationsApi, pushApi } from '../../lib/api';
 
@@ -16,27 +19,64 @@ const isIOS = typeof navigator !== 'undefined' && /iPad|iPhone|iPod/.test(naviga
 const isStandalone = typeof window !== 'undefined' && !!window.navigator.standalone;
 
 /**
- * Adaptive shell — uses mobile-first layout (top header + bottom nav) on small screens,
- * falls back to the existing Admin/Sales sidebar layout on md+ screens.
+ * AppShell — adaptive layout.
+ * - Desktop (md+): delegates to AdminLayout or SalesLayout.
+ * - Mobile: custom top-header + bottom-nav + notification drawer.
  */
 export default function AppShell({ children }) {
   const { user } = useAuth();
   const nav = useNavigate();
-  const loc = useLocation();
+
   const [isMobile, setIsMobile] = useState(false);
   const [online, setOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
   const [showInstall, setShowInstall] = useState(false);
   const [deferredPrompt, setDeferredPrompt] = useState(null);
+  const [showIosInstall, setShowIosInstall] = useState(false);
+  const [shareCopied, setShareCopied] = useState(false);
+
+  const [notifOpen, setNotifOpen] = useState(false);
+  const [notifs, setNotifs] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
+
   const [pushSubscribed, setPushSubscribed] = useState(false);
   const [pushEnabling, setPushEnabling] = useState(false);
-  const [showIosInstall, setShowIosInstall] = useState(false);
-
   const pushSupported = typeof window !== 'undefined' && 'PushManager' in window && 'Notification' in window;
 
-  const fetchUnread = useCallback(async () => {
-    try { const r = await notificationsApi.getAll(); setUnreadCount((r.data || []).filter(n => !n.is_read).length); } catch {}
+  const prevUnreadRef = useRef(null);
+
+  const playNotifAlert = useCallback(() => {
+    if (navigator.vibrate) navigator.vibrate([120, 60, 120]);
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.type = 'sine'; osc.frequency.value = 880;
+      gain.gain.setValueAtTime(0.3, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.35);
+      osc.start(ctx.currentTime); osc.stop(ctx.currentTime + 0.35);
+      ctx.close().catch(() => {});
+    } catch {}
   }, []);
+
+  const fetchUnread = useCallback(async () => {
+    try {
+      const r = await notificationsApi.getAll();
+      const all = r.data || [];
+      const newUnread = all.filter(n => !n.is_read).length;
+      if (prevUnreadRef.current !== null && newUnread > prevUnreadRef.current) {
+        playNotifAlert();
+        const diff = newUnread - prevUnreadRef.current;
+        toast.message(`${diff} new notification${diff > 1 ? 's' : ''}`, {
+          description: all.find(n => !n.is_read)?.title || '',
+          icon: '🔔', duration: 4000,
+        });
+      }
+      prevUnreadRef.current = newUnread;
+      setNotifs(all);
+      setUnreadCount(newUnread);
+    } catch {}
+  }, [playNotifAlert]);
 
   useEffect(() => {
     fetchUnread();
@@ -102,112 +142,68 @@ export default function AppShell({ children }) {
     setShowInstall(false);
   };
 
+  const handleShare = async () => {
+    const url = `${window.location.origin}/get-app`;
+    if (navigator.share) {
+      navigator.share({ title: 'Divine Computer Pvt Ltd', url }).catch(() => {});
+    } else {
+      try { await navigator.clipboard.writeText(url); }
+      catch {
+        const el = document.createElement('textarea');
+        el.value = url; el.style.position = 'fixed'; el.style.opacity = '0';
+        document.body.appendChild(el); el.select();
+        document.execCommand('copy'); document.body.removeChild(el);
+      }
+      setShareCopied(true);
+      setTimeout(() => setShareCopied(false), 2000);
+    }
+  };
+
   // Desktop → existing layout
   if (!isMobile) {
     const Layout = user?.role === 'sales' ? SalesLayout : AdminLayout;
     return <Layout>{children}</Layout>;
   }
 
-  // Mobile shell — role-aware tabs
   const isSalesUser = user?.role === 'sales';
-  const tabs = isSalesUser ? [
-    { path: '/today',               icon: Home,         label: 'Today'  },
-    { path: '/sales/leads',         icon: Target,       label: 'Leads'  },
-    { path: '/sales/visits',        icon: MapPin,       label: 'Visits' },
-    { path: '/sales/quotations',    icon: FileText,     label: 'Quotes' },
-    { path: '/leave-management',    icon: CalendarDays, label: 'Leave'  },
-  ] : [
-    { path: '/today',           icon: Home,    label: 'Today'   },
-    { path: '/leads',           icon: Target,  label: 'CRM'     },
-    { path: '/visit-planning',  icon: MapPin,  label: 'Visits'  },
-    { path: '/orders',          icon: Package, label: 'Orders'  },
-    { path: '/marketing',       icon: Megaphone, label: 'Mktg'  },
-  ];
 
   return (
     <div className="min-h-screen bg-[var(--bg-primary)] text-[var(--text-primary)]">
-      {/* Top header */}
-      <header className="sticky top-0 z-30 bg-[var(--bg-card)] border-b border-[var(--border-color)] px-3 py-2 flex items-center justify-between" data-testid="mobile-header">
-        <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#e94560] to-[#f05c75] flex items-center justify-center font-bold text-white text-xs">SS</div>
-          <div>
-            <p className="text-sm font-semibold truncate leading-tight">SmartShape Pro</p>
-            <p className="text-[10px] text-[var(--text-muted)] leading-tight">{user?.name}</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-1.5">
-          {/* Push enable — shown only if not yet subscribed */}
-          {pushSupported && !pushSubscribed && Notification.permission !== 'denied' && (
-            <button
-              onClick={enablePush}
-              disabled={pushEnabling}
-              className="h-8 px-2.5 rounded-full bg-[#e94560] text-white text-[11px] font-semibold inline-flex items-center gap-1 disabled:opacity-60"
-              title="Enable push notifications"
-            >
-              <Bell className="h-3 w-3" /> {pushEnabling ? '…' : 'Alerts'}
-            </button>
-          )}
-          {/* Install button */}
-          {showInstall && (
-            <button onClick={promptInstall} className="h-8 px-2.5 rounded-full bg-[var(--bg-hover)] border border-[var(--border-color)] text-[var(--text-secondary)] text-[11px] font-semibold inline-flex items-center gap-1" data-testid="install-pwa-btn">
-              <Download className="h-3 w-3" /> Install
-            </button>
-          )}
-          {/* Notification bell with unread badge */}
-          <div className="relative">
-            <Bell className="h-5 w-5 text-[var(--text-muted)]" />
-            {unreadCount > 0 && (
-              <span className="absolute -top-1 -right-1 min-w-[14px] h-3.5 px-0.5 bg-[#e94560] text-white text-[8px] font-bold rounded-full flex items-center justify-center leading-none">
-                {unreadCount > 9 ? '9+' : unreadCount}
-              </span>
-            )}
-          </div>
-          {online ? <Wifi className="h-4 w-4 text-green-400" /> : <WifiOff className="h-4 w-4 text-red-400" />}
-        </div>
-      </header>
+      <AppShellHeader
+        user={user}
+        online={online}
+        unreadCount={unreadCount}
+        pushSupported={pushSupported}
+        pushSubscribed={pushSubscribed}
+        pushEnabling={pushEnabling}
+        showInstall={showInstall}
+        showIosInstall={showIosInstall}
+        shareCopied={shareCopied}
+        onBellClick={() => setNotifOpen(true)}
+        onEnablePush={enablePush}
+        onShare={handleShare}
+        onInstall={promptInstall}
+        onDismissIos={() => { localStorage.setItem('ios-install-dismissed', '1'); setShowIosInstall(false); }}
+      />
 
-      {/* Offline banner */}
-      {!online && (
-        <div className="bg-red-500/15 border-b border-red-500/30 text-red-400 text-xs py-1.5 px-3 text-center" data-testid="offline-banner">
-          You are offline — actions will sync when you reconnect.
-        </div>
-      )}
-
-      {/* iOS Add to Home Screen banner */}
-      {showIosInstall && (
-        <div className="bg-blue-500/8 border-b border-blue-500/20 px-3 py-2.5 flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-[#e94560] to-[#f05c75] flex items-center justify-center text-white font-black text-[9px] shrink-0 shadow-sm">SS</div>
-          <div className="flex-1 min-w-0">
-            <p className="text-xs font-bold text-[var(--text-primary)]">Install SmartShape Pro</p>
-            <p className="text-[10px] text-[var(--text-muted)] leading-tight mt-0.5">
-              Tap <span className="text-blue-400 font-semibold">Share ↑</span> in Safari → <span className="text-blue-400 font-semibold">"Add to Home Screen"</span>
-            </p>
-          </div>
-          <button onClick={() => { localStorage.setItem('ios-install-dismissed', '1'); setShowIosInstall(false); }}
-            className="shrink-0 p-1.5 text-[var(--text-muted)]">
-            <X className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      )}
-
-      {/* Main content */}
       <main className="pb-20">{children}</main>
 
-      {/* Bottom navigation */}
-      <nav className="fixed bottom-0 left-0 right-0 z-40 bg-[var(--bg-card)] border-t border-[var(--border-color)] safe-area-bottom" data-testid="mobile-bottom-nav">
-        <div className="grid grid-cols-5">
-          {tabs.map(t => {
-            const active = loc.pathname.startsWith(t.path);
-            return (
-              <button key={t.path} onClick={() => nav(t.path)} className={`flex flex-col items-center justify-center py-2 gap-0.5 min-h-[56px] transition-colors ${active ? 'text-[#e94560]' : 'text-[var(--text-muted)]'}`} data-testid={`nav-${t.label.toLowerCase()}`}>
-                <t.icon className="h-5 w-5" />
-                <span className="text-[10px] font-medium">{t.label}</span>
-                {active && <span className="absolute bottom-0 h-0.5 w-12 bg-[#e94560] rounded-t" />}
-              </button>
-            );
-          })}
-        </div>
-      </nav>
+      <AppShellNotifDrawer
+        open={notifOpen}
+        onClose={() => setNotifOpen(false)}
+        notifs={notifs}
+        setNotifs={setNotifs}
+        unreadCount={unreadCount}
+        setUnreadCount={setUnreadCount}
+        pushSupported={pushSupported}
+        pushSubscribed={pushSubscribed}
+        setPushSubscribed={setPushSubscribed}
+        pushEnabling={pushEnabling}
+        onEnablePush={enablePush}
+        onNavigate={nav}
+      />
+
+      <AppShellNav isSalesUser={isSalesUser} />
     </div>
   );
 }

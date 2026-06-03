@@ -42,6 +42,8 @@ from routes.whatsapp_routes import router as whatsapp_router
 from routes.email_routes import router as email_router
 from routes.demo_routes import router as demo_router
 from routes.push_routes import router as push_router
+from routes.delegation_routes import router as delegation_router
+from routes.fms_routes import router as fms_router
 from scheduler import start_scheduler
 
 # ── App instance ───────────────────────────────────────────────────────────────
@@ -85,6 +87,8 @@ app.include_router(whatsapp_router, prefix="/api")
 app.include_router(email_router, prefix="/api")
 app.include_router(demo_router, prefix="/api")
 app.include_router(push_router, prefix="/api")
+app.include_router(delegation_router, prefix="/api")
+app.include_router(fms_router, prefix="/api")
 
 # ── Static files — uploaded WhatsApp attachments served publicly ───────────────
 _WA_UPLOADS = os.path.join(os.path.dirname(__file__), "uploads", "whatsapp")
@@ -280,6 +284,7 @@ async def startup():
         {"module_id": "mod_field_sales", "name": "field_sales", "display_name": "Field Sales", "category": "sales", "sort_order": 16, "is_active": True},
         {"module_id": "mod_leads", "name": "leads", "display_name": "Leads & CRM", "category": "sales", "sort_order": 17, "is_active": True},
         {"module_id": "mod_sales", "name": "sales_portal", "display_name": "Sales Portal", "category": "sales", "sort_order": 18, "is_active": True},
+        {"module_id": "mod_delegation", "name": "delegation", "display_name": "Delegation System", "category": "admin", "sort_order": 19, "is_active": True},
     ]
     for mod in default_modules:
         existing_mod = await db.modules.find_one({"module_id": mod["module_id"]})

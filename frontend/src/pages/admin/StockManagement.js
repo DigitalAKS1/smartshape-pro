@@ -1,87 +1,35 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import AdminLayout from '../../components/layouts/AdminLayout';
-import { stock, dies, salesPersons } from '../../lib/api';
 import { formatDate } from '../../lib/utils';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../../components/ui/dialog';
 import { Plus, TrendingUp, TrendingDown, Users, Package, AlertTriangle, ChevronDown, ChevronUp } from 'lucide-react';
-import { toast } from 'sonner';
-
-const MOVEMENT_LABELS = { stock_in: 'Stock In', stock_out: 'Stock Out', allocated_to_sales: 'Allocated', returned_from_sales: 'Returned', physical_adjustment: 'Adjustment' };
-const MOVEMENT_COLORS = { stock_in: 'text-green-500', stock_out: 'text-red-400', allocated_to_sales: 'text-blue-400', returned_from_sales: 'text-purple-400', physical_adjustment: 'text-yellow-500' };
+import { useStockManagement, MOVEMENT_LABELS, MOVEMENT_COLORS } from '../../hooks/useStockManagement';
 
 export default function StockManagement() {
-  const [movements, setMovements] = useState([]);
-  const [diesList, setDiesList] = useState([]);
-  const [salesPersonsList, setSalesPersonsList] = useState([]);
-  const [holdings, setHoldings] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [holdingsLoading, setHoldingsLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState('history');
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [expandedSp, setExpandedSp] = useState(null);
-  const [movementForm, setMovementForm] = useState({ die_id: '', movement_type: 'stock_in', quantity: 1, sales_person_id: '', notes: '' });
+  const {
+    movements, diesList, salesPersonsList, holdings,
+    loading, holdingsLoading,
+    activeTab, setActiveTab,
+    dialogOpen, setDialogOpen,
+    expandedSp, setExpandedSp,
+    movementForm, setMovementForm,
+    stats, totalHeld,
+    handleCreateMovement,
+  } = useStockManagement();
 
-  const card = 'bg-[var(--bg-card)] border-[var(--border-color)]';
-  const inputCls = 'bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]';
-  const textPri = 'text-[var(--text-primary)]';
-  const textSec = 'text-[var(--text-secondary)]';
+  const card      = 'bg-[var(--bg-card)] border-[var(--border-color)]';
+  const inputCls  = 'bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]';
+  const textPri   = 'text-[var(--text-primary)]';
+  const textSec   = 'text-[var(--text-secondary)]';
   const textMuted = 'text-[var(--text-muted)]';
-  const dlgCls = 'bg-[var(--bg-card)] border-[var(--border-color)] text-[var(--text-primary)]';
-
-  useEffect(() => { fetchData(); }, []);
-
-  const fetchData = async () => {
-    try {
-      const [movRes, diesRes, spRes] = await Promise.all([stock.getMovements(), dies.getAll(), salesPersons.getAll()]);
-      setMovements(movRes.data);
-      setDiesList(diesRes.data);
-      setSalesPersonsList(spRes.data);
-    } catch { toast.error('Failed to load data'); }
-    finally { setLoading(false); }
-  };
-
-  const fetchHoldings = async () => {
-    setHoldingsLoading(true);
-    try {
-      const res = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/sales-person-stock`, { credentials: 'include' });
-      const data = await res.json();
-      setHoldings(Array.isArray(data) ? data : []);
-    } catch { toast.error('Failed to load holdings'); }
-    finally { setHoldingsLoading(false); }
-  };
-
-  useEffect(() => { if (activeTab === 'holdings') fetchHoldings(); }, [activeTab]); // eslint-disable-line
-
-  const handleCreateMovement = async (e) => {
-    e.preventDefault();
-    if (!movementForm.die_id) { toast.error('Select a die'); return; }
-    if (movementForm.movement_type === 'allocated_to_sales' && !movementForm.sales_person_id) { toast.error('Select a sales person'); return; }
-    try {
-      await stock.createMovement({ ...movementForm, quantity: Number(movementForm.quantity) });
-      toast.success('Stock movement recorded');
-      setDialogOpen(false);
-      setMovementForm({ die_id: '', movement_type: 'stock_in', quantity: 1, sales_person_id: '', notes: '' });
-      fetchData();
-      if (activeTab === 'holdings') fetchHoldings();
-    } catch (err) { toast.error(err.response?.data?.detail || 'Failed to record movement'); }
-  };
-
-  const stats = {
-    total: movements.length,
-    stockIn: movements.filter(m => m.movement_type === 'stock_in').length,
-    stockOut: movements.filter(m => m.movement_type === 'stock_out').length,
-    allocated: movements.filter(m => m.movement_type === 'allocated_to_sales').length,
-  };
-
-  const totalHeld = holdings.reduce((s, h) => s + (h.total_units || 0), 0);
+  const dlgCls    = 'bg-[var(--bg-card)] border-[var(--border-color)] text-[var(--text-primary)]';
 
   return (
     <AdminLayout>
       <div className="space-y-5">
-
         {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div>
@@ -96,9 +44,9 @@ export default function StockManagement() {
         {/* KPI strip */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           {[
-            { label: 'Total Movements', value: stats.total, cls: textPri },
-            { label: 'Stock In', value: stats.stockIn, cls: 'text-green-500' },
-            { label: 'Stock Out', value: stats.stockOut, cls: 'text-red-400' },
+            { label: 'Total Movements',    value: stats.total,     cls: textPri },
+            { label: 'Stock In',           value: stats.stockIn,   cls: 'text-green-500' },
+            { label: 'Stock Out',          value: stats.stockOut,  cls: 'text-red-400' },
             { label: 'Allocated to Field', value: stats.allocated, cls: 'text-blue-400' },
           ].map(s => (
             <div key={s.label} className={`${card} border rounded-xl p-4`}>
@@ -110,9 +58,11 @@ export default function StockManagement() {
 
         {/* Tabs */}
         <div className={`flex ${card} border rounded-md p-1 gap-1`}>
-          {[['history','Movement History'], ['holdings','Sales Team Holdings']].map(([id, label]) => (
+          {[['history', 'Movement History'], ['holdings', 'Sales Team Holdings']].map(([id, label]) => (
             <button key={id} onClick={() => setActiveTab(id)}
-              className={`flex-1 py-2 rounded text-sm font-medium transition-colors ${activeTab === id ? 'bg-[#e94560] text-white' : `${textSec} hover:bg-[var(--bg-hover)]`}`}>
+              className={`flex-1 py-2 rounded text-sm font-medium transition-colors ${
+                activeTab === id ? 'bg-[#e94560] text-white' : `${textSec} hover:bg-[var(--bg-hover)]`
+              }`}>
               {label}
             </button>
           ))}
@@ -122,9 +72,14 @@ export default function StockManagement() {
         {activeTab === 'history' && (
           <div className={`${card} border rounded-md overflow-hidden`} data-testid="movement-history">
             {loading ? (
-              <div className="flex items-center justify-center h-64"><div className="animate-spin rounded-full h-12 w-12 border-4 border-[#e94560] border-t-transparent" /></div>
+              <div className="flex items-center justify-center h-64">
+                <div className="animate-spin rounded-full h-12 w-12 border-4 border-[#e94560] border-t-transparent" />
+              </div>
             ) : movements.length === 0 ? (
-              <div className="p-16 text-center"><TrendingUp className={`h-12 w-12 mx-auto mb-3 ${textMuted}`} strokeWidth={1} /><p className={textMuted}>No movements recorded yet</p></div>
+              <div className="p-16 text-center">
+                <TrendingUp className={`h-12 w-12 mx-auto mb-3 ${textMuted}`} strokeWidth={1} />
+                <p className={textMuted}>No movements recorded yet</p>
+              </div>
             ) : (
               <>
                 {/* Desktop table */}
@@ -145,9 +100,7 @@ export default function StockManagement() {
                             <p className="font-mono text-[#e94560] text-xs font-medium">{m.die_code}</p>
                             <p className={`text-xs ${textMuted}`}>{m.die_name}</p>
                           </td>
-                          <td className="px-4 py-3">
-                            <span className={`text-xs font-medium ${MOVEMENT_COLORS[m.movement_type] || textSec}`}>{MOVEMENT_LABELS[m.movement_type] || m.movement_type}</span>
-                          </td>
+                          <td className="px-4 py-3"><span className={`text-xs font-medium ${MOVEMENT_COLORS[m.movement_type] || textSec}`}>{MOVEMENT_LABELS[m.movement_type] || m.movement_type}</span></td>
                           <td className={`px-4 py-3 font-mono font-bold ${textPri}`}>{m.quantity}</td>
                           <td className={`px-4 py-3 text-sm ${textSec}`}>{m.sales_person_name || '—'}</td>
                           <td className={`px-4 py-3 text-sm ${textMuted}`}>{formatDate(m.movement_date)}</td>
@@ -187,7 +140,9 @@ export default function StockManagement() {
         {activeTab === 'holdings' && (
           <div className="space-y-3" data-testid="sales-holdings">
             {holdingsLoading ? (
-              <div className="flex items-center justify-center h-64"><div className="animate-spin rounded-full h-12 w-12 border-4 border-[#e94560] border-t-transparent" /></div>
+              <div className="flex items-center justify-center h-64">
+                <div className="animate-spin rounded-full h-12 w-12 border-4 border-[#e94560] border-t-transparent" />
+              </div>
             ) : holdings.length === 0 ? (
               <div className={`${card} border rounded-md p-16 text-center`}>
                 <Users className={`h-12 w-12 mx-auto mb-3 ${textMuted}`} strokeWidth={1} />
@@ -199,14 +154,14 @@ export default function StockManagement() {
                 <div className={`${card} border rounded-xl p-4 flex items-center gap-4`}>
                   <Package className="h-8 w-8 text-blue-400" />
                   <div>
-                    <p className={`text-2xl font-bold font-mono text-blue-400`}>{totalHeld}</p>
+                    <p className="text-2xl font-bold font-mono text-blue-400">{totalHeld}</p>
                     <p className={`text-xs ${textMuted}`}>Total units with field team across {holdings.length} members</p>
                   </div>
                 </div>
                 {holdings.map(sp => (
                   <div key={sp.sales_person_id} className={`${card} border rounded-md overflow-hidden`}>
                     <button onClick={() => setExpandedSp(expandedSp === sp.sales_person_id ? null : sp.sales_person_id)}
-                      className={`w-full flex items-center justify-between p-4 hover:bg-[var(--bg-hover)] transition-colors`}>
+                      className="w-full flex items-center justify-between p-4 hover:bg-[var(--bg-hover)] transition-colors">
                       <div className="flex items-center gap-3">
                         <div className="w-9 h-9 rounded-full bg-[#e94560]/15 flex items-center justify-center flex-shrink-0">
                           <span className="text-sm font-bold text-[#e94560]">{sp.sales_person_name?.charAt(0)}</span>
@@ -217,7 +172,7 @@ export default function StockManagement() {
                         </div>
                       </div>
                       <div className="flex items-center gap-3">
-                        <span className={`font-mono font-bold text-blue-400 text-lg`}>{sp.total_units}</span>
+                        <span className="font-mono font-bold text-blue-400 text-lg">{sp.total_units}</span>
                         {expandedSp === sp.sales_person_id ? <ChevronUp className={`h-4 w-4 ${textMuted}`} /> : <ChevronDown className={`h-4 w-4 ${textMuted}`} />}
                       </div>
                     </button>
@@ -244,7 +199,9 @@ export default function StockManagement() {
                           </tbody>
                         </table>
                         {sp.holdings.some(h => (h.current_holding || 0) === 0) && (
-                          <p className={`text-xs ${textMuted} px-4 py-2 flex items-center gap-1`}><AlertTriangle className="h-3 w-3" /> Some dies fully returned</p>
+                          <p className={`text-xs ${textMuted} px-4 py-2 flex items-center gap-1`}>
+                            <AlertTriangle className="h-3 w-3" /> Some dies fully returned
+                          </p>
                         )}
                       </div>
                     )}
@@ -255,7 +212,7 @@ export default function StockManagement() {
           </div>
         )}
 
-        {/* ── Record Movement Dialog ── */}
+        {/* Record Movement Dialog */}
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
           <DialogContent className={`${dlgCls} w-[calc(100vw-1rem)] sm:max-w-md`}>
             <DialogHeader><DialogTitle className={textPri}>Record Stock Movement</DialogTitle></DialogHeader>
@@ -300,7 +257,6 @@ export default function StockManagement() {
             </form>
           </DialogContent>
         </Dialog>
-
       </div>
     </AdminLayout>
   );

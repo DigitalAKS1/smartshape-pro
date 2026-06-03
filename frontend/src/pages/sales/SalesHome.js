@@ -1,17 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import { Link } from 'react-router-dom';
 import SalesLayout from '../../components/layouts/SalesLayout';
 import PunchClock from '../../components/PunchClock';
-import {
-  attendance as attendanceApi, visits as visitsApi,
-  leads as leadsApi, tasks as tasksApi, quotations as quotationsApi,
-} from '../../lib/api';
-import { useAuth } from '../../contexts/AuthContext';
-import { getSalesPermissions } from '../../lib/salesPermissions';
+import { useSalesHome } from '../../hooks/useSalesHome';
 import {
   MapPin, FileText, Receipt, Target, Clock, Phone, MessageSquare,
   ChevronRight, AlertCircle, CheckCircle, Navigation, Flame,
-  TrendingUp, Calendar, Star, BarChart2,
+  BarChart2, Calendar,
 } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 
@@ -30,8 +25,6 @@ const openWa = (phone) => {
   if (n) window.open(`https://wa.me/${n.startsWith('91') ? n : '91' + n}`, '_blank');
 };
 
-const fmt = (d) => d ? new Date(d).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '';
-
 function openNavigate(lat, lng, name) {
   if (lat && lng) {
     window.open(`https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`, '_blank');
@@ -41,55 +34,11 @@ function openNavigate(lat, lng, name) {
 }
 
 export default function SalesHome() {
-  const { user } = useAuth();
-  const today    = new Date().toISOString().split('T')[0];
-  const perms    = getSalesPermissions(user?.sales_role);
-
-  const [data, setData]         = useState({ attendance: null, visits: [], leads: [], quotations: [], overdue: [], allLeads: [] });
-  const [loading, setLoading]   = useState(true);
-  const [punchOpen, setPunchOpen] = useState(false);
-
-  useEffect(() => { fetchAll(); }, []);
-
-  const fetchAll = async () => {
-    try {
-      const [att, vis, ldr, tsk, qts] = await Promise.all([
-        attendanceApi.getToday().catch(() => ({ data: null })),
-        perms.visits_log     ? visitsApi.getAll().catch(() => ({ data: [] }))      : Promise.resolve({ data: [] }),
-        perms.leads_view     ? leadsApi.getAll().catch(() => ({ data: [] }))       : Promise.resolve({ data: [] }),
-        tasksApi.getAll().catch(() => ({ data: [] })),
-        perms.quotation_view ? quotationsApi.getAll().catch(() => ({ data: [] }))  : Promise.resolve({ data: [] }),
-      ]);
-
-      const allLeads = ldr.data || [];
-      const allTasks = tsk.data || [];
-
-      setData({
-        attendance:  att.data,
-        visits:      (vis.data || []).filter(v => v.visit_date === today),
-        leads:       allLeads.filter(l => !['won','lost'].includes(l.stage)),
-        allLeads,
-        quotations:  (qts.data || []).filter(q => ['draft','sent'].includes(q.quotation_status)),
-        overdue:     allTasks.filter(t => t.status === 'pending' && t.due_date <= today),
-      });
-    } catch (e) { console.error(e); }
-    finally { setLoading(false); }
-  };
-
-  // Priority leads: hot/warm + overdue followup, or just hot
-  const priorityLeads = data.leads
-    .filter(l => l.lead_type === 'hot' || (l.lead_type === 'warm' && l.next_followup_date && l.next_followup_date <= today))
-    .sort((a, b) => {
-      if (a.lead_type === 'hot' && b.lead_type !== 'hot') return -1;
-      if (b.lead_type === 'hot' && a.lead_type !== 'hot') return 1;
-      return 0;
-    })
-    .slice(0, 5);
-
-  // Week stats (count from allLeads updated this week)
-  const weekStart = new Date(); weekStart.setDate(weekStart.getDate() - 7);
-  const weekLeadsActive = data.allLeads.filter(l => !['won','lost'].includes(l.stage)).length;
-  const weekWon = data.allLeads.filter(l => l.stage === 'won').length;
+  const {
+    user, today, perms, data,
+    loading, punchOpen, setPunchOpen,
+    priorityLeads, weekLeadsActive, weekWon,
+  } = useSalesHome();
 
   if (loading) return (
     <SalesLayout title="Today">
@@ -128,11 +77,7 @@ export default function SalesHome() {
             </div>
             <ChevronRight className={`h-4 w-4 ${tMuted} transition-transform ${punchOpen ? 'rotate-90' : ''}`} />
           </button>
-          {punchOpen && (
-            <div className="mt-2">
-              <PunchClock />
-            </div>
-          )}
+          {punchOpen && <div className="mt-2"><PunchClock /></div>}
         </div>
 
         {/* ── Attendance banner ── */}
@@ -154,10 +99,10 @@ export default function SalesHome() {
         {/* ── KPI Strip ── */}
         <div className="grid grid-cols-4 gap-2">
           {[
-            { icon: Target,    label: 'Active',   value: data.leads.length,      color: 'text-blue-400',   bg: 'bg-blue-400/10' },
-            { icon: Flame,     label: 'Urgent',   value: priorityLeads.length,   color: 'text-[#e94560]',  bg: 'bg-[#e94560]/10' },
-            { icon: MapPin,    label: 'Visits',   value: data.visits.length,     color: 'text-purple-400', bg: 'bg-purple-400/10' },
-            { icon: FileText,  label: 'Quotes',   value: data.quotations.length, color: 'text-orange-400', bg: 'bg-orange-400/10' },
+            { icon: Target,   label: 'Active',  value: data.leads.length,      color: 'text-blue-400',   bg: 'bg-blue-400/10' },
+            { icon: Flame,    label: 'Urgent',  value: priorityLeads.length,   color: 'text-[#e94560]',  bg: 'bg-[#e94560]/10' },
+            { icon: MapPin,   label: 'Visits',  value: data.visits.length,     color: 'text-purple-400', bg: 'bg-purple-400/10' },
+            { icon: FileText, label: 'Quotes',  value: data.quotations.length, color: 'text-orange-400', bg: 'bg-orange-400/10' },
           ].map(({ icon: Icon, label, value, color, bg }) => (
             <div key={label} className={`${card} rounded-xl p-2.5`}>
               <div className={`w-7 h-7 rounded-lg ${bg} flex items-center justify-center mb-1.5 mx-auto`}>
@@ -169,7 +114,7 @@ export default function SalesHome() {
           ))}
         </div>
 
-        {/* ── 🔥 DO THIS NOW ── */}
+        {/* ── DO THIS NOW ── */}
         {priorityLeads.length > 0 && (
           <section>
             <div className="flex items-center justify-between mb-2.5">
@@ -178,7 +123,7 @@ export default function SalesHome() {
                 <h2 className={`text-sm font-bold ${tPri}`}>Do This Now</h2>
                 <span className="text-[10px] bg-[#e94560] text-white px-1.5 py-0.5 rounded-full font-bold">{priorityLeads.length}</span>
               </div>
-              <Link to="/sales/leads" className={`text-[11px] text-[#e94560] font-semibold`}>See all →</Link>
+              <Link to="/sales/leads" className="text-[11px] text-[#e94560] font-semibold">See all →</Link>
             </div>
             <div className="space-y-2">
               {priorityLeads.map(lead => {
@@ -230,7 +175,7 @@ export default function SalesHome() {
                 <span className="text-[10px] bg-purple-500/20 text-purple-400 px-1.5 py-0.5 rounded-full font-bold">{data.visits.length}</span>
               )}
             </div>
-            <Link to="/sales/visits" className={`text-[11px] text-[#e94560] font-semibold`}>+ Plan Visit</Link>
+            <Link to="/sales/visits" className="text-[11px] text-[#e94560] font-semibold">+ Plan Visit</Link>
           </div>
 
           {data.visits.length === 0 ? (
@@ -243,14 +188,10 @@ export default function SalesHome() {
             </div>
           ) : (
             <>
-              {/* Route planner button */}
               {data.visits.filter(v => v.lat || v.planned_address).length > 1 && (
                 <button
                   onClick={() => {
-                    const pts = data.visits
-                      .filter(v => v.lat && v.lng)
-                      .map(v => `${v.lat},${v.lng}`)
-                      .join('/');
+                    const pts = data.visits.filter(v => v.lat && v.lng).map(v => `${v.lat},${v.lng}`).join('/');
                     if (pts) window.open(`https://www.google.com/maps/dir/${pts}`, '_blank');
                   }}
                   className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-purple-500/10 border border-purple-500/30 text-purple-400 text-xs font-semibold mb-3">
@@ -264,9 +205,7 @@ export default function SalesHome() {
                       <div className="flex-1 min-w-0">
                         <p className={`text-sm font-semibold ${tPri}`}>{v.school_name}</p>
                         <p className={`text-[11px] ${tMuted}`}>{v.visit_time} · {v.contact_person}</p>
-                        {v.planned_address && (
-                          <p className={`text-[11px] ${tMuted} truncate mt-0.5`}>{v.planned_address}</p>
-                        )}
+                        {v.planned_address && <p className={`text-[11px] ${tMuted} truncate mt-0.5`}>{v.planned_address}</p>}
                       </div>
                       <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold flex-shrink-0 ${
                         v.status === 'completed' ? 'bg-green-500/20 text-green-400' :
@@ -274,8 +213,7 @@ export default function SalesHome() {
                         'bg-yellow-500/20 text-yellow-400'
                       }`}>{v.status}</span>
                     </div>
-                    <button
-                      onClick={() => openNavigate(v.lat, v.lng, v.school_name || v.planned_address)}
+                    <button onClick={() => openNavigate(v.lat, v.lng, v.school_name || v.planned_address)}
                       className="w-full flex items-center justify-center gap-1.5 py-2 rounded-lg bg-purple-500/10 text-purple-400 text-xs font-semibold">
                       <Navigation className="h-3.5 w-3.5" /> Navigate
                     </button>
@@ -335,11 +273,11 @@ export default function SalesHome() {
           )}
           {(() => {
             const actions = [
-              { to: '/sales/attendance', icon: CheckCircle,  label: 'Attendance',   color: 'text-blue-400',   bg: 'bg-blue-400/10',   perm: 'attendance' },
-              { to: '/sales/visits',     icon: MapPin,        label: 'Visits',       color: 'text-purple-400', bg: 'bg-purple-400/10', perm: 'visits_log' },
-              { to: '/sales/quotations', icon: FileText,      label: 'My Quotes',    color: 'text-orange-400', bg: 'bg-orange-400/10', perm: 'quotation_view' },
-              { to: '/sales/expenses',   icon: Receipt,       label: 'Expenses',     color: 'text-green-400',  bg: 'bg-green-400/10',  perm: 'expenses_log' },
-              { to: '/leave-management', icon: Calendar,      label: 'Leave',        color: 'text-teal-400',   bg: 'bg-teal-400/10',   perm: 'leave_apply' },
+              { to: '/sales/attendance', icon: CheckCircle,  label: 'Attendance',  color: 'text-blue-400',   bg: 'bg-blue-400/10',   perm: 'attendance' },
+              { to: '/sales/visits',     icon: MapPin,        label: 'Visits',      color: 'text-purple-400', bg: 'bg-purple-400/10', perm: 'visits_log' },
+              { to: '/sales/quotations', icon: FileText,      label: 'My Quotes',   color: 'text-orange-400', bg: 'bg-orange-400/10', perm: 'quotation_view' },
+              { to: '/sales/expenses',   icon: Receipt,       label: 'Expenses',    color: 'text-green-400',  bg: 'bg-green-400/10',  perm: 'expenses_log' },
+              { to: '/leave-management', icon: Calendar,      label: 'Leave',       color: 'text-teal-400',   bg: 'bg-teal-400/10',   perm: 'leave_apply' },
             ].filter(a => perms[a.perm]);
             if (!actions.length) return null;
             return (
@@ -365,9 +303,9 @@ export default function SalesHome() {
           </div>
           <div className="grid grid-cols-3 gap-3">
             {[
-              { label: 'Active Leads',  value: weekLeadsActive, color: 'text-blue-400' },
-              { label: 'Won',           value: weekWon,          color: 'text-green-400' },
-              { label: 'Open Quotes',   value: data.quotations.length, color: 'text-orange-400' },
+              { label: 'Active Leads', value: weekLeadsActive,        color: 'text-blue-400' },
+              { label: 'Won',          value: weekWon,                 color: 'text-green-400' },
+              { label: 'Open Quotes',  value: data.quotations.length,  color: 'text-orange-400' },
             ].map(s => (
               <div key={s.label} className="text-center">
                 <p className={`text-2xl font-bold ${s.color}`}>{s.value}</p>
@@ -376,7 +314,6 @@ export default function SalesHome() {
             ))}
           </div>
         </section>
-
       </div>
     </SalesLayout>
   );

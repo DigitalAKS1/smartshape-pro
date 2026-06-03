@@ -1,2434 +1,1000 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
-import AdminLayout from '../../components/layouts/AdminLayout';
-import { schools as schoolsApi, leads as leadsApi, followups as fuApi, tasks as tasksApi, salesPersons, contacts as contactsApi, exportData, groups as groupsApi, sources as sourcesApi, contactRoles as contactRolesApi, tags as tagsApi, dripSequences as dripSequencesApi } from '../../lib/api';
-import { formatCurrency, formatDate as _fmt } from '../../lib/utils';
-import { useAuth } from '../../contexts/AuthContext';
+import React from 'react';
+import { useNavigate } from 'react-router-dom';
+import AppShell from '../../components/layouts/AppShell';
 import { useTheme } from '../../contexts/ThemeContext';
-import { formatDate } from '../../lib/utils';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
-import { Label } from '../../components/ui/label';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../../components/ui/dialog';
 import { toast } from 'sonner';
-import { Plus, Phone, MessageSquare, Mail, Calendar, Clock, CheckCircle, AlertTriangle, User, UserCog, Trash2, Edit2, Upload, Search, Target, ChevronRight, Building2, MapPin, UserPlus, ArrowRightCircle, Download, ChevronLeft, LayoutGrid, Lock, Package, MoreHorizontal, X, Eye, Zap, FileText } from 'lucide-react';
+import {
+  Plus, MessageSquare, Calendar, Target, Building2, UserPlus,
+  Upload, Search, ChevronRight, AlertTriangle, Clock, MoreHorizontal,
+  Edit2, Trash2, Lock, UserCog, FileText, Linkedin, Instagram, Eye,
+} from 'lucide-react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../../components/ui/dropdown-menu';
 import WhatsAppSendDialog from '../../components/WhatsAppSendDialog';
 import KanbanBoard, { ageColor, AgeBadge } from '../../components/KanbanBoard';
 import ReassignLeadDialog from '../../components/ReassignLeadDialog';
-import { STAGES, SCHOOL_TYPES, DESIGNATIONS } from '../../lib/crmConstants';
+import { STAGES, SCHOOL_TYPES } from '../../lib/crmConstants';
 import LeadMobileCard from '../../components/crm/LeadMobileCard';
 import { FieldTooltip } from '../../components/ui/Tooltip';
 import EmptyState, { EMPTY_STATES } from '../../components/ui/EmptyState';
+import { leads as leadsApiObj, quotations as quotationsApi2, adminApi } from '../../lib/api';
 
-const NOTE_TYPES = [
-  { id: 'call', label: 'Call', icon: Phone },
-  { id: 'whatsapp', label: 'WhatsApp', icon: MessageSquare },
-  { id: 'email', label: 'Email', icon: Mail },
-  { id: 'meeting', label: 'Meeting', icon: Calendar },
-  { id: 'note', label: 'Note', icon: Edit2 },
-];
-const SOURCES = ['Website', 'Referral', 'Exhibition', 'Cold Call', 'WhatsApp', 'Ads', 'Import'];
+import useLeadsCRM from '../../hooks/useLeadsCRM';
+import LeadDetailPanel from '../../components/crm/LeadDetailPanel';
+import LeadFormDialog from '../../components/crm/LeadFormDialog';
+import SchoolFormDialog from '../../components/crm/SchoolFormDialog';
+import ContactFormDialog from '../../components/crm/ContactFormDialog';
+import ContactsTab from '../../components/crm/ContactsTab';
+import TasksTab from '../../components/crm/TasksTab';
 
 export default function LeadsCRM() {
-  const { user } = useAuth();
-  const { isDark } = useTheme();
   const navigate = useNavigate();
-  const [searchParams, setSearchParams] = useSearchParams();
-  const [leadsList, setLeadsList] = useState([]);
-  const [schoolsList, setSchoolsList] = useState([]);
-  const [tasksList, setTasksList] = useState([]);
-  const [contactsList, setContactsList] = useState([]);
-  const [spList, setSpList] = useState([]);
-  // FMS Phase 1 masters
-  const [groupsList, setGroupsList] = useState([]);
-  const [sourcesList, setSourcesList] = useState([]);
-  const [rolesList, setRolesList] = useState([]);
-  const [tagsList, setTagsList] = useState([]);
-  const [filterTag, setFilterTag] = useState('');
-  // new tag inline-create input in lead form
-  const [newTagInput, setNewTagInput] = useState('');
-  const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState('schools');
-  const [searchTerm, setSearchTerm] = useState('');
-  const [filterType, setFilterType] = useState('all');
-  // Dialogs
-  const [leadDialogOpen, setLeadDialogOpen] = useState(false);
-  const [schoolDialogOpen, setSchoolDialogOpen] = useState(false);
-  const [detailLead, setDetailLead] = useState(null);
-  const [notes, setNotes] = useState([]);
-  const [leadFollowups, setLeadFollowups] = useState([]);
-  const [noteForm, setNoteForm] = useState({ type: 'call', content: '', outcome: '' });
-  const [fuForm, setFuForm] = useState({ followup_date: '', followup_time: '', followup_type: 'call', notes: '' });
-  const [physicalDispatches, setPhysicalDispatches] = useState([]);
-  const [pdForm, setPdForm] = useState({ material_type: 'brochure', description: '', courier_name: '', tracking_number: '', sent_date: '' });
-  const [leadVisits, setLeadVisits] = useState([]);
-  const [taskDialogOpen, setTaskDialogOpen] = useState(false);
-  const [importDialogOpen, setImportDialogOpen] = useState(false);
-  const fileRef = useRef(null);
-  // Forms
-  const [editLead, setEditLead] = useState(null);
-  const [addNewSchool, setAddNewSchool] = useState(false);
-  const [leadForm, setLeadForm] = useState({ school_id: '', contact_name: '', designation: '', contact_role_id: '', contact_phone: '', contact_email: '', source: '', source_id: '', lead_type: 'warm', interested_product: '', priority: 'medium', next_followup_date: '', likely_closure_date: '', assignment_type: 'manual', assigned_to: '', notes: '', tags: [], referred_by_contact_id: '', referral_reward_status: 'none' });
-  const [newSchool, setNewSchool] = useState({ school_name: '', school_type: 'CBSE', phone: '', email: '', city: '', state: '', pincode: '', school_strength: 0 });
-  const [schoolForm, setSchoolForm] = useState({});
-  const [taskForm, setTaskForm] = useState({ title: '', type: 'follow_up', lead_id: '', lead_name: '', assigned_to: '', due_date: '', due_time: '', priority: 'medium' });
-  // Contact state
-  const [contactDialogOpen, setContactDialogOpen] = useState(false);
-  const [contactForm, setContactForm] = useState({ name: '', phone: '', email: '', company: '', designation: '', contact_role_id: '', source: '', source_id: '', notes: '', birthday: '', tag_ids: [] });
-  const [editContact, setEditContact] = useState(null);
-  const [convertDialogOpen, setConvertDialogOpen] = useState(false);
-  const [convertContact, setConvertContact] = useState(null);
-  const [convertForm, setConvertForm] = useState({ school_id: '', lead_type: 'warm', priority: 'medium', interested_product: '', assigned_to: '' });
-  const [convertAddNewSchool, setConvertAddNewSchool] = useState(false);
-  const [convertNewSchool, setConvertNewSchool] = useState({ school_name: '', school_type: 'CBSE', city: '', phone: '', school_strength: 0 });
-  const [contactImportOpen, setContactImportOpen] = useState(false);
-  const contactFileRef = useRef(null);
-  const [importFile, setImportFile] = useState(null);
-  const [importTags, setImportTags] = useState([]);
-  const [importNotes, setImportNotes] = useState('');
-  const [importing, setImporting] = useState(false);
-  const [importResult, setImportResult] = useState(null);
-  const [filterRole, setFilterRole] = useState('');
-  const [filterContactTag, setFilterContactTag] = useState('');
-  // Drip enrollment state (P1-C)
-  const [leadEnrollments, setLeadEnrollments] = useState([]);
-  const [dripSequencesList, setDripSequencesList] = useState([]);
-  const [enrollDialogOpen, setEnrollDialogOpen] = useState(false);
-  const [selectedSequenceId, setSelectedSequenceId] = useState('');
-  // Contact activity (P2-B)
-  const [expandedContactId, setExpandedContactId] = useState(null);
-  const [contactActivity, setContactActivity] = useState([]);
-  // Sorting
-  const [sortConfig, setSortConfig] = useState({ key: '', dir: 'asc' });
-  // Pagination
-  const [contactPage, setContactPage] = useState(1);
-  const contactsPerPage = 10;
-  // School edit
-  const [editSchool, setEditSchool] = useState(null);
-  const [editSchoolForm, setEditSchoolForm] = useState({});
-  // WhatsApp dialog (FMS Phase 4)
-  const [waOpen, setWaOpen] = useState(false);
-  const [waCtx, setWaCtx] = useState({ module: 'general', context: {}, title: 'Send WhatsApp' });
-  // FMS Phase 5.1 + 5.2: view + bulk + reassign
-  const [leadView, setLeadView] = useState('pipeline'); // 'pipeline' | 'kanban' | 'table'
-  const [selectedLeadIds, setSelectedLeadIds] = useState(new Set());
-  const [reassignOpen, setReassignOpen] = useState(false);
-  const [reassignLead, setReassignLead] = useState(null);
-  const [reassignBulkIds, setReassignBulkIds] = useState(null);
+  const { isDark } = useTheme();
+  const crm = useLeadsCRM();
 
-  const fetchData = async () => {
-    try {
-      const [lr, sr, tr, spr, cr, gr, srcR, rlR, tgR, dripR] = await Promise.all([
-        leadsApi.getAll(), schoolsApi.getAll(), tasksApi.getAll(), salesPersons.getAll(), contactsApi.getAll(),
-        groupsApi.getAll().catch(() => ({ data: [] })),
-        sourcesApi.getAll().catch(() => ({ data: [] })),
-        contactRolesApi.getAll().catch(() => ({ data: [] })),
-        tagsApi.getAll().catch(() => ({ data: [] })),
-        dripSequencesApi.getAll().catch(() => ({ data: [] })),
-      ]);
-      setLeadsList(lr.data);
-      setSchoolsList(sr.data);
-      setTasksList(tr.data);
-      setSpList(spr.data);
-      setContactsList(cr.data);
-      setGroupsList(gr.data || []);
-      setSourcesList(srcR.data || []);
-      setRolesList(rlR.data || []);
-      setTagsList(tgR.data || []);
-      setDripSequencesList(dripR.data || []);
-    } catch { toast.error('Failed to load'); }
-    finally { setLoading(false); }
-  };
-  useEffect(() => { fetchData(); }, []);
-
-  // Open lead detail from URL ?lead=<lead_id>
-  useEffect(() => {
-    const leadParam = searchParams.get('lead');
-    if (!loading && leadParam && leadsList.length > 0) {
-      const lead = leadsList.find(l => l.lead_id === leadParam);
-      if (lead) {
-        setActiveTab('pipeline');
-        openDetail(lead);
-        setSearchParams({}, { replace: true });
-      }
-    }
-  }, [loading, leadsList, searchParams]); // eslint-disable-line
-
-  // Role badge colours
-  const ROLE_COLORS = {
-    'Principal':      'bg-purple-500/15 text-purple-500',
-    'Vice Principal': 'bg-indigo-500/15 text-indigo-500',
-    'Teacher':        'bg-green-500/15 text-green-500',
-    'Purchase Head':  'bg-orange-500/15 text-orange-500',
-    'Admin Head':     'bg-blue-500/15 text-blue-500',
-    'Director':       'bg-rose-500/15 text-rose-500',
-    'Coordinator':    'bg-teal-500/15 text-teal-500',
-    'Manager':        'bg-cyan-500/15 text-cyan-500',
-    'Owner':          'bg-amber-500/15 text-amber-600',
-  };
-  const getRoleColor = (name) => ROLE_COLORS[name] || 'bg-gray-500/15 text-gray-400';
-  const getRoleName = (contact) => {
-    if (contact.contact_role_id && rolesList.length) {
-      const r = rolesList.find(r => r.role_id === contact.contact_role_id);
-      if (r) return r.name;
-    }
-    return contact.designation || null;
-  };
-
-  // Theme colors
+  // Theme shorthand
   const card = isDark ? 'bg-[var(--bg-card)] border-[var(--border-color)]' : 'bg-white border-[var(--border-color)]';
   const inputCls = 'bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]';
   const textPri = 'text-[var(--text-primary)]';
   const textSec = 'text-[var(--text-secondary)]';
   const textMuted = 'text-[var(--text-muted)]';
   const hoverBg = isDark ? 'hover:bg-[var(--bg-hover)]' : 'hover:bg-[#f0f0f5]';
-  const dlgCls = isDark ? 'bg-[var(--bg-card)] border-[var(--border-color)] text-[var(--text-primary)]' : 'bg-white border-[var(--border-color)] text-[var(--text-primary)]';
 
-  // Handlers
-  const openCreateLead = () => { setEditLead(null); setAddNewSchool(false); setLeadForm({ school_id: '', contact_name: '', designation: '', contact_role_id: '', contact_phone: '', contact_email: '', source: '', source_id: '', lead_type: 'warm', interested_product: '', priority: 'medium', next_followup_date: '', likely_closure_date: '', assignment_type: 'manual', assigned_to: '', notes: '', tags: [], referred_by_contact_id: '', referral_reward_status: 'none' }); setNewTagInput(''); setNewSchool({ school_name: '', school_type: 'CBSE', phone: '', email: '', city: '', state: '', pincode: '', school_strength: 0 }); setLeadDialogOpen(true); };
-  const openEditLead = (lead) => { setEditLead(lead); setLeadForm({ ...lead }); setLeadDialogOpen(true); };
-
-  const openDetail = async (lead) => {
-    setDetailLead(lead);
-    setPhysicalDispatches([]);
-    setLeadVisits([]);
-    setPdForm({ material_type: 'brochure', description: '', courier_name: '', tracking_number: '', sent_date: new Date().toISOString().slice(0, 10) });
-    try {
-      const [nr, fr, pdRes, enrollRes, visitsRes] = await Promise.all([
-        leadsApi.getNotes(lead.lead_id),
-        fuApi.getAll(lead.lead_id),
-        fetch(`${process.env.REACT_APP_BACKEND_URL}/api/physical-dispatches?lead_id=${lead.lead_id}`, { credentials: 'include' }).then(r => r.json()).catch(() => []),
-        dripSequencesApi.enrollments({ lead_id: lead.lead_id }).catch(() => ({ data: [] })),
-        fetch(`${process.env.REACT_APP_BACKEND_URL}/api/leads/${lead.lead_id}/visit-history`, { credentials: 'include' }).then(r => r.json()).catch(() => []),
-      ]);
-      setNotes(nr.data);
-      setLeadFollowups(fr.data);
-      setPhysicalDispatches(Array.isArray(pdRes) ? pdRes : []);
-      setLeadEnrollments(Array.isArray(enrollRes.data) ? enrollRes.data : []);
-      setLeadVisits(Array.isArray(visitsRes) ? visitsRes : []);
-    } catch { setNotes([]); setLeadFollowups([]); setLeadEnrollments([]); setLeadVisits([]); }
+  const completionBadge = (pct, onClickFn) => {
+    const cls = pct >= 80 ? 'bg-green-500/20 text-green-400' : pct >= 50 ? 'bg-yellow-500/20 text-yellow-500' : 'bg-red-500/20 text-red-400';
+    return (
+      <button onClick={onClickFn} title="Click to edit and complete profile"
+        className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${cls} cursor-pointer hover:opacity-80 transition-opacity`}>
+        {pct}%
+      </button>
+    );
   };
-
-  const addPhysicalDispatch = async () => {
-    if (!detailLead) return;
-    try {
-      const res = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/physical-dispatches`, {
-        method: 'POST', credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...pdForm, lead_id: detailLead.lead_id, lead_name: detailLead.company_name || detailLead.contact_name }),
-      });
-      const created = await res.json();
-      setPhysicalDispatches(prev => [created, ...prev]);
-      setPdForm({ material_type: 'brochure', description: '', courier_name: '', tracking_number: '', sent_date: new Date().toISOString().slice(0, 10) });
-      toast.success('Dispatch logged');
-    } catch { toast.error('Failed to log dispatch'); }
-  };
-
-  const markDispatchReceived = async (dispatch_id) => {
-    await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/physical-dispatches/${dispatch_id}`, {
-      method: 'PUT', credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ received_confirmed: true }),
-    });
-    setPhysicalDispatches(prev => prev.map(d => d.dispatch_id === dispatch_id ? { ...d, received_confirmed: true } : d));
-  };
-
-  const saveLead = async () => {
-    if (!leadForm.contact_name || !leadForm.contact_phone) { toast.error('Contact name and phone required'); return; }
-    try {
-      const payload = { ...leadForm };
-      if (addNewSchool && newSchool.school_name) {
-        payload.new_school = newSchool;
-        payload.company_name = newSchool.school_name;
-      } else if (leadForm.school_id) {
-        const sch = schoolsList.find(s => s.school_id === leadForm.school_id);
-        if (sch) payload.company_name = sch.school_name;
-      }
-      const sp = spList.find(s => s.email === leadForm.assigned_to);
-      if (sp) payload.assigned_name = sp.name;
-      if (editLead) {
-        await leadsApi.update(editLead.lead_id, payload);
-        toast.success('Lead updated');
-      } else {
-        await leadsApi.create(payload);
-        toast.success('Lead created');
-      }
-      setLeadDialogOpen(false);
-      fetchData();
-    } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
-  };
-
-  const changeStage = async (leadId, newStage) => {
-    await leadsApi.update(leadId, { stage: newStage });
-    fetchData();
-    if (detailLead?.lead_id === leadId) setDetailLead({ ...detailLead, stage: newStage });
-  };
-
-  const addNote = async () => {
-    if (!noteForm.content) return;
-    const noteType = noteForm.type;
-    await leadsApi.addNote(detailLead.lead_id, noteForm);
-    setNoteForm({ type: 'call', content: '', outcome: '' });
-    const res = await leadsApi.getNotes(detailLead.lead_id);
-    setNotes(res.data);
-    toast.success('Note added');
-    // FMS Phase 4: auto-popup WhatsApp after call/visit/meeting/whatsapp note
-    if (['call', 'whatsapp', 'meeting'].includes(noteType)) {
-      setTimeout(() => {
-        if (window.confirm('Send a WhatsApp follow-up to this contact?')) {
-          setWaCtx({
-            module: 'lead', title: `WhatsApp follow-up - ${detailLead.contact_name}`,
-            context: {
-              lead_id: detailLead.lead_id, school_id: detailLead.school_id,
-              phone: detailLead.contact_phone, contact_name: detailLead.contact_name,
-              school_name: detailLead.company_name || detailLead.school_name,
-            },
-          });
-          setWaOpen(true);
-        }
-      }, 200);
-    }
-  };
-
-  const openWaForLead = (lead) => {
-    setWaCtx({
-      module: 'lead', title: `WhatsApp - ${lead.contact_name}`,
-      context: {
-        lead_id: lead.lead_id, school_id: lead.school_id,
-        phone: lead.contact_phone, contact_name: lead.contact_name,
-        school_name: lead.company_name || lead.school_name,
-      },
-    });
-    setWaOpen(true);
-  };
-  const openWaForContact = (c) => {
-    setWaCtx({
-      module: 'contact', title: `WhatsApp - ${c.name}`,
-      context: { contact_id: c.contact_id, phone: c.phone, contact_name: c.name, school_name: c.company },
-    });
-    setWaOpen(true);
-  };
-
-  // FMS Phase 5.2: Kanban drag-and-drop handler with soft-warning guards
-  const handleKanbanMove = async ({ itemId, from, to, item }) => {
-    // Guard: activity logged?
-    let hasActivity = false;
-    try {
-      const r = await leadsApi.getNotes(itemId);
-      hasActivity = Array.isArray(r.data) && r.data.length > 0;
-    } catch { /* ignore */ }
-    const hasFollowup = !!item.next_followup_date;
-    if (!hasActivity || !hasFollowup) {
-      const missing = [!hasActivity ? 'activity log' : null, !hasFollowup ? 'next follow-up date' : null].filter(Boolean).join(' + ');
-      const confirmProceed = window.confirm(`Move recommended only after ${missing}. Proceed anyway?`);
-      if (!confirmProceed) return;
-    }
-    try {
-      await leadsApi.update(itemId, { stage: to, stage_change_note: `Drag from ${from} to ${to}` });
-      toast.success(`Moved to ${STAGES.find(s => s.id === to)?.label || to}`);
-      fetchData();
-    } catch (e) {
-      toast.error(e?.response?.data?.detail || 'Move failed');
-    }
-  };
-
-  // Lead selection for bulk
-  const toggleLeadSelect = (id) => setSelectedLeadIds(prev => {
-    const n = new Set(prev);
-    if (n.has(id)) n.delete(id); else n.add(id);
-    return n;
-  });
-
-  // Days-since-activity for colour coding
-  const daysSince = (iso) => {
-    if (!iso) return 999;
-    return Math.floor((new Date() - new Date(iso)) / (1000 * 60 * 60 * 24));
-  };
-  const touchAgeCls = (iso) => {
-    const d = daysSince(iso);
-    if (d <= 3) return 'text-green-400';
-    if (d <= 7) return 'text-yellow-400';
-    if (d <= 14) return 'text-orange-400';
-    return 'text-red-400';
-  };
-  const calcSchoolCompletion = (sch) => {
-    const fields = ['school_name', 'school_type', 'phone', 'email', 'city', 'state', 'primary_contact_name', 'designation', 'school_strength', 'website'];
-    const filled = fields.filter(f => sch[f] && String(sch[f]).trim() !== '' && sch[f] !== 0).length;
-    return Math.round((filled / fields.length) * 100);
-  };
-
-  const addFollowup = async () => {
-    if (!fuForm.followup_date) return;
-    await fuApi.create({ ...fuForm, lead_id: detailLead.lead_id });
-    setFuForm({ followup_date: '', followup_time: '', followup_type: 'call', notes: '' });
-    const res = await fuApi.getAll(detailLead.lead_id);
-    setLeadFollowups(res.data);
-    toast.success('Follow-up scheduled');
-  };
-
-  const completeFollowup = async (fid) => {
-    await fuApi.update(fid, { status: 'completed' });
-    const res = await fuApi.getAll(detailLead.lead_id);
-    setLeadFollowups(res.data);
-  };
-
-  const handleImport = async (file) => {
-    try {
-      const res = await leadsApi.importCsv(file);
-      toast.success(`Imported: ${res.data.created} created, ${res.data.linked} linked, ${res.data.duplicates} duplicates`);
-      setImportDialogOpen(false);
-      fetchData();
-    } catch { toast.error('Import failed'); }
-  };
-
-  const openCreateTask = (lead) => { setTaskForm({ title: '', type: 'follow_up', lead_id: lead?.lead_id || '', lead_name: lead?.company_name || '', assigned_to: lead?.assigned_to || '', due_date: '', due_time: '', priority: 'medium' }); setTaskDialogOpen(true); };
-  const saveTask = async () => {
-    if (!taskForm.title || !taskForm.due_date) { toast.error('Title and due date required'); return; }
-    const sp = spList.find(s => s.email === taskForm.assigned_to);
-    await tasksApi.create({ ...taskForm, assigned_name: sp?.name || '' });
-    setTaskDialogOpen(false); fetchData(); toast.success('Task created');
-  };
-  const updateTaskStatus = async (taskId, status) => { await tasksApi.update(taskId, { status }); fetchData(); };
-
-  // Contact handlers
-  const openCreateContact = () => { setEditContact(null); setContactForm({ name: '', phone: '', email: '', company: '', designation: '', contact_role_id: '', source: '', source_id: '', notes: '', birthday: '', tag_ids: [] }); setContactDialogOpen(true); };
-  const openEditContact = (c) => { setEditContact(c); setContactForm({ name: c.name, phone: c.phone, email: c.email || '', company: c.company || '', designation: c.designation || '', contact_role_id: c.contact_role_id || '', source: c.source || '', source_id: c.source_id || '', notes: c.notes || '', birthday: c.birthday || '', tag_ids: c.tag_ids || [] }); setContactDialogOpen(true); };
-  const saveContact = async () => {
-    if (!contactForm.name || !contactForm.phone) { toast.error('Name and phone required'); return; }
-    try {
-      const { tag_ids, ...payload } = contactForm;
-      // Auto-link school_id when company name exactly matches a school
-      if (payload.company && !payload.school_id) {
-        const matched = schoolsList.find(s => s.school_name.toLowerCase() === payload.company.toLowerCase());
-        if (matched) payload.school_id = matched.school_id;
-      }
-      let contactId;
-      if (editContact) {
-        await contactsApi.update(editContact.contact_id, payload);
-        contactId = editContact.contact_id;
-        toast.success('Contact updated');
-        // Sync tag changes
-        const prevTags = editContact.tag_ids || [];
-        const toAdd = tag_ids.filter(id => !prevTags.includes(id));
-        const toRemove = prevTags.filter(id => !tag_ids.includes(id));
-        await Promise.all([
-          ...toAdd.map(id => contactsApi.addTag(contactId, id)),
-          ...toRemove.map(id => contactsApi.removeTag(contactId, id)),
-        ]);
-      } else {
-        const res = await contactsApi.create(payload);
-        contactId = res.data?.contact_id;
-        toast.success('Contact added');
-        // Add initial tags
-        if (contactId && tag_ids.length > 0) {
-          await Promise.all(tag_ids.map(id => contactsApi.addTag(contactId, id)));
-        }
-      }
-      setContactDialogOpen(false); fetchData();
-    } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
-  };
-  const deleteContact = async (id) => {
-    if (!window.confirm('Delete this contact?')) return;
-    await contactsApi.delete(id); fetchData(); toast.success('Contact deleted');
-  };
-  const openConvert = (c) => {
-    setConvertContact(c);
-    setConvertForm({ school_id: '', lead_type: 'warm', priority: 'medium', interested_product: '', assigned_to: user?.email || '' });
-    setConvertAddNewSchool(false);
-    setConvertNewSchool({ school_name: '', school_type: 'CBSE', city: '', phone: '', school_strength: 0 });
-    setConvertDialogOpen(true);
-  };
-  const handleConvert = async () => {
-    try {
-      const sp = spList.find(s => s.email === convertForm.assigned_to);
-      const payload = { ...convertForm, assigned_name: sp?.name || user?.name || '' };
-      if (convertAddNewSchool && convertNewSchool.school_name) {
-        payload.new_school = convertNewSchool;
-        payload.school_id = '';
-      }
-      await contactsApi.convertToLead(convertContact.contact_id, payload);
-      toast.success(`${convertContact.name} converted to lead!`);
-      setConvertDialogOpen(false); fetchData();
-    } catch (err) { toast.error(err.response?.data?.detail || 'Failed to convert'); }
-  };
-  const handleContactImport = async () => {
-    if (!importFile) return;
-    setImporting(true);
-    try {
-      const res = await contactsApi.importCsv(importFile, { tagIds: importTags, globalNotes: importNotes });
-      setImportResult(res.data);
-      fetchData();
-    } catch { toast.error('Import failed'); }
-    finally { setImporting(false); }
-  };
-
-  const resetImportDialog = () => {
-    setImportFile(null); setImportTags([]); setImportNotes(''); setImportResult(null);
-  };
-
-  const downloadSampleCsv = () => {
-    const cols = ['name','phone','email','company','designation','source','notes'];
-    const row1 = ['Rajesh Kumar','9876543210','rajesh@school.edu','Delhi Public School','Principal','Referral','Met at education expo 2024'];
-    const row2 = ['Priya Sharma','9123456780','priya@abc.edu','ABC Academy','Purchase Head','Exhibition',''];
-    const blob = new Blob([[cols, row1, row2].map(r => r.join(',')).join('\n')], { type: 'text/csv' });
-    const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: 'contacts_sample.csv' });
-    a.click(); URL.revokeObjectURL(a.href);
-  };
-  const handleContactExport = () => {
-    exportData.download('contacts');
-    toast.success('Exporting contacts...');
-  };
-
-  // Sort helper
-  const toggleSort = (key) => {
-    setSortConfig(prev => prev.key === key ? { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' });
-  };
-  const sortIndicator = (key) => sortConfig.key === key ? (sortConfig.dir === 'asc' ? ' ▲' : ' ▼') : '';
-  const sortData = (data, key, dir) => {
-    if (!key) return data;
-    return [...data].sort((a, b) => {
-      const av = (a[key] || ''), bv = (b[key] || '');
-      if (typeof av === 'number' && typeof bv === 'number') return dir === 'asc' ? av - bv : bv - av;
-      return dir === 'asc' ? String(av).localeCompare(String(bv)) : String(bv).localeCompare(String(av));
-    });
-  };
-
-  // School edit/delete
-  const openEditSchool = (sch) => {
-    setEditSchool(sch);
-    setEditSchoolForm({ school_name: sch.school_name || '', school_type: sch.school_type || 'CBSE', phone: sch.phone || '', email: sch.email || '', city: sch.city || '', state: sch.state || '', primary_contact_name: sch.primary_contact_name || '', designation: sch.designation || '', school_strength: sch.school_strength || 0 });
-    setSchoolDialogOpen(true);
-  };
-  const handleSaveSchool = async () => {
-    if (!editSchoolForm.school_name) { toast.error('School name required'); return; }
-    try {
-      if (editSchool) {
-        await schoolsApi.update(editSchool.school_id, editSchoolForm);
-        toast.success('School updated');
-      } else {
-        await schoolsApi.create(editSchoolForm);
-        toast.success('School added');
-      }
-      setSchoolDialogOpen(false);
-      setEditSchool(null);
-      fetchData();
-    } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
-  };
-  const handleDeleteSchool = async (sch) => {
-    if (!window.confirm(`Delete school "${sch.school_name}"? Associated leads will NOT be deleted.`)) return;
-    try { await schoolsApi.delete(sch.school_id); toast.success('School deleted'); fetchData(); }
-    catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
-  };
-
-  // Filter leads
-  const filtered = leadsList.filter(l => {
-    if (searchTerm) {
-      const s = searchTerm.toLowerCase();
-      if (!((l.company_name || '').toLowerCase().includes(s) || (l.contact_name || '').toLowerCase().includes(s) || (l.contact_phone || '').includes(s) || (l.school_city || '').toLowerCase().includes(s))) return false;
-    }
-    if (filterType !== 'all') {
-      if (['hot', 'warm', 'cold'].includes(filterType) && l.lead_type !== filterType) return false;
-      if (SCHOOL_TYPES.includes(filterType) && l.school_type !== filterType) return false;
-    }
-    if (filterTag && !(l.tags || []).includes(filterTag)) return false;
-    return true;
-  });
 
   const getStageObj = (id) => STAGES.find(s => s.id === id) || STAGES[0];
 
-  if (loading) return <AdminLayout><div className="flex items-center justify-center h-96"><div className="inline-block animate-spin rounded-full h-12 w-12 border-4 border-[#e94560] border-t-transparent" /></div></AdminLayout>;
+  if (crm.loading) return (
+    <AppShell>
+      <div className="flex items-center justify-center h-96">
+        <div className="inline-block animate-spin rounded-full h-12 w-12 border-4 border-[#e94560] border-t-transparent" />
+      </div>
+    </AppShell>
+  );
 
   return (
-    <AdminLayout>
+    <AppShell>
       <div className="space-y-5">
-        {/* Header */}
+
+        {/* ── Header ─────────────────────────────────────────────────── */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div>
             <h1 className={`text-3xl sm:text-4xl font-semibold ${textPri} tracking-tight`} data-testid="leads-title">School CRM</h1>
-            <p className={`${textSec} mt-1 text-sm`}>{contactsList.filter(c => !c.converted_to_lead).length} contacts • {leadsList.length} leads • {schoolsList.length} schools</p>
+            <p className={`${textSec} mt-1 text-sm`}>{crm.contactsList.filter(c => !c.converted_to_lead).length} contacts • {crm.leadsList.length} leads • {crm.schoolsList.length} schools</p>
           </div>
-          {/* Mobile header: More menu + New Lead only */}
+          {/* Mobile header */}
           <div className="flex sm:hidden gap-2">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="outline" size="sm" className="border-[var(--border-color)] text-[var(--text-secondary)]"><MoreHorizontal className="h-4 w-4" /></Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="bg-[var(--bg-card)] border-[var(--border-color)]">
-                <DropdownMenuItem onClick={openCreateContact} className={textSec}><UserPlus className="mr-2 h-3.5 w-3.5" /> Add Contact</DropdownMenuItem>
-                <DropdownMenuItem onClick={() => setImportDialogOpen(true)} className={textSec}><Upload className="mr-2 h-3.5 w-3.5" /> Import CSV</DropdownMenuItem>
-                <DropdownMenuItem onClick={() => { setEditSchool(null); setEditSchoolForm({ school_name: '', school_type: 'CBSE', group_id: '', phone: '', email: '', city: '', state: '', primary_contact_name: '', designation: '', school_strength: 0 }); setSchoolDialogOpen(true); }} className={textSec}><Building2 className="mr-2 h-3.5 w-3.5" /> Add School</DropdownMenuItem>
-                <DropdownMenuItem onClick={() => openCreateTask(null)} className={textSec}><Calendar className="mr-2 h-3.5 w-3.5" /> New Task</DropdownMenuItem>
-                {user?.role === 'admin' && <DropdownMenuItem onClick={async () => { if (!window.confirm('Auto-assign all unassigned leads?')) return; try { const r = await leadsApi.autoAssign(); toast.success(`Auto-assigned ${r.data.assigned} lead(s)`); fetchData(); } catch { toast.error('Auto-assign failed'); } }} className={textSec}><Target className="mr-2 h-3.5 w-3.5" /> Auto-Assign</DropdownMenuItem>}
+                <DropdownMenuItem onClick={crm.openCreateContact} className={textSec}><UserPlus className="mr-2 h-3.5 w-3.5" /> Add Contact</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => crm.setImportDialogOpen(true)} className={textSec}><Upload className="mr-2 h-3.5 w-3.5" /> Import CSV</DropdownMenuItem>
+                <DropdownMenuItem onClick={crm.openCreateSchool} className={textSec}><Building2 className="mr-2 h-3.5 w-3.5" /> Add School</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => crm.openCreateTask(null)} className={textSec}><Calendar className="mr-2 h-3.5 w-3.5" /> New Task</DropdownMenuItem>
+                {crm.user?.role === 'admin' && (
+                  <DropdownMenuItem onClick={async () => {
+                    if (!window.confirm('Auto-assign all unassigned leads?')) return;
+                    try { const r = await leadsApiObj.autoAssign(); toast.success(`Auto-assigned ${r.data.assigned} lead(s)`); crm.fetchData(); }
+                    catch { toast.error('Auto-assign failed'); }
+                  }} className={textSec}><Target className="mr-2 h-3.5 w-3.5" /> Auto-Assign</DropdownMenuItem>
+                )}
               </DropdownMenuContent>
             </DropdownMenu>
-            <Button onClick={openCreateLead} size="sm" className="bg-[#e94560] hover:bg-[#f05c75] text-white" data-testid="create-lead-button">
+            <Button onClick={crm.openCreateLead} size="sm" className="bg-[#e94560] hover:bg-[#f05c75] text-white" data-testid="create-lead-button">
               <Plus className="mr-1 h-3 w-3" /> New Lead
             </Button>
           </div>
-          {/* Desktop header: all buttons */}
+          {/* Desktop header */}
           <div className="hidden sm:flex flex-wrap gap-2">
-            <Button onClick={openCreateContact} variant="outline" size="sm" className={'border-[var(--border-color)] text-[var(--text-secondary)]'} data-testid="add-contact-btn">
+            <Button onClick={crm.openCreateContact} variant="outline" size="sm" className="border-[var(--border-color)] text-[var(--text-secondary)]" data-testid="add-contact-btn">
               <UserPlus className="mr-1 h-3 w-3" /> Add Contact
             </Button>
-            <Button onClick={() => setImportDialogOpen(true)} variant="outline" size="sm" className={'border-[var(--border-color)] text-[var(--text-secondary)]'} data-testid="import-btn">
+            <Button onClick={() => crm.setImportDialogOpen(true)} variant="outline" size="sm" className="border-[var(--border-color)] text-[var(--text-secondary)]" data-testid="import-btn">
               <Upload className="mr-1 h-3 w-3" /> Import CSV
             </Button>
-            <Button onClick={() => { setEditSchool(null); setEditSchoolForm({ school_name: '', school_type: 'CBSE', group_id: '', phone: '', email: '', city: '', state: '', primary_contact_name: '', designation: '', school_strength: 0 }); setSchoolDialogOpen(true); }} variant="outline" size="sm" className={'border-[var(--border-color)] text-[var(--text-secondary)]'} data-testid="add-school-btn">
+            <Button onClick={crm.openCreateSchool} variant="outline" size="sm" className="border-[var(--border-color)] text-[var(--text-secondary)]" data-testid="add-school-btn">
               <Building2 className="mr-1 h-3 w-3" /> Add School
             </Button>
-            <Button onClick={() => openCreateTask(null)} variant="outline" size="sm" className={'border-[var(--border-color)] text-[var(--text-secondary)]'} data-testid="create-task-button">
+            <Button onClick={() => crm.openCreateTask(null)} variant="outline" size="sm" className="border-[var(--border-color)] text-[var(--text-secondary)]" data-testid="create-task-button">
               <Calendar className="mr-1 h-3 w-3" /> New Task
             </Button>
-            {user?.role === 'admin' && (
+            {crm.user?.role === 'admin' && (
               <Button onClick={async () => {
                 if (!window.confirm('Round-robin auto-assign all UNASSIGNED leads to active sales persons?')) return;
-                try {
-                  const r = await leadsApi.autoAssign();
-                  toast.success(`Auto-assigned ${r.data.assigned} lead(s)`);
-                  fetchData();
-                } catch { toast.error('Auto-assign failed'); }
-              }} variant="outline" size="sm" className={'border-[var(--border-color)] text-[var(--text-secondary)]'} data-testid="auto-assign-btn">
+                try { const r = await leadsApiObj.autoAssign(); toast.success(`Auto-assigned ${r.data.assigned} lead(s)`); crm.fetchData(); }
+                catch { toast.error('Auto-assign failed'); }
+              }} variant="outline" size="sm" className="border-[var(--border-color)] text-[var(--text-secondary)]" data-testid="auto-assign-btn">
                 <Target className="mr-1 h-3 w-3" /> Auto-Assign
               </Button>
             )}
-            <Button onClick={openCreateLead} size="sm" className="bg-[#e94560] hover:bg-[#f05c75] text-white">
+            {crm.user?.role === 'admin' && (
+              <Button onClick={async () => {
+                try {
+                  const r = await quotationsApi2.backfillLeads();
+                  const d = r.data;
+                  toast.success(`Sync done — ${d.processed}/${d.total} quotations linked to leads`);
+                  crm.fetchData();
+                } catch { toast.error('Sync failed'); }
+              }} variant="outline" size="sm" className="border-purple-500/40 text-purple-400 hover:bg-purple-500/10" title="Create/link leads for all quotations">
+                <FileText className="mr-1 h-3 w-3" /> Sync Quotes→Leads
+              </Button>
+            )}
+            <Button onClick={crm.openCreateLead} size="sm" className="bg-[#e94560] hover:bg-[#f05c75] text-white">
               <Plus className="mr-1 h-3 w-3" /> New Lead
             </Button>
           </div>
         </div>
 
-        {/* View Toggle + Bulk Actions — only visible on pipeline tab */}
-        {activeTab === 'pipeline' && <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className={`${card} border rounded-md p-0.5 flex gap-0.5`} data-testid="lead-view-toggle">
-            {[
-              { id: 'pipeline', label: 'Pipeline', mobileHide: false },
-              { id: 'kanban', label: 'Kanban', mobileHide: true },
-              { id: 'table', label: 'Table', mobileHide: false },
-            ].map(v => (
-              <button key={v.id} onClick={() => setLeadView(v.id)} data-testid={`view-${v.id}`}
-                className={`px-3 py-1.5 rounded text-xs font-medium transition-all ${v.mobileHide ? 'hidden sm:block' : ''} ${leadView === v.id ? 'bg-[#e94560] text-white' : `${textSec} hover:bg-[var(--bg-hover)]`}`}>
-                {v.label}
-              </button>
-            ))}
-          </div>
-          {selectedLeadIds.size > 0 && (
-            <div className="flex items-center gap-2 flex-wrap" data-testid="bulk-actions-bar">
-              <span className={`text-xs ${textSec}`}>{selectedLeadIds.size} selected</span>
-              <Button size="sm" onClick={() => { setReassignBulkIds(Array.from(selectedLeadIds)); setReassignLead(null); setReassignOpen(true); }} className="bg-[#e94560] hover:bg-[#f05c75] text-white h-8" data-testid="bulk-reassign-btn">
-                <UserCog className="mr-1 h-3 w-3" /> Reassign
-              </Button>
-              <select defaultValue="" className={`h-8 px-2 rounded text-xs ${inputCls} cursor-pointer`}
-                onChange={async e => {
-                  const tagId = e.target.value;
-                  if (!tagId) return;
-                  try {
-                    await leadsApi.bulkTag({ lead_ids: Array.from(selectedLeadIds), tag_id: tagId, action: 'add' });
-                    toast.success(`Tag added to ${selectedLeadIds.size} lead(s)`);
-                    fetchData();
-                  } catch { toast.error('Bulk tag failed'); }
-                  e.target.value = '';
-                }}>
-                <option value="">+ Add Tag</option>
-                {tagsList.map(t => <option key={t.tag_id} value={t.tag_id}>{t.name}</option>)}
-              </select>
-              <select defaultValue="" className={`h-8 px-2 rounded text-xs ${inputCls} cursor-pointer`}
-                onChange={async e => {
-                  const stage = e.target.value;
-                  if (!stage) return;
-                  if (!window.confirm(`Move ${selectedLeadIds.size} lead(s) to stage "${stage}"?`)) { e.target.value = ''; return; }
-                  try {
-                    await leadsApi.bulkStage({ lead_ids: Array.from(selectedLeadIds), stage });
-                    toast.success(`${selectedLeadIds.size} lead(s) moved to ${stage}`);
-                    setSelectedLeadIds(new Set());
-                    fetchData();
-                  } catch { toast.error('Bulk stage change failed'); }
-                  e.target.value = '';
-                }}>
-                <option value="">Move to Stage</option>
-                {STAGES.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
-              </select>
-              <Button size="sm" variant="outline" onClick={() => setSelectedLeadIds(new Set())} className={`border-[var(--border-color)] ${textSec} h-8`}>Clear</Button>
+        {/* ── View Toggle + Bulk Actions ─────────────────────────────── */}
+        {crm.activeTab === 'pipeline' && (
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className={`${card} border rounded-md p-0.5 flex gap-0.5`} data-testid="lead-view-toggle">
+              {[
+                { id: 'pipeline', label: 'Pipeline', mobileHide: false },
+                { id: 'kanban', label: 'Kanban', mobileHide: true },
+                { id: 'table', label: 'Table', mobileHide: false },
+              ].map(v => (
+                <button key={v.id} onClick={() => crm.setLeadView(v.id)} data-testid={`view-${v.id}`}
+                  className={`px-3 py-1.5 rounded text-xs font-medium transition-all ${v.mobileHide ? 'hidden sm:block' : ''} ${crm.leadView === v.id ? 'bg-[#e94560] text-white' : `${textSec} hover:bg-[var(--bg-hover)]`}`}>
+                  {v.label}
+                </button>
+              ))}
             </div>
-          )}
-        </div>}
+            {crm.selectedLeadIds.size > 0 && (
+              <div className="flex items-center gap-2 flex-wrap" data-testid="bulk-actions-bar">
+                <span className={`text-xs ${textSec}`}>{crm.selectedLeadIds.size} selected</span>
+                <Button size="sm" onClick={() => { crm.setReassignBulkIds(Array.from(crm.selectedLeadIds)); crm.setReassignLead(null); crm.setReassignOpen(true); }} className="bg-[#e94560] hover:bg-[#f05c75] text-white h-8" data-testid="bulk-reassign-btn">
+                  <UserCog className="mr-1 h-3 w-3" /> Reassign
+                </Button>
+                <select defaultValue="" className={`h-8 px-2 rounded text-xs ${inputCls} cursor-pointer`}
+                  onChange={async e => {
+                    const tagId = e.target.value;
+                    if (!tagId) return;
+                    try {
+                      await leadsApiObj.bulkTag({ lead_ids: Array.from(crm.selectedLeadIds), tag_id: tagId, action: 'add' });
+                      toast.success(`Tag added to ${crm.selectedLeadIds.size} lead(s)`);
+                      crm.fetchData();
+                    } catch { toast.error('Bulk tag failed'); }
+                    e.target.value = '';
+                  }}>
+                  <option value="">+ Add Tag</option>
+                  {crm.tagsList.map(t => <option key={t.tag_id} value={t.tag_id}>{t.name}</option>)}
+                </select>
+                <select defaultValue="" className={`h-8 px-2 rounded text-xs ${inputCls} cursor-pointer`}
+                  onChange={async e => {
+                    const stage = e.target.value;
+                    if (!stage) return;
+                    if (!window.confirm(`Move ${crm.selectedLeadIds.size} lead(s) to stage "${stage}"?`)) { e.target.value = ''; return; }
+                    try {
+                      await leadsApiObj.bulkStage({ lead_ids: Array.from(crm.selectedLeadIds), stage });
+                      toast.success(`${crm.selectedLeadIds.size} lead(s) moved to ${stage}`);
+                      crm.setSelectedLeadIds(new Set());
+                      crm.fetchData();
+                    } catch { toast.error('Bulk stage change failed'); }
+                    e.target.value = '';
+                  }}>
+                  <option value="">Move to Stage</option>
+                  {STAGES.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
+                </select>
+                <Button size="sm" variant="outline" onClick={() => crm.setSelectedLeadIds(new Set())} className={`border-[var(--border-color)] ${textSec} h-8`}>Clear</Button>
+              </div>
+            )}
+          </div>
+        )}
 
-        {/* Search & Filters */}
+        {/* ── Search & Filters ───────────────────────────────────────── */}
         <div className="sticky top-14 lg:static z-20 -mx-4 sm:mx-0 px-4 sm:px-0 py-2 sm:py-0 bg-[var(--bg-primary)] sm:bg-transparent border-b sm:border-0 border-[var(--border-color)] flex flex-col sm:flex-row gap-2">
           <div className="relative flex-1">
             <Search className={`absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 ${textMuted}`} />
-            <Input value={searchTerm} onChange={e => setSearchTerm(e.target.value)} placeholder="Search school, contact, phone, city..." className={`pl-10 ${inputCls}`} data-testid="search-input" />
+            <Input value={crm.searchTerm} onChange={e => crm.setSearchTerm(e.target.value)} placeholder="Search school, contact, phone, city..." className={`pl-10 ${inputCls}`} data-testid="search-input" />
           </div>
-          <select value={filterType} onChange={e => setFilterType(e.target.value)} className={`h-10 px-3 rounded-md text-sm ${inputCls}`} data-testid="filter-select">
+          <select value={crm.filterType} onChange={e => crm.setFilterType(e.target.value)} className={`h-10 px-3 rounded-md text-sm ${inputCls}`} data-testid="filter-select">
             <option value="all">All Types</option>
             <option value="hot">Hot</option>
             <option value="warm">Warm</option>
             <option value="cold">Cold</option>
             {SCHOOL_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
           </select>
-          <select value={filterTag} onChange={e => setFilterTag(e.target.value)} className={`h-10 px-3 rounded-md text-sm ${inputCls}`} data-testid="filter-tag-select">
+          <select value={crm.filterTag} onChange={e => crm.setFilterTag(e.target.value)} className={`h-10 px-3 rounded-md text-sm ${inputCls}`} data-testid="filter-tag-select">
             <option value="">All Tags</option>
-            {tagsList.map(t => <option key={t.tag_id} value={t.tag_id}>{t.name}</option>)}
+            {crm.tagsList.map(t => <option key={t.tag_id} value={t.tag_id}>{t.name}</option>)}
           </select>
         </div>
 
-        {/* Tabs */}
+        {/* ── Tabs ──────────────────────────────────────────────────── */}
         <div className={`flex gap-1 ${card} border rounded-md p-1 overflow-x-auto`}>
           {['schools', 'contacts', 'list', 'pipeline', 'tasks', 'reports'].map(tab => (
-            <button key={tab} onClick={() => setActiveTab(tab)} className={`flex-shrink-0 px-3 py-2 rounded text-xs sm:text-sm font-medium transition-all capitalize ${activeTab === tab ? 'bg-[#e94560] text-white' : `${textSec} ${hoverBg}`}`} data-testid={`tab-${tab}`}>
-              {tab === 'contacts' ? `Contacts (${contactsList.filter(c => !c.converted_to_lead).length})`
+            <button key={tab} onClick={() => crm.setActiveTab(tab)}
+              className={`flex-shrink-0 px-3 py-2 rounded text-xs sm:text-sm font-medium transition-all capitalize ${crm.activeTab === tab ? 'bg-[#e94560] text-white' : `${textSec} ${hoverBg}`}`}
+              data-testid={`tab-${tab}`}>
+              {tab === 'contacts' ? `Contacts (${crm.contactsList.filter(c => !c.converted_to_lead).length})`
                 : tab === 'pipeline' ? 'Pipeline'
-                : tab === 'list' ? `Leads (${filtered.length})`
-                : tab === 'tasks' ? `Tasks (${tasksList.length})`
-                : tab === 'schools' ? `Schools (${schoolsList.length})`
+                : tab === 'list' ? `Leads (${crm.filteredLeads.length})`
+                : tab === 'tasks' ? `Tasks (${crm.tasksList.length})`
+                : tab === 'schools' ? `Schools (${crm.schoolsList.length})`
                 : 'Reports'}
             </button>
           ))}
         </div>
 
-        {/* CONTACTS VIEW */}
-        {activeTab === 'contacts' && (() => {
-          // Role counts for filter chips
-          const roleCounts = {};
-          contactsList.forEach(c => {
-            const rn = getRoleName(c);
-            if (rn) roleCounts[rn] = (roleCounts[rn] || 0) + 1;
-          });
-          const topRoles = Object.entries(roleCounts).sort((a, b) => b[1] - a[1]);
+        {/* ── CONTACTS TAB ──────────────────────────────────────────── */}
+        {crm.activeTab === 'contacts' && (
+          <ContactsTab
+            contactsList={crm.contactsList}
+            leadsList={crm.leadsList}
+            filterRole={crm.filterRole}
+            setFilterRole={crm.setFilterRole}
+            filterContactTag={crm.filterContactTag}
+            setFilterContactTag={crm.setFilterContactTag}
+            searchTerm={crm.searchTerm}
+            tagsList={crm.tagsList}
+            rolesList={crm.rolesList}
+            sortConfig={crm.sortConfig}
+            toggleSort={crm.toggleSort}
+            sortIndicator={crm.sortIndicator}
+            sortData={crm.sortData}
+            contactPage={crm.contactPage}
+            setContactPage={crm.setContactPage}
+            contactsPerPage={crm.contactsPerPage}
+            getRoleName={crm.getRoleName}
+            calcContactCompletion={crm.calcContactCompletion}
+            touchAgeCls={crm.touchAgeCls}
+            daysSince={crm.daysSince}
+            openCreateContact={crm.openCreateContact}
+            openEditContact={crm.openEditContact}
+            deleteContact={crm.deleteContact}
+            openConvert={crm.openConvert}
+            openWaForContact={crm.openWaForContact}
+            handleContactExport={crm.handleContactExport}
+            setContactImportOpen={crm.setContactImportOpen}
+            setActiveTab={crm.setActiveTab}
+            openDetail={crm.openDetail}
+            expandedContactId={crm.expandedContactId}
+            contactActivity={crm.contactActivity}
+            expandContactActivity={crm.expandContactActivity}
+            fetchData={crm.fetchData}
+            user={crm.user}
+          />
+        )}
 
-          let cFiltered = contactsList.filter(c => {
-            if (filterRole && getRoleName(c) !== filterRole) return false;
-            if (filterContactTag && !(c.tag_ids || []).includes(filterContactTag)) return false;
-            if (searchTerm) {
-              const s = searchTerm.toLowerCase();
-              return (c.name || '').toLowerCase().includes(s) || (c.phone || '').includes(s) || (c.company || '').toLowerCase().includes(s) || (c.email || '').toLowerCase().includes(s);
-            }
-            return true;
-          });
-          cFiltered = sortData(cFiltered, sortConfig.key, sortConfig.dir);
-          const totalPages = Math.max(1, Math.ceil(cFiltered.length / contactsPerPage));
-          const safePage = Math.min(contactPage, totalPages);
-          const paginated = cFiltered.slice((safePage - 1) * contactsPerPage, safePage * contactsPerPage);
+        {/* ── LEADS LIST VIEW ───────────────────────────────────────── */}
+        {crm.activeTab === 'list' && (() => {
+          const sortedLeads = crm.sortData(crm.filteredLeads, crm.sortConfig.key, crm.sortConfig.dir);
           return (
-          <div className="space-y-3" data-testid="contacts-list">
-            {/* Role filter chips */}
-            {topRoles.length > 0 && (
-              <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
-                <button
-                  onClick={() => { setFilterRole(''); setContactPage(1); }}
-                  className={`flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full whitespace-nowrap border transition-all ${
-                    filterRole === ''
-                      ? 'bg-[var(--accent)] border-[var(--accent)] text-white'
-                      : 'border-[var(--border-color)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]'
-                  }`}>
-                  All
-                  <span className={`text-[10px] font-bold px-1.5 rounded-full ${filterRole === '' ? 'bg-white/20 text-white' : 'bg-[var(--bg-primary)]'}`}>
-                    {contactsList.length}
-                  </span>
-                </button>
-                {topRoles.map(([role, count]) => (
-                  <button key={role}
-                    onClick={() => { setFilterRole(role); setContactPage(1); }}
-                    className={`flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full whitespace-nowrap border transition-all ${
-                      filterRole === role
-                        ? `${getRoleColor(role)} border-current`
-                        : 'border-[var(--border-color)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]'
-                    }`}>
-                    {role}
-                    <span className={`text-[10px] font-bold px-1.5 rounded-full ${filterRole === role ? 'bg-current/10' : 'bg-[var(--bg-primary)]'}`}>
-                      {count}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            )}
-
-            {/* Tag filter chips */}
-            {tagsList.length > 0 && (
-              <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
-                <span className={`text-[10px] uppercase tracking-wider font-semibold ${textMuted} whitespace-nowrap`}>Tags:</span>
-                <button
-                  onClick={() => { setFilterContactTag(''); setContactPage(1); }}
-                  className={`text-xs px-2.5 py-1 rounded-full whitespace-nowrap border transition-all ${
-                    filterContactTag === '' ? 'bg-[var(--accent)] border-[var(--accent)] text-white' : 'border-[var(--border-color)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]'
-                  }`}>All</button>
-                {tagsList.map(t => (
-                  <button key={t.tag_id}
-                    onClick={() => { setFilterContactTag(t.tag_id); setContactPage(1); }}
-                    className={`text-xs px-2.5 py-1 rounded-full whitespace-nowrap border transition-all ${
-                      filterContactTag === t.tag_id ? 'text-white border-transparent' : 'border-[var(--border-color)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]'
-                    }`}
-                    style={filterContactTag === t.tag_id ? { backgroundColor: t.color } : {}}>
-                    <span className="inline-block w-2 h-2 rounded-full mr-1 align-middle" style={{ backgroundColor: t.color }} />{t.name}
-                  </button>
-                ))}
-              </div>
-            )}
-
-            {/* Contacts action bar */}
-            <div className="flex flex-wrap items-center gap-2">
-              <Button onClick={handleContactExport} variant="outline" size="sm" className="border-[var(--border-color)] text-[var(--text-secondary)]" data-testid="export-contacts-btn">
-                <Download className="mr-1 h-3 w-3" /> Export CSV
-              </Button>
-              <Button onClick={() => setContactImportOpen(true)} variant="outline" size="sm" className="border-[var(--border-color)] text-[var(--text-secondary)]" data-testid="import-contacts-btn">
-                <Upload className="mr-1 h-3 w-3" /> Import CSV
-              </Button>
-              <span className={`text-xs ${textMuted} ml-auto`}>{cFiltered.length} contacts{searchTerm || filterRole ? ' (filtered)' : ''} • {contactsList.filter(c => c.converted_to_lead).length} converted</span>
-            </div>
-
-            {cFiltered.length === 0 ? (
-              <div className={`${card} border rounded-md p-12 text-center`}>
-                <UserPlus className={`h-12 w-12 mx-auto mb-3 ${textMuted}`} strokeWidth={1} />
-                <p className={textMuted}>No contacts found</p>
-                <Button onClick={openCreateContact} size="sm" className="mt-4 bg-[#e94560] hover:bg-[#f05c75] text-white"><Plus className="mr-1 h-3 w-3" /> Add Contact</Button>
-              </div>
-            ) : (
-              <>
-                {/* Mobile: contact cards */}
-                <div className="sm:hidden space-y-2" data-testid="contacts-list-mobile">
-                  {paginated.map(contact => (
-                    <div key={contact.contact_id} className={`${card} border rounded-md p-3 flex items-start justify-between gap-2 ${contact.converted_to_lead ? 'opacity-60' : ''}`}>
+            <div className={`${card} border rounded-md overflow-hidden`} data-testid="leads-list-view">
+              {/* Mobile cards */}
+              <div className="sm:hidden divide-y divide-[var(--border-color)]">
+                {sortedLeads.map(lead => {
+                  const stg = getStageObj(lead.stage);
+                  return (
+                    <div key={lead.lead_id} onClick={() => crm.openDetail(lead)} className="p-3 flex items-start justify-between gap-2 active:bg-[var(--bg-hover)]">
                       <div className="flex-1 min-w-0">
-                        <p className={`${textPri} font-medium text-sm truncate`}>{contact.name}</p>
-                        <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
-                          {getRoleName(contact) && (
-                            <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${getRoleColor(getRoleName(contact))}`}>
-                              {getRoleName(contact)}
-                            </span>
-                          )}
-                          {contact.company && <span className={`text-xs ${textMuted} truncate`}>{contact.company}</span>}
+                        <p className={`${textPri} font-medium text-sm truncate`}>{lead.company_name || lead.contact_name}</p>
+                        <p className={`text-xs ${textMuted}`}>{lead.contact_name} • {lead.contact_phone}</p>
+                        <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium border ${stg.color}`}>{stg.label}</span>
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${lead.lead_type === 'hot' ? 'bg-red-500/20 text-red-400' : lead.lead_type === 'warm' ? 'bg-yellow-500/20 text-yellow-400' : 'bg-blue-500/20 text-blue-400'}`}>{lead.lead_type}</span>
                         </div>
-                        {(contact.tag_ids || []).length > 0 && (
-                          <div className="flex items-center gap-1 mt-0.5 flex-wrap">
-                            {(contact.tag_ids || []).slice(0, 3).map(tid => {
-                              const tg = tagsList.find(t => t.tag_id === tid);
-                              return tg ? <span key={tid} className="text-[9px] px-1.5 py-0.5 rounded-full text-white font-medium" style={{ backgroundColor: tg.color }}>{tg.name}</span> : null;
-                            })}
-                            {(contact.tag_ids || []).length > 3 && <span className={`text-[9px] ${textMuted}`}>+{(contact.tag_ids || []).length - 3}</span>}
-                          </div>
-                        )}
-                        <div className="flex items-center gap-3 mt-1.5 flex-wrap">
-                          <a href={`tel:${contact.phone}`} className={`text-xs ${textSec} flex items-center gap-1`}><Phone className="h-3 w-3" />{contact.phone}</a>
-                          {contact.email && <a href={`mailto:${contact.email}`} className={`text-xs ${textSec} flex items-center gap-1 max-w-[160px] truncate`}><Mail className="h-3 w-3" />{contact.email}</a>}
-                        </div>
-                        {contact.converted_to_lead
-                          ? <span className="mt-1 inline-block text-[10px] px-2 py-0.5 rounded bg-green-500/20 text-green-400 font-medium">Converted</span>
-                          : <span className="mt-1 inline-block text-[10px] px-2 py-0.5 rounded bg-blue-500/20 text-blue-400 font-medium">Active</span>}
                       </div>
-                      <div className="flex flex-col gap-0.5 flex-shrink-0">
-                        <Button size="sm" variant="ghost" onClick={() => openWaForContact(contact)} className="text-green-500 h-9 w-9 p-0"><MessageSquare className="h-4 w-4" /></Button>
-                        {!contact.converted_to_lead && <Button size="sm" variant="ghost" onClick={() => openConvert(contact)} className="text-[#e94560] h-9 w-9 p-0" data-testid={`convert-contact-${contact.contact_id}`}><ArrowRightCircle className="h-4 w-4" /></Button>}
-                        <Button size="sm" variant="ghost" onClick={() => openEditContact(contact)} className={`${textSec} h-9 w-9 p-0`}><Edit2 className="h-3.5 w-3.5" /></Button>
-                        <Button size="sm" variant="ghost" onClick={() => deleteContact(contact.contact_id)} className="text-red-400 h-9 w-9 p-0"><Trash2 className="h-3.5 w-3.5" /></Button>
-                      </div>
+                      <ChevronRight className={`h-4 w-4 ${textMuted} flex-shrink-0 mt-1`} />
                     </div>
-                  ))}
-                </div>
-                {/* Desktop: Table */}
-                <div className={`hidden sm:block ${card} border rounded-md overflow-hidden`}>
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-sm" data-testid="contacts-table">
-                      <thead><tr className="bg-[var(--bg-primary)]">
-                        <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} cursor-pointer select-none`} onClick={() => toggleSort('name')}>Name{sortIndicator('name')}</th>
-                        <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} cursor-pointer select-none`} onClick={() => toggleSort('phone')}>Phone{sortIndicator('phone')}</th>
-                        <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden sm:table-cell cursor-pointer select-none`} onClick={() => toggleSort('email')}>Email{sortIndicator('email')}</th>
-                        <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden md:table-cell cursor-pointer select-none`} onClick={() => toggleSort('company')}>Company{sortIndicator('company')}</th>
-                        <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden lg:table-cell cursor-pointer select-none`} onClick={() => toggleSort('source')}>Source{sortIndicator('source')}</th>
-                        <th className={`text-center text-xs uppercase py-3 px-3 ${textMuted} hidden xl:table-cell cursor-pointer select-none`} onClick={() => toggleSort('last_activity_date')}>Last Touch{sortIndicator('last_activity_date')}</th>
-                        <th className={`text-center text-xs uppercase py-3 px-3 ${textMuted}`}>Status</th>
-                        <th className={`text-right text-xs uppercase py-3 px-3 ${textMuted}`}>Actions</th>
-                      </tr></thead>
-                      <tbody>
-                        {paginated.map(contact => (
-                          <React.Fragment key={contact.contact_id}>
-                          <tr className={`border-t border-[var(--border-color)] hover:bg-[var(--bg-hover)] cursor-pointer ${contact.converted_to_lead ? 'opacity-55' : ''}`} data-testid={`contact-row-${contact.contact_id}`}
-                            onClick={async () => {
-                              if (expandedContactId === contact.contact_id) { setExpandedContactId(null); return; }
-                              try {
-                                const res = await contactsApi.getActivity(contact.contact_id);
-                                setContactActivity(res.data || []);
-                                setExpandedContactId(contact.contact_id);
-                              } catch { toast.error('Failed to load activity'); }
-                            }}>
-                            <td className="py-2.5 px-3">
-                              <p className={`${textPri} font-medium text-sm`}>{contact.name}</p>
-                              <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
-                                {getRoleName(contact) && (
-                                  <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${getRoleColor(getRoleName(contact))}`}>
-                                    {getRoleName(contact)}
-                                  </span>
-                                )}
-                                {(contact.tag_ids || []).slice(0, 2).map(tid => {
-                                  const tg = tagsList.find(t => t.tag_id === tid);
-                                  return tg ? <span key={tid} className="text-[9px] px-1.5 py-0.5 rounded-full text-white font-medium" style={{ backgroundColor: tg.color }}>{tg.name}</span> : null;
-                                })}
-                                {(contact.tag_ids || []).length > 2 && <span className={`text-[9px] ${textMuted}`}>+{(contact.tag_ids || []).length - 2}</span>}
-                              </div>
-                            </td>
-                            <td className="py-2.5 px-3">
-                              <a href={`tel:${contact.phone}`} className={`text-sm ${textSec} hover:text-[#e94560]`}>{contact.phone}</a>
-                            </td>
-                            <td className={`py-2.5 px-3 hidden sm:table-cell text-sm ${textSec}`}>
-                              {contact.email ? <a href={`mailto:${contact.email}`} className="hover:text-[#e94560]">{contact.email}</a> : <span className={textMuted}>—</span>}
-                            </td>
-                            <td className={`py-2.5 px-3 hidden md:table-cell text-sm ${textSec}`}>{contact.company || <span className={textMuted}>—</span>}</td>
-                            <td className={`py-2.5 px-3 hidden lg:table-cell text-xs ${textMuted}`}>{contact.source || '—'}</td>
-                            <td className="py-2.5 px-3 hidden xl:table-cell text-center">
-                              {contact.last_activity_date ? (
-                                <span className={`text-[11px] font-medium ${touchAgeCls(contact.last_activity_date)}`}>
-                                  {daysSince(contact.last_activity_date) === 0 ? 'Today' : `${daysSince(contact.last_activity_date)}d ago`}
-                                </span>
-                              ) : <span className={`text-[11px] ${textMuted}`}>—</span>}
-                            </td>
-                            <td className="py-2.5 px-3 text-center">
-                              {contact.converted_to_lead ? (
-                                <button
-                                  onClick={() => {
-                                    const l = leadsList.find(x => x.lead_id === contact.lead_id);
-                                    if (l) { setActiveTab('pipeline'); openDetail(l); }
-                                  }}
-                                  className="text-[10px] px-2 py-0.5 rounded bg-green-500/20 text-green-400 font-medium hover:bg-green-500/30 transition-colors cursor-pointer"
-                                  title="Click to view lead">
-                                  Lead · {leadsList.find(x => x.lead_id === contact.lead_id)?.stage || 'view'}
-                                </button>
-                              ) : (
-                                <span className="text-[10px] px-2 py-0.5 rounded bg-blue-500/20 text-blue-400 font-medium">Active</span>
-                              )}
-                            </td>
-                            <td className="py-2.5 px-3 text-right whitespace-nowrap" onClick={e => e.stopPropagation()}>
-                              <Button size="sm" variant="ghost" onClick={() => openWaForContact(contact)} className="text-green-500 h-7 px-1.5" title="Send WhatsApp" data-testid={`wa-contact-${contact.contact_id}`}><MessageSquare className="h-3.5 w-3.5" /></Button>
-                              {!contact.converted_to_lead && (
-                                <Button size="sm" variant="ghost" onClick={() => openConvert(contact)} className="text-[#e94560] h-7 px-1.5" title="Convert to Lead" data-testid={`convert-contact-${contact.contact_id}`}><ArrowRightCircle className="h-3.5 w-3.5" /></Button>
-                              )}
-                              <Button size="sm" variant="ghost" onClick={() => openEditContact(contact)} className={`${textSec} h-7 px-1.5`} data-testid={`edit-contact-${contact.contact_id}`}><Edit2 className="h-3 w-3" /></Button>
-                              <Button size="sm" variant="ghost" onClick={() => deleteContact(contact.contact_id)} className="text-red-400 h-7 px-1.5" data-testid={`delete-contact-${contact.contact_id}`}><Trash2 className="h-3 w-3" /></Button>
-                            </td>
-                          </tr>
-                          {expandedContactId === contact.contact_id && (
-                            <tr>
-                              <td colSpan="8" className={`px-4 py-3 ${isDark ? 'bg-[var(--bg-hover)]' : 'bg-[#f8fafc]'} border-t border-[var(--border-color)]`}>
-                                <p className={`text-xs font-semibold ${textSec} mb-2`}>Activity Timeline</p>
-                                {contactActivity.length === 0 ? (
-                                  <p className={`text-xs ${textMuted}`}>No marketing activity recorded yet</p>
-                                ) : (
-                                  <div className="space-y-1.5">
-                                    {contactActivity.slice(0, 10).map((act, i) => (
-                                      <div key={i} className="flex items-center gap-2 text-xs">
-                                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium capitalize flex-shrink-0 ${
-                                          act.type === 'whatsapp' ? 'bg-green-500/20 text-green-400'
-                                          : act.type === 'drip' ? 'bg-yellow-500/20 text-yellow-600'
-                                          : 'bg-pink-500/20 text-pink-400'
-                                        }`}>{act.type}</span>
-                                        <span className={`flex-1 ${textPri} truncate`}>{act.label}</span>
-                                        {act.status && <span className={`${textMuted} text-[10px] flex-shrink-0`}>{act.status}</span>}
-                                        <span className={`${textMuted} flex-shrink-0`}>{act.at ? formatDate(act.at) : '—'}</span>
-                                      </div>
-                                    ))}
-                                  </div>
-                                )}
-                              </td>
-                            </tr>
-                          )}
-                          </React.Fragment>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-
-                {/* Pagination */}
-                {totalPages > 1 && (
-                  <div className="flex items-center justify-between" data-testid="contacts-pagination">
-                    <p className={`text-xs ${textMuted}`}>Showing {(safePage - 1) * contactsPerPage + 1}–{Math.min(safePage * contactsPerPage, cFiltered.length)} of {cFiltered.length}</p>
-                    <div className="flex items-center gap-1">
-                      <Button variant="outline" size="sm" disabled={safePage <= 1} onClick={() => setContactPage(p => Math.max(1, p - 1))} className={`border-[var(--border-color)] ${textMuted} h-8 w-8 p-0`} data-testid="contacts-prev-page"><ChevronLeft className="h-4 w-4" /></Button>
-                      {Array.from({ length: totalPages }, (_, i) => i + 1).filter(p => p === 1 || p === totalPages || Math.abs(p - safePage) <= 1).map((p, idx, arr) => (
-                        <React.Fragment key={p}>
-                          {idx > 0 && arr[idx - 1] !== p - 1 && <span className={`px-1 ${textMuted}`}>...</span>}
-                          <Button variant={p === safePage ? 'default' : 'outline'} size="sm" onClick={() => setContactPage(p)}
-                            className={`h-8 w-8 p-0 text-xs ${p === safePage ? 'bg-[#e94560] text-white' : `border-[var(--border-color)] ${textSec}`}`}
-                            data-testid={`contacts-page-${p}`}>{p}</Button>
-                        </React.Fragment>
-                      ))}
-                      <Button variant="outline" size="sm" disabled={safePage >= totalPages} onClick={() => setContactPage(p => Math.min(totalPages, p + 1))} className={`border-[var(--border-color)] ${textMuted} h-8 w-8 p-0`} data-testid="contacts-next-page"><ChevronRight className="h-4 w-4" /></Button>
-                    </div>
-                  </div>
-                )}
-              </>
-            )}
-          </div>
+                  );
+                })}
+                {sortedLeads.length === 0 && <div className="p-8 text-center"><p className={`text-sm ${textMuted}`}>No leads found</p></div>}
+              </div>
+              {/* Desktop table */}
+              <div className="hidden sm:block overflow-x-auto">
+                <table className="w-full text-sm" data-testid="leads-flat-table">
+                  <thead><tr className="bg-[var(--bg-primary)]">
+                    <th className="py-3 px-3 w-8"><input type="checkbox" className="accent-[#e94560]" onChange={e => { if (e.target.checked) crm.setSelectedLeadIds(new Set(sortedLeads.map(l => l.lead_id))); else crm.setSelectedLeadIds(new Set()); }} checked={sortedLeads.length > 0 && sortedLeads.every(l => crm.selectedLeadIds.has(l.lead_id))} /></th>
+                    <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} cursor-pointer select-none`} onClick={() => crm.toggleSort('company_name')}>School{crm.sortIndicator('company_name')}</th>
+                    <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} cursor-pointer select-none`} onClick={() => crm.toggleSort('contact_name')}>Contact{crm.sortIndicator('contact_name')}</th>
+                    <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} cursor-pointer select-none`} onClick={() => crm.toggleSort('lead_type')}>Type{crm.sortIndicator('lead_type')}</th>
+                    <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} cursor-pointer select-none`} onClick={() => crm.toggleSort('stage')}>Stage{crm.sortIndicator('stage')}</th>
+                    <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} cursor-pointer select-none`} onClick={() => crm.toggleSort('lead_score')}>Score{crm.sortIndicator('lead_score')}</th>
+                    <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden lg:table-cell`}>Assigned</th>
+                    <th className={`text-right text-xs uppercase py-3 px-3 ${textMuted}`}>Actions</th>
+                  </tr></thead>
+                  <tbody>
+                    {sortedLeads.map(lead => {
+                      const stg = getStageObj(lead.stage);
+                      return (
+                        <tr key={lead.lead_id} className="border-t border-[var(--border-color)] hover:bg-[var(--bg-hover)] cursor-pointer" onClick={() => crm.openDetail(lead)}>
+                          <td className="py-2.5 px-3" onClick={e => e.stopPropagation()}><input type="checkbox" className="accent-[#e94560]" checked={crm.selectedLeadIds.has(lead.lead_id)} onChange={() => crm.toggleLeadSelect(lead.lead_id)} /></td>
+                          <td className="py-2.5 px-3">
+                            <p className={`${textPri} font-medium text-sm`}>{lead.company_name}</p>
+                            <p className={`text-xs ${textMuted}`}>{lead.school_type} {lead.school_city && `| ${lead.school_city}`}</p>
+                          </td>
+                          <td className="py-2.5 px-3">
+                            <p className={`${textPri} text-sm`}>{lead.contact_name}</p>
+                            <p className={`text-xs ${textMuted}`}>{lead.contact_phone}</p>
+                          </td>
+                          <td className="py-2.5 px-3"><span className={`text-xs px-2 py-0.5 rounded font-medium ${lead.lead_type === 'hot' ? 'bg-red-500/20 text-red-400' : lead.lead_type === 'warm' ? 'bg-yellow-500/20 text-yellow-400' : 'bg-blue-500/20 text-blue-400'}`}>{lead.lead_type}</span></td>
+                          <td className="py-2.5 px-3"><span className={`text-xs px-2 py-0.5 rounded font-medium border ${stg.color}`}>{stg.label}</span></td>
+                          <td className="py-2.5 px-3"><span className="font-mono text-sm text-[#e94560]">{lead.lead_score || 0}</span></td>
+                          <td className={`py-2.5 px-3 hidden lg:table-cell text-sm ${textSec}`}>{lead.assigned_name?.split(' ')[0]}</td>
+                          <td className="py-2.5 px-3 text-right" onClick={e => e.stopPropagation()}>
+                            <Button size="sm" variant="ghost" onClick={() => crm.openEditLead(lead)} className={`${textSec} h-7`}><Edit2 className="h-3 w-3" /></Button>
+                            <Button size="sm" variant="ghost" onClick={async () => { if (!window.confirm('Delete this lead?')) return; await leadsApiObj.delete(lead.lead_id); crm.fetchData(); toast.success('Deleted'); }} className="text-red-400 h-7"><Trash2 className="h-3 w-3" /></Button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {sortedLeads.length === 0 && <tr><td colSpan="7"><EmptyState {...(crm.searchTerm ? EMPTY_STATES.searchResult : EMPTY_STATES.leads)} compact /></td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            </div>
           );
         })()}
 
-        {/* LEADS LIST VIEW (flat sortable table) */}
-        {activeTab === 'list' && (() => {
-          const sortedLeads = sortData(filtered, sortConfig.key, sortConfig.dir);
-          return (
-          <div className={`${card} border rounded-md overflow-hidden`} data-testid="leads-list-view">
-            {/* Mobile cards */}
-            <div className="sm:hidden divide-y divide-[var(--border-color)]">
-              {sortedLeads.map(lead => {
-                const stg = getStageObj(lead.stage);
+        {/* ── PIPELINE VIEW ─────────────────────────────────────────── */}
+        {crm.activeTab === 'pipeline' && crm.leadView === 'pipeline' && (
+          <>
+            {/* Mobile: vertical stacked */}
+            <div className="sm:hidden space-y-5" data-testid="pipeline-mobile">
+              {STAGES.map(stage => {
+                const stageLeads = crm.filteredLeads.filter(l => l.stage === stage.id);
+                if (stageLeads.length === 0) return null;
                 return (
-                  <div key={lead.lead_id} onClick={() => openDetail(lead)} className="p-3 flex items-start justify-between gap-2 active:bg-[var(--bg-hover)]">
-                    <div className="flex-1 min-w-0">
-                      <p className={`${textPri} font-medium text-sm truncate`}>{lead.company_name || lead.contact_name}</p>
-                      <p className={`text-xs ${textMuted}`}>{lead.contact_name} • {lead.contact_phone}</p>
-                      <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-                        <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium border ${stg.color}`}>{stg.label}</span>
-                        <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${lead.lead_type === 'hot' ? 'bg-red-500/20 text-red-400' : lead.lead_type === 'warm' ? 'bg-yellow-500/20 text-yellow-400' : 'bg-blue-500/20 text-blue-400'}`}>{lead.lead_type}</span>
-                      </div>
+                  <div key={stage.id}>
+                    <div className="flex items-center gap-2 mb-2.5">
+                      <span className={`px-2.5 py-1 rounded-full text-xs font-semibold border ${stage.color}`}>{stage.label}</span>
+                      <span className={`text-xs ${textMuted} font-medium`}>{stageLeads.length} lead{stageLeads.length !== 1 ? 's' : ''}</span>
                     </div>
-                    <ChevronRight className={`h-4 w-4 ${textMuted} flex-shrink-0 mt-1`} />
+                    <div className="space-y-2.5">
+                      {stageLeads.map(lead => (
+                        <LeadMobileCard key={lead.lead_id} lead={lead} onDetail={crm.openDetail} tagsList={crm.tagsList} card={card} textPri={textPri} textSec={textSec} textMuted={textMuted} />
+                      ))}
+                    </div>
                   </div>
                 );
               })}
-              {sortedLeads.length === 0 && <div className="p-8 text-center"><p className={`text-sm ${textMuted}`}>No leads found</p></div>}
+              {crm.filteredLeads.length === 0 && <EmptyState {...(crm.searchTerm || crm.filterType !== 'all' ? EMPTY_STATES.searchResult : EMPTY_STATES.leads)} action={{ label: '+ Add Lead', onClick: crm.openCreateLead }} />}
             </div>
-            {/* Desktop table */}
-            <div className="hidden sm:block overflow-x-auto">
-              <table className="w-full text-sm" data-testid="leads-flat-table">
-                <thead><tr className="bg-[var(--bg-primary)]">
-                  <th className="py-3 px-3 w-8"><input type="checkbox" className="accent-[#e94560]" onChange={e => { if (e.target.checked) setSelectedLeadIds(new Set(sortedLeads.map(l => l.lead_id))); else setSelectedLeadIds(new Set()); }} checked={sortedLeads.length > 0 && sortedLeads.every(l => selectedLeadIds.has(l.lead_id))} /></th>
-                  <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} cursor-pointer select-none`} onClick={() => toggleSort('company_name')}>School{sortIndicator('company_name')}</th>
-                  <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} cursor-pointer select-none`} onClick={() => toggleSort('contact_name')}>Contact{sortIndicator('contact_name')}</th>
-                  <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} cursor-pointer select-none`} onClick={() => toggleSort('lead_type')}>Type{sortIndicator('lead_type')}</th>
-                  <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} cursor-pointer select-none`} onClick={() => toggleSort('stage')}>Stage{sortIndicator('stage')}</th>
-                  <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} cursor-pointer select-none`} onClick={() => toggleSort('lead_score')}>Score{sortIndicator('lead_score')}</th>
-                  <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden lg:table-cell`}>Assigned</th>
-                  <th className={`text-right text-xs uppercase py-3 px-3 ${textMuted}`}>Actions</th>
-                </tr></thead>
-                <tbody>
-                  {sortedLeads.map(lead => {
-                    const stg = getStageObj(lead.stage);
-                    return (
-                      <tr key={lead.lead_id} className="border-t border-[var(--border-color)] hover:bg-[var(--bg-hover)] cursor-pointer" onClick={() => openDetail(lead)}>
-                        <td className="py-2.5 px-3" onClick={e => e.stopPropagation()}><input type="checkbox" className="accent-[#e94560]" checked={selectedLeadIds.has(lead.lead_id)} onChange={() => toggleLeadSelect(lead.lead_id)} /></td>
-                        <td className="py-2.5 px-3">
-                          <p className={`${textPri} font-medium text-sm`}>{lead.company_name}</p>
-                          <p className={`text-xs ${textMuted}`}>{lead.school_type} {lead.school_city && `| ${lead.school_city}`}</p>
-                        </td>
-                        <td className="py-2.5 px-3">
-                          <p className={`${textPri} text-sm`}>{lead.contact_name}</p>
-                          <p className={`text-xs ${textMuted}`}>{lead.contact_phone}</p>
-                        </td>
-                        <td className="py-2.5 px-3"><span className={`text-xs px-2 py-0.5 rounded font-medium ${lead.lead_type === 'hot' ? 'bg-red-500/20 text-red-400' : lead.lead_type === 'warm' ? 'bg-yellow-500/20 text-yellow-400' : 'bg-blue-500/20 text-blue-400'}`}>{lead.lead_type}</span></td>
-                        <td className="py-2.5 px-3"><span className={`text-xs px-2 py-0.5 rounded font-medium border ${stg.color}`}>{stg.label}</span></td>
-                        <td className="py-2.5 px-3"><span className="font-mono text-sm text-[#e94560]">{lead.lead_score || 0}</span></td>
-                        <td className={`py-2.5 px-3 hidden lg:table-cell text-sm ${textSec}`}>{lead.assigned_name?.split(' ')[0]}</td>
-                        <td className="py-2.5 px-3 text-right" onClick={e => e.stopPropagation()}>
-                          <Button size="sm" variant="ghost" onClick={() => openEditLead(lead)} className={`${textSec} h-7`}><Edit2 className="h-3 w-3" /></Button>
-                          <Button size="sm" variant="ghost" onClick={async () => { if (!window.confirm('Delete this lead?')) return; await leadsApi.delete(lead.lead_id); fetchData(); toast.success('Deleted'); }} className="text-red-400 h-7"><Trash2 className="h-3 w-3" /></Button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                  {sortedLeads.length === 0 && <tr><td colSpan="7"><EmptyState {...(searchTerm ? EMPTY_STATES.searchResult : EMPTY_STATES.leads)} compact /></td></tr>}
-                </tbody>
-              </table>
-            </div>
-          </div>
-          );
-        })()}
-
-        {/* PIPELINE VIEW */}
-        {activeTab === 'pipeline' && leadView === 'pipeline' && (
-          <>
-          {/* Mobile: vertical stacked list */}
-          <div className="sm:hidden space-y-5" data-testid="pipeline-mobile">
-            {STAGES.map(stage => {
-              const stageLeads = filtered.filter(l => l.stage === stage.id);
-              if (stageLeads.length === 0) return null;
-              return (
-                <div key={stage.id}>
-                  <div className="flex items-center gap-2 mb-2.5">
-                    <span className={`px-2.5 py-1 rounded-full text-xs font-semibold border ${stage.color}`}>{stage.label}</span>
-                    <span className={`text-xs ${textMuted} font-medium`}>{stageLeads.length} lead{stageLeads.length !== 1 ? 's' : ''}</span>
-                  </div>
-                  <div className="space-y-2.5">
-                    {stageLeads.map(lead => (
-                      <LeadMobileCard
-                        key={lead.lead_id}
-                        lead={lead}
-                        onDetail={openDetail}
-                        tagsList={tagsList}
-                        card={card}
-                        textPri={textPri}
-                        textSec={textSec}
-                        textMuted={textMuted}
-                      />
-                    ))}
-                  </div>
-                </div>
-              );
-            })}
-            {filtered.length === 0 && <EmptyState {...(searchTerm || filterType !== 'all' ? EMPTY_STATES.searchResult : EMPTY_STATES.leads)} action={{ label: '+ Add Lead', onClick: openCreateLead }} />}
-          </div>
-          {/* Desktop: horizontal pipeline */}
-          <div className="hidden sm:flex gap-2 overflow-x-auto pb-4" data-testid="pipeline-board">
-            {STAGES.map(stage => {
-              const stageLeads = filtered.filter(l => l.stage === stage.id);
-              return (
-                <div key={stage.id} className="min-w-[200px] sm:min-w-[220px] flex-shrink-0">
-                  <div className="flex items-center gap-2 mb-2 px-1">
-                    <span className={`px-2 py-0.5 rounded text-xs font-medium border ${stage.color}`}>{stage.label}</span>
-                    <span className={`text-xs ${textMuted}`}>{stageLeads.length}</span>
-                  </div>
-                  <div className="space-y-2">
-                    {stageLeads.map(lead => (
-                      <div key={lead.lead_id} onClick={() => openDetail(lead)} className={`${card} border rounded-md p-3 cursor-pointer hover:border-[#e94560]/40 transition-all`} data-testid={`lead-card-${lead.lead_id}`}>
-                        <div className="flex items-center justify-between">
-                          <p className={`${textPri} font-medium text-sm truncate`}>{lead.company_name || lead.contact_name}</p>
-                          {lead.lead_score > 0 && <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#e94560]/20 text-[#e94560] font-mono font-bold">{lead.lead_score}</span>}
-                        </div>
-                        <p className={`text-xs ${textMuted} truncate`}>{lead.contact_name} {lead.designation ? `(${lead.designation})` : ''}</p>
-                        <div className="flex items-center justify-between mt-2">
-                          {lead.lead_type && <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${lead.lead_type === 'hot' ? 'bg-red-500/20 text-red-400' : lead.lead_type === 'warm' ? 'bg-yellow-500/20 text-yellow-400' : 'bg-blue-500/20 text-blue-400'}`}>{lead.lead_type}</span>}
-                          <span className={`text-[10px] ${textMuted}`}>{lead.assigned_name?.split(' ')[0]}</span>
-                        </div>
-                        {lead.visit_required && <div className="mt-1.5"><span className="text-[10px] px-1.5 py-0.5 rounded font-medium bg-orange-500/20 text-orange-400 border border-orange-500/30 inline-flex items-center gap-1" data-testid={`visit-required-${lead.lead_id}`}><AlertTriangle className="h-2.5 w-2.5" /> Visit Required</span></div>}
-                        {lead.next_followup_date && <p className={`text-[10px] ${textMuted} mt-1 flex items-center gap-1`}><Clock className="h-3 w-3" /> {lead.next_followup_date}</p>}
-                        {(lead.tags || []).length > 0 && (
-                          <div className="flex flex-wrap gap-1 mt-1.5">
-                            {(lead.tags || []).slice(0, 3).map(tid => {
-                              const tag = tagsList.find(t => t.tag_id === tid);
-                              if (!tag) return null;
-                              return <span key={tid} className="text-[9px] px-1.5 py-0.5 rounded-full font-medium text-white" style={{ backgroundColor: tag.color }}>{tag.name}</span>;
-                            })}
-                            {(lead.tags || []).length > 3 && <span className={`text-[9px] ${textMuted}`}>+{(lead.tags || []).length - 3}</span>}
+            {/* Desktop: horizontal pipeline */}
+            <div className="hidden sm:flex gap-2 overflow-x-auto pb-4" data-testid="pipeline-board">
+              {STAGES.map(stage => {
+                const stageLeads = crm.filteredLeads.filter(l => l.stage === stage.id);
+                return (
+                  <div key={stage.id} className="min-w-[200px] sm:min-w-[220px] flex-shrink-0">
+                    <div className="flex items-center gap-2 mb-2 px-1">
+                      <span className={`px-2 py-0.5 rounded text-xs font-medium border ${stage.color}`}>{stage.label}</span>
+                      <span className={`text-xs ${textMuted}`}>{stageLeads.length}</span>
+                    </div>
+                    <div className="space-y-2">
+                      {stageLeads.map(lead => (
+                        <div key={lead.lead_id} onClick={() => crm.openDetail(lead)} className={`${card} border rounded-md p-3 cursor-pointer hover:border-[#e94560]/40 transition-all`} data-testid={`lead-card-${lead.lead_id}`}>
+                          <div className="flex items-center justify-between">
+                            <p className={`${textPri} font-medium text-sm truncate`}>{lead.company_name || lead.contact_name}</p>
+                            {lead.lead_score > 0 && <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#e94560]/20 text-[#e94560] font-mono font-bold">{lead.lead_score}</span>}
                           </div>
-                        )}
-                      </div>
-                    ))}
-                    {stageLeads.length === 0 && <p className={`text-xs ${textMuted} text-center py-6`}>Empty</p>}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-          </>
-        )}
-
-        {/* KANBAN VIEW (FMS Phase 5.2) */}
-        {activeTab === 'pipeline' && leadView === 'kanban' && (
-          <>
-          {/* Mobile: kanban not supported — show pipeline list */}
-          <div className="sm:hidden space-y-4">
-            <p className={`text-xs ${textMuted} text-center py-1`}>Kanban not available on mobile — showing pipeline list</p>
-            {STAGES.map(stage => {
-              const stageLeads = filtered.filter(l => l.stage === stage.id);
-              if (stageLeads.length === 0) return null;
-              return (
-                <div key={stage.id}>
-                  <div className="flex items-center gap-2 mb-2">
-                    <span className={`px-2 py-0.5 rounded text-xs font-medium border ${stage.color}`}>{stage.label}</span>
-                    <span className={`text-xs ${textMuted}`}>{stageLeads.length}</span>
-                  </div>
-                  <div className="space-y-2">
-                    {stageLeads.map(lead => (
-                      <div key={lead.lead_id} onClick={() => openDetail(lead)} className={`${card} border rounded-md p-3 cursor-pointer active:opacity-70 transition-opacity`}>
-                        <div className="flex items-center justify-between gap-2">
-                          <p className={`${textPri} font-medium text-sm truncate flex-1`}>{lead.company_name || lead.contact_name}</p>
-                          {lead.lead_score > 0 && <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#e94560]/20 text-[#e94560] font-mono font-bold flex-shrink-0">{lead.lead_score}</span>}
+                          <p className={`text-xs ${textMuted} truncate`}>{lead.contact_name} {lead.designation ? `(${lead.designation})` : ''}</p>
+                          <div className="flex items-center justify-between mt-2">
+                            {lead.lead_type && <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${lead.lead_type === 'hot' ? 'bg-red-500/20 text-red-400' : lead.lead_type === 'warm' ? 'bg-yellow-500/20 text-yellow-400' : 'bg-blue-500/20 text-blue-400'}`}>{lead.lead_type}</span>}
+                            <span className={`text-[10px] ${textMuted}`}>{lead.assigned_name?.split(' ')[0]}</span>
+                          </div>
+                          {lead.visit_required && <div className="mt-1.5"><span className="text-[10px] px-1.5 py-0.5 rounded font-medium bg-orange-500/20 text-orange-400 border border-orange-500/30 inline-flex items-center gap-1" data-testid={`visit-required-${lead.lead_id}`}><AlertTriangle className="h-2.5 w-2.5" /> Visit Required</span></div>}
+                          {lead.next_followup_date && <p className={`text-[10px] ${textMuted} mt-1 flex items-center gap-1`}><Clock className="h-3 w-3" /> {lead.next_followup_date}</p>}
+                          {(lead.tags || []).length > 0 && (
+                            <div className="flex flex-wrap gap-1 mt-1.5">
+                              {(lead.tags || []).slice(0, 3).map(tid => {
+                                const tag = crm.tagsList.find(t => t.tag_id === tid);
+                                if (!tag) return null;
+                                return <span key={tid} className="text-[9px] px-1.5 py-0.5 rounded-full font-medium text-white" style={{ backgroundColor: tag.color }}>{tag.name}</span>;
+                              })}
+                              {(lead.tags || []).length > 3 && <span className={`text-[9px] ${textMuted}`}>+{(lead.tags || []).length - 3}</span>}
+                            </div>
+                          )}
                         </div>
-                        <p className={`text-xs ${textMuted} mt-0.5 truncate`}>{lead.contact_name} • {lead.contact_phone}</p>
-                        <div className="flex items-center gap-2 mt-2 flex-wrap">
-                          {lead.lead_type && <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${lead.lead_type === 'hot' ? 'bg-red-500/20 text-red-400' : lead.lead_type === 'warm' ? 'bg-yellow-500/20 text-yellow-400' : 'bg-blue-500/20 text-blue-400'}`}>{lead.lead_type}</span>}
-                          {lead.next_followup_date && <span className={`text-[10px] ${textMuted} flex items-center gap-1`}><Clock className="h-3 w-3" />{lead.next_followup_date}</span>}
-                          <span className={`text-[10px] ${textMuted} ml-auto`}>{lead.assigned_name?.split(' ')[0]}</span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-          {/* Desktop: KanbanBoard */}
-          <div className="hidden sm:block">
-          <KanbanBoard
-            columns={STAGES}
-            items={filtered}
-            getItemId={(l) => l.lead_id}
-            getItemColumnId={(l) => l.stage || 'new'}
-            onMove={handleKanbanMove}
-            emptyText="Drop leads here"
-            renderCard={(lead) => {
-              const days = daysSince(lead.last_activity_date);
-              const borderCls = ageColor(days, lead.next_followup_date);
-              return (
-                <div onClick={() => openDetail(lead)} className={`${card} border-l-4 ${borderCls} rounded-md p-2.5 cursor-pointer hover:shadow-lg hover:shadow-[#e94560]/10 transition-all`} data-testid={`kanban-card-${lead.lead_id}`}>
-                  <div className="flex items-center justify-between gap-2">
-                    <input type="checkbox" onClick={(e) => e.stopPropagation()} onChange={(e) => { e.stopPropagation(); toggleLeadSelect(lead.lead_id); }} checked={selectedLeadIds.has(lead.lead_id)} className="accent-[#e94560]" data-testid={`select-lead-${lead.lead_id}`} />
-                    <p className={`${textPri} font-medium text-sm truncate flex-1`}>{lead.company_name || lead.contact_name}</p>
-                    {lead.is_locked && <Lock className="h-3 w-3 text-[#e94560]" />}
-                    {lead.lead_score > 0 && <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#e94560]/20 text-[#e94560] font-mono font-bold">{lead.lead_score}</span>}
-                  </div>
-                  <p className={`text-xs ${textMuted} truncate mt-0.5`}>{lead.contact_name} • {lead.contact_phone}</p>
-                  <div className="flex items-center justify-between mt-2 gap-1">
-                    {lead.lead_type && <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${lead.lead_type === 'hot' ? 'bg-red-500/20 text-red-400' : lead.lead_type === 'warm' ? 'bg-yellow-500/20 text-yellow-400' : 'bg-blue-500/20 text-blue-400'}`}>{lead.lead_type}</span>}
-                    <span className={`text-[10px] ${textMuted} truncate`}>{lead.assigned_name?.split(' ')[0] || 'Unassigned'}</span>
-                  </div>
-                  {(lead.reassignment_count || 0) > 2 && (
-                    <p className="text-[10px] text-red-400 mt-1 flex items-center gap-1"><UserCog className="h-2.5 w-2.5" /> Reassigned {lead.reassignment_count}×</p>
-                  )}
-                  <AgeBadge daysSinceActivity={days} followupDate={lead.next_followup_date} />
-                  {(lead.tags || []).length > 0 && (
-                    <div className="flex flex-wrap gap-1 mt-1.5">
-                      {(lead.tags || []).slice(0, 3).map(tid => {
-                        const tag = tagsList.find(t => t.tag_id === tid);
-                        if (!tag) return null;
-                        return <span key={tid} className="text-[9px] px-1.5 py-0.5 rounded-full font-medium text-white" style={{ backgroundColor: tag.color }}>{tag.name}</span>;
-                      })}
-                      {(lead.tags || []).length > 3 && <span className={`text-[9px] ${textMuted}`}>+{(lead.tags || []).length - 3}</span>}
+                      ))}
+                      {stageLeads.length === 0 && <p className={`text-xs ${textMuted} text-center py-6`}>Empty</p>}
                     </div>
-                  )}
-                  <div className="flex gap-1 mt-2 pt-2 border-t border-[var(--border-color)]">
-                    <button type="button" onClick={(e) => { e.stopPropagation(); setReassignLead(lead); setReassignBulkIds(null); setReassignOpen(true); }} className="text-[10px] text-[#e94560] hover:underline" data-testid={`reassign-${lead.lead_id}`}>Reassign</button>
-                    <span className={textMuted}>•</span>
-                    <button type="button" onClick={(e) => { e.stopPropagation(); openWaForLead(lead); }} className="text-[10px] text-green-500 hover:underline">WhatsApp</button>
                   </div>
-                </div>
-              );
-            }}
-          />
-          </div>
+                );
+              })}
+            </div>
           </>
         )}
 
-        {/* TABLE VIEW via toggle */}
-        {activeTab === 'pipeline' && leadView === 'table' && (() => {
-          const sortedLeads = sortData(filtered, sortConfig.key, sortConfig.dir);
-          return (
-          <div className={`${card} border rounded-md overflow-hidden`}>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm" data-testid="leads-table">
-                <thead><tr className={'bg-[var(--bg-primary)]'}>
-                  <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} cursor-pointer select-none`} onClick={() => toggleSort('company_name')}>School{sortIndicator('company_name')}</th>
-                  <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} cursor-pointer select-none`} onClick={() => toggleSort('contact_name')}>Contact{sortIndicator('contact_name')}</th>
-                  <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden sm:table-cell cursor-pointer select-none`} onClick={() => toggleSort('lead_type')}>Type{sortIndicator('lead_type')}</th>
-                  <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden md:table-cell cursor-pointer select-none`} onClick={() => toggleSort('stage')}>Stage{sortIndicator('stage')}</th>
-                  <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden lg:table-cell cursor-pointer select-none`} onClick={() => toggleSort('lead_score')}>Score{sortIndicator('lead_score')}<FieldTooltip text="Lead Score (0–100) calculated from engagement, recency, and deal size. Higher = hotter lead." /></th>
-                  <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden lg:table-cell`}>Assigned</th>
-                  <th className={`text-right text-xs uppercase py-3 px-3 ${textMuted}`}>Actions</th>
-                </tr></thead>
-                <tbody>
-                  {sortedLeads.map(lead => {
-                    const stg = getStageObj(lead.stage);
-                    return (
-                      <tr key={lead.lead_id} className={`border-t border-[var(--border-color)] hover:bg-[var(--bg-hover)] cursor-pointer`} onClick={() => openDetail(lead)} data-testid={`lead-row-${lead.lead_id}`}>
-                        <td className="py-2.5 px-3">
-                          <p className={`${textPri} font-medium text-sm`}>{lead.company_name}</p>
-                          <p className={`text-xs ${textMuted}`}>{lead.school_type} {lead.school_city && `| ${lead.school_city}`}</p>
-                        </td>
-                        <td className="py-2.5 px-3">
-                          <p className={`${textPri} text-sm`}>{lead.contact_name}</p>
-                          <p className={`text-xs ${textMuted}`}>{lead.contact_phone}</p>
-                        </td>
-                        <td className="py-2.5 px-3 hidden sm:table-cell">
-                          <span className={`text-xs px-2 py-0.5 rounded font-medium ${lead.lead_type === 'hot' ? 'bg-red-500/20 text-red-400' : lead.lead_type === 'warm' ? 'bg-yellow-500/20 text-yellow-400' : 'bg-blue-500/20 text-blue-400'}`}>{lead.lead_type}</span>
-                        </td>
-                        <td className="py-2.5 px-3 hidden md:table-cell">
-                          <span className={`text-xs px-2 py-0.5 rounded font-medium border ${stg.color}`}>{stg.label}</span>
-                        </td>
-                        <td className="py-2.5 px-3 hidden lg:table-cell"><span className="font-mono text-sm text-[#e94560]">{lead.lead_score || 0}</span></td>
-                        <td className={`py-2.5 px-3 hidden lg:table-cell text-sm ${textSec}`}>{lead.assigned_name?.split(' ')[0]}</td>
-                        <td className="py-2.5 px-3 text-right" onClick={e => e.stopPropagation()}>
-                          <Button size="sm" variant="ghost" onClick={() => openEditLead(lead)} className={`${textSec} h-7`} data-testid={`edit-lead-${lead.lead_id}`}><Edit2 className="h-3 w-3" /></Button>
-                          <Button size="sm" variant="ghost" onClick={async () => { if (!window.confirm('Delete this lead?')) return; await leadsApi.delete(lead.lead_id); fetchData(); toast.success('Deleted'); }} className="text-red-400 h-7" data-testid={`delete-lead-${lead.lead_id}`}><Trash2 className="h-3 w-3" /></Button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                  {sortedLeads.length === 0 && <tr><td colSpan="7"><EmptyState {...(searchTerm ? EMPTY_STATES.searchResult : EMPTY_STATES.leads)} compact /></td></tr>}
-                </tbody>
-              </table>
+        {/* ── KANBAN VIEW ───────────────────────────────────────────── */}
+        {crm.activeTab === 'pipeline' && crm.leadView === 'kanban' && (
+          <>
+            {/* Mobile: kanban not supported */}
+            <div className="sm:hidden space-y-4">
+              <p className={`text-xs ${textMuted} text-center py-1`}>Kanban not available on mobile — showing pipeline list</p>
+              {STAGES.map(stage => {
+                const stageLeads = crm.filteredLeads.filter(l => l.stage === stage.id);
+                if (stageLeads.length === 0) return null;
+                return (
+                  <div key={stage.id}>
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className={`px-2 py-0.5 rounded text-xs font-medium border ${stage.color}`}>{stage.label}</span>
+                      <span className={`text-xs ${textMuted}`}>{stageLeads.length}</span>
+                    </div>
+                    <div className="space-y-2">
+                      {stageLeads.map(lead => (
+                        <div key={lead.lead_id} onClick={() => crm.openDetail(lead)} className={`${card} border rounded-md p-3 cursor-pointer active:opacity-70 transition-opacity`}>
+                          <div className="flex items-center justify-between gap-2">
+                            <p className={`${textPri} font-medium text-sm truncate flex-1`}>{lead.company_name || lead.contact_name}</p>
+                            {lead.lead_score > 0 && <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#e94560]/20 text-[#e94560] font-mono font-bold flex-shrink-0">{lead.lead_score}</span>}
+                          </div>
+                          <p className={`text-xs ${textMuted} mt-0.5 truncate`}>{lead.contact_name} • {lead.contact_phone}</p>
+                          <div className="flex items-center gap-2 mt-2 flex-wrap">
+                            {lead.lead_type && <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${lead.lead_type === 'hot' ? 'bg-red-500/20 text-red-400' : lead.lead_type === 'warm' ? 'bg-yellow-500/20 text-yellow-400' : 'bg-blue-500/20 text-blue-400'}`}>{lead.lead_type}</span>}
+                            {lead.next_followup_date && <span className={`text-[10px] ${textMuted} flex items-center gap-1`}><Clock className="h-3 w-3" />{lead.next_followup_date}</span>}
+                            <span className={`text-[10px] ${textMuted} ml-auto`}>{lead.assigned_name?.split(' ')[0]}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
-          </div>
+            {/* Desktop: KanbanBoard */}
+            <div className="hidden sm:block">
+              <KanbanBoard
+                columns={STAGES}
+                items={crm.filteredLeads}
+                getItemId={(l) => l.lead_id}
+                getItemColumnId={(l) => l.stage || 'new'}
+                onMove={crm.handleKanbanMove}
+                emptyText="Drop leads here"
+                renderCard={(lead) => {
+                  const days = crm.daysSince(lead.last_activity_date);
+                  const borderCls = ageColor(days, lead.next_followup_date);
+                  return (
+                    <div onClick={() => crm.openDetail(lead)} className={`${card} border-l-4 ${borderCls} rounded-md p-2.5 cursor-pointer hover:shadow-lg hover:shadow-[#e94560]/10 transition-all`} data-testid={`kanban-card-${lead.lead_id}`}>
+                      <div className="flex items-center justify-between gap-2">
+                        <input type="checkbox" onClick={(e) => e.stopPropagation()} onChange={(e) => { e.stopPropagation(); crm.toggleLeadSelect(lead.lead_id); }} checked={crm.selectedLeadIds.has(lead.lead_id)} className="accent-[#e94560]" data-testid={`select-lead-${lead.lead_id}`} />
+                        <p className={`${textPri} font-medium text-sm truncate flex-1`}>{lead.company_name || lead.contact_name}</p>
+                        {lead.is_locked && <Lock className="h-3 w-3 text-[#e94560]" />}
+                        {lead.lead_score > 0 && <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#e94560]/20 text-[#e94560] font-mono font-bold">{lead.lead_score}</span>}
+                      </div>
+                      <p className={`text-xs ${textMuted} truncate mt-0.5`}>{lead.contact_name} • {lead.contact_phone}</p>
+                      <div className="flex items-center justify-between mt-2 gap-1">
+                        {lead.lead_type && <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${lead.lead_type === 'hot' ? 'bg-red-500/20 text-red-400' : lead.lead_type === 'warm' ? 'bg-yellow-500/20 text-yellow-400' : 'bg-blue-500/20 text-blue-400'}`}>{lead.lead_type}</span>}
+                        <span className={`text-[10px] ${textMuted} truncate`}>{lead.assigned_name?.split(' ')[0] || 'Unassigned'}</span>
+                      </div>
+                      {(lead.reassignment_count || 0) > 2 && (
+                        <p className="text-[10px] text-red-400 mt-1 flex items-center gap-1"><UserCog className="h-2.5 w-2.5" /> Reassigned {lead.reassignment_count}×</p>
+                      )}
+                      <AgeBadge daysSinceActivity={days} followupDate={lead.next_followup_date} />
+                      {(lead.tags || []).length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-1.5">
+                          {(lead.tags || []).slice(0, 3).map(tid => {
+                            const tag = crm.tagsList.find(t => t.tag_id === tid);
+                            if (!tag) return null;
+                            return <span key={tid} className="text-[9px] px-1.5 py-0.5 rounded-full font-medium text-white" style={{ backgroundColor: tag.color }}>{tag.name}</span>;
+                          })}
+                          {(lead.tags || []).length > 3 && <span className={`text-[9px] ${textMuted}`}>+{(lead.tags || []).length - 3}</span>}
+                        </div>
+                      )}
+                      <div className="flex gap-1 mt-2 pt-2 border-t border-[var(--border-color)]">
+                        <button type="button" onClick={(e) => { e.stopPropagation(); crm.setReassignLead(lead); crm.setReassignBulkIds(null); crm.setReassignOpen(true); }} className="text-[10px] text-[#e94560] hover:underline" data-testid={`reassign-${lead.lead_id}`}>Reassign</button>
+                        <span className={textMuted}>•</span>
+                        <button type="button" onClick={(e) => { e.stopPropagation(); crm.openWaForLead(lead); }} className="text-[10px] text-green-500 hover:underline">WhatsApp</button>
+                      </div>
+                    </div>
+                  );
+                }}
+              />
+            </div>
+          </>
+        )}
+
+        {/* ── TABLE VIEW ────────────────────────────────────────────── */}
+        {crm.activeTab === 'pipeline' && crm.leadView === 'table' && (() => {
+          const sortedLeads = crm.sortData(crm.filteredLeads, crm.sortConfig.key, crm.sortConfig.dir);
+          return (
+            <div className={`${card} border rounded-md overflow-hidden`}>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm" data-testid="leads-table">
+                  <thead><tr className="bg-[var(--bg-primary)]">
+                    <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} cursor-pointer select-none`} onClick={() => crm.toggleSort('company_name')}>School{crm.sortIndicator('company_name')}</th>
+                    <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} cursor-pointer select-none`} onClick={() => crm.toggleSort('contact_name')}>Contact{crm.sortIndicator('contact_name')}</th>
+                    <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden sm:table-cell cursor-pointer select-none`} onClick={() => crm.toggleSort('lead_type')}>Type{crm.sortIndicator('lead_type')}</th>
+                    <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden md:table-cell cursor-pointer select-none`} onClick={() => crm.toggleSort('stage')}>Stage{crm.sortIndicator('stage')}</th>
+                    <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden lg:table-cell cursor-pointer select-none`} onClick={() => crm.toggleSort('lead_score')}>Score{crm.sortIndicator('lead_score')}<FieldTooltip text="Lead Score (0–100) calculated from engagement, recency, and deal size. Higher = hotter lead." /></th>
+                    <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden lg:table-cell`}>Assigned</th>
+                    <th className={`text-right text-xs uppercase py-3 px-3 ${textMuted}`}>Actions</th>
+                  </tr></thead>
+                  <tbody>
+                    {sortedLeads.map(lead => {
+                      const stg = getStageObj(lead.stage);
+                      return (
+                        <tr key={lead.lead_id} className="border-t border-[var(--border-color)] hover:bg-[var(--bg-hover)] cursor-pointer" onClick={() => crm.openDetail(lead)} data-testid={`lead-row-${lead.lead_id}`}>
+                          <td className="py-2.5 px-3">
+                            <p className={`${textPri} font-medium text-sm`}>{lead.company_name}</p>
+                            <p className={`text-xs ${textMuted}`}>{lead.school_type} {lead.school_city && `| ${lead.school_city}`}</p>
+                          </td>
+                          <td className="py-2.5 px-3">
+                            <p className={`${textPri} text-sm`}>{lead.contact_name}</p>
+                            <p className={`text-xs ${textMuted}`}>{lead.contact_phone}</p>
+                          </td>
+                          <td className="py-2.5 px-3 hidden sm:table-cell">
+                            <span className={`text-xs px-2 py-0.5 rounded font-medium ${lead.lead_type === 'hot' ? 'bg-red-500/20 text-red-400' : lead.lead_type === 'warm' ? 'bg-yellow-500/20 text-yellow-400' : 'bg-blue-500/20 text-blue-400'}`}>{lead.lead_type}</span>
+                          </td>
+                          <td className="py-2.5 px-3 hidden md:table-cell">
+                            <span className={`text-xs px-2 py-0.5 rounded font-medium border ${stg.color}`}>{stg.label}</span>
+                          </td>
+                          <td className="py-2.5 px-3 hidden lg:table-cell"><span className="font-mono text-sm text-[#e94560]">{lead.lead_score || 0}</span></td>
+                          <td className={`py-2.5 px-3 hidden lg:table-cell text-sm ${textSec}`}>{lead.assigned_name?.split(' ')[0]}</td>
+                          <td className="py-2.5 px-3 text-right" onClick={e => e.stopPropagation()}>
+                            <Button size="sm" variant="ghost" onClick={() => crm.openEditLead(lead)} className={`${textSec} h-7`} data-testid={`edit-lead-${lead.lead_id}`}><Edit2 className="h-3 w-3" /></Button>
+                            <Button size="sm" variant="ghost" onClick={async () => { if (!window.confirm('Delete this lead?')) return; await leadsApiObj.delete(lead.lead_id); crm.fetchData(); toast.success('Deleted'); }} className="text-red-400 h-7" data-testid={`delete-lead-${lead.lead_id}`}><Trash2 className="h-3 w-3" /></Button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {sortedLeads.length === 0 && <tr><td colSpan="7"><EmptyState {...(crm.searchTerm ? EMPTY_STATES.searchResult : EMPTY_STATES.leads)} compact /></td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            </div>
           );
         })()}
 
-        {/* TASKS VIEW */}
-        {activeTab === 'tasks' && (
-          <div className="space-y-2" data-testid="tasks-list">
-            {tasksList.length === 0 ? <EmptyState {...EMPTY_STATES.tasks} action={{ label: '+ Add Task', onClick: () => setTaskDialogOpen(true) }} /> : tasksList.map(task => {
-              const isOverdue = task.status === 'pending' && task.due_date && new Date(task.due_date) < new Date();
-              return (
-                <div key={task.task_id} className={`${card} border rounded-md p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 ${isOverdue ? '!border-red-500/40' : ''}`}>
-                  <div className="flex items-center gap-3 flex-1">
-                    <button onClick={() => updateTaskStatus(task.task_id, task.status === 'done' ? 'pending' : 'done')} className={`w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 ${task.status === 'done' ? 'bg-green-500 border-green-500' : isOverdue ? 'border-red-400' : isDark ? 'border-[#6b6b80]' : 'border-[#ccc]'}`}>
-                      {task.status === 'done' && <CheckCircle className="h-3 w-3 text-[var(--text-primary)]" />}
-                    </button>
-                    <div>
-                      <p className={`font-medium text-sm ${task.status === 'done' ? `line-through ${textMuted}` : textPri}`}>{task.title}</p>
-                      <p className={`text-xs ${textMuted}`}>{task.lead_name} | {task.assigned_name} | {task.due_date}</p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {isOverdue && <span className="text-red-400 text-xs flex items-center gap-1"><AlertTriangle className="h-3 w-3" />Overdue</span>}
-                    <span className={`px-2 py-0.5 rounded text-xs border ${task.priority === 'high' ? 'border-red-500/30 text-red-400' : task.priority === 'low' ? 'border-green-500/30 text-green-400' : 'border-yellow-500/30 text-yellow-400'}`}>{task.priority}</span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+        {/* ── TASKS TAB ─────────────────────────────────────────────── */}
+        {crm.activeTab === 'tasks' && (
+          <TasksTab
+            tasksList={crm.tasksList}
+            taskDialogOpen={crm.taskDialogOpen}
+            setTaskDialogOpen={crm.setTaskDialogOpen}
+            taskForm={crm.taskForm}
+            setTaskForm={crm.setTaskForm}
+            spList={crm.spList}
+            saveTask={crm.saveTask}
+            updateTaskStatus={crm.updateTaskStatus}
+          />
         )}
 
-        {/* SCHOOLS VIEW */}
-        {activeTab === 'schools' && (() => {
-          let schFiltered = schoolsList;
-          if (searchTerm) {
-            const s = searchTerm.toLowerCase();
+        {/* ── SCHOOLS TAB ───────────────────────────────────────────── */}
+        {crm.activeTab === 'schools' && (() => {
+          let schFiltered = crm.schoolsList;
+          if (crm.searchTerm) {
+            const s = crm.searchTerm.toLowerCase();
             schFiltered = schFiltered.filter(sc => (sc.school_name || '').toLowerCase().includes(s) || (sc.email || '').toLowerCase().includes(s) || (sc.city || '').toLowerCase().includes(s) || (sc.phone || '').includes(s) || (sc.primary_contact_name || '').toLowerCase().includes(s));
           }
-          schFiltered = sortData(schFiltered, sortConfig.key, sortConfig.dir);
+          schFiltered = crm.sortData(schFiltered, crm.sortConfig.key, crm.sortConfig.dir);
           return (
-          <div className="space-y-3">
-          {/* Mobile: school cards */}
-          <div className="sm:hidden space-y-2" data-testid="schools-list-mobile">
-            {schFiltered.map(sch => {
-              const schLeads = leadsList.filter(l => l.school_id === sch.school_id);
-              return (
-                <div key={sch.school_id} className={`${card} border rounded-md p-3 flex items-start justify-between gap-2`} data-testid={`school-card-${sch.school_id}`}>
-                  <div className="flex-1 min-w-0">
-                    <p className={`${textPri} font-medium text-sm truncate`}>{sch.school_name}</p>
-                    <p className={`text-xs ${textMuted}`}>{sch.school_type}{sch.city ? ` • ${sch.city}` : ''}</p>
-                    {sch.primary_contact_name && <p className={`text-xs ${textSec} mt-0.5`}>{sch.primary_contact_name}{sch.designation ? ` (${sch.designation})` : ''}</p>}
-                    <div className="flex items-center gap-2 mt-1.5">
-                      <span className="text-xs px-2 py-0.5 rounded bg-[#e94560]/20 text-[#e94560] font-bold">{schLeads.length} leads</span>
-                      {sch.phone && <a href={`tel:${sch.phone}`} className={`text-xs ${textSec}`}>{sch.phone}</a>}
+            <div className="space-y-3">
+              {/* Mobile: school cards */}
+              <div className="sm:hidden space-y-2" data-testid="schools-list-mobile">
+                {schFiltered.map(sch => {
+                  const schLeads = crm.leadsList.filter(l => l.school_id === sch.school_id);
+                  return (
+                    <div key={sch.school_id} className={`${card} border rounded-md p-3 flex items-start justify-between gap-2`} data-testid={`school-card-${sch.school_id}`}>
+                      <div className="flex-1 min-w-0">
+                        <p className={`${textPri} font-medium text-sm truncate`}>{sch.school_name}</p>
+                        <p className={`text-xs ${textMuted}`}>{sch.school_type}{sch.city ? ` • ${sch.city}` : ''}</p>
+                        <p className="text-xs mt-0.5">
+                          {sch.primary_contact_name
+                            ? <span className={textSec}>{sch.primary_contact_name}{sch.designation ? ` (${sch.designation})` : ''}</span>
+                            : <span className="italic" style={{ color: '#c0ccd8' }}>no contact on record</span>}
+                        </p>
+                        <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                          <span className="text-xs px-2 py-0.5 rounded bg-[#e94560]/20 text-[#e94560] font-bold">{schLeads.length} leads</span>
+                          {completionBadge(crm.calcSchoolCompletion(sch), () => crm.openEditSchool(sch))}
+                          {sch.phone && <a href={`tel:${sch.phone}`} className={`text-xs ${textSec}`}>{sch.phone}</a>}
+                          {sch.linkedin_url && <a href={sch.linkedin_url.startsWith('http') ? sch.linkedin_url : `https://${sch.linkedin_url}`} target="_blank" rel="noopener noreferrer" className="text-[#0a66c2]" title="LinkedIn"><Linkedin className="h-3.5 w-3.5" /></a>}
+                          {sch.instagram_url && <a href={sch.instagram_url.startsWith('http') ? sch.instagram_url : `https://instagram.com/${sch.instagram_url.replace('@','')}`} target="_blank" rel="noopener noreferrer" className="text-[#e1306c]" title="Instagram"><Instagram className="h-3.5 w-3.5" /></a>}
+                        </div>
+                      </div>
+                      <div className="flex gap-1 flex-shrink-0">
+                        <Button size="sm" variant="ghost" onClick={() => navigate(`/school-profile/${sch.school_id}`)} className={`${textSec} h-9 w-9 p-0`} title="View School Profile"><Eye className="h-3.5 w-3.5" /></Button>
+                        <Button size="sm" variant="ghost" onClick={() => crm.openEditSchool(sch)} className={`${textSec} h-9 w-9 p-0`}><Edit2 className="h-3.5 w-3.5" /></Button>
+                        <Button size="sm" variant="ghost" onClick={() => crm.handleDeleteSchool(sch)} className="text-red-400 h-9 w-9 p-0"><Trash2 className="h-3.5 w-3.5" /></Button>
+                      </div>
                     </div>
-                  </div>
-                  <div className="flex gap-1 flex-shrink-0">
-                    <Button size="sm" variant="ghost" onClick={() => navigate(`/school-profile/${sch.school_id}`)} className={`${textSec} h-9 w-9 p-0`} title="View School Profile"><Eye className="h-3.5 w-3.5" /></Button>
-                    <Button size="sm" variant="ghost" onClick={() => openEditSchool(sch)} className={`${textSec} h-9 w-9 p-0`}><Edit2 className="h-3.5 w-3.5" /></Button>
-                    <Button size="sm" variant="ghost" onClick={() => handleDeleteSchool(sch)} className="text-red-400 h-9 w-9 p-0"><Trash2 className="h-3.5 w-3.5" /></Button>
-                  </div>
+                  );
+                })}
+                {schFiltered.length === 0 && <p className={`text-center ${textMuted} py-12`}>No schools found</p>}
+              </div>
+              {/* Desktop: table */}
+              <div className={`hidden sm:block ${card} border rounded-md overflow-hidden`}>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm" data-testid="schools-table">
+                    <thead><tr className="bg-[var(--bg-primary)]">
+                      <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} cursor-pointer select-none`} onClick={() => crm.toggleSort('school_name')}>School{crm.sortIndicator('school_name')}</th>
+                      <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden sm:table-cell cursor-pointer select-none`} onClick={() => crm.toggleSort('school_type')}>Type{crm.sortIndicator('school_type')}</th>
+                      <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden md:table-cell cursor-pointer select-none`} onClick={() => crm.toggleSort('city')}>City{crm.sortIndicator('city')}</th>
+                      <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden md:table-cell`}>Contact</th>
+                      <th className={`text-center text-xs uppercase py-3 px-3 ${textMuted} hidden lg:table-cell cursor-pointer select-none`} onClick={() => crm.toggleSort('school_strength')}>Strength{crm.sortIndicator('school_strength')}</th>
+                      <th className={`text-center text-xs uppercase py-3 px-3 ${textMuted} hidden lg:table-cell`}>Profile</th>
+                      <th className={`text-center text-xs uppercase py-3 px-3 ${textMuted}`}>Leads</th>
+                      <th className={`text-right text-xs uppercase py-3 px-3 ${textMuted}`}>Actions</th>
+                    </tr></thead>
+                    <tbody>
+                      {schFiltered.map(sch => {
+                        const schLeads = crm.leadsList.filter(l => l.school_id === sch.school_id);
+                        return (
+                          <tr key={sch.school_id} className="border-t border-[var(--border-color)] hover:bg-[var(--bg-hover)] cursor-pointer" onClick={() => navigate(`/school-profile/${sch.school_id}`)} data-testid={`school-row-${sch.school_id}`}>
+                            <td className="py-2.5 px-3">
+                              <p className={`${textPri} font-medium hover:text-[#e94560] transition-colors`}>{sch.school_name}</p>
+                              <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                                {sch.email && <a href={`mailto:${sch.email}`} className={`text-xs ${textMuted} hover:text-[#e94560] flex items-center gap-0.5`} onClick={e => e.stopPropagation()}><MessageSquare className="h-2.5 w-2.5" />{sch.email}</a>}
+                                {sch.linkedin_url && <a href={sch.linkedin_url.startsWith('http') ? sch.linkedin_url : `https://${sch.linkedin_url}`} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} className="text-[#0a66c2] hover:opacity-75" title="LinkedIn"><Linkedin className="h-3 w-3" /></a>}
+                                {sch.instagram_url && <a href={sch.instagram_url.startsWith('http') ? sch.instagram_url : `https://instagram.com/${sch.instagram_url.replace('@','')}`} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} className="text-[#e1306c] hover:opacity-75" title="Instagram"><Instagram className="h-3 w-3" /></a>}
+                              </div>
+                            </td>
+                            <td className={`py-2.5 px-3 hidden sm:table-cell text-xs ${textSec}`}>{sch.school_type}</td>
+                            <td className="py-2.5 px-3 hidden md:table-cell text-xs">
+                              {sch.city
+                                ? <span className={textSec}>{sch.city}{sch.state ? `, ${sch.state}` : ''}</span>
+                                : <span className="italic text-[11px]" style={{ color: '#c0ccd8' }}>no city</span>}
+                            </td>
+                            <td className="py-2.5 px-3 hidden md:table-cell">
+                              {sch.primary_contact_name
+                                ? <>
+                                    <p className={`text-xs ${textPri}`}>{sch.primary_contact_name}</p>
+                                    <p className={`text-xs ${textMuted}`}>{sch.designation || <span className="italic" style={{ color: '#c0ccd8' }}>no title</span>}</p>
+                                  </>
+                                : <span className="text-[11px] italic" style={{ color: '#c0ccd8' }}>no contact</span>}
+                            </td>
+                            <td className={`py-2.5 px-3 hidden lg:table-cell text-center font-mono ${textPri}`}>{sch.school_strength || '-'}</td>
+                            <td className="py-2.5 px-3 hidden lg:table-cell text-center" onClick={e => e.stopPropagation()}>
+                              {completionBadge(crm.calcSchoolCompletion(sch), () => crm.openEditSchool(sch))}
+                            </td>
+                            <td className="py-2.5 px-3 text-center"><span className="bg-[#e94560]/20 text-[#e94560] px-2 py-0.5 rounded text-xs font-bold">{schLeads.length}</span></td>
+                            <td className="py-2.5 px-3 text-right" onClick={e => e.stopPropagation()}>
+                              <Button size="sm" variant="ghost" onClick={e => { e.stopPropagation(); crm.openEditSchool(sch); }} className={`${textSec} h-7`} data-testid={`edit-school-${sch.school_id}`}><Edit2 className="h-3 w-3" /></Button>
+                              <Button size="sm" variant="ghost" onClick={e => { e.stopPropagation(); crm.handleDeleteSchool(sch); }} className="text-red-400 h-7" data-testid={`delete-school-${sch.school_id}`}><Trash2 className="h-3 w-3" /></Button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      {schFiltered.length === 0 && <tr><td colSpan="8" className={`py-12 text-center ${textMuted}`}>No schools match your search</td></tr>}
+                    </tbody>
+                  </table>
                 </div>
-              );
-            })}
-            {schFiltered.length === 0 && <p className={`text-center ${textMuted} py-12`}>No schools found</p>}
-          </div>
-          {/* Desktop: table */}
-          <div className={`hidden sm:block ${card} border rounded-md overflow-hidden`}>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm" data-testid="schools-table">
-                <thead><tr className={'bg-[var(--bg-primary)]'}>
-                  <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} cursor-pointer select-none`} onClick={() => toggleSort('school_name')}>School{sortIndicator('school_name')}</th>
-                  <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden sm:table-cell cursor-pointer select-none`} onClick={() => toggleSort('school_type')}>Type{sortIndicator('school_type')}</th>
-                  <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden md:table-cell cursor-pointer select-none`} onClick={() => toggleSort('city')}>City{sortIndicator('city')}</th>
-                  <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden md:table-cell`}>Contact</th>
-                  <th className={`text-center text-xs uppercase py-3 px-3 ${textMuted} hidden lg:table-cell cursor-pointer select-none`} onClick={() => toggleSort('school_strength')}>Strength{sortIndicator('school_strength')}</th>
-                  <th className={`text-center text-xs uppercase py-3 px-3 ${textMuted} hidden lg:table-cell`}>Profile</th>
-                  <th className={`text-center text-xs uppercase py-3 px-3 ${textMuted}`}>Leads</th>
-                  <th className={`text-right text-xs uppercase py-3 px-3 ${textMuted}`}>Actions</th>
-                </tr></thead>
-                <tbody>
-                  {schFiltered.map(sch => {
-                    const schLeads = leadsList.filter(l => l.school_id === sch.school_id);
-                    return (
-                      <tr key={sch.school_id} className={`border-t border-[var(--border-color)] hover:bg-[var(--bg-hover)]`} data-testid={`school-row-${sch.school_id}`}>
-                        <td className="py-2.5 px-3">
-                          <p className={`${textPri} font-medium`}>{sch.school_name}</p>
-                          <p className={`text-xs ${textMuted}`}>{sch.email}</p>
-                        </td>
-                        <td className={`py-2.5 px-3 hidden sm:table-cell text-xs ${textSec}`}>{sch.school_type}</td>
-                        <td className={`py-2.5 px-3 hidden md:table-cell text-xs ${textSec}`}>{sch.city}{sch.state ? `, ${sch.state}` : ''}</td>
-                        <td className="py-2.5 px-3 hidden md:table-cell">
-                          <p className={`text-xs ${textPri}`}>{sch.primary_contact_name}</p>
-                          <p className={`text-xs ${textMuted}`}>{sch.designation}</p>
-                        </td>
-                        <td className={`py-2.5 px-3 hidden lg:table-cell text-center font-mono ${textPri}`}>{sch.school_strength || '-'}</td>
-                        <td className="py-2.5 px-3 hidden lg:table-cell text-center">
-                          {(() => {
-                            const pct = calcSchoolCompletion(sch);
-                            const cls = pct >= 90 ? 'bg-green-500/20 text-green-400' : pct >= 60 ? 'bg-yellow-500/20 text-yellow-400' : pct >= 30 ? 'bg-orange-500/20 text-orange-400' : 'bg-red-500/20 text-red-400';
-                            return <span className={`text-[11px] px-2 py-0.5 rounded font-bold ${cls}`}>{pct}%</span>;
-                          })()}
-                        </td>
-                        <td className="py-2.5 px-3 text-center"><span className="bg-[#e94560]/20 text-[#e94560] px-2 py-0.5 rounded text-xs font-bold">{schLeads.length}</span></td>
-                        <td className="py-2.5 px-3 text-right" onClick={e => e.stopPropagation()}>
-                          <Button size="sm" variant="ghost" onClick={() => navigate(`/school-profile/${sch.school_id}`)} className={`${textSec} h-7`} title="View School Profile"><Eye className="h-3 w-3" /></Button>
-                          <Button size="sm" variant="ghost" onClick={() => openEditSchool(sch)} className={`${textSec} h-7`} data-testid={`edit-school-${sch.school_id}`}><Edit2 className="h-3 w-3" /></Button>
-                          <Button size="sm" variant="ghost" onClick={() => handleDeleteSchool(sch)} className="text-red-400 h-7" data-testid={`delete-school-${sch.school_id}`}><Trash2 className="h-3 w-3" /></Button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                  {schFiltered.length === 0 && <tr><td colSpan="8" className={`py-12 text-center ${textMuted}`}>No schools match your search</td></tr>}
-                </tbody>
-              </table>
+              </div>
             </div>
-          </div>
-          </div>
           );
         })()}
 
-        {/* PACKAGES TAB */}
-        {/* REPORTS TAB */}
-        {activeTab === 'reports' && (() => {
-          const totalContacts = contactsList.length;
-          const convertedContacts = contactsList.filter(c => c.converted_to_lead).length;
+        {/* ── REPORTS TAB ───────────────────────────────────────────── */}
+        {crm.activeTab === 'reports' && (() => {
+          const totalContacts = crm.contactsList.length;
+          const convertedContacts = crm.contactsList.filter(c => c.converted_to_lead).length;
           const activeContacts = totalContacts - convertedContacts;
-          const totalLeads = leadsList.length;
-          const demoLeads = leadsList.filter(l => l.stage === 'demo').length;
-          const quotedLeads = leadsList.filter(l => l.stage === 'quoted').length;
-          const wonLeads = leadsList.filter(l => l.stage === 'won').length;
-          const retentionLeads = leadsList.filter(l => l.stage === 'retention').length;
-          const resellLeads = leadsList.filter(l => l.stage === 'resell').length;
-
-          // Aging buckets for contacts (days since last_activity_date)
+          const totalLeads = crm.leadsList.length;
+          const demoLeads = crm.leadsList.filter(l => l.stage === 'demo').length;
+          const quotedLeads = crm.leadsList.filter(l => l.stage === 'quoted').length;
+          const wonLeads = crm.leadsList.filter(l => l.stage === 'won').length;
+          const retentionLeads = crm.leadsList.filter(l => l.stage === 'retention').length;
+          const resellLeads = crm.leadsList.filter(l => l.stage === 'resell').length;
           const agingBuckets = [
-            { label: 'Fresh (≤3d)', cls: 'bg-green-500/20 text-green-400 border-green-500/30', count: contactsList.filter(c => !c.converted_to_lead && daysSince(c.last_activity_date) <= 3).length },
-            { label: 'Active (4-7d)', cls: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30', count: contactsList.filter(c => !c.converted_to_lead && daysSince(c.last_activity_date) > 3 && daysSince(c.last_activity_date) <= 7).length },
-            { label: 'Cooling (8-14d)', cls: 'bg-orange-500/20 text-orange-400 border-orange-500/30', count: contactsList.filter(c => !c.converted_to_lead && daysSince(c.last_activity_date) > 7 && daysSince(c.last_activity_date) <= 14).length },
-            { label: 'Cold (15d+)', cls: 'bg-red-500/20 text-red-400 border-red-500/30', count: contactsList.filter(c => !c.converted_to_lead && daysSince(c.last_activity_date) > 14).length },
+            { label: 'Fresh (≤3d)', cls: 'bg-green-500/20 text-green-400 border-green-500/30', count: crm.contactsList.filter(c => !c.converted_to_lead && crm.daysSince(c.last_activity_date) <= 3).length },
+            { label: 'Active (4-7d)', cls: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30', count: crm.contactsList.filter(c => !c.converted_to_lead && crm.daysSince(c.last_activity_date) > 3 && crm.daysSince(c.last_activity_date) <= 7).length },
+            { label: 'Cooling (8-14d)', cls: 'bg-orange-500/20 text-orange-400 border-orange-500/30', count: crm.contactsList.filter(c => !c.converted_to_lead && crm.daysSince(c.last_activity_date) > 7 && crm.daysSince(c.last_activity_date) <= 14).length },
+            { label: 'Cold (15d+)', cls: 'bg-red-500/20 text-red-400 border-red-500/30', count: crm.contactsList.filter(c => !c.converted_to_lead && crm.daysSince(c.last_activity_date) > 14).length },
           ];
-          // Lead aging buckets
           const leadAgingBuckets = [
-            { label: '≤3d', cls: 'bg-green-500/20 text-green-400', count: leadsList.filter(l => daysSince(l.last_activity_date) <= 3).length },
-            { label: '4-7d', cls: 'bg-yellow-500/20 text-yellow-400', count: leadsList.filter(l => daysSince(l.last_activity_date) > 3 && daysSince(l.last_activity_date) <= 7).length },
-            { label: '8-14d', cls: 'bg-orange-500/20 text-orange-400', count: leadsList.filter(l => daysSince(l.last_activity_date) > 7 && daysSince(l.last_activity_date) <= 14).length },
-            { label: '15d+', cls: 'bg-red-500/20 text-red-400', count: leadsList.filter(l => daysSince(l.last_activity_date) > 14).length },
+            { label: '≤3d', cls: 'bg-green-500/20 text-green-400', count: crm.leadsList.filter(l => crm.daysSince(l.last_activity_date) <= 3).length },
+            { label: '4-7d', cls: 'bg-yellow-500/20 text-yellow-400', count: crm.leadsList.filter(l => crm.daysSince(l.last_activity_date) > 3 && crm.daysSince(l.last_activity_date) <= 7).length },
+            { label: '8-14d', cls: 'bg-orange-500/20 text-orange-400', count: crm.leadsList.filter(l => crm.daysSince(l.last_activity_date) > 7 && crm.daysSince(l.last_activity_date) <= 14).length },
+            { label: '15d+', cls: 'bg-red-500/20 text-red-400', count: crm.leadsList.filter(l => crm.daysSince(l.last_activity_date) > 14).length },
           ];
-          // Team leaderboard
           const teamMap = {};
-          spList.forEach(sp => { teamMap[sp.email] = { name: sp.name, leads: 0, won: 0, contacts: 0 }; });
-          leadsList.forEach(l => { if (teamMap[l.assigned_to]) { teamMap[l.assigned_to].leads++; if (l.stage === 'won') teamMap[l.assigned_to].won++; } });
-          contactsList.forEach(c => { if (teamMap[c.created_by]) teamMap[c.created_by].contacts++; });
+          crm.spList.forEach(sp => { teamMap[sp.email] = { name: sp.name, leads: 0, won: 0, contacts: 0 }; });
+          crm.leadsList.forEach(l => { if (teamMap[l.assigned_to]) { teamMap[l.assigned_to].leads++; if (l.stage === 'won') teamMap[l.assigned_to].won++; } });
+          crm.contactsList.forEach(c => { if (teamMap[c.created_by]) teamMap[c.created_by].contacts++; });
           const teamBoard = Object.values(teamMap).sort((a, b) => b.leads - a.leads);
-          // School completion distribution
           const schCompletion = { incomplete: 0, low: 0, good: 0, complete: 0 };
-          schoolsList.forEach(sch => {
-            const p = calcSchoolCompletion(sch);
+          crm.schoolsList.forEach(sch => {
+            const p = crm.calcSchoolCompletion(sch);
             if (p < 30) schCompletion.incomplete++;
             else if (p < 60) schCompletion.low++;
             else if (p < 90) schCompletion.good++;
             else schCompletion.complete++;
           });
-          // Leads per school
-          const leadsPerSchool = schoolsList.map(sch => ({
+          const leadsPerSchool = crm.schoolsList.map(sch => ({
             name: sch.school_name, city: sch.city,
-            count: leadsList.filter(l => l.school_id === sch.school_id).length,
-            pct: calcSchoolCompletion(sch),
+            count: crm.leadsList.filter(l => l.school_id === sch.school_id).length,
+            pct: crm.calcSchoolCompletion(sch),
           })).filter(s => s.count > 0).sort((a, b) => b.count - a.count).slice(0, 10);
 
           return (
-          <div className="space-y-5" data-testid="reports-tab">
-            {/* Funnel */}
-            <div className={`${card} border rounded-md p-4`}>
-              <h3 className={`${textPri} font-semibold text-sm mb-3`}>Contact → Lead Funnel</h3>
-              <div className="flex flex-wrap gap-2 items-end">
-                {[
-                  { label: 'Total Contacts', val: totalContacts, cls: 'bg-blue-500/20 text-blue-400 border-blue-500/30' },
-                  { label: 'Converted', val: convertedContacts, cls: 'bg-cyan-500/20 text-cyan-400 border-cyan-500/30', pct: totalContacts ? Math.round(convertedContacts / totalContacts * 100) : 0 },
-                  { label: 'Demo', val: demoLeads, cls: 'bg-purple-500/20 text-purple-400 border-purple-500/30', pct: totalLeads ? Math.round(demoLeads / totalLeads * 100) : 0 },
-                  { label: 'Quoted', val: quotedLeads, cls: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30', pct: totalLeads ? Math.round(quotedLeads / totalLeads * 100) : 0 },
-                  { label: 'Won', val: wonLeads, cls: 'bg-green-500/20 text-green-400 border-green-500/30', pct: totalLeads ? Math.round(wonLeads / totalLeads * 100) : 0 },
-                  { label: 'Retention', val: retentionLeads, cls: 'bg-teal-500/20 text-teal-400 border-teal-500/30', pct: wonLeads ? Math.round(retentionLeads / Math.max(wonLeads, 1) * 100) : 0 },
-                  { label: 'Resell', val: resellLeads, cls: 'bg-indigo-500/20 text-indigo-400 border-indigo-500/30', pct: retentionLeads ? Math.round(resellLeads / Math.max(retentionLeads, 1) * 100) : 0 },
-                ].map((f, i) => (
-                  <div key={f.label} className={`flex-1 min-w-[90px] border rounded-md p-3 text-center ${f.cls}`}>
-                    <p className="text-2xl font-bold">{f.val}</p>
-                    <p className="text-[11px] font-medium">{f.label}</p>
-                    {f.pct !== undefined && <p className="text-[10px] opacity-70">{f.pct}% conv.</p>}
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Aging buckets (contacts + leads) */}
-            <div className="grid sm:grid-cols-2 gap-4">
+            <div className="space-y-5" data-testid="reports-tab">
               <div className={`${card} border rounded-md p-4`}>
-                <h3 className={`${textPri} font-semibold text-sm mb-3`}>Contact Follow-up Aging</h3>
-                <div className="space-y-2">
-                  {agingBuckets.map(b => (
-                    <div key={b.label} className="flex items-center justify-between">
-                      <span className={`text-xs px-2 py-0.5 rounded border ${b.cls}`}>{b.label}</span>
-                      <div className="flex-1 mx-3 bg-[var(--bg-primary)] rounded-full h-2 overflow-hidden">
-                        <div className={`h-2 rounded-full ${b.cls.split(' ')[0]}`} style={{ width: `${activeContacts ? Math.round(b.count / activeContacts * 100) : 0}%` }} />
-                      </div>
-                      <span className={`text-xs font-bold ${textPri} w-6 text-right`}>{b.count}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-              <div className={`${card} border rounded-md p-4`}>
-                <h3 className={`${textPri} font-semibold text-sm mb-3`}>Lead Follow-up Aging</h3>
-                <div className="space-y-2">
-                  {leadAgingBuckets.map(b => (
-                    <div key={b.label} className="flex items-center justify-between">
-                      <span className={`text-xs px-2 py-0.5 rounded ${b.cls} w-14 text-center`}>{b.label}</span>
-                      <div className="flex-1 mx-3 bg-[var(--bg-primary)] rounded-full h-2 overflow-hidden">
-                        <div className={`h-2 rounded-full ${b.cls.split(' ')[0]}`} style={{ width: `${totalLeads ? Math.round(b.count / totalLeads * 100) : 0}%` }} />
-                      </div>
-                      <span className={`text-xs font-bold ${textPri} w-6 text-right`}>{b.count}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-
-            {/* Stage distribution */}
-            <div className={`${card} border rounded-md p-4`}>
-              <h3 className={`${textPri} font-semibold text-sm mb-3`}>Lead Stage Distribution</h3>
-              <div className="flex flex-wrap gap-2">
-                {STAGES.map(s => {
-                  const cnt = leadsList.filter(l => l.stage === s.id).length;
-                  return (
-                    <div key={s.id} className={`flex items-center gap-2 px-3 py-2 rounded border ${s.color} flex-1 min-w-[90px] justify-between`}>
-                      <span className="text-xs font-medium">{s.label}</span>
-                      <span className="text-lg font-bold">{cnt}</span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Team leaderboard */}
-            {teamBoard.length > 0 && (
-              <div className={`${card} border rounded-md p-4`}>
-                <h3 className={`${textPri} font-semibold text-sm mb-3`}>Team Leaderboard</h3>
-                <div className={`rounded-md overflow-hidden border border-[var(--border-color)]`}>
-                  <table className="w-full text-sm">
-                    <thead><tr className="bg-[var(--bg-primary)]">
-                      <th className={`text-left py-2 px-3 text-xs uppercase ${textMuted}`}>Sales Person</th>
-                      <th className={`text-center py-2 px-3 text-xs uppercase ${textMuted}`}>Contacts</th>
-                      <th className={`text-center py-2 px-3 text-xs uppercase ${textMuted}`}>Leads</th>
-                      <th className={`text-center py-2 px-3 text-xs uppercase ${textMuted}`}>Won</th>
-                      <th className={`text-center py-2 px-3 text-xs uppercase ${textMuted}`}>Win Rate</th>
-                    </tr></thead>
-                    <tbody>
-                      {teamBoard.map((m, i) => (
-                        <tr key={m.name} className={`border-t border-[var(--border-color)] ${i === 0 ? 'bg-[#e94560]/5' : ''}`}>
-                          <td className={`py-2 px-3 font-medium ${textPri}`}>
-                            <div className="flex items-center gap-1.5">
-                              {i === 0 && <span className="text-yellow-400 text-xs">★</span>}
-                              {m.name}
-                            </div>
-                          </td>
-                          <td className={`py-2 px-3 text-center ${textSec}`}>{m.contacts}</td>
-                          <td className={`py-2 px-3 text-center font-mono text-[#e94560] font-bold`}>{m.leads}</td>
-                          <td className={`py-2 px-3 text-center text-green-400 font-bold`}>{m.won}</td>
-                          <td className={`py-2 px-3 text-center text-xs ${textSec}`}>{m.leads ? `${Math.round(m.won / m.leads * 100)}%` : '—'}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
-
-            {/* School profile completion */}
-            <div className="grid sm:grid-cols-2 gap-4">
-              <div className={`${card} border rounded-md p-4`}>
-                <h3 className={`${textPri} font-semibold text-sm mb-3`}>School Profile Completion</h3>
-                <div className="space-y-2">
+                <h3 className={`${textPri} font-semibold text-sm mb-3`}>Contact → Lead Funnel</h3>
+                <div className="flex flex-wrap gap-2 items-end">
                   {[
-                    { label: 'Incomplete (<30%)', val: schCompletion.incomplete, cls: 'bg-red-500/20 text-red-400 border-red-500/30' },
-                    { label: 'Low (30-59%)', val: schCompletion.low, cls: 'bg-orange-500/20 text-orange-400 border-orange-500/30' },
-                    { label: 'Good (60-89%)', val: schCompletion.good, cls: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30' },
-                    { label: 'Complete (90%+)', val: schCompletion.complete, cls: 'bg-green-500/20 text-green-400 border-green-500/30' },
-                  ].map(b => (
-                    <div key={b.label} className="flex items-center justify-between">
-                      <span className={`text-xs px-2 py-0.5 rounded border ${b.cls} min-w-[130px]`}>{b.label}</span>
-                      <div className="flex-1 mx-3 bg-[var(--bg-primary)] rounded-full h-2 overflow-hidden">
-                        <div className={`h-2 rounded-full ${b.cls.split(' ')[0]}`} style={{ width: `${schoolsList.length ? Math.round(b.val / schoolsList.length * 100) : 0}%` }} />
-                      </div>
-                      <span className={`text-xs font-bold ${textPri} w-6 text-right`}>{b.val}</span>
+                    { label: 'Total Contacts', val: totalContacts, cls: 'bg-blue-500/20 text-blue-400 border-blue-500/30' },
+                    { label: 'Converted', val: convertedContacts, cls: 'bg-cyan-500/20 text-cyan-400 border-cyan-500/30', pct: totalContacts ? Math.round(convertedContacts / totalContacts * 100) : 0 },
+                    { label: 'Demo', val: demoLeads, cls: 'bg-purple-500/20 text-purple-400 border-purple-500/30', pct: totalLeads ? Math.round(demoLeads / totalLeads * 100) : 0 },
+                    { label: 'Quoted', val: quotedLeads, cls: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30', pct: totalLeads ? Math.round(quotedLeads / totalLeads * 100) : 0 },
+                    { label: 'Won', val: wonLeads, cls: 'bg-green-500/20 text-green-400 border-green-500/30', pct: totalLeads ? Math.round(wonLeads / totalLeads * 100) : 0 },
+                    { label: 'Retention', val: retentionLeads, cls: 'bg-teal-500/20 text-teal-400 border-teal-500/30', pct: wonLeads ? Math.round(retentionLeads / Math.max(wonLeads, 1) * 100) : 0 },
+                    { label: 'Resell', val: resellLeads, cls: 'bg-indigo-500/20 text-indigo-400 border-indigo-500/30', pct: retentionLeads ? Math.round(resellLeads / Math.max(retentionLeads, 1) * 100) : 0 },
+                  ].map(f => (
+                    <div key={f.label} className={`flex-1 min-w-[90px] border rounded-md p-3 text-center ${f.cls}`}>
+                      <p className="text-2xl font-bold">{f.val}</p>
+                      <p className="text-[11px] font-medium">{f.label}</p>
+                      {f.pct !== undefined && <p className="text-[10px] opacity-70">{f.pct}% conv.</p>}
                     </div>
                   ))}
                 </div>
               </div>
-              {/* Top schools by leads */}
-              {leadsPerSchool.length > 0 && (
+              <div className="grid sm:grid-cols-2 gap-4">
                 <div className={`${card} border rounded-md p-4`}>
-                  <h3 className={`${textPri} font-semibold text-sm mb-3`}>Top Schools by Engagement</h3>
-                  <div className="space-y-1.5">
-                    {leadsPerSchool.slice(0, 8).map(s => (
-                      <div key={s.name} className="flex items-center justify-between">
-                        <div className="flex-1 min-w-0">
-                          <p className={`text-xs ${textPri} truncate`}>{s.name}</p>
-                          <p className={`text-[10px] ${textMuted}`}>{s.city}</p>
+                  <h3 className={`${textPri} font-semibold text-sm mb-3`}>Contact Follow-up Aging</h3>
+                  <div className="space-y-2">
+                    {agingBuckets.map(b => (
+                      <div key={b.label} className="flex items-center justify-between">
+                        <span className={`text-xs px-2 py-0.5 rounded border ${b.cls}`}>{b.label}</span>
+                        <div className="flex-1 mx-3 bg-[var(--bg-primary)] rounded-full h-2 overflow-hidden">
+                          <div className={`h-2 rounded-full ${b.cls.split(' ')[0]}`} style={{ width: `${activeContacts ? Math.round(b.count / activeContacts * 100) : 0}%` }} />
                         </div>
-                        <div className="flex items-center gap-2 ml-2">
-                          <span className={`text-[10px] px-1.5 py-0.5 rounded ${s.pct >= 90 ? 'bg-green-500/20 text-green-400' : s.pct >= 60 ? 'bg-yellow-500/20 text-yellow-400' : 'bg-orange-500/20 text-orange-400'}`}>{s.pct}%</span>
-                          <span className="text-xs font-bold text-[#e94560]">{s.count}</span>
-                        </div>
+                        <span className={`text-xs font-bold ${textPri} w-6 text-right`}>{b.count}</span>
                       </div>
                     ))}
                   </div>
                 </div>
+                <div className={`${card} border rounded-md p-4`}>
+                  <h3 className={`${textPri} font-semibold text-sm mb-3`}>Lead Follow-up Aging</h3>
+                  <div className="space-y-2">
+                    {leadAgingBuckets.map(b => (
+                      <div key={b.label} className="flex items-center justify-between">
+                        <span className={`text-xs px-2 py-0.5 rounded ${b.cls} w-14 text-center`}>{b.label}</span>
+                        <div className="flex-1 mx-3 bg-[var(--bg-primary)] rounded-full h-2 overflow-hidden">
+                          <div className={`h-2 rounded-full ${b.cls.split(' ')[0]}`} style={{ width: `${totalLeads ? Math.round(b.count / totalLeads * 100) : 0}%` }} />
+                        </div>
+                        <span className={`text-xs font-bold ${textPri} w-6 text-right`}>{b.count}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              <div className={`${card} border rounded-md p-4`}>
+                <h3 className={`${textPri} font-semibold text-sm mb-3`}>Lead Stage Distribution</h3>
+                <div className="flex flex-wrap gap-2">
+                  {STAGES.map(s => {
+                    const cnt = crm.leadsList.filter(l => l.stage === s.id).length;
+                    return (
+                      <div key={s.id} className={`flex items-center gap-2 px-3 py-2 rounded border ${s.color} flex-1 min-w-[90px] justify-between`}>
+                        <span className="text-xs font-medium">{s.label}</span>
+                        <span className="text-lg font-bold">{cnt}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+              {teamBoard.length > 0 && (
+                <div className={`${card} border rounded-md p-4`}>
+                  <h3 className={`${textPri} font-semibold text-sm mb-3`}>Team Leaderboard</h3>
+                  <div className="rounded-md overflow-hidden border border-[var(--border-color)]">
+                    <table className="w-full text-sm">
+                      <thead><tr className="bg-[var(--bg-primary)]">
+                        <th className={`text-left py-2 px-3 text-xs uppercase ${textMuted}`}>Sales Person</th>
+                        <th className={`text-center py-2 px-3 text-xs uppercase ${textMuted}`}>Contacts</th>
+                        <th className={`text-center py-2 px-3 text-xs uppercase ${textMuted}`}>Leads</th>
+                        <th className={`text-center py-2 px-3 text-xs uppercase ${textMuted}`}>Won</th>
+                        <th className={`text-center py-2 px-3 text-xs uppercase ${textMuted}`}>Win Rate</th>
+                      </tr></thead>
+                      <tbody>
+                        {teamBoard.map((m, i) => (
+                          <tr key={m.name} className={`border-t border-[var(--border-color)] ${i === 0 ? 'bg-[#e94560]/5' : ''}`}>
+                            <td className={`py-2 px-3 font-medium ${textPri}`}>
+                              <div className="flex items-center gap-1.5">{i === 0 && <span className="text-yellow-400 text-xs">★</span>}{m.name}</div>
+                            </td>
+                            <td className={`py-2 px-3 text-center ${textSec}`}>{m.contacts}</td>
+                            <td className="py-2 px-3 text-center font-mono text-[#e94560] font-bold">{m.leads}</td>
+                            <td className="py-2 px-3 text-center text-green-400 font-bold">{m.won}</td>
+                            <td className={`py-2 px-3 text-center text-xs ${textSec}`}>{m.leads ? `${Math.round(m.won / m.leads * 100)}%` : '—'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
               )}
+              <div className="grid sm:grid-cols-2 gap-4">
+                <div className={`${card} border rounded-md p-4`}>
+                  <h3 className={`${textPri} font-semibold text-sm mb-3`}>School Profile Completion</h3>
+                  <div className="space-y-2">
+                    {[
+                      { label: 'Incomplete (<30%)', val: schCompletion.incomplete, cls: 'bg-red-500/20 text-red-400 border-red-500/30' },
+                      { label: 'Low (30-59%)', val: schCompletion.low, cls: 'bg-orange-500/20 text-orange-400 border-orange-500/30' },
+                      { label: 'Good (60-89%)', val: schCompletion.good, cls: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30' },
+                      { label: 'Complete (90%+)', val: schCompletion.complete, cls: 'bg-green-500/20 text-green-400 border-green-500/30' },
+                    ].map(b => (
+                      <div key={b.label} className="flex items-center justify-between">
+                        <span className={`text-xs px-2 py-0.5 rounded border ${b.cls} min-w-[130px]`}>{b.label}</span>
+                        <div className="flex-1 mx-3 bg-[var(--bg-primary)] rounded-full h-2 overflow-hidden">
+                          <div className={`h-2 rounded-full ${b.cls.split(' ')[0]}`} style={{ width: `${crm.schoolsList.length ? Math.round(b.val / crm.schoolsList.length * 100) : 0}%` }} />
+                        </div>
+                        <span className={`text-xs font-bold ${textPri} w-6 text-right`}>{b.val}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                {leadsPerSchool.length > 0 && (
+                  <div className={`${card} border rounded-md p-4`}>
+                    <h3 className={`${textPri} font-semibold text-sm mb-3`}>Top Schools by Engagement</h3>
+                    <div className="space-y-1.5">
+                      {leadsPerSchool.slice(0, 8).map(s => (
+                        <div key={s.name} className="flex items-center justify-between">
+                          <div className="flex-1 min-w-0">
+                            <p className={`text-xs ${textPri} truncate`}>{s.name}</p>
+                            <p className={`text-[10px] ${textMuted}`}>{s.city}</p>
+                          </div>
+                          <div className="flex items-center gap-2 ml-2">
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded ${s.pct >= 90 ? 'bg-green-500/20 text-green-400' : s.pct >= 60 ? 'bg-yellow-500/20 text-yellow-400' : 'bg-orange-500/20 text-orange-400'}`}>{s.pct}%</span>
+                            <span className="text-xs font-bold text-[#e94560]">{s.count}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
           );
         })()}
 
-        {/* LEAD DETAIL DIALOG */}
-        {detailLead && (
-          <Dialog open={!!detailLead} onOpenChange={() => setDetailLead(null)}>
-            <DialogContent className={`${dlgCls} w-[calc(100vw-1rem)] sm:max-w-2xl max-h-[88dvh] overflow-y-auto`}>
-              <DialogHeader>
-                <DialogTitle className={`${textPri} text-lg flex items-center justify-between`}>
-                  <div>
-                    <span>{detailLead.company_name || detailLead.contact_name}</span>
-                    {detailLead.lead_score > 0 && <span className="ml-2 text-sm px-2 py-0.5 rounded bg-[#e94560]/20 text-[#e94560] font-mono">{detailLead.lead_score}</span>}
-                  </div>
-                  <div className="flex gap-1">
-                    <Button size="sm" variant="ghost" onClick={() => openWaForLead(detailLead)} className="text-green-500" data-testid="lead-wa-btn"><MessageSquare className="h-4 w-4" /></Button>
-                    <Button size="sm" variant="ghost" onClick={() => { setReassignLead(detailLead); setReassignBulkIds(null); setReassignOpen(true); }} className="text-[#e94560]" data-testid="lead-reassign-btn"><UserCog className="h-4 w-4" /></Button>
-                    <Button size="sm" variant="ghost" onClick={() => { openEditLead(detailLead); setDetailLead(null); }} className={textSec}><Edit2 className="h-4 w-4" /></Button>
-                    <Button size="sm" variant="ghost" onClick={() => openCreateTask(detailLead)} className={textSec}><Calendar className="h-4 w-4" /></Button>
-                  </div>
-                </DialogTitle>
-              </DialogHeader>
-              <div className="space-y-4">
-                <div className={`flex items-center gap-3 text-sm ${textSec} flex-wrap`}>
-                  <span className="flex items-center gap-1"><User className="h-3 w-3" /> {detailLead.contact_name}</span>
-                  {detailLead.contact_phone && <span className="flex items-center gap-1"><Phone className="h-3 w-3" /> {detailLead.contact_phone}</span>}
-                  {detailLead.school_city && <span className="flex items-center gap-1"><MapPin className="h-3 w-3" /> {detailLead.school_city}</span>}
-                  {detailLead.likely_closure_date && <span className={`flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-purple-500/15 text-purple-400 border border-purple-500/30`} data-testid="detail-likely-closure"><Target className="h-3 w-3" /> Likely close: {detailLead.likely_closure_date}</span>}
-                  {detailLead.visit_required && <span className={`flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-orange-500/15 text-orange-400 border border-orange-500/30`} data-testid="detail-visit-required"><AlertTriangle className="h-3 w-3" /> Visit Required</span>}
-                  {detailLead.is_locked && <span className="flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-[#e94560]/15 text-[#e94560] border border-[#e94560]/30" data-testid="detail-locked"><Lock className="h-3 w-3" /> Locked (order placed)</span>}
-                  {(detailLead.reassignment_count || 0) > 0 && <span className={`flex items-center gap-1 text-xs px-2 py-0.5 rounded ${detailLead.reassignment_count > 2 ? 'bg-red-500/15 text-red-400 border border-red-500/30' : 'bg-blue-500/15 text-blue-400 border border-blue-500/30'}`} data-testid="detail-reassign-count"><UserCog className="h-3 w-3" /> Reassigned {detailLead.reassignment_count}×</span>}
-                  {detailLead.converted_from_contact && (
-                    <span className="flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-blue-500/15 text-blue-400 border border-blue-500/30">
-                      <UserPlus className="h-3 w-3" /> From: {detailLead.linked_contact_name || detailLead.converted_from_contact.slice(0, 10)}
-                    </span>
-                  )}
-                </div>
-                {/* Stage selector */}
-                <div className="flex gap-1 flex-wrap">
-                  {STAGES.map(s => (
-                    <button key={s.id} onClick={() => changeStage(detailLead.lead_id, s.id)} className={`px-2 py-1 rounded text-xs font-medium border transition-all ${detailLead.stage === s.id ? s.color + ' ring-1' : `${isDark ? 'border-[var(--border-color)] text-[var(--text-muted)]' : 'border-[var(--border-color)] text-[#888]'} ${hoverBg}`}`}>{s.label}</button>
-                  ))}
-                </div>
+        {/* ── DIALOGS ───────────────────────────────────────────────── */}
 
-                {/* Convert-to-Order (FMS Phase 5.3) — only when stage = negotiation/won AND not locked */}
-                {['negotiation', 'won'].includes(detailLead.stage) && !detailLead.is_locked && (
-                  <Button onClick={async () => {
-                    // find quotation for this school
-                    const quotRes = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/quotations`, { credentials: 'include' });
-                    const quots = await quotRes.json();
-                    const match = Array.isArray(quots) ? quots.find(q => q.school_name === detailLead.company_name || q.school_name === detailLead.school_name) : null;
-                    if (!match) { toast.error('No quotation found for this school — create one first'); return; }
-                    if (!window.confirm(`Convert to order using quotation ${match.quote_number}? Lead will be locked (admin can unlock).`)) return;
-                    try {
-                      const r = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/orders`, {
-                        method: 'POST', credentials: 'include',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ quotation_id: match.quotation_id, lead_id: detailLead.lead_id, payment_threshold_pct: 50 }),
-                      });
-                      const data = await r.json();
-                      if (r.ok) {
-                        toast.success(`Order ${data.order_number} created`);
-                        setDetailLead({ ...detailLead, is_locked: true, stage: 'won', order_id: data.order_id });
-                        fetchData();
-                      } else {
-                        toast.error(data.detail || 'Conversion failed');
-                      }
-                    } catch { toast.error('Conversion failed'); }
-                  }} className="bg-green-600 hover:bg-green-700 text-white" data-testid="convert-to-order-btn">
-                    <Package className="mr-1 h-4 w-4" /> Convert to Order
-                  </Button>
-                )}
-                {/* Add Note */}
-                <div className={`${'bg-[var(--bg-primary)] border-[var(--border-color)]'} border rounded-md p-3 space-y-2`}>
-                  <div className="flex gap-1 flex-wrap">
-                    {NOTE_TYPES.map(nt => (
-                      <button key={nt.id} onClick={() => setNoteForm({ ...noteForm, type: nt.id })} className={`px-2 py-1 rounded text-xs flex items-center gap-1 ${noteForm.type === nt.id ? 'bg-[#e94560]/20 text-[#e94560]' : `${textMuted} ${hoverBg}`}`}>
-                        <nt.icon className="h-3 w-3" /> {nt.label}
-                      </button>
-                    ))}
-                  </div>
-                  <Input value={noteForm.content} onChange={e => setNoteForm({ ...noteForm, content: e.target.value })} placeholder="Log interaction..." className={`${inputCls} text-sm`} data-testid="note-input" />
-                  <div className="flex gap-2">
-                    <Input value={noteForm.outcome} onChange={e => setNoteForm({ ...noteForm, outcome: e.target.value })} placeholder="Outcome" className={`${inputCls} text-sm flex-1`} />
-                    <Button onClick={addNote} size="sm" className="bg-[#e94560] hover:bg-[#f05c75]" data-testid="add-note-button">Add</Button>
-                  </div>
-                </div>
-                {/* Schedule Follow-up */}
-                <div className={`${'bg-[var(--bg-primary)] border-[var(--border-color)]'} border rounded-md p-3`}>
-                  <p className={`text-xs font-medium ${textSec} mb-2`}>Schedule Follow-up</p>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                    <Input type="date" value={fuForm.followup_date} onChange={e => setFuForm({...fuForm, followup_date: e.target.value})} className={`${inputCls} text-sm`} />
-                    <Input type="time" value={fuForm.followup_time} onChange={e => setFuForm({...fuForm, followup_time: e.target.value})} className={`${inputCls} text-sm`} />
-                    <select value={fuForm.followup_type} onChange={e => setFuForm({...fuForm, followup_type: e.target.value})} className={`h-10 px-2 rounded text-sm ${inputCls}`}>
-                      <option value="call">Call</option><option value="whatsapp">WhatsApp</option><option value="visit">Visit</option>
-                    </select>
-                    <Button onClick={addFollowup} size="sm" className="bg-[#e94560] hover:bg-[#f05c75] h-10 w-full">Schedule</Button>
-                  </div>
-                </div>
-                {/* Follow-ups */}
-                {leadFollowups.length > 0 && (
-                  <div>
-                    <p className={`text-xs font-medium ${textSec} mb-2`}>Follow-ups ({leadFollowups.length})</p>
-                    <div className="space-y-1">
-                      {leadFollowups.map(fu => (
-                        <div key={fu.followup_id} className={`flex items-center justify-between text-sm ${card} border rounded p-2`}>
-                          <div>
-                            <span className={textPri}>{fu.followup_date} {fu.followup_time}</span>
-                            <span className={`ml-2 text-xs ${textMuted} capitalize`}>{fu.followup_type}</span>
-                            {fu.notes && <span className={`ml-2 text-xs ${textMuted}`}>- {fu.notes}</span>}
-                          </div>
-                          <div className="flex items-center gap-1">
-                            <span className={`text-xs px-1.5 py-0.5 rounded ${fu.status === 'completed' ? 'bg-green-500/20 text-green-400' : fu.status === 'missed' ? 'bg-red-500/20 text-red-400' : 'bg-yellow-500/20 text-yellow-400'}`}>{fu.status}</span>
-                            {fu.status === 'pending' && <Button size="sm" variant="ghost" onClick={() => completeFollowup(fu.followup_id)} className="text-green-400 h-6"><CheckCircle className="h-3 w-3" /></Button>}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {/* Visit History */}
-                {leadVisits.length > 0 && (
-                  <div>
-                    <p className={`text-xs font-medium ${textSec} mb-2`}>Visit History ({leadVisits.length})</p>
-                    <div className="space-y-1.5">
-                      {leadVisits.map((v, i) => (
-                        <div key={v.visit_id || i} className={`${card} border rounded-md p-2.5 space-y-0.5`}>
-                          <div className="flex items-center justify-between gap-2">
-                            <span className={`text-xs font-semibold ${textPri}`}>{v.visit_date}{v.visit_time ? ` · ${v.visit_time}` : ''}</span>
-                            <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${
-                              v.status === 'completed' ? 'bg-emerald-500/15 text-emerald-400' :
-                              v.status === 'checked_in' ? 'bg-blue-500/15 text-blue-400' :
-                              v.status === 'cancelled' ? 'bg-red-500/15 text-red-400' :
-                              'bg-amber-500/15 text-amber-400'
-                            }`}>{v.status}</span>
-                          </div>
-                          {v.rep_name && <p className={`text-xs ${textMuted}`}>Rep: {v.rep_name}</p>}
-                          {v.purpose  && <p className={`text-xs ${textMuted}`}>Purpose: {v.purpose}</p>}
-                          {v.outcome  && <p className={`text-xs ${textMuted}`}>Outcome: {v.outcome}</p>}
-                          {v.check_in_time && (
-                            <p className={`text-xs ${textMuted}`}>
-                              Checked in: {new Date(v.check_in_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
-                              {v.check_out_time && ` → ${new Date(v.check_out_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}`}
-                            </p>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {/* Physical Dispatches */}
-                <div className={`${'bg-[var(--bg-primary)] border-[var(--border-color)]'} border rounded-md p-3`}>
-                  <p className={`text-xs font-medium ${textSec} mb-2`}>Physical Material Sent ({physicalDispatches.length})</p>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-2">
-                    <select value={pdForm.material_type} onChange={e => setPdForm({...pdForm, material_type: e.target.value})} className={`h-9 px-2 rounded text-xs ${inputCls}`}>
-                      <option value="brochure">Brochure</option>
-                      <option value="sample">Sample</option>
-                      <option value="die">Die</option>
-                      <option value="catalogue">Catalogue</option>
-                      <option value="gift">Gift</option>
-                    </select>
-                    <Input value={pdForm.description} onChange={e => setPdForm({...pdForm, description: e.target.value})} placeholder="Description" className={`${inputCls} text-xs h-9 sm:col-span-2`} />
-                    <Input value={pdForm.courier_name} onChange={e => setPdForm({...pdForm, courier_name: e.target.value})} placeholder="Courier" className={`${inputCls} text-xs h-9`} />
-                    <Input value={pdForm.tracking_number} onChange={e => setPdForm({...pdForm, tracking_number: e.target.value})} placeholder="Tracking #" className={`${inputCls} text-xs h-9`} />
-                    <Input type="date" value={pdForm.sent_date} onChange={e => setPdForm({...pdForm, sent_date: e.target.value})} className={`${inputCls} text-xs h-9`} />
-                    <Button onClick={addPhysicalDispatch} size="sm" className="bg-[#e94560] hover:bg-[#f05c75] h-9 text-xs col-span-2 sm:col-span-1">Log</Button>
-                  </div>
-                  {physicalDispatches.length > 0 && (
-                    <div className="space-y-1">
-                      {physicalDispatches.map(d => (
-                        <div key={d.dispatch_id} className={`flex items-center justify-between text-xs ${card} border rounded p-2`}>
-                          <div>
-                            <span className={`font-medium ${textPri} capitalize`}>{d.material_type}</span>
-                            {d.description && <span className={`ml-1 ${textMuted}`}>— {d.description}</span>}
-                            <span className={`ml-2 ${textMuted}`}>{d.sent_date}</span>
-                            {d.courier_name && <span className={`ml-1 ${textMuted}`}>via {d.courier_name}</span>}
-                            {d.tracking_number && <span className={`ml-1 text-blue-400`}>#{d.tracking_number}</span>}
-                          </div>
-                          {d.received_confirmed
-                            ? <span className="text-green-400 text-xs">Received</span>
-                            : <Button size="sm" variant="ghost" onClick={() => markDispatchReceived(d.dispatch_id)} className={`text-xs h-6 ${textMuted}`}>Mark Received</Button>
-                          }
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-                {/* Timeline */}
-                <div data-testid="notes-timeline">
-                  <p className={`text-xs font-medium ${textSec} mb-2`}>Activity ({notes.length})</p>
-                  {notes.map(note => {
-                    const nt = NOTE_TYPES.find(n => n.id === note.type) || NOTE_TYPES[4];
-                    return (
-                      <div key={note.note_id} className="flex gap-2 text-sm mb-2">
-                        <div className={`w-7 h-7 rounded-full ${isDark ? 'bg-[var(--bg-hover)]' : 'bg-[#f0f0f5]'} flex items-center justify-center flex-shrink-0`}>
-                          <nt.icon className="h-3 w-3 text-[#e94560]" />
-                        </div>
-                        <div className={`flex-1 border-l ${'border-[var(--border-color)]'} pl-2 pb-2`}>
-                          <p className={textPri}>{note.content}</p>
-                          {note.outcome && <p className={`text-xs ${textMuted}`}>Outcome: {note.outcome}</p>}
-                          <p className={`text-xs ${textMuted}`}>{note.created_by_name} - {formatDate(note.created_at)}</p>
-                        </div>
-                      </div>
-                    );
-                  })}
-                  {notes.length === 0 && <EmptyState {...EMPTY_STATES.callNotes} compact />}
-                </div>
+        <LeadDetailPanel
+          detailLead={crm.detailLead}
+          setDetailLead={crm.setDetailLead}
+          notes={crm.notes}
+          leadFollowups={crm.leadFollowups}
+          physicalDispatches={crm.physicalDispatches}
+          leadVisits={crm.leadVisits}
+          leadEnrollments={crm.leadEnrollments}
+          noteForm={crm.noteForm}
+          setNoteForm={crm.setNoteForm}
+          fuForm={crm.fuForm}
+          setFuForm={crm.setFuForm}
+          pdForm={crm.pdForm}
+          setPdForm={crm.setPdForm}
+          enrollDialogOpen={crm.enrollDialogOpen}
+          setEnrollDialogOpen={crm.setEnrollDialogOpen}
+          selectedSequenceId={crm.selectedSequenceId}
+          setSelectedSequenceId={crm.setSelectedSequenceId}
+          setLeadEnrollments={crm.setLeadEnrollments}
+          dripSequencesList={crm.dripSequencesList}
+          allQuotations={crm.allQuotations}
+          addNote={crm.addNote}
+          addFollowup={crm.addFollowup}
+          completeFollowup={crm.completeFollowup}
+          addPhysicalDispatch={crm.addPhysicalDispatch}
+          markDispatchReceived={crm.markDispatchReceived}
+          changeStage={crm.changeStage}
+          openEditLead={crm.openEditLead}
+          openCreateTask={crm.openCreateTask}
+          openWaForLead={crm.openWaForLead}
+          setReassignLead={crm.setReassignLead}
+          setReassignBulkIds={crm.setReassignBulkIds}
+          setReassignOpen={crm.setReassignOpen}
+          fetchData={crm.fetchData}
+        />
 
-                {/* Pipeline History (FMS Phase 2) */}
-                {Array.isArray(detailLead.pipeline_history) && detailLead.pipeline_history.length > 0 && (
-                  <div data-testid="pipeline-history">
-                    <p className={`text-xs font-medium ${textSec} mb-2`}>Pipeline History ({detailLead.pipeline_history.length})</p>
-                    <div className="space-y-1.5">
-                      {detailLead.pipeline_history.map((h, i) => {
-                        const fromObj = STAGES.find(s => s.id === h.from_stage);
-                        const toObj = STAGES.find(s => s.id === h.to_stage) || STAGES[0];
-                        return (
-                          <div key={i} className={`flex items-center gap-2 text-xs ${card} border rounded px-2.5 py-1.5`}>
-                            {fromObj ? <span className={`px-1.5 py-0.5 rounded font-medium border ${fromObj.color} text-[10px]`}>{fromObj.label}</span> : <span className={`text-[10px] ${textMuted}`}>—</span>}
-                            <ChevronRight className="h-3 w-3" />
-                            <span className={`px-1.5 py-0.5 rounded font-medium border ${toObj.color} text-[10px]`}>{toObj.label}</span>
-                            <span className={`flex-1 ${textMuted} truncate`}>{h.note}</span>
-                            <span className={`${textMuted}`}>{h.by_name?.split(' ')[0]} • {formatDate(h.at)}</span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
+        <LeadFormDialog
+          open={crm.leadDialogOpen}
+          onOpenChange={crm.setLeadDialogOpen}
+          editLead={crm.editLead}
+          leadForm={crm.leadForm}
+          setLeadForm={crm.setLeadForm}
+          addNewSchool={crm.addNewSchool}
+          setAddNewSchool={crm.setAddNewSchool}
+          newSchool={crm.newSchool}
+          setNewSchool={crm.setNewSchool}
+          newTagInput={crm.newTagInput}
+          setNewTagInput={crm.setNewTagInput}
+          schoolsList={crm.schoolsList}
+          spList={crm.spList}
+          rolesList={crm.rolesList}
+          sourcesList={crm.sourcesList}
+          tagsList={crm.tagsList}
+          setTagsList={crm.setTagsList}
+          contactsList={crm.contactsList}
+          saveLead={crm.saveLead}
+        />
 
-                {/* Reassignment History (FMS Phase 5.1) */}
-                {Array.isArray(detailLead.reassignments) && detailLead.reassignments.length > 0 && (
-                  <div data-testid="reassignment-history">
-                    <p className={`text-xs font-medium ${textSec} mb-2 flex items-center gap-1`}><UserCog className="h-3 w-3" /> Reassignment History ({detailLead.reassignments.length})</p>
-                    <div className="space-y-1.5">
-                      {detailLead.reassignments.map((r, i) => (
-                        <div key={i} className={`text-xs ${card} border rounded px-2.5 py-1.5`}>
-                          <div className="flex items-center gap-2">
-                            <span className={`${textSec}`}>{r.from_name || 'Unassigned'}</span>
-                            <ChevronRight className="h-3 w-3" />
-                            <span className={`${textPri} font-medium`}>{r.to_name}</span>
-                            <span className={`flex-1 ${textMuted} text-right`}>by {r.by_name?.split(' ')[0]} • {formatDate(r.at)}</span>
-                          </div>
-                          <p className={`${textMuted} mt-0.5 italic`}>"{r.reason}"</p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
+        <SchoolFormDialog
+          open={crm.schoolDialogOpen}
+          onOpenChange={crm.setSchoolDialogOpen}
+          editSchool={crm.editSchool}
+          setEditSchool={crm.setEditSchool}
+          editSchoolForm={crm.editSchoolForm}
+          setEditSchoolForm={crm.setEditSchoolForm}
+          groupsList={crm.groupsList}
+          designationsList={crm.designationsList}
+          handleSaveSchool={crm.handleSaveSchool}
+        />
 
-                {/* Drip Sequences (P1-C) */}
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <p className={`text-xs font-medium ${textSec} flex items-center gap-1`}><Zap className="h-3 w-3" /> Drip Sequences ({leadEnrollments.length})</p>
-                    <Button size="sm" variant="outline"
-                      onClick={() => { setSelectedSequenceId(''); setEnrollDialogOpen(true); }}
-                      className={`h-6 text-xs border-[var(--border-color)] ${textSec} px-2`}>+ Enroll</Button>
-                  </div>
-                  {leadEnrollments.length > 0 ? (
-                    <div className="space-y-1">
-                      {leadEnrollments.map(enr => {
-                        const seq = dripSequencesList.find(s => s.sequence_id === enr.sequence_id);
-                        return (
-                          <div key={enr.enrollment_id} className={`flex items-center justify-between text-xs ${card} border rounded px-2.5 py-1.5`}>
-                            <div className="flex items-center gap-2 min-w-0">
-                              <span className={`${textPri} font-medium truncate`}>{seq?.name || enr.sequence_id}</span>
-                              <span className={`${textMuted} flex-shrink-0`}>Step {(enr.current_step || 0) + 1}</span>
-                              {enr.next_step_at && <span className={`${textMuted} flex-shrink-0`}>· Next: {formatDate(enr.next_step_at)}</span>}
-                            </div>
-                            <div className="flex items-center gap-1 flex-shrink-0 ml-2">
-                              <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
-                                enr.status === 'active' ? 'bg-green-500/20 text-green-400'
-                                : enr.status === 'completed' ? 'bg-blue-500/20 text-blue-400'
-                                : 'bg-gray-500/20 text-gray-400'
-                              }`}>{enr.status}</span>
-                              {enr.status === 'active' && (
-                                <Button size="sm" variant="ghost"
-                                  onClick={async () => {
-                                    try {
-                                      await dripSequencesApi.cancelEnrollment(enr.enrollment_id);
-                                      setLeadEnrollments(prev => prev.map(e => e.enrollment_id === enr.enrollment_id ? { ...e, status: 'cancelled' } : e));
-                                      toast.success('Enrollment cancelled');
-                                    } catch { toast.error('Failed to cancel'); }
-                                  }}
-                                  className="text-red-400 h-6 w-6 p-0">
-                                  <X className="h-3 w-3" />
-                                </Button>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ) : <p className={`text-xs ${textMuted}`}>Not enrolled in any sequence</p>}
-                </div>
-              </div>
-            </DialogContent>
-          </Dialog>
-        )}
+        <ContactFormDialog
+          contactDialogOpen={crm.contactDialogOpen}
+          setContactDialogOpen={crm.setContactDialogOpen}
+          editContact={crm.editContact}
+          contactForm={crm.contactForm}
+          setContactForm={crm.setContactForm}
+          schoolsList={crm.schoolsList}
+          rolesList={crm.rolesList}
+          sourcesList={crm.sourcesList}
+          spList={crm.spList}
+          tagsList={crm.tagsList}
+          designationsList={crm.designationsList}
+          saveContact={crm.saveContact}
+          convertDialogOpen={crm.convertDialogOpen}
+          setConvertDialogOpen={crm.setConvertDialogOpen}
+          convertContact={crm.convertContact}
+          convertForm={crm.convertForm}
+          setConvertForm={crm.setConvertForm}
+          convertAddNewSchool={crm.convertAddNewSchool}
+          setConvertAddNewSchool={crm.setConvertAddNewSchool}
+          convertNewSchool={crm.convertNewSchool}
+          setConvertNewSchool={crm.setConvertNewSchool}
+          handleConvert={crm.handleConvert}
+          contactImportOpen={crm.contactImportOpen}
+          setContactImportOpen={crm.setContactImportOpen}
+          contactFileRef={crm.contactFileRef}
+          importFile={crm.importFile}
+          setImportFile={crm.setImportFile}
+          importTags={crm.importTags}
+          setImportTags={crm.setImportTags}
+          importNotes={crm.importNotes}
+          setImportNotes={crm.setImportNotes}
+          importing={crm.importing}
+          importResult={crm.importResult}
+          handleContactImport={crm.handleContactImport}
+          resetImportDialog={crm.resetImportDialog}
+          downloadSampleCsv={crm.downloadSampleCsv}
+        />
 
-        {/* LEAD FORM DIALOG */}
-        <Dialog open={leadDialogOpen} onOpenChange={setLeadDialogOpen}>
-          <DialogContent className={`${dlgCls} w-[calc(100vw-1rem)] sm:max-w-lg max-h-[88dvh] overflow-y-auto`}>
-            <DialogHeader><DialogTitle className={textPri}>{editLead ? 'Edit Lead' : 'New Lead'}</DialogTitle></DialogHeader>
-            <div className="space-y-3 py-2">
-              {/* School selection */}
-              {!editLead && (
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <Label className={`${textSec} text-xs`}>School *</Label>
-                    <button onClick={() => setAddNewSchool(!addNewSchool)} className="text-xs text-[#e94560]">{addNewSchool ? 'Select Existing' : '+ Add New School'}</button>
-                  </div>
-                  {addNewSchool ? (
-                    <div className={`${'bg-[var(--bg-primary)] border-[var(--border-color)]'} border rounded-md p-3 space-y-2`}>
-                      <Input value={newSchool.school_name} onChange={e => setNewSchool({...newSchool, school_name: e.target.value})} placeholder="School name *" className={`${inputCls} text-sm`} />
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                        <select value={newSchool.school_type} onChange={e => setNewSchool({...newSchool, school_type: e.target.value})} className={`h-9 px-2 rounded text-sm ${inputCls}`}>
-                          {SCHOOL_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
-                        </select>
-                        <Input value={newSchool.city} onChange={e => setNewSchool({...newSchool, city: e.target.value})} placeholder="City" className={`${inputCls} text-sm`} />
-                      </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                        <Input value={newSchool.phone} onChange={e => setNewSchool({...newSchool, phone: e.target.value})} placeholder="Phone" className={`${inputCls} text-sm`} />
-                        <Input type="number" value={newSchool.school_strength} onChange={e => setNewSchool({...newSchool, school_strength: parseInt(e.target.value) || 0})} placeholder="Strength" className={`${inputCls} text-sm`} />
-                      </div>
-                    </div>
-                  ) : (
-                    <select value={leadForm.school_id} onChange={e => setLeadForm({...leadForm, school_id: e.target.value})} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`} data-testid="school-select">
-                      <option value="">Select school</option>
-                      {schoolsList.map(s => <option key={s.school_id} value={s.school_id}>{s.school_name} ({s.city})</option>)}
-                    </select>
-                  )}
-                </div>
-              )}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div><Label className={`${textSec} text-xs`}>Contact Name *</Label><Input value={leadForm.contact_name} onChange={e => setLeadForm({...leadForm, contact_name: e.target.value})} className={inputCls} data-testid="lead-contact-input" /></div>
-                <div><Label className={`${textSec} text-xs`}>Role / Designation</Label>
-                  <select value={leadForm.contact_role_id || ''} onChange={e => { const role = rolesList.find(r => r.role_id === e.target.value); setLeadForm({...leadForm, contact_role_id: e.target.value, designation: role?.name || leadForm.designation}); }} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`} data-testid="lead-role-select">
-                    <option value="">{rolesList.length ? 'Select role' : 'Loading roles...'}</option>
-                    {rolesList.map(r => <option key={r.role_id} value={r.role_id}>{r.name}</option>)}
-                  </select>
-                </div>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div><Label className={`${textSec} text-xs`}>Phone *</Label><Input value={leadForm.contact_phone} onChange={e => setLeadForm({...leadForm, contact_phone: e.target.value})} className={inputCls} data-testid="lead-phone-input" /></div>
-                <div><Label className={`${textSec} text-xs`}>Email</Label><Input value={leadForm.contact_email} onChange={e => setLeadForm({...leadForm, contact_email: e.target.value})} className={inputCls} /></div>
-              </div>
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                <div><Label className={`${textSec} text-xs`}>Source</Label>
-                  <select value={leadForm.source_id || ''} onChange={e => { const src = sourcesList.find(s => s.source_id === e.target.value); setLeadForm({...leadForm, source_id: e.target.value, source: src?.name || ''}); }} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`} data-testid="lead-source-select">
-                    <option value="">{sourcesList.length ? 'Select source' : 'Loading sources...'}</option>
-                    {sourcesList.map(s => <option key={s.source_id} value={s.source_id}>{s.name}</option>)}
-                  </select>
-                </div>
-                <div><Label className={`${textSec} text-xs`}>Type</Label>
-                  <select value={leadForm.lead_type} onChange={e => setLeadForm({...leadForm, lead_type: e.target.value})} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`}>
-                    <option value="hot">Hot</option><option value="warm">Warm</option><option value="cold">Cold</option>
-                  </select>
-                </div>
-                <div><Label className={`${textSec} text-xs`}>Priority</Label>
-                  <select value={leadForm.priority} onChange={e => setLeadForm({...leadForm, priority: e.target.value})} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`}>
-                    <option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option>
-                  </select>
-                </div>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div><Label className={`${textSec} text-xs`}>Assign To *</Label>
-                  <select value={leadForm.assigned_to} onChange={e => setLeadForm({...leadForm, assigned_to: e.target.value})} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`}>
-                    <option value="">Select</option>{spList.map(sp => <option key={sp.email} value={sp.email}>{sp.name}</option>)}
-                  </select>
-                </div>
-                <div><Label className={`${textSec} text-xs`}>Next Follow-up</Label><Input type="date" value={leadForm.next_followup_date} onChange={e => setLeadForm({...leadForm, next_followup_date: e.target.value})} className={inputCls} /></div>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div><Label className={`${textSec} text-xs`}>Assignment Type</Label>
-                  <select value={leadForm.assignment_type || 'manual'} onChange={e => setLeadForm({...leadForm, assignment_type: e.target.value})} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`} data-testid="lead-assignment-type-select">
-                    <option value="manual">Manual</option>
-                    <option value="self">Self</option>
-                    <option value="round_robin">Round Robin</option>
-                    <option value="auto">Auto</option>
-                  </select>
-                </div>
-                <div><Label className={`${textSec} text-xs`}>Likely Closure Date</Label><Input type="date" value={leadForm.likely_closure_date || ''} onChange={e => setLeadForm({...leadForm, likely_closure_date: e.target.value})} className={inputCls} data-testid="lead-likely-closure-input" /></div>
-              </div>
-              <div><Label className={`${textSec} text-xs`}>Notes</Label><Input value={leadForm.notes} onChange={e => setLeadForm({...leadForm, notes: e.target.value})} className={inputCls} /></div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div><Label className={`${textSec} text-xs`}>Referred By (Contact)</Label>
-                  <select value={leadForm.referred_by_contact_id || ''} onChange={e => setLeadForm({...leadForm, referred_by_contact_id: e.target.value})} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`}>
-                    <option value="">None</option>
-                    {contactsList.map(c => <option key={c.contact_id} value={c.contact_id}>{c.name}{c.company ? ` (${c.company})` : ''}</option>)}
-                  </select>
-                </div>
-                <div><Label className={`${textSec} text-xs`}>Referral Reward</Label>
-                  <select value={leadForm.referral_reward_status || 'none'} onChange={e => setLeadForm({...leadForm, referral_reward_status: e.target.value})} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`}>
-                    <option value="none">None</option>
-                    <option value="pending">Pending</option>
-                    <option value="given">Given</option>
-                  </select>
-                </div>
-              </div>
-              {/* Tag Multi-select */}
-              <div>
-                <Label className={`${textSec} text-xs`}>Tags</Label>
-                <div className="flex flex-wrap gap-1.5 mt-1 mb-1">
-                  {tagsList.map(t => {
-                    const sel = (leadForm.tags || []).includes(t.tag_id);
-                    return (
-                      <button key={t.tag_id} type="button"
-                        onClick={() => setLeadForm({...leadForm, tags: sel ? (leadForm.tags||[]).filter(id => id !== t.tag_id) : [...(leadForm.tags||[]), t.tag_id]})}
-                        className={`flex items-center gap-1 px-2 py-1 rounded-full text-xs border transition-all ${sel ? 'text-white border-transparent' : `${textMuted} border-[var(--border-color)]`}`}
-                        style={sel ? { backgroundColor: t.color } : {}}>
-                        <span className="w-2 h-2 rounded-full" style={{ backgroundColor: t.color }} />
-                        {t.name}
-                      </button>
-                    );
-                  })}
-                </div>
-                <div className="flex gap-1 mt-1">
-                  <input value={newTagInput} onChange={e => setNewTagInput(e.target.value)}
-                    onKeyDown={async e => {
-                      if (e.key === 'Enter' && newTagInput.trim()) {
-                        e.preventDefault();
-                        const res = await tagsApi.create({ name: newTagInput.trim(), color: '#6366f1' });
-                        const newTag = res.data;
-                        setTagsList(prev => [...prev, newTag]);
-                        setLeadForm(prev => ({...prev, tags: [...(prev.tags||[]), newTag.tag_id]}));
-                        setNewTagInput('');
-                      }
-                    }}
-                    placeholder="Type new tag + Enter" className={`${inputCls} h-7 text-xs px-2 rounded flex-1 border`} />
-                </div>
-              </div>
-            </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setLeadDialogOpen(false)} className={'border-[var(--border-color)] text-[var(--text-secondary)]'}>Cancel</Button>
-              <Button onClick={saveLead} className="bg-[#e94560] hover:bg-[#f05c75]" data-testid="save-lead-button">{editLead ? 'Update' : 'Create Lead'}</Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-
-        {/* SCHOOL FORM DIALOG */}
-        <Dialog open={schoolDialogOpen} onOpenChange={(v) => { setSchoolDialogOpen(v); if (!v) setEditSchool(null); }}>
-          <DialogContent className={`${dlgCls} w-[calc(100vw-1rem)] sm:max-w-lg max-h-[88dvh] overflow-y-auto`}>
-            <DialogHeader><DialogTitle className={textPri}>{editSchool ? 'Edit School' : 'Add School'}</DialogTitle></DialogHeader>
-            <div className="space-y-3 py-2">
-              <div><Label className={`${textSec} text-xs`}>School Name *</Label><Input value={editSchoolForm.school_name || ''} onChange={e => setEditSchoolForm({...editSchoolForm, school_name: e.target.value})} className={inputCls} data-testid="school-name-input" /></div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div><Label className={`${textSec} text-xs`}>Group / Trust</Label>
-                  <select value={editSchoolForm.group_id || ''} onChange={e => setEditSchoolForm({...editSchoolForm, group_id: e.target.value})} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`} data-testid="school-group-select">
-                    <option value="">{groupsList.length ? '-- Select Group --' : 'No groups defined'}</option>
-                    {groupsList.map(g => <option key={g.group_id} value={g.group_id}>{g.group_name}</option>)}
-                  </select>
-                </div>
-                <div><Label className={`${textSec} text-xs`}>Email</Label><Input type="email" value={editSchoolForm.email || ''} onChange={e => setEditSchoolForm({...editSchoolForm, email: e.target.value})} className={inputCls} data-testid="school-email-input" /></div>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div><Label className={`${textSec} text-xs`}>Type</Label>
-                  <select value={editSchoolForm.school_type || 'CBSE'} onChange={e => setEditSchoolForm({...editSchoolForm, school_type: e.target.value})} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`}>
-                    {SCHOOL_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
-                  </select></div>
-                <div><Label className={`${textSec} text-xs`}>Phone</Label><Input value={editSchoolForm.phone || ''} onChange={e => setEditSchoolForm({...editSchoolForm, phone: e.target.value})} className={inputCls} /></div>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div><Label className={`${textSec} text-xs`}>City</Label><Input value={editSchoolForm.city || ''} onChange={e => setEditSchoolForm({...editSchoolForm, city: e.target.value})} className={inputCls} /></div>
-                <div><Label className={`${textSec} text-xs`}>State</Label><Input value={editSchoolForm.state || ''} onChange={e => setEditSchoolForm({...editSchoolForm, state: e.target.value})} className={inputCls} /></div>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div><Label className={`${textSec} text-xs`}>Contact Name</Label><Input value={editSchoolForm.primary_contact_name || ''} onChange={e => setEditSchoolForm({...editSchoolForm, primary_contact_name: e.target.value})} className={inputCls} /></div>
-                <div><Label className={`${textSec} text-xs`}>Role / Designation</Label>
-                  <select value={editSchoolForm.designation || ''} onChange={e => setEditSchoolForm({...editSchoolForm, designation: e.target.value})} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`} data-testid="school-role-select">
-                    <option value="">Select</option>
-                    {(rolesList.length ? rolesList.map(r => r.name) : DESIGNATIONS).map(d => <option key={d} value={d}>{d}</option>)}
-                  </select></div>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div><Label className={`${textSec} text-xs`}>Strength</Label><Input type="number" value={editSchoolForm.school_strength || 0} onChange={e => setEditSchoolForm({...editSchoolForm, school_strength: parseInt(e.target.value) || 0})} className={inputCls} /></div>
-                <div><Label className={`${textSec} text-xs`}>Existing Vendor</Label><Input value={editSchoolForm.existing_vendor || ''} onChange={e => setEditSchoolForm({...editSchoolForm, existing_vendor: e.target.value})} className={inputCls} /></div>
-              </div>
-            </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => { setSchoolDialogOpen(false); setEditSchool(null); }} className={'border-[var(--border-color)] text-[var(--text-secondary)]'}>Cancel</Button>
-              <Button onClick={handleSaveSchool} className="bg-[#e94560] hover:bg-[#f05c75] text-white" data-testid="save-school-button">{editSchool ? 'Update School' : 'Add School'}</Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-
-        {/* TASK DIALOG */}
-        <Dialog open={taskDialogOpen} onOpenChange={setTaskDialogOpen}>
-          <DialogContent className={`${dlgCls} w-[calc(100vw-1rem)] sm:max-w-md`}>
-            <DialogHeader><DialogTitle className={textPri}>New Task</DialogTitle></DialogHeader>
-            <div className="space-y-3 py-2">
-              <div><Label className={`${textSec} text-xs`}>Title *</Label><Input value={taskForm.title} onChange={e => setTaskForm({...taskForm, title: e.target.value})} className={inputCls} data-testid="task-title-input" /></div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div><Label className={`${textSec} text-xs`}>Due Date *</Label><Input type="date" value={taskForm.due_date} onChange={e => setTaskForm({...taskForm, due_date: e.target.value})} className={inputCls} /></div>
-                <div><Label className={`${textSec} text-xs`}>Assign To</Label>
-                  <select value={taskForm.assigned_to} onChange={e => { const sp = spList.find(s => s.email === e.target.value); setTaskForm({...taskForm, assigned_to: e.target.value, assigned_name: sp?.name || ''}); }} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`}>
-                    <option value="">Select</option>{spList.map(sp => <option key={sp.email} value={sp.email}>{sp.name}</option>)}
-                  </select></div>
-              </div>
-              {taskForm.lead_name && <p className={`text-xs ${textMuted}`}>Lead: {taskForm.lead_name}</p>}
-            </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setTaskDialogOpen(false)} className={'border-[var(--border-color)] text-[var(--text-secondary)]'}>Cancel</Button>
-              <Button onClick={saveTask} className="bg-[#e94560] hover:bg-[#f05c75]" data-testid="save-task-button">Create</Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-
-        {/* IMPORT DIALOG */}
-        <Dialog open={importDialogOpen} onOpenChange={setImportDialogOpen}>
-          <DialogContent className={`${dlgCls} w-[calc(100vw-1rem)] sm:max-w-md`}>
-            <DialogHeader><DialogTitle className={textPri}>Import Leads from CSV</DialogTitle></DialogHeader>
-            <div className="py-4 space-y-3">
+        {/* Lead import dialog */}
+        {crm.importDialogOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => crm.setImportDialogOpen(false)}>
+            <div className={`${isDark ? 'bg-[var(--bg-card)] border-[var(--border-color)] text-[var(--text-primary)]' : 'bg-white border-[var(--border-color)] text-[var(--text-primary)]'} border rounded-lg p-6 w-[calc(100vw-2rem)] max-w-md space-y-3`} onClick={e => e.stopPropagation()}>
+              <h2 className={`font-semibold text-lg ${textPri}`}>Import Leads from CSV</h2>
               <p className={`text-sm ${textSec}`}>CSV columns: school_name, school_type, website, location, contact_name, designation, phone, email, school_strength, source</p>
-              <div className={`${'bg-[var(--bg-primary)] border-[var(--border-color)]'} border-2 border-dashed rounded-md p-8 text-center cursor-pointer`} onClick={() => fileRef.current?.click()}>
+              <div className="bg-[var(--bg-primary)] border-2 border-dashed border-[var(--border-color)] rounded-md p-8 text-center cursor-pointer" onClick={() => crm.fileRef.current?.click()}>
                 <Upload className={`h-8 w-8 mx-auto mb-2 ${textMuted}`} />
                 <p className={textSec}>Click to upload CSV file</p>
-                <input ref={fileRef} type="file" accept=".csv" className="hidden" onChange={e => { if (e.target.files?.[0]) handleImport(e.target.files[0]); }} />
+                <input ref={crm.fileRef} type="file" accept=".csv" className="hidden" onChange={e => { if (e.target.files?.[0]) crm.handleImport(e.target.files[0]); }} />
+              </div>
+              <div className="flex justify-end">
+                <Button variant="outline" onClick={() => crm.setImportDialogOpen(false)} className="border-[var(--border-color)] text-[var(--text-secondary)]">Close</Button>
               </div>
             </div>
-          </DialogContent>
-        </Dialog>
-        {/* CONTACT DIALOG */}
-        <Dialog open={contactDialogOpen} onOpenChange={setContactDialogOpen}>
-          <DialogContent className={`${dlgCls} w-[calc(100vw-1rem)] sm:max-w-md`}>
-            <DialogHeader><DialogTitle className={textPri}>{editContact ? 'Edit Contact' : 'Add Contact'}</DialogTitle></DialogHeader>
-            <div className="space-y-3 py-2">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div><Label className={`${textSec} text-xs`}>Name *</Label><Input value={contactForm.name} onChange={e => setContactForm({...contactForm, name: e.target.value})} className={inputCls} placeholder="Full name" data-testid="contact-name-input" /></div>
-                <div><Label className={`${textSec} text-xs`}>Phone *</Label><Input value={contactForm.phone} onChange={e => setContactForm({...contactForm, phone: e.target.value})} className={inputCls} placeholder="+91..." data-testid="contact-phone-input" /></div>
-              </div>
-              <div><Label className={`${textSec} text-xs`}>Email</Label><Input value={contactForm.email} onChange={e => setContactForm({...contactForm, email: e.target.value})} className={inputCls} placeholder="email@example.com" data-testid="contact-email-input" /></div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <Label className={`${textSec} text-xs`}>Company / School</Label>
-                  <Input value={contactForm.company} onChange={e => setContactForm({...contactForm, company: e.target.value})} className={inputCls} placeholder="Search school or type name" list="contact-school-suggestions" />
-                  <datalist id="contact-school-suggestions">
-                    {schoolsList.map(s => <option key={s.school_id} value={s.school_name} />)}
-                  </datalist>
-                  {contactForm.company && schoolsList.some(s => s.school_name.toLowerCase() === contactForm.company.toLowerCase()) && (
-                    <p className="text-[10px] text-green-500 mt-0.5 flex items-center gap-1">
-                      <CheckCircle className="h-3 w-3" /> Linked to school database
-                    </p>
-                  )}
-                </div>
-                <div><Label className={`${textSec} text-xs`}>Role / Designation</Label>
-                  <select value={contactForm.contact_role_id || ''} onChange={e => { const role = rolesList.find(r => r.role_id === e.target.value); setContactForm({...contactForm, contact_role_id: e.target.value, designation: role?.name || contactForm.designation}); }} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`} data-testid="contact-role-select">
-                    <option value="">{rolesList.length ? 'Select role' : 'Loading...'}</option>
-                    {rolesList.map(r => <option key={r.role_id} value={r.role_id}>{r.name}</option>)}
-                  </select>
-                </div>
-              </div>
-              <div><Label className={`${textSec} text-xs`}>Source</Label>
-                <select value={contactForm.source_id || ''} onChange={e => { const src = sourcesList.find(s => s.source_id === e.target.value); setContactForm({...contactForm, source_id: e.target.value, source: src?.name || ''}); }} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`} data-testid="contact-source-select">
-                  <option value="">{sourcesList.length ? 'Select source' : 'Loading...'}</option>
-                  {sourcesList.map(s => <option key={s.source_id} value={s.source_id}>{s.name}</option>)}
-                </select>
-              </div>
-              <div><Label className={`${textSec} text-xs`}>Notes</Label><Input value={contactForm.notes} onChange={e => setContactForm({...contactForm, notes: e.target.value})} className={inputCls} placeholder="Any additional info..." /></div>
-              <div><Label className={`${textSec} text-xs`}>Birthday (YYYY-MM-DD)</Label><Input type="date" value={contactForm.birthday} onChange={e => setContactForm({...contactForm, birthday: e.target.value})} className={inputCls} /></div>
-              {tagsList.length > 0 && (
-                <div>
-                  <Label className={`${textSec} text-xs`}>Tags</Label>
-                  <div className="flex flex-wrap gap-1.5 mt-1">
-                    {tagsList.map(t => {
-                      const sel = (contactForm.tag_ids || []).includes(t.tag_id);
-                      return (
-                        <button key={t.tag_id} type="button"
-                          onClick={() => setContactForm(prev => ({
-                            ...prev,
-                            tag_ids: sel ? (prev.tag_ids || []).filter(id => id !== t.tag_id) : [...(prev.tag_ids || []), t.tag_id],
-                          }))}
-                          className={`flex items-center gap-1 px-2 py-1 rounded-full text-xs border transition-all ${sel ? 'text-white border-transparent' : `${textMuted} border-[var(--border-color)]`}`}
-                          style={sel ? { backgroundColor: t.color } : {}}>
-                          <span className="w-2 h-2 rounded-full" style={{ backgroundColor: t.color }} />
-                          {t.name}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-            </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setContactDialogOpen(false)} className={'border-[var(--border-color)] text-[var(--text-secondary)]'}>Cancel</Button>
-              <Button onClick={saveContact} className="bg-[#e94560] hover:bg-[#f05c75] text-white" data-testid="save-contact-button">{editContact ? 'Update' : 'Add Contact'}</Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+          </div>
+        )}
 
-        {/* CONVERT TO LEAD DIALOG */}
-        <Dialog open={convertDialogOpen} onOpenChange={setConvertDialogOpen}>
-          <DialogContent className={`${dlgCls} w-[calc(100vw-1rem)] sm:max-w-md`}>
-            <DialogHeader><DialogTitle className={textPri}>Convert to Lead</DialogTitle></DialogHeader>
-            {convertContact && (
-              <div className="space-y-4 py-2">
-                <div className={`bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-md p-3`}>
-                  <p className={`${textPri} font-medium`}>{convertContact.name}</p>
-                  <p className={`text-sm ${textMuted}`}>{convertContact.phone}{convertContact.email ? ` • ${convertContact.email}` : ''}</p>
-                  {convertContact.company && <p className={`text-xs ${textMuted} mt-1`}>{convertContact.company}{convertContact.designation ? ` • ${convertContact.designation}` : ''}</p>}
-                </div>
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <Label className={`${textSec} text-xs`}>Link to School</Label>
-                    <button onClick={() => { setConvertAddNewSchool(!convertAddNewSchool); setConvertForm({...convertForm, school_id: ''}); }} className="text-xs text-[#e94560] hover:underline">
-                      {convertAddNewSchool ? '← Select Existing' : '+ Create New School'}
-                    </button>
-                  </div>
-                  {convertAddNewSchool ? (
-                    <div className={`bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-md p-3 space-y-2`}>
-                      <Input value={convertNewSchool.school_name} onChange={e => setConvertNewSchool({...convertNewSchool, school_name: e.target.value})} placeholder="School name *" className={`${inputCls} text-sm`} data-testid="convert-new-school-name" />
-                      <div className="grid grid-cols-2 gap-2">
-                        <select value={convertNewSchool.school_type} onChange={e => setConvertNewSchool({...convertNewSchool, school_type: e.target.value})} className={`h-9 px-2 rounded text-sm ${inputCls}`}>
-                          {SCHOOL_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
-                        </select>
-                        <Input value={convertNewSchool.city} onChange={e => setConvertNewSchool({...convertNewSchool, city: e.target.value})} placeholder="City" className={`${inputCls} text-sm`} />
-                      </div>
-                      <div className="grid grid-cols-2 gap-2">
-                        <Input value={convertNewSchool.phone} onChange={e => setConvertNewSchool({...convertNewSchool, phone: e.target.value})} placeholder="Phone" className={`${inputCls} text-sm`} />
-                        <Input type="number" value={convertNewSchool.school_strength} onChange={e => setConvertNewSchool({...convertNewSchool, school_strength: parseInt(e.target.value) || 0})} placeholder="Strength" className={`${inputCls} text-sm`} />
-                      </div>
-                    </div>
-                  ) : (
-                    <select value={convertForm.school_id} onChange={e => setConvertForm({...convertForm, school_id: e.target.value})} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`} data-testid="convert-school-select">
-                      <option value="">-- No school (create later) --</option>
-                      {schoolsList.map(s => <option key={s.school_id} value={s.school_id}>{s.school_name} ({s.city || s.school_type})</option>)}
-                    </select>
-                  )}
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div><Label className={`${textSec} text-xs`}>Lead Type</Label>
-                    <select value={convertForm.lead_type} onChange={e => setConvertForm({...convertForm, lead_type: e.target.value})} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`} data-testid="convert-lead-type">
-                      <option value="hot">Hot</option><option value="warm">Warm</option><option value="cold">Cold</option>
-                    </select>
-                  </div>
-                  <div><Label className={`${textSec} text-xs`}>Priority</Label>
-                    <select value={convertForm.priority} onChange={e => setConvertForm({...convertForm, priority: e.target.value})} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`}>
-                      <option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option>
-                    </select>
-                  </div>
-                </div>
-                <div><Label className={`${textSec} text-xs`}>Interested Product</Label><Input value={convertForm.interested_product} onChange={e => setConvertForm({...convertForm, interested_product: e.target.value})} className={inputCls} placeholder="e.g. Premium Package" /></div>
-                <div><Label className={`${textSec} text-xs`}>Assign To</Label>
-                  <select value={convertForm.assigned_to} onChange={e => setConvertForm({...convertForm, assigned_to: e.target.value})} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`} data-testid="convert-assign-to">
-                    <option value={user?.email}>{user?.name} (Me)</option>
-                    {spList.filter(s => s.email !== user?.email).map(sp => <option key={sp.email} value={sp.email}>{sp.name}</option>)}
-                  </select>
-                </div>
-              </div>
-            )}
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setConvertDialogOpen(false)} className={'border-[var(--border-color)] text-[var(--text-secondary)]'}>Cancel</Button>
-              <Button onClick={handleConvert} className="bg-[#e94560] hover:bg-[#f05c75] text-white" data-testid="confirm-convert-button">
-                <ArrowRightCircle className="mr-1.5 h-4 w-4" /> Convert to Lead
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-        {/* CONTACT IMPORT DIALOG */}
-        <Dialog open={contactImportOpen} onOpenChange={(open) => { if (!open) resetImportDialog(); setContactImportOpen(open); }}>
-          <DialogContent className={`${dlgCls} w-[calc(100vw-1rem)] sm:max-w-lg`}>
-            <DialogHeader>
-              <DialogTitle className={textPri}>Import Contacts from CSV</DialogTitle>
-            </DialogHeader>
+        <WhatsAppSendDialog open={crm.waOpen} onOpenChange={crm.setWaOpen} module={crm.waCtx.module} context={crm.waCtx.context} title={crm.waCtx.title} />
 
-            {importResult ? (
-              /* ── Result view ── */
-              <div className="py-4 space-y-4">
-                <div className="text-center space-y-2">
-                  <div className="w-14 h-14 rounded-full bg-green-500/15 flex items-center justify-center mx-auto">
-                    <CheckCircle className="h-7 w-7 text-green-500" />
-                  </div>
-                  <p className={`text-base font-semibold ${textPri}`}>Import Complete</p>
-                </div>
-                <div className="grid grid-cols-3 gap-3">
-                  <div className={`bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-lg p-3 text-center`}>
-                    <p className="text-2xl font-bold text-green-500">{importResult.created}</p>
-                    <p className={`text-xs ${textMuted} mt-0.5`}>Created</p>
-                  </div>
-                  <div className={`bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-lg p-3 text-center`}>
-                    <p className="text-2xl font-bold text-yellow-500">{importResult.duplicates}</p>
-                    <p className={`text-xs ${textMuted} mt-0.5`}>Skipped</p>
-                  </div>
-                  <div className={`bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-lg p-3 text-center`}>
-                    <p className={`text-2xl font-bold ${importResult.errors?.length ? 'text-red-500' : textMuted}`}>{importResult.errors?.length || 0}</p>
-                    <p className={`text-xs ${textMuted} mt-0.5`}>Errors</p>
-                  </div>
-                </div>
-                {importResult.errors?.length > 0 && (
-                  <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3 space-y-1">
-                    <p className="text-xs font-semibold text-red-400">Row errors:</p>
-                    {importResult.errors.slice(0, 5).map((e, i) => (
-                      <p key={i} className="text-xs text-red-400">• {e}</p>
-                    ))}
-                  </div>
-                )}
-                <Button onClick={() => { setContactImportOpen(false); resetImportDialog(); }}
-                  className="w-full bg-[#e94560] hover:bg-[#f05c75] text-white">
-                  Done
-                </Button>
-              </div>
-            ) : (
-              /* ── Upload form ── */
-              <div className="space-y-4 py-2">
-                {/* Column guide + sample download */}
-                <div className={`bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-lg p-3 flex items-start justify-between gap-3`}>
-                  <div>
-                    <p className={`text-xs font-semibold ${textSec} mb-1`}>CSV columns</p>
-                    <p className={`text-xs font-mono ${textMuted} leading-relaxed`}>name · phone · email · company<br />designation · source · notes</p>
-                  </div>
-                  <button onClick={downloadSampleCsv}
-                    className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-md border border-[var(--border-color)] ${textSec} hover:bg-[var(--bg-hover)] whitespace-nowrap flex-shrink-0 transition-colors`}>
-                    <Download className="h-3 w-3" /> Sample CSV
-                  </button>
-                </div>
-
-                {/* Drop zone */}
-                <div
-                  className={`border-2 border-dashed rounded-lg p-6 text-center cursor-pointer transition-all ${
-                    importFile
-                      ? 'border-[var(--accent)] bg-[var(--accent-bg)]'
-                      : 'border-[var(--border-color)] hover:border-[var(--accent)]/50 hover:bg-[var(--bg-hover)]'
-                  }`}
-                  onClick={() => !importFile && contactFileRef.current?.click()}
-                  onDragOver={e => e.preventDefault()}
-                  onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f?.name.endsWith('.csv')) setImportFile(f); }}
-                >
-                  {importFile ? (
-                    <div className="flex items-center justify-center gap-3">
-                      <FileText className="h-5 w-5 text-[var(--accent)] flex-shrink-0" />
-                      <div className="text-left">
-                        <p className={`text-sm font-medium ${textPri}`}>{importFile.name}</p>
-                        <p className={`text-xs ${textMuted}`}>{(importFile.size / 1024).toFixed(1)} KB</p>
-                      </div>
-                      <button onClick={e => { e.stopPropagation(); setImportFile(null); contactFileRef.current.value = ''; }}
-                        className={`ml-1 ${textMuted} hover:text-red-500 transition-colors`}>
-                        <X className="h-4 w-4" />
-                      </button>
-                    </div>
-                  ) : (
-                    <>
-                      <Upload className={`h-7 w-7 mx-auto mb-2 ${textMuted}`} />
-                      <p className={`text-sm font-medium ${textSec}`}>Drag & drop or click to browse</p>
-                      <p className={`text-xs ${textMuted} mt-0.5`}>.CSV files only</p>
-                    </>
-                  )}
-                  <input ref={contactFileRef} type="file" accept=".csv" className="hidden"
-                    data-testid="contact-import-file-input"
-                    onChange={e => { if (e.target.files?.[0]) setImportFile(e.target.files[0]); }} />
-                </div>
-
-                {/* Tag selector */}
-                <div>
-                  <p className={`text-xs font-semibold ${textSec} mb-2`}>
-                    Apply Tags to All Imported Contacts <span className={`font-normal ${textMuted}`}>(optional)</span>
-                  </p>
-                  {tagsList.length > 0 ? (
-                    <div className="flex flex-wrap gap-1.5">
-                      {tagsList.map(tag => {
-                        const sel = importTags.includes(tag.tag_id);
-                        return (
-                          <button key={tag.tag_id}
-                            onClick={() => setImportTags(prev => sel ? prev.filter(id => id !== tag.tag_id) : [...prev, tag.tag_id])}
-                            className={`text-xs px-2.5 py-1 rounded-full border transition-all ${sel ? 'border-transparent text-white' : `border-[var(--border-color)] ${textSec} hover:border-[var(--accent)]/50`}`}
-                            style={sel ? { backgroundColor: tag.color || '#e94560' } : {}}>
-                            {sel ? '✓ ' : ''}{tag.name}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    <p className={`text-xs ${textMuted}`}>No tags defined — create tags in CRM Masters first.</p>
-                  )}
-                </div>
-
-                {/* Global notes */}
-                <div>
-                  <p className={`text-xs font-semibold ${textSec} mb-1.5`}>
-                    Additional Notes <span className={`font-normal ${textMuted}`}>(appended to all contacts)</span>
-                  </p>
-                  <textarea value={importNotes} onChange={e => setImportNotes(e.target.value)}
-                    placeholder="e.g. Imported from Education Expo 2024 — Delhi"
-                    rows={2}
-                    className={`w-full px-3 py-2 rounded-md text-sm resize-none border ${inputCls}`}
-                  />
-                </div>
-
-                <p className={`text-xs ${textMuted} flex items-center gap-1.5`}>
-                  <AlertTriangle className="h-3 w-3 flex-shrink-0" />
-                  Rows with the same name + phone as existing contacts will be skipped.
-                </p>
-              </div>
-            )}
-
-            {!importResult && (
-              <DialogFooter>
-                <Button variant="outline" onClick={() => { setContactImportOpen(false); resetImportDialog(); }}
-                  className={`border-[var(--border-color)] ${textSec}`}>
-                  Cancel
-                </Button>
-                <Button disabled={!importFile || importing} onClick={handleContactImport}
-                  className="bg-[#e94560] hover:bg-[#f05c75] text-white">
-                  {importing ? 'Importing…' : <><Upload className="mr-1.5 h-3.5 w-3.5" />Import Contacts</>}
-                </Button>
-              </DialogFooter>
-            )}
-          </DialogContent>
-        </Dialog>
-
-        {/* ENROLL IN DRIP DIALOG (P1-C) */}
-        <Dialog open={enrollDialogOpen} onOpenChange={setEnrollDialogOpen}>
-          <DialogContent className={`${dlgCls} w-[calc(100vw-1rem)] sm:max-w-sm`}>
-            <DialogHeader><DialogTitle className={textPri}>Enroll in Drip Sequence</DialogTitle></DialogHeader>
-            <div className="space-y-3 py-2">
-              <Label className={`${textSec} text-xs`}>Select Sequence</Label>
-              <select value={selectedSequenceId} onChange={e => setSelectedSequenceId(e.target.value)}
-                className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`}>
-                <option value="">-- Choose sequence --</option>
-                {dripSequencesList.filter(s => s.is_active).map(s => (
-                  <option key={s.sequence_id} value={s.sequence_id}>
-                    {s.name} ({(s.steps || []).length} steps)
-                  </option>
-                ))}
-              </select>
-            </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setEnrollDialogOpen(false)} className="border-[var(--border-color)] text-[var(--text-secondary)]">Cancel</Button>
-              <Button
-                disabled={!selectedSequenceId}
-                onClick={async () => {
-                  if (!detailLead) return;
-                  try {
-                    const res = await dripSequencesApi.enroll({ sequence_id: selectedSequenceId, lead_id: detailLead.lead_id });
-                    setLeadEnrollments(prev => [res.data, ...prev]);
-                    setEnrollDialogOpen(false);
-                    toast.success('Enrolled in sequence');
-                  } catch (err) {
-                    toast.error(err.response?.data?.detail || 'Enrollment failed');
-                  }
-                }}
-                className="bg-[#e94560] hover:bg-[#f05c75] text-white">
-                Enroll
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-
-        {/* WHATSAPP SEND DIALOG (FMS Phase 4) */}
-        <WhatsAppSendDialog open={waOpen} onOpenChange={setWaOpen} module={waCtx.module} context={waCtx.context} title={waCtx.title} />
-
-        {/* REASSIGN LEAD DIALOG (FMS Phase 5.1) */}
         <ReassignLeadDialog
-          open={reassignOpen}
-          onOpenChange={setReassignOpen}
-          lead={reassignLead}
-          leadIds={reassignBulkIds}
-          onSuccess={() => { setSelectedLeadIds(new Set()); fetchData(); }}
+          open={crm.reassignOpen}
+          onOpenChange={crm.setReassignOpen}
+          lead={crm.reassignLead}
+          leadIds={crm.reassignBulkIds}
+          onSuccess={() => { crm.setSelectedLeadIds(new Set()); crm.fetchData(); }}
         />
+
       </div>
 
-      {/* Mobile FAB — New Lead */}
+      {/* Mobile FAB */}
       <button
-        onClick={openCreateLead}
-        className="sm:hidden fixed z-40 w-14 h-14 rounded-full bg-[#e94560] hover:bg-[#f05c75] text-white shadow-xl flex items-center justify-center active:scale-95 transition-transform" style={{ bottom: 'calc(3.75rem + env(safe-area-inset-bottom) + 1rem)', right: '1rem' }}
-        aria-label="New Lead"
-      >
+        onClick={crm.openCreateLead}
+        className="sm:hidden fixed z-40 w-14 h-14 rounded-full bg-[#e94560] hover:bg-[#f05c75] text-white shadow-xl flex items-center justify-center active:scale-95 transition-transform"
+        style={{ bottom: 'calc(3.75rem + env(safe-area-inset-bottom) + 1rem)', right: '1rem' }}
+        aria-label="New Lead">
         <Plus className="h-6 w-6" />
       </button>
-    </AdminLayout>
+    </AppShell>
   );
 }

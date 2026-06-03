@@ -269,6 +269,56 @@ async def delete_contact_role(role_id: str, request: Request):
     return {"message": "Role deleted"}
 
 
+# ==================== DESIGNATION MASTER ====================
+
+_DEFAULT_DESIGNATIONS = [
+    "CEO", "MD", "Director", "Trustee", "Chairman",
+    "Principal", "Vice Principal", "Head of Department",
+    "Coordinator", "Administrator", "Accountant",
+    "Teacher", "Librarian", "Counselor",
+]
+
+@router.get("/designations")
+async def get_designations(request: Request):
+    await get_current_user(request)
+    designations = await db.designations.find({}, {"_id": 0}).sort("name", 1).to_list(200)
+    if not designations:
+        for d in _DEFAULT_DESIGNATIONS:
+            await db.designations.insert_one({"designation_id": f"des_{uuid.uuid4().hex[:8]}", "name": d, "is_active": True})
+        designations = await db.designations.find({}, {"_id": 0}).sort("name", 1).to_list(200)
+    return designations
+
+@router.post("/designations")
+async def create_designation(request: Request):
+    user = await get_current_user(request)
+    body = await request.json()
+    name = (body.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Name is required")
+    existing = await db.designations.find_one({"name": {"$regex": f"^{name}$", "$options": "i"}})
+    if existing:
+        raise HTTPException(status_code=409, detail="Designation already exists")
+    did = f"des_{uuid.uuid4().hex[:8]}"
+    doc = {"designation_id": did, "name": name, "department": body.get("department", ""), "is_active": True, "created_by": user["email"]}
+    await db.designations.insert_one(doc)
+    return await db.designations.find_one({"designation_id": did}, {"_id": 0})
+
+@router.put("/designations/{designation_id}")
+async def update_designation(designation_id: str, request: Request):
+    await get_current_user(request)
+    body = await request.json()
+    allowed = {k: v for k, v in body.items() if k in ("name", "department", "is_active")}
+    if allowed:
+        await db.designations.update_one({"designation_id": designation_id}, {"$set": allowed})
+    return await db.designations.find_one({"designation_id": designation_id}, {"_id": 0})
+
+@router.delete("/designations/{designation_id}")
+async def delete_designation(designation_id: str, request: Request):
+    await get_current_user(request)
+    await db.designations.delete_one({"designation_id": designation_id})
+    return {"message": "Designation deleted"}
+
+
 # ==================== TAG MASTER ====================
 
 # 12 expert marketing tags pre-seeded for SmartShape B2B school sales cycle
@@ -428,6 +478,8 @@ async def create_school(request: Request):
         "annual_budget_range": body.get("annual_budget_range", ""),
         "existing_vendor": body.get("existing_vendor", ""),
         "social_profiles": body.get("social_profiles", {}),
+        "linkedin_url": body.get("linkedin_url", ""),
+        "instagram_url": body.get("instagram_url", ""),
         "anniversary": body.get("anniversary", ""),
         "last_activity_date": datetime.now(timezone.utc).isoformat(),
         "created_by": user["email"],
@@ -445,7 +497,8 @@ async def update_school(school_id: str, request: Request):
     for k in ("school_name", "school_type", "board", "group_id", "website", "email", "phone",
               "city", "state", "pincode", "address", "primary_contact_name", "designation",
               "alternate_contact", "school_strength", "number_of_branches",
-              "annual_budget_range", "existing_vendor", "social_profiles", "anniversary"):
+              "annual_budget_range", "existing_vendor", "social_profiles",
+              "linkedin_url", "instagram_url", "anniversary"):
         if k in body:
             allowed[k] = body[k]
     allowed["last_activity_date"] = datetime.now(timezone.utc).isoformat()
@@ -654,6 +707,35 @@ async def create_contact(request: Request):
         else:
             school_id = None  # invalid FK — ignore it
 
+    # Auto-link: if company name matches a school, resolve school_id
+    if not school_id and company:
+        found_sch = await db.schools.find_one(
+            {"school_name": {"$regex": f"^{re.escape(company)}$", "$options": "i"}},
+            {"_id": 0, "school_id": 1}
+        )
+        if found_sch:
+            school_id = found_sch["school_id"]
+        elif body.get("create_school_if_missing"):
+            # Auto-create a minimal school record so the contact is properly linked
+            new_sch_id = f"sch_{uuid.uuid4().hex[:12]}"
+            await db.schools.insert_one({
+                "school_id": new_sch_id,
+                "school_name": company,
+                "school_type": "CBSE",
+                "phone": body.get("phone", ""),
+                "email": body.get("email", ""),
+                "city": "", "state": "", "pincode": "", "address": "",
+                "primary_contact_name": body.get("name", ""),
+                "designation": body.get("designation", ""),
+                "school_strength": 0, "number_of_branches": 1,
+                "annual_budget_range": "", "existing_vendor": "",
+                "social_profiles": {}, "linkedin_url": "", "instagram_url": "",
+                "last_activity_date": now_iso,
+                "created_by": user["email"],
+                "created_at": now_iso,
+            })
+            school_id = new_sch_id
+
     contact_doc = {
         "contact_id": contact_id,
         "name": body.get("name", ""),
@@ -667,6 +749,7 @@ async def create_contact(request: Request):
         "source_id": body.get("source_id", ""),
         "notes": body.get("notes", ""),
         "birthday": body.get("birthday", ""),
+        "assigned_to": body.get("assigned_to", ""),
         "status": "active",
         "converted_to_lead": False,
         "lead_id": None,
@@ -684,7 +767,7 @@ async def update_contact(contact_id: str, request: Request):
     await get_current_user(request)
     body = await request.json()
     allowed = {}
-    for k in ("name", "phone", "email", "designation", "contact_role_id", "source", "source_id", "notes", "status", "birthday"):
+    for k in ("name", "phone", "email", "designation", "contact_role_id", "source", "source_id", "notes", "status", "birthday", "assigned_to"):
         if k in body:
             allowed[k] = body[k]
 
@@ -714,7 +797,35 @@ async def update_contact(contact_id: str, request: Request):
 
     # Allow direct company edit only when no school_id is being set
     elif "company" in body:
-        allowed["company"] = body["company"]
+        new_company = body["company"]
+        allowed["company"] = new_company
+        # Auto-link: if the new company name matches a school, set school_id
+        if new_company:
+            found_sch = await db.schools.find_one(
+                {"school_name": {"$regex": f"^{re.escape(new_company)}$", "$options": "i"}},
+                {"_id": 0, "school_id": 1}
+            )
+            if found_sch:
+                allowed["school_id"] = found_sch["school_id"]
+            elif body.get("create_school_if_missing") and new_company:
+                now_iso = datetime.now(timezone.utc).isoformat()
+                existing_con = await db.contacts.find_one({"contact_id": contact_id}, {"_id": 0, "name": 1, "phone": 1, "designation": 1})
+                new_sch_id = f"sch_{uuid.uuid4().hex[:12]}"
+                await db.schools.insert_one({
+                    "school_id": new_sch_id,
+                    "school_name": new_company,
+                    "school_type": "CBSE",
+                    "phone": existing_con.get("phone", "") if existing_con else "",
+                    "email": body.get("email", ""),
+                    "city": "", "state": "", "pincode": "", "address": "",
+                    "primary_contact_name": existing_con.get("name", "") if existing_con else "",
+                    "designation": existing_con.get("designation", "") if existing_con else "",
+                    "school_strength": 0, "number_of_branches": 1,
+                    "annual_budget_range": "", "existing_vendor": "",
+                    "social_profiles": {}, "linkedin_url": "", "instagram_url": "",
+                    "last_activity_date": now_iso, "created_by": "auto", "created_at": now_iso,
+                })
+                allowed["school_id"] = new_sch_id
 
     allowed["last_activity_date"] = datetime.now(timezone.utc).isoformat()
     await db.contacts.update_one({"contact_id": contact_id}, {"$set": allowed})
@@ -724,7 +835,7 @@ async def update_contact(contact_id: str, request: Request):
 @router.delete("/contacts/{contact_id}")
 async def delete_contact(contact_id: str, request: Request):
     user = await get_current_user(request)
-    contact = await db.contacts.find_one({"contact_id": contact_id}, {"_id": 0, "contact_id": 1, "converted_to_lead": 1})
+    contact = await db.contacts.find_one({"contact_id": contact_id}, {"_id": 0})
     if not contact:
         raise HTTPException(status_code=404, detail="Contact not found")
     # Block deletion if contact has been converted to an active lead
@@ -736,6 +847,16 @@ async def delete_contact(contact_id: str, request: Request):
     await db.contacts.update_one(
         {"contact_id": contact_id},
         {"$set": {"is_deleted": True, "deleted_at": now_iso, "deleted_by": user["email"]}}
+    )
+    # Null out the back-reference on any lead that referenced this contact
+    await db.leads.update_many(
+        {"converted_from_contact": contact_id},
+        {"$unset": {"converted_from_contact": ""}}
+    )
+    # Null out referral references
+    await db.leads.update_many(
+        {"referred_by_contact_id": contact_id},
+        {"$unset": {"referred_by_contact_id": ""}}
     )
     return {"message": "Contact archived (soft-deleted)"}
 
@@ -948,21 +1069,52 @@ async def import_contacts_csv(
             contact_id = f"con_{uuid.uuid4().hex[:12]}"
             csv_notes = row.get("notes", "").strip()
             notes_combined = f"{csv_notes}\n{extra_note}".strip() if csv_notes and extra_note else (extra_note or csv_notes)
+            csv_company = (row.get("school", "") or row.get("company", "")).strip()
+            csv_now = datetime.now(timezone.utc).isoformat()
+            # Auto-link company name → school_id; auto-create school if missing
+            csv_school_id = None
+            if csv_company:
+                found_sch = await db.schools.find_one(
+                    {"school_name": {"$regex": f"^{re.escape(csv_company)}$", "$options": "i"}},
+                    {"_id": 0, "school_id": 1}
+                )
+                if found_sch:
+                    csv_school_id = found_sch["school_id"]
+                else:
+                    new_sch_id = f"sch_{uuid.uuid4().hex[:12]}"
+                    await db.schools.insert_one({
+                        "school_id": new_sch_id, "school_name": csv_company,
+                        "school_type": "CBSE",
+                        "phone": phone, "email": row.get("email", "").strip(),
+                        "city": "", "state": "", "pincode": "", "address": "",
+                        "primary_contact_name": name,
+                        "designation": row.get("designation", "").strip(),
+                        "school_strength": 0, "number_of_branches": 1,
+                        "annual_budget_range": "", "existing_vendor": "",
+                        "social_profiles": {}, "linkedin_url": "", "instagram_url": "",
+                        "last_activity_date": csv_now, "created_by": "import", "created_at": csv_now,
+                    })
+                    csv_school_id = new_sch_id
+            csv_assigned = row.get("assigned_to", "").strip()
             await db.contacts.insert_one({
                 "contact_id": contact_id,
                 "name": name,
                 "phone": phone,
                 "email": row.get("email", "").strip(),
-                "company": row.get("company", "").strip(),
+                "company": csv_company,
+                "school_id": csv_school_id,
                 "designation": row.get("designation", "").strip(),
                 "source": row.get("source", "").strip(),
                 "notes": notes_combined,
+                "birthday": row.get("birthday", "").strip(),
+                "assigned_to": csv_assigned,
                 "tag_ids": tag_id_list,
                 "status": "active",
                 "converted_to_lead": False,
                 "lead_id": None,
                 "created_by": user["email"] if request else "import",
-                "created_at": datetime.now(timezone.utc).isoformat(),
+                "created_at": csv_now,
+                "last_activity_date": csv_now,
             })
             created += 1
         except Exception as e:
@@ -1017,6 +1169,13 @@ async def create_lead(request: Request):
     body = await request.json()
 
     school_id = body.get("school_id")
+    # Validate existing school_id refers to a real, non-deleted school
+    if school_id and not body.get("new_school"):
+        sch_exists = await db.schools.find_one(
+            {"school_id": school_id, "is_deleted": {"$ne": True}}, {"_id": 0, "school_id": 1}
+        )
+        if not sch_exists:
+            raise HTTPException(status_code=404, detail="School not found or has been deleted")
     if not school_id and body.get("new_school"):
         ns = body["new_school"]
         school_id = f"sch_{uuid.uuid4().hex[:12]}"
@@ -1459,9 +1618,37 @@ async def lock_lead(lead_id: str, request: Request):
 
 @router.delete("/leads/{lead_id}")
 async def delete_lead(lead_id: str, request: Request):
-    await get_current_user(request)
+    user = await get_current_user(request)
+    lead = await db.leads.find_one({"lead_id": lead_id}, {"_id": 0, "converted_from_contact": 1, "order_id": 1})
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    # Block deletion if a live order exists for this lead
+    if lead.get("order_id"):
+        order = await db.orders.find_one({"order_id": lead["order_id"]}, {"_id": 0, "order_id": 1})
+        if order:
+            raise HTTPException(status_code=409, detail="Cannot delete lead: an order exists. Cancel or delete the order first.")
+
+    # Cascade: hard-delete all child CRM records
+    await asyncio.gather(
+        db.followups.delete_many({"lead_id": lead_id}),
+        db.call_notes.delete_many({"lead_id": lead_id}),
+        db.tasks.delete_many({"lead_id": lead_id}),
+        db.physical_dispatches.delete_many({"lead_id": lead_id}),
+        db.drip_enrollments.delete_many({"lead_id": lead_id}),
+        db.whatsapp_logs.update_many({"lead_id": lead_id}, {"$unset": {"lead_id": ""}}),
+    )
+
+    # Restore converted contact back to active if this lead was the conversion target
+    if lead.get("converted_from_contact"):
+        await db.contacts.update_one(
+            {"contact_id": lead["converted_from_contact"]},
+            {"$set": {"converted_to_lead": False, "lead_id": None,
+                      "last_activity_date": datetime.now(timezone.utc).isoformat()}}
+        )
+
     await db.leads.delete_one({"lead_id": lead_id})
-    return {"message": "Lead deleted"}
+    return {"message": "Lead and all related records deleted"}
 
 
 @router.get("/leads/{lead_id}/notes")
@@ -1585,6 +1772,43 @@ async def create_physical_dispatch(request: Request):
     }
     await db.physical_dispatches.insert_one(doc)
     await touch_last_activity("lead", body["lead_id"])
+
+    # Auto-link to delegation: create a dispatch-follow-up task for the assigned rep
+    try:
+        lead_doc = await db.leads.find_one({"lead_id": body["lead_id"]}, {"_id": 0})
+        if lead_doc and lead_doc.get("assigned_to"):
+            del_emp = await db.del_employees.find_one(
+                {"email": lead_doc["assigned_to"], "is_active": True}, {"_id": 0}
+            )
+            if del_emp:
+                _tid = f"task_{uuid.uuid4().hex[:10]}"
+                _num = f"DISP-{dispatch_id[-6:].upper()}"
+                _iid = f"inst_{uuid.uuid4().hex[:10]}"
+                _now = datetime.now(timezone.utc).isoformat()
+                _due = doc.get("sent_date", _now[:10])
+                await db.del_tasks.insert_one({
+                    "task_id": _tid, "task_number": _num,
+                    "title": f"Dispatch: {doc['material_type'].title()} → {lead_doc.get('company_name', lead_doc.get('contact_name',''))}",
+                    "description": f"Courier: {doc.get('courier_name','')} · {doc.get('tracking_number','')}",
+                    "task_type": "onetime", "frequency": "onetime", "target_date": _due,
+                    "priority": "medium", "assignee_ids": [del_emp["emp_id"]],
+                    "assignees": [del_emp], "delegator_id": None, "delegator_name": "",
+                    "score": 0, "require_verification": False, "requires_image": False,
+                    "linked_entity_id": dispatch_id, "linked_entity_type": "dispatch",
+                    "status": "active", "is_active": True, "created_at": _now,
+                })
+                await db.del_task_instances.insert_one({
+                    "instance_id": _iid, "task_id": _tid, "task_title": f"Dispatch: {doc['material_type'].title()}",
+                    "task_number": _num, "emp_id": del_emp["emp_id"], "emp_name": del_emp["name"],
+                    "department_id": del_emp.get("department_id",""), "department_name": del_emp.get("department_name",""),
+                    "delegator_id": None, "delegator_name": "", "due_date": _due, "frequency": "onetime",
+                    "priority": "medium", "score": 0, "require_verification": False, "requires_image": False,
+                    "linked_entity_id": dispatch_id, "linked_entity_type": "dispatch",
+                    "status": "pending", "completed_at": None, "verified_at": None, "verified_by": None,
+                    "completion_note": "", "completion_image_url": None, "created_at": _now,
+                })
+    except Exception:
+        pass  # never block dispatch creation
 
     # Auto-WhatsApp: fire-and-forget tracking notification to the lead contact
     try:

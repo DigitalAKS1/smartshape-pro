@@ -1,0 +1,121 @@
+code,name,type,category,min_level,description,stock_qty
+FL-001,Daisy Small,standard,flowers,5,Small daisy flower die for paper crafting,0
+FL-002,Daisy Large,standard,flowers,5,Large daisy flower die for paper crafting,0
+FL-003,Daisy Cluster,standard,flowers,5,Cluster of daisy flowers die,0
+FL-004,Lotus,standard,flowers,5,Lotus flower die for decorative crafting,0
+FL-005,Rose,standard,flowers,5,Classic rose flower die,0
+FL-006,Rose Bud,standard,flowers,5,Rose bud die for card making,0
+FL-007,Clematis,standard,flowers,5,Clematis flower die for paper crafting,0
+FL-008,Sunflower,standard,flowers,5,Sunflower die for decorative projects,0
+FL-009,Poinsettia,standard,flowers,5,Poinsettia Christmas flower die,0
+FL-010,Cherry Blossom,standard,flowers,5,Cherry blossom branch die,0
+FL-011,Hibiscus,standard,flowers,5,Hibiscus flower die,0
+FL-012,Marigold,standard,flowers,5,Marigold flower die for festive crafts,0
+FL-013,Peony,standard,flowers,5,Peony flower die for paper crafting,0
+FL-014,Wildflower,standard,flowers,5,Wildflower mix die,0
+FL-015,Tulip,standard,flowers,5,Tulip flower die,0
+GFL-001,Giant Daisy,giant,giant_flowers,3,Large format giant daisy flower die,0
+GFL-002,Giant Rose,giant,giant_flowers,3,Large format giant rose die,0
+GFL-003,Giant Sunflower,giant,giant_flowers,3,Large format giant sunflower die,0
+GFL-004,Giant Lotus,giant,giant_flowers,3,Large format giant lotus die,0
+GFL-005,Giant Peony,giant,giant_flowers,3,Large format giant peony die,0
+LF-001,Tropical Leaf,standard,leaf,5,Tropical broad leaf die,0
+LF-002,Monstera Leaf,standard,leaf,5,Monstera split leaf die for tropical crafts,0
+LF-003,Palm Leaf,standard,leaf,5,Palm frond leaf die,0
+LF-004,Branch With Leaves,standard,leaf,5,Decorative branch with leaves die,0
+LF-005,Autumn Leaf,standard,leaf,5,Autumn falling leaf die,0
+LF-006,Fern Frond,standard,leaf,5,Fern frond die for nature crafts,0
+LF-007,Holly Leaf,standard,leaf,5,Holly leaf with berries die,0
+LF-008,Eucalyptus Sprig,standard,leaf,5,Eucalyptus sprig die,0
+LF-009,Maple Leaf,standard,leaf,5,Maple leaf die,0
+LF-010,Oak Leaf,standard,leaf,5,Oak leaf die,0
+BF-001,Butterfly Green Purple,standard,butterfly,5,Green and purple toned butterfly die,0
+BF-002,Butterfly Yellow Blue,standard,butterfly,5,Yellow and blue toned butterfly die,0
+BF-003,Butterfly Pink Orange,standard,butterfly,5,Pink and orange toned butterfly die,0
+BF-004,Butterfly Classic,standard,butterfly,5,Classic symmetrical butterfly die,0
+BF-005,Butterfly Swallowtail,standard,butterfly,5,Swallowtail butterfly die,0
+BF-006,Butterfly Small,standard,butterfly,5,Small decorative butterfly die,0
+AB-001,Flamingo,standard,animals_birds,5,Flamingo standing pose die,0
+AB-002,Rabbit,standard,animals_birds,5,Rabbit side profile die,0
+AB-003,Peacock,standard,animals_birds,5,Peacock with tail feathers die,0
+AB-004,Frog,standard,animals_birds,5,Frog sitting pose die,0
+AB-005,Duck,standard,animals_birds,5,Duck or swan die,0
+AB-006,Fish,standard,animals_birds,5,Fish decorative die,0
+AB-007,Dove,standard,animals_birds,5,Dove in flight die,0
+AB-008,Bird On Branch,standard,animals_birds,5,Small bird perched on branch die,0
+AB-009,Elephant,standard,animals_birds,5,Elephant silhouette die,0
+AB-010,Deer,standard,animals_birds,5,Deer silhouette die,0
+BD-001,Scalloped Border,standard,borders,5,Scalloped edge border die,0
+BD-002,Wavy Border,standard,borders,5,Wavy line border die,0
+BD-003,Star Border,standard,borders,5,Star pattern border die,0
+BD-004,Circle Border,standard,borders,5,Circle pattern border die,0
+BD-005,Fence Border,standard,borders,5,Picket fence border die,0
+BD-006,Grass Border,standard,borders,5,Grass and ground border die,0
+BD-007,Lace Border,standard,borders,5,Lace pattern decorative border die,0
+BD-008,Dotted Border,standard,borders,5,Dotted pattern border die,0
+BD-009,Heart Border,standard,borders,5,Hearts in a row border die,0
+BD-010,Leaf Border,standard,borders,5,Leaf pattern border die,0
+SH-001,Circle,standard,shapes,5,Basic circle shape die,0
+SH-002,Heart,standard,shapes,5,Heart shape die,0
+SH-003,Star 5-Point,standard,shapes,5,Five-pointed star die,0
+SH-004,Star 6-Point,standard,shapes,5,Six-pointed star die,0
+SH-005,Arrow,standard,shapes,5,Directional arrow die,0
+SH-006,Hexagon,standard,shapes,5,Hexagon shape die,0
+SH-007,Diamond,standard,shapes,5,Diamond/rhombus shape die,0
+SH-008,Oval,standard,shapes,5,Oval shape die,0
+SH-009,Rectangle Rounded,standard,shapes,5,Rectangle with rounded corners die,0
+SH-010,Cloud,standard,shapes,5,Cloud shape die,0
+SH-011,Teardrop,standard,shapes,5,Teardrop shape die,0
+SH-012,Crescent Moon,standard,shapes,5,Crescent moon shape die,0
+AL-001,English Uppercase A-D,standard,alphabets,5,English capital letters A B C D die set,0
+AL-002,English Uppercase E-H,standard,alphabets,5,English capital letters E F G H die set,0
+AL-003,English Uppercase I-L,standard,alphabets,5,English capital letters I J K L die set,0
+AL-004,English Uppercase M-P,standard,alphabets,5,English capital letters M N O P die set,0
+AL-005,English Uppercase Q-T,standard,alphabets,5,English capital letters Q R S T die set,0
+AL-006,English Uppercase U-Z,standard,alphabets,5,English capital letters U V W X Y Z die set,0
+AL-007,English Lowercase a-d,standard,alphabets,5,English small letters a b c d die set,0
+AL-008,English Lowercase e-h,standard,alphabets,5,English small letters e f g h die set,0
+AL-009,English Lowercase i-l,standard,alphabets,5,English small letters i j k l die set,0
+AL-010,English Lowercase m-p,standard,alphabets,5,English small letters m n o p die set,0
+AL-011,English Lowercase q-t,standard,alphabets,5,English small letters q r s t die set,0
+AL-012,English Lowercase u-z,standard,alphabets,5,English small letters u v w x y z die set,0
+AL-013,Numbers 0-4,standard,numbers,5,Number digits 0 1 2 3 4 die set,0
+AL-014,Numbers 5-9,standard,numbers,5,Number digits 5 6 7 8 9 die set,0
+AL-015,Hindi Alphabets Set 1,standard,alphabets,5,Hindi consonants ka kha ga gha set 1,0
+AL-016,Hindi Alphabets Set 2,standard,alphabets,5,Hindi consonants cha chha ja jha set 2,0
+AL-017,Hindi Alphabets Set 3,standard,alphabets,5,Hindi consonants ta tha da dha set 3,0
+SF-001,Snowflake Design 1,standard,snowflake,5,Classic six-arm snowflake die,0
+SF-002,Snowflake Design 2,standard,snowflake,5,Intricate snowflake pattern die,0
+SF-003,Snowflake Design 3,standard,snowflake,5,Simple geometric snowflake die,0
+SF-004,Snowflake Set,standard,snowflake,5,Assorted snowflake set die,0
+FR-001,Strawberry,standard,fruits,5,Strawberry fruit die,0
+FR-002,Cherry,standard,fruits,5,Cherry pair on stem die,0
+FR-003,Pear,standard,fruits,5,Pear fruit die,0
+FR-004,Apple,standard,fruits,5,Apple fruit die,0
+FR-005,Pineapple,standard,fruits,5,Pineapple fruit die,0
+FR-006,Watermelon Slice,standard,fruits,5,Watermelon slice die,0
+3D-001,Cube 3D,standard,shapes,5,Three-dimensional cube die for craft projects,0
+3D-002,Cone 3D,standard,shapes,5,Three-dimensional cone die,0
+3D-003,Pyramid Pink,standard,shapes,5,Pink pyramid 3D die,0
+3D-004,Tetrahedron,standard,shapes,5,Tetrahedron geometric 3D die,0
+3D-005,Sphere 3D,standard,shapes,5,Sphere or ball 3D die,0
+DC-001,Fleur-de-lis,standard,decorative,5,Classic fleur-de-lis decorative die,0
+DC-002,Paisley,standard,decorative,5,Paisley motif decorative die,0
+DC-003,Scrollwork,standard,decorative,5,Ornamental scrollwork die,0
+DC-004,Diya,standard,decorative,5,Diya oil lamp die for Indian festivals,0
+DC-005,Skeleton,standard,decorative,5,Skeleton silhouette Halloween die,0
+DC-006,Tangram,standard,decorative,5,Tangram puzzle shape die,0
+DC-007,Coral Tree,standard,decorative,5,Coral tree branch die,0
+DC-008,Gift Box,standard,other,5,Wrapped gift box die,0
+DC-009,Envelope,standard,other,5,Envelope die for card making,0
+DC-010,Tag Label,standard,other,5,Price tag or label die,0
+DC-011,Bookmark,standard,other,5,Bookmark die for stationery,0
+DC-012,Ribbon Medal,standard,other,5,Ribbon and medal die,0
+DC-013,Footprints,standard,decorative,5,Animal or baby footprints die,0
+DC-014,Rose Petals,standard,flowers,5,Scattered rose petals die,0
+DC-015,Dragonfly,standard,decorative,5,Dragonfly decorative die,0
+DC-016,Feather,standard,decorative,5,Decorative feather die,0
+DC-017,Anchor,standard,decorative,5,Anchor nautical die,0
+DC-018,Crown,standard,decorative,5,Crown royalty die,0
+DC-019,Bow,standard,decorative,5,Decorative bow/ribbon die,0
+DC-020,Treble Clef,standard,decorative,5,Musical treble clef die,0

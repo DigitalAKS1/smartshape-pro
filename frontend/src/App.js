@@ -46,6 +46,7 @@ import ActivityLogsPage from './pages/admin/ActivityLogs';
 import DispatchTracking from './pages/admin/DispatchTracking';
 import SchoolProfile from './pages/admin/SchoolProfile';
 import MarketingHub from './pages/admin/MarketingHub';
+import DelegationApp from './pages/admin/DelegationApp';
 
 // Sales pages
 import SalesHome from './pages/sales/SalesHome';
@@ -62,6 +63,7 @@ import NotFound from './pages/NotFound';
 import CataloguePage from './pages/CataloguePage';
 import CustomerPortal from './pages/CustomerPortal';
 import CustomerLogin from './pages/CustomerLogin';
+import GetApp from './pages/GetApp';
 
 // School Portal
 import SchoolLogin from './pages/SchoolLogin';
@@ -142,6 +144,7 @@ function AppRouter() {
       <Route path="/customer-login" element={<CustomerLogin />} />
       <Route path="/school/login" element={<SchoolLogin />} />
       <Route path="/school" element={<SchoolDashboard />} />
+      <Route path="/get-app" element={<GetApp />} />
       
       {/* Protected Routes - Admin */}
       <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
@@ -179,6 +182,7 @@ function AppRouter() {
       <Route path="/customer-engagement" element={<ProtectedRoute><CustomerEngagement /></ProtectedRoute>} />
       <Route path="/school-profile/:school_id" element={<ProtectedRoute><SchoolProfile /></ProtectedRoute>} />
       <Route path="/marketing" element={<ProtectedRoute><MarketingHub /></ProtectedRoute>} />
+      <Route path="/delegation" element={<ProtectedRoute><DelegationApp /></ProtectedRoute>} />
       
       {/* Protected Routes - Sales */}
       <Route path="/sales" element={<ProtectedRoute><SalesHome /></ProtectedRoute>} />

@@ -265,9 +265,33 @@ async def _resolve_audience(audience_filter: dict) -> list:
     lead_stages  = audience_filter.get("lead_stages", [])   # P2-A: contacts via lead stage
     school_types = audience_filter.get("school_types", [])  # P3-A: filter by school board type
     min_strength = audience_filter.get("min_strength")      # P3-A: filter by school strength
-    school_cities = audience_filter.get("school_cities", [])  # P3-A: filter by school city
+    school_cities   = audience_filter.get("school_cities", [])   # P3-A: filter by school city
+    contact_ids     = audience_filter.get("contact_ids", [])      # direct hand-pick (webinar)
+    not_purchased   = audience_filter.get("not_purchased", False)  # non-won lead funnel
 
     base_filt = {"is_deleted": {"$ne": True}}
+
+    # Direct contact selection — hand-picked list (webinar / zoom invites)
+    if contact_ids:
+        return await db.contacts.find(
+            {"contact_id": {"$in": contact_ids}, "is_deleted": {"$ne": True}},
+            {"_id": 0}
+        ).to_list(None)
+
+    # Marketing funnel: contacts NOT linked to any won deal — uses DB-side $nin for performance
+    if not_purchased:
+        won_leads = await db.leads.find(
+            {"stage": "won", "is_deleted": {"$ne": True}},
+            {"_id": 0, "converted_from_contact": 1, "school_id": 1}
+        ).to_list(None)
+        won_contact_ids = [l["converted_from_contact"] for l in won_leads if l.get("converted_from_contact")]
+        won_school_ids  = [l["school_id"] for l in won_leads if l.get("school_id")]
+        excl: dict = {"is_deleted": {"$ne": True}}
+        if won_contact_ids:
+            excl["contact_id"] = {"$nin": won_contact_ids}
+        if won_school_ids:
+            excl["school_id"] = {"$nin": won_school_ids}
+        return await db.contacts.find(excl, {"_id": 0}).to_list(None)
 
     # P2-A — By lead stage: collect contacts linked to leads in given stages
     if lead_stages:
