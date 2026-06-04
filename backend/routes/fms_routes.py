@@ -71,6 +71,26 @@ def _mask_flow(flow: dict, team: str) -> dict:
         return flow
     return {k: ("" if k in hidden else v) for k, v in flow.items()}
 
+# ── Stage edit-lock (write gating) ───────────────────────────────────────────
+
+# Map a stage's logical team to the user teams allowed to act on it.
+# (dispatch/purchase/management/field consolidate under store/admin in this ERP.)
+_STAGE_TEAM_ALLOWED = {
+    "sales":      {"sales", "admin"},
+    "store":      {"store", "admin"},
+    "dispatch":   {"store", "admin"},
+    "purchase":   {"store", "admin"},
+    "accounts":   {"accounts", "admin"},
+    "management": {"admin"},
+    "field":      {"sales", "admin"},
+}
+
+def _require_stage_team(user: dict, stage: dict):
+    team = get_team(user)
+    allowed = _STAGE_TEAM_ALLOWED.get(stage.get("team", ""), {"admin"})
+    if team not in allowed:
+        raise HTTPException(403, f"Your role ({team}) cannot act on a {stage.get('team')} stage")
+
 # ── TAT Engine: office-hour-aware next plan time ──────────────────────────────
 
 DEFAULT_OFFICE_START = 10   # 10 AM
@@ -394,6 +414,7 @@ async def complete_stage(stage_id: str, request: Request):
 
     stage = await db.fms_stages.find_one({"stage_id": stage_id})
     if not stage: raise HTTPException(404, "Stage not found")
+    _require_stage_team(user, stage)
     if stage["status"] not in ("active", "waiting"):
         raise HTTPException(400, "Stage already completed")
 
@@ -430,6 +451,7 @@ async def approve_stage(stage_id: str, request: Request):
     cfg = await get_fms_settings()
     stage = await db.fms_stages.find_one({"stage_id": stage_id})
     if not stage: raise HTTPException(404)
+    _require_stage_team(user, stage)
     await db.fms_stages.update_one({"stage_id": stage_id}, {"$set": {
         "status": "done", "approval_status": "approved",
         "approval_by": user.get("email"), "approval_at": now_iso(),
@@ -446,6 +468,7 @@ async def reject_stage(stage_id: str, request: Request):
     stage = await db.fms_stages.find_one({"stage_id": stage_id})
     if not stage:
         raise HTTPException(404, "Stage not found")
+    _require_stage_team(user, stage)
 
     # Keep the original stage in 'rejected' state with the reason preserved.
     await db.fms_stages.update_one({"stage_id": stage_id}, {"$set": {
@@ -551,6 +574,9 @@ async def get_qc(flow_id: str, request: Request):
 @router.post("/qc")
 async def submit_qc(body: QCSubmit, request: Request):
     user = await get_current_user(request)
+    stage = await db.fms_stages.find_one({"stage_id": body.stage_id}, {"_id": 0})
+    if not stage: raise HTTPException(404, "Stage not found")
+    _require_stage_team(user, stage)
     qc_id = gen_id("qc")
     doc = {
         "qc_id": qc_id, "flow_id": body.flow_id, "stage_id": body.stage_id,
@@ -570,36 +596,32 @@ async def submit_qc(body: QCSubmit, request: Request):
         )
         # Insert a rework stage (temporary)
         cfg = await get_fms_settings()
-        stage = await db.fms_stages.find_one({"stage_id": body.stage_id}, {"_id": 0})
-        if stage:
-            rw_plan = calculate_plan_time(
-                now_utc(), 8,  # 8 hours rework TAT
-                cfg["office_start"], cfg["office_end"],
-                cfg["weekly_off"], cfg["holidays"],
-            )
-            await db.fms_stages.insert_one({
-                "stage_id": gen_id("stg"), "flow_id": body.flow_id,
-                "order": stage["order"],   # same order, re-run
-                "key": "rework", "label": "Rework (QC Failed)",
-                "team": "store", "tat_hours": 8, "needs_approval": False,
-                "status": "active",
-                "plan_start": now_iso(), "plan_done": rw_plan.isoformat(),
-                "actual_start": now_iso(), "actual_done": None,
-                "assigned_to": stage.get("assigned_to", ""),
-                "done_by": None, "done_note": "",
-                "tat_status": "pending", "score": None,
-            })
+        rw_plan = calculate_plan_time(
+            now_utc(), 8,  # 8 hours rework TAT
+            cfg["office_start"], cfg["office_end"],
+            cfg["weekly_off"], cfg["holidays"],
+        )
+        await db.fms_stages.insert_one({
+            "stage_id": gen_id("stg"), "flow_id": body.flow_id,
+            "order": stage["order"],   # same order, re-run
+            "key": "rework", "label": "Rework (QC Failed)",
+            "team": "store", "tat_hours": 8, "needs_approval": False,
+            "status": "active",
+            "plan_start": now_iso(), "plan_done": rw_plan.isoformat(),
+            "actual_start": now_iso(), "actual_done": None,
+            "assigned_to": stage.get("assigned_to", ""),
+            "done_by": None, "done_note": "",
+            "tat_status": "pending", "score": None,
+        })
     else:
         # QC passed — mark stage done and advance
         cfg = await get_fms_settings()
-        stage = await db.fms_stages.find_one({"stage_id": body.stage_id}, {"_id": 0})
-        if stage:
-            await db.fms_stages.update_one(
-                {"stage_id": body.stage_id},
-                {"$set": {"status": "done", "actual_done": now_iso(),
-                          "tat_status": "green", "qc_id": qc_id}}
-            )
-            await _advance_flow(body.flow_id, stage["order"], now_utc(), cfg)
+        await db.fms_stages.update_one(
+            {"stage_id": body.stage_id},
+            {"$set": {"status": "done", "actual_done": now_iso(),
+                      "tat_status": "green", "qc_id": qc_id}}
+        )
+        await _advance_flow(body.flow_id, stage["order"], now_utc(), cfg)
 
     return await db.fms_qc.find_one({"qc_id": qc_id}, {"_id": 0})
 
@@ -635,6 +657,8 @@ async def get_checklist(flow_id: str, request: Request):
 @router.post("/checklist")
 async def submit_checklist(request: Request):
     user = await get_current_user(request)
+    if get_team(user) not in ("store", "admin"):
+        raise HTTPException(403, "Only store/admin can submit the pre-dispatch checklist")
     body = await request.json()
     flow_id = body["flow_id"]
     items = body["items"]  # list of {key, label, checked, checked_by, checked_at, note}
