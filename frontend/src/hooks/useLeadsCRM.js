@@ -357,13 +357,13 @@ export default function useLeadsCRM() {
   // ─────────────────────────────────────────────────────────────────────────────
   const openEditSchool = (sch) => {
     setEditSchool(sch);
-    setEditSchoolForm({ school_name: sch.school_name || '', school_type: sch.school_type || 'CBSE', phone: sch.phone || '', email: sch.email || '', city: sch.city || '', state: sch.state || '', primary_contact_name: sch.primary_contact_name || '', designation: sch.designation || '', school_strength: sch.school_strength || 0, existing_vendor: sch.existing_vendor || '', linkedin_url: sch.linkedin_url || '', instagram_url: sch.instagram_url || '', website: sch.website || '' });
+    setEditSchoolForm({ school_name: sch.school_name || '', school_type: sch.school_type || 'CBSE', group_id: sch.group_id || '', phone: sch.phone || '', email: sch.email || '', city: sch.city || '', state: sch.state || '', address: sch.address || '', pincode: sch.pincode || '', primary_contact_name: sch.primary_contact_name || '', designation: sch.designation || '', school_strength: sch.school_strength || 0, existing_vendor: sch.existing_vendor || '', linkedin_url: sch.linkedin_url || '', instagram_url: sch.instagram_url || '', website: sch.website || '' });
     setSchoolDialogOpen(true);
   };
 
   const openCreateSchool = () => {
     setEditSchool(null);
-    setEditSchoolForm({ school_name: '', school_type: 'CBSE', group_id: '', phone: '', email: '', city: '', state: '', primary_contact_name: '', designation: '', school_strength: 0, existing_vendor: '', linkedin_url: '', instagram_url: '', website: '' });
+    setEditSchoolForm({ school_name: '', school_type: 'CBSE', group_id: '', phone: '', email: '', city: '', state: '', address: '', pincode: '', primary_contact_name: '', designation: '', school_strength: 0, existing_vendor: '', linkedin_url: '', instagram_url: '', website: '' });
     setSchoolDialogOpen(true);
   };
 

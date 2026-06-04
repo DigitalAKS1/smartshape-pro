@@ -61,6 +61,16 @@ export default function SchoolFormDialog({
             <div><Label className={`${textSec} text-xs`}>State</Label><Input value={editSchoolForm.state || ''} onChange={e => setEditSchoolForm({...editSchoolForm, state: e.target.value})} className={inputCls} /></div>
           </div>
 
+          <div>
+            <Label className={`${textSec} text-xs`}>Address</Label>
+            <Input value={editSchoolForm.address || ''} onChange={e => setEditSchoolForm({...editSchoolForm, address: e.target.value})} placeholder="Street, area, landmark…" className={inputCls} data-testid="school-address-input" />
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div><Label className={`${textSec} text-xs`}>Website</Label><Input value={editSchoolForm.website || ''} onChange={e => setEditSchoolForm({...editSchoolForm, website: e.target.value})} placeholder="https://…" className={inputCls} data-testid="school-website-input" /></div>
+            <div><Label className={`${textSec} text-xs`}>Pincode</Label><Input value={editSchoolForm.pincode || ''} onChange={e => setEditSchoolForm({...editSchoolForm, pincode: e.target.value})} className={inputCls} /></div>
+          </div>
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div><Label className={`${textSec} text-xs`}>Contact Name</Label><Input value={editSchoolForm.primary_contact_name || ''} onChange={e => setEditSchoolForm({...editSchoolForm, primary_contact_name: e.target.value})} className={inputCls} /></div>
             <div>
