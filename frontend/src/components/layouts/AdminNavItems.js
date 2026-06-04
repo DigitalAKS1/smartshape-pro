@@ -47,6 +47,7 @@ export const MODULE_ROUTE_MAP = {
     { path: '/marketing', icon: Zap, label: 'Marketing & WhatsApp' },
   ],
   delegation: { path: '/delegation', icon: ClipboardList, label: 'Delegation System' },
+  flow_management: { path: '/flow-management', icon: Zap, label: 'Flow Management' },
   sales_portal: { path: '/sales', icon: Smartphone, label: 'Sales Portal' },
   user_management: [
     { path: '/user-management', icon: Users, label: 'User Management' },
@@ -66,13 +67,14 @@ export const SIDEBAR_SECTIONS = [
   { label: 'Finance & HR',      modules: ['accounts', 'payroll', 'hr'] },
   { label: 'Reports',           modules: ['analytics'] },
   { label: 'Delegation',        modules: ['delegation'] },
+  { label: 'Flow Management',   modules: ['flow_management'] },
   { label: 'Administration',    modules: ['user_management', 'settings'] },
 ];
 
 export const TEAM_MODULES = {
-  accounts: ['dashboard', 'quotations', 'accounts', 'payroll', 'analytics', 'delegation'],
-  store:    ['dashboard', 'quotations', 'inventory', 'stock_management', 'purchase_alerts', 'physical_count', 'store', 'package_master', 'delegation'],
-  sales:    ['dashboard', 'quotations', 'field_sales', 'sales_portal', 'leads', 'delegation'],
+  accounts: ['dashboard', 'quotations', 'accounts', 'payroll', 'analytics', 'delegation', 'flow_management'],
+  store:    ['dashboard', 'quotations', 'inventory', 'stock_management', 'purchase_alerts', 'physical_count', 'store', 'package_master', 'delegation', 'flow_management'],
+  sales:    ['dashboard', 'quotations', 'field_sales', 'sales_portal', 'leads', 'delegation', 'flow_management'],
 };
 
 export const BOTTOM_NAV_ITEMS = [

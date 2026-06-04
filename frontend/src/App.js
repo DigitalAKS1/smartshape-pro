@@ -47,6 +47,7 @@ import DispatchTracking from './pages/admin/DispatchTracking';
 import SchoolProfile from './pages/admin/SchoolProfile';
 import MarketingHub from './pages/admin/MarketingHub';
 import DelegationApp from './pages/admin/DelegationApp';
+import FlowManagement from './pages/admin/FlowManagement';
 
 // Sales pages
 import SalesHome from './pages/sales/SalesHome';
@@ -183,6 +184,7 @@ function AppRouter() {
       <Route path="/school-profile/:school_id" element={<ProtectedRoute><SchoolProfile /></ProtectedRoute>} />
       <Route path="/marketing" element={<ProtectedRoute><MarketingHub /></ProtectedRoute>} />
       <Route path="/delegation" element={<ProtectedRoute><DelegationApp /></ProtectedRoute>} />
+      <Route path="/flow-management" element={<ProtectedRoute><FlowManagement /></ProtectedRoute>} />
       
       {/* Protected Routes - Sales */}
       <Route path="/sales" element={<ProtectedRoute><SalesHome /></ProtectedRoute>} />
