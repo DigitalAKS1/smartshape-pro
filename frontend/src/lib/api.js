@@ -650,6 +650,7 @@ export const delegation = {
   },
   instances: {
     list:             (p)    => API.get('/delegation/instances', { params: p }),
+    patch:            (id,d) => API.patch(`/delegation/instances/${id}`, d),
     complete:         (id,d) => API.post(`/delegation/instances/${id}/complete`, d),
     completeWithImage:(id,fd)=> API.post(`/delegation/instances/${id}/complete-with-image`, fd),
     verify:           (id)   => API.post(`/delegation/instances/${id}/verify`, {}),

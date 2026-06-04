@@ -6,6 +6,7 @@ import { useDelegationApp } from '../../hooks/useDelegationApp';
 import DelegationDashboard from '../../components/delegation/DelegationDashboard';
 import DelegationTaskForm from '../../components/delegation/DelegationTaskForm';
 import DelegationDepartmentManager from '../../components/delegation/DelegationDepartmentManager';
+import EditTaskDialog from '../../components/delegation/EditTaskDialog';
 import {
   DelegationOverviewTab, DelegationVisitsTab, DelegationReportsTab,
   DelegationCalendarTab, DelegationPersonDrawer,
@@ -175,8 +176,29 @@ export default function DelegationApp() {
         drawerSearch={s.drawerSearch} setDrawerSearch={s.setDrawerSearch}
         drawerStatus={s.drawerStatus} setDrawerStatus={s.setDrawerStatus}
         completeInst={s.completeInst} verifyInst={s.verifyInst} reopenInst={s.reopenInst}
+        onEditTask={(inst) => s.openEditTask(inst, s.activeRole)}
         TODAY={s.TODAY} {...sharedTheme}
       />
+
+      {/* Edit task dialog */}
+      {s.editTask && (
+        <EditTaskDialog
+          task={s.editTask}
+          role={s.activeRole}
+          assignableEmployees={s.assignableEmployees}
+          saving={s.savingEdit}
+          onSubmit={async (payload) => {
+            if (s.activeRole === 'delegatee') {
+              await s.patchInstance(s.editTask.__instanceId, payload);
+              s.setEditTask(null);
+            } else {
+              await s.updateTask(s.editTask.task_id, payload);
+            }
+          }}
+          onClose={() => s.setEditTask(null)}
+          {...sharedTheme}
+        />
+      )}
     </AdminLayout>
   );
 }

@@ -42,6 +42,10 @@ export function useDelegationApp() {
   const [drawerSearch,  setDrawerSearch] = useState('');
   const [drawerStatus,  setDrawerStatus] = useState('');
 
+  /* ── edit-task dialog ── */
+  const [editTask,   setEditTask]   = useState(null);   // task being edited, or null
+  const [savingEdit, setSavingEdit] = useState(false);
+
   /* ── delegatee assigner filter ── */
   const [assignerFilter, setAssignerFilter] = useState('');
 
@@ -217,6 +221,56 @@ export function useDelegationApp() {
     toast.success('Completed with photo'); loadInstances(); loadDash();
   };
 
+  /* ─────────────── task editing ──────────────────────────────────────── */
+  // Open the edit dialog from an instance row. Owners load the full task
+  // definition (so dates/assignees aren't wiped on save); delegatees soft-edit
+  // their own instance (we stash __instanceId for patchInstance).
+  const openEditTask = async (inst, role) => {
+    if (role === 'delegatee') {
+      setEditTask({
+        __instanceId: inst.instance_id,
+        task_id: inst.task_id,
+        title: inst.task_title,
+        priority: inst.priority,
+      });
+      return;
+    }
+    try {
+      const r = await delApi.tasks.list({});
+      const t = (r.data || []).find(x => x.task_id === inst.task_id);
+      if (t) setEditTask(t);
+      else toast.error('Task definition not found');
+    } catch {
+      toast.error('Failed to load task');
+    }
+  };
+
+  const updateTask = async (taskId, payload) => {
+    setSavingEdit(true);
+    try {
+      await delApi.tasks.update(taskId, payload);
+      toast.success('Task updated');
+      setEditTask(null);
+      loadInstances(); loadDash(); loadTeamSummary();
+      if (drawer) openDrawer(drawer);
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Update failed');
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
+  const patchInstance = async (instanceId, payload) => {
+    try {
+      await delApi.instances.patch(instanceId, payload);
+      toast.success('Saved');
+      loadInstances();
+      if (drawer) openDrawer(drawer);
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Save failed');
+    }
+  };
+
   /* ─────────────── bulk assign ───────────────────────────────────────── */
   const updateRow = (id, field, val) =>
     setRows(rs => rs.map(r => r._id === id ? { ...r, [field]: val } : r));
@@ -340,6 +394,8 @@ export function useDelegationApp() {
     /* dialogs */
     deptOpen, setDeptOpen, deptForm, setDeptForm,
     empOpen, setEmpOpen, editEmp, setEditEmp, empForm, setEmpForm,
+    /* edit task */
+    editTask, setEditTask, savingEdit, openEditTask, updateTask, patchInstance,
     /* handlers */
     openDrawer, completeInst, verifyInst, reopenInst, bulkClose,
     handleImageComplete, toggleRole, saveEmp, saveDept, syncUsersNow,
