@@ -22,6 +22,7 @@ IST = timezone(timedelta(hours=5, minutes=30))
 
 from database import db
 from auth_utils import get_current_user
+from rbac import get_team
 
 router = APIRouter(prefix="/fms", tags=["fms"])
 
@@ -54,6 +55,21 @@ async def _log_stage(flow_id: str, stage: dict, action: str,
         "note": note,
         "at": now_iso(),
     })
+
+# ── RBAC field masking ────────────────────────────────────────────────────────
+
+# Fields hidden from each team on flow read responses
+_MASK_BY_TEAM = {
+    "sales": ["amount", "customer_phone"],
+    "store": ["amount"],
+}
+
+def _mask_flow(flow: dict, team: str) -> dict:
+    """Strip sensitive fields from a flow dict for non-privileged teams."""
+    hidden = _MASK_BY_TEAM.get(team, [])
+    if not hidden:
+        return flow
+    return {k: ("" if k in hidden else v) for k, v in flow.items()}
 
 # ── TAT Engine: office-hour-aware next plan time ──────────────────────────────
 
@@ -229,20 +245,21 @@ class FlowCreate(BaseModel):
 @router.get("/flows")
 async def list_flows(request: Request, flow_type: Optional[str] = None,
                      status: Optional[str] = None, limit: int = 100):
-    await get_current_user(request)
+    user = await get_current_user(request)
     q = {}
     if flow_type: q["flow_type"] = flow_type
     if status:    q["status"]    = status
     flows = await db.fms_flows.find(q, {"_id": 0}).sort("created_at", -1).to_list(limit)
-    return flows
+    team = get_team(user)
+    return [_mask_flow(f, team) for f in flows]
 
 @router.get("/flows/{flow_id}")
 async def get_flow(flow_id: str, request: Request):
-    await get_current_user(request)
+    user = await get_current_user(request)
     flow = await db.fms_flows.find_one({"flow_id": flow_id}, {"_id": 0})
     if not flow: raise HTTPException(404, "Flow not found")
     stages = await db.fms_stages.find({"flow_id": flow_id}, {"_id": 0}).sort("order", 1).to_list(50)
-    return {**flow, "stages": stages}
+    return {**_mask_flow(flow, get_team(user)), "stages": stages}
 
 @router.get("/flows/{flow_id}/logs")
 async def get_flow_logs(flow_id: str, request: Request):
@@ -651,19 +668,16 @@ class PaymentMilestone(BaseModel):
 
 @router.get("/payments/{flow_id}")
 async def get_payments(flow_id: str, request: Request):
-    await get_current_user(request)
+    user = await get_current_user(request)
     payments = await db.fms_payments.find({"flow_id": flow_id}, {"_id": 0}).sort("created_at", 1).to_list(20)
     flow = await db.fms_flows.find_one({"flow_id": flow_id}, {"_id": 0}) or {}
+    if get_team(user) in ("sales", "store"):
+        raise HTTPException(403, "Payment data not visible for your role")
     total = flow.get("amount", 0)
     collected = sum(p["amount"] for p in payments)
     balance = total - collected
-    return {
-        "payments": payments,
-        "total": total,
-        "collected": collected,
-        "balance": balance,
-        "pct_collected": round(collected / total * 100, 1) if total else 0,
-    }
+    return {"payments": payments, "total": total, "collected": collected, "balance": balance,
+            "pct_collected": round(collected / total * 100, 1) if total else 0}
 
 @router.post("/payments")
 async def add_payment(body: PaymentMilestone, request: Request):
@@ -693,7 +707,8 @@ async def add_payment(body: PaymentMilestone, request: Request):
 
 @router.get("/dashboard")
 async def fms_dashboard(request: Request, flow_type: Optional[str] = None):
-    await get_current_user(request)
+    user = await get_current_user(request)
+    team = get_team(user)
     now = now_utc()
     q = {"status": {"$in": ["active", "blocked"]}}
     if flow_type: q["flow_type"] = flow_type
@@ -716,7 +731,7 @@ async def fms_dashboard(request: Request, flow_type: Optional[str] = None):
                           max(1, (plan_dt - datetime.fromisoformat(s["plan_start"])).total_seconds())
                     s["tat_status"] = "orange" if pct > 0.8 else "pending"
 
-        result.append({**flow, "stages": stages})
+        result.append({**_mask_flow(flow, team), "stages": stages})
 
     # Summary counts
     total  = await db.fms_flows.count_documents({"status": {"$in": ["active","blocked"]}})
