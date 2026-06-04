@@ -424,18 +424,46 @@ async def approve_stage(stage_id: str, request: Request):
 @router.post("/stages/{stage_id}/reject")
 async def reject_stage(stage_id: str, request: Request):
     user = await get_current_user(request)
+    cfg = await get_fms_settings()
     body = await request.json()
     stage = await db.fms_stages.find_one({"stage_id": stage_id})
-    if not stage: raise HTTPException(404)
+    if not stage:
+        raise HTTPException(404, "Stage not found")
+
+    # Keep the original stage in 'rejected' state with the reason preserved.
     await db.fms_stages.update_one({"stage_id": stage_id}, {"$set": {
-        "status": "rejected", "approval_status": "rejected",
+        "status": "rejected",
+        "approval_status": "rejected",
         "approval_by": user.get("email"),
         "reject_reason": body.get("reason", ""),
-        "actual_done": None,  # reset so stage can be re-done
+        "rejected_at": now_iso(),
     }})
-    # Re-open stage for redo
-    await db.fms_stages.update_one({"stage_id": stage_id}, {"$set": {"status": "active"}})
-    return {"message": "Rejected — stage reopened for redo"}
+    await _log_stage(stage["flow_id"], stage, "rejected", user,
+                     note=body.get("reason", ""), from_status=stage["status"],
+                     to_status="rejected")
+
+    # Create a fresh redo stage at the same order so the flow can proceed.
+    now = now_utc()
+    plan_done = calculate_plan_time(
+        now, stage.get("tat_hours", 4),
+        cfg["office_start"], cfg["office_end"], cfg["weekly_off"], cfg["holidays"],
+    )
+    redo = {
+        "stage_id": gen_id("stg"), "flow_id": stage["flow_id"],
+        "order": stage["order"], "key": f"{stage['key']}_redo",
+        "label": f"{stage['label']} (Redo)", "team": stage["team"],
+        "tat_hours": stage.get("tat_hours", 4), "needs_approval": stage.get("needs_approval", False),
+        "status": "active",
+        "plan_start": now.isoformat(), "plan_done": plan_done.isoformat(),
+        "actual_start": now.isoformat(), "actual_done": None,
+        "assigned_to": stage.get("assigned_to", ""),
+        "customer_notify": stage.get("customer_notify", False),
+        "done_by": None, "done_note": "", "approval_status": None, "approval_by": None,
+        "tat_status": "pending", "score": None,
+    }
+    await db.fms_stages.insert_one(redo)
+    await _log_stage(stage["flow_id"], redo, "reworked", user, to_status="active")
+    return {"message": "Rejected — redo stage created"}
 
 async def _advance_flow(flow_id: str, completed_order: int, now: datetime, cfg: dict):
     """Find next stage, activate it, recalculate plan times from now."""
