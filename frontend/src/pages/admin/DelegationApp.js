@@ -7,12 +7,15 @@ import DelegationDashboard from '../../components/delegation/DelegationDashboard
 import DelegationTaskForm from '../../components/delegation/DelegationTaskForm';
 import DelegationDepartmentManager from '../../components/delegation/DelegationDepartmentManager';
 import EditTaskDialog from '../../components/delegation/EditTaskDialog';
+import ReassignTaskDialog from '../../components/delegation/ReassignTaskDialog';
+import ApprovalsInbox from '../../components/delegation/ApprovalsInbox';
+import NotificationsBell from '../../components/delegation/NotificationsBell';
 import {
   DelegationOverviewTab, DelegationVisitsTab, DelegationReportsTab,
   DelegationCalendarTab, DelegationPersonDrawer,
 } from '../../components/delegation/DelegationTaskList';
 import {
-  LayoutGrid, ClipboardList, Calendar, Users, MapPin, BarChart2, Briefcase, Shield, UserCheck, User,
+  LayoutGrid, ClipboardList, Calendar, Users, MapPin, BarChart2, Briefcase, Shield, UserCheck, User, CheckCircle2,
 } from 'lucide-react';
 
 const PINK = '#e94560';
@@ -60,6 +63,11 @@ export default function DelegationApp() {
               <p className={`${textMuted} text-xs mt-0.5`}>Assign · track · verify team work</p>
             </div>
           </div>
+          <NotificationsBell
+            notifications={s.notifications}
+            markNotifRead={s.markNotifRead} markAllNotifsRead={s.markAllNotifsRead}
+            {...sharedTheme}
+          />
         </div>
 
         {/* Role switcher */}
@@ -85,7 +93,12 @@ export default function DelegationApp() {
 
         {/* Tab bar */}
         <div className={`${card} border rounded-xl p-1 flex gap-0.5 overflow-x-auto`}>
-          {VIEWS.map(v => (
+          {[
+            ...VIEWS,
+            ...((s.activeRole === 'boss' || s.activeRole === 'delegator')
+              ? [{ id: 'approvals', label: 'Approvals', icon: CheckCircle2 }]
+              : []),
+          ].map(v => (
             <button key={v.id} onClick={() => s.setViewTab(v.id)}
               className={`flex items-center gap-1.5 px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-medium whitespace-nowrap transition-all flex-shrink-0
                 ${s.viewTab === v.id ? 'text-white' : `${textSec} hover:bg-[var(--bg-hover)]`}`}
@@ -166,6 +179,14 @@ export default function DelegationApp() {
             {...sharedTheme}
           />
         )}
+
+        {/* Approvals */}
+        {s.viewTab === 'approvals' && (
+          <ApprovalsInbox
+            requests={s.reassignRequests} decideReassign={s.decideReassign}
+            {...sharedTheme}
+          />
+        )}
       </div>
 
       {/* Person drawer */}
@@ -177,8 +198,20 @@ export default function DelegationApp() {
         drawerStatus={s.drawerStatus} setDrawerStatus={s.setDrawerStatus}
         completeInst={s.completeInst} verifyInst={s.verifyInst} reopenInst={s.reopenInst}
         onEditTask={(inst) => s.openEditTask(inst, s.activeRole)}
+        onReassign={(inst) => s.setReassignInst(inst)}
         TODAY={s.TODAY} {...sharedTheme}
       />
+
+      {/* Reassign dialog */}
+      {s.reassignInst && (
+        <ReassignTaskDialog
+          instance={s.reassignInst}
+          employees={s.employees}
+          onSubmit={s.submitReassign}
+          onClose={() => s.setReassignInst(null)}
+          {...sharedTheme}
+        />
+      )}
 
       {/* Edit task dialog */}
       {s.editTask && (

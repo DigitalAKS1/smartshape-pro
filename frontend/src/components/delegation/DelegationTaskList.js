@@ -2,7 +2,7 @@ import React, { useRef } from 'react';
 import {
   Check, Camera, Calendar, AlertTriangle, Users, ClipboardList,
   UserCheck, MapPin, RefreshCw, Link2, User, RotateCcw, Eye,
-  CheckSquare, ChevronRight, Pencil,
+  CheckSquare, ChevronRight, Pencil, ArrowRightLeft,
 } from 'lucide-react';
 
 const PINK = '#e94560';
@@ -589,7 +589,7 @@ export function DelegationPersonDrawer({
   drawerTasks, drawerLoading, drawerFiltered,
   drawerSearch, setDrawerSearch,
   drawerStatus, setDrawerStatus,
-  completeInst, verifyInst, reopenInst, onEditTask,
+  completeInst, verifyInst, reopenInst, onEditTask, onReassign,
   card, textPri, textSec, textMuted, inputCls, TODAY,
 }) {
   if (!drawer) return null;
@@ -735,6 +735,12 @@ export function DelegationPersonDrawer({
                     <button onClick={() => onEditTask(inst)}
                       className={`px-4 flex items-center justify-center gap-1.5 py-2.5 text-xs ${textMuted} hover:bg-[var(--bg-hover)] border-l border-[var(--border-color)]`}>
                       <Pencil className="h-3.5 w-3.5" /> Edit
+                    </button>
+                  )}
+                  {onReassign && inst.status === 'pending' && (
+                    <button onClick={() => onReassign(inst)}
+                      className={`px-4 flex items-center justify-center gap-1.5 py-2.5 text-xs ${textMuted} hover:bg-[var(--bg-hover)] border-l border-[var(--border-color)]`}>
+                      <ArrowRightLeft className="h-3.5 w-3.5" /> Reassign
                     </button>
                   )}
                 </div>

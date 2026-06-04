@@ -657,6 +657,16 @@ export const delegation = {
     reopen:           (id)   => API.post(`/delegation/instances/${id}/reopen`, {}),
     bulkComplete:     (data) => API.post('/delegation/instances/bulk-complete', data),
     team:             (id)   => API.get(`/delegation/instances/${id}/team`),
+    reassignRequest:  (id,d) => API.post(`/delegation/instances/${id}/reassign-request`, d),
+  },
+  reassignRequests: {
+    list:   (p)    => API.get('/delegation/reassign-requests', { params: p }),
+    decide: (id,d) => API.post(`/delegation/reassign-requests/${id}/decide`, d),
+  },
+  notifications: {
+    list:    (p)  => API.get('/delegation/notifications', { params: p }),
+    read:    (id) => API.post(`/delegation/notifications/${id}/read`, {}),
+    readAll: ()   => API.post('/delegation/notifications/read-all', {}),
   },
   calendar:   (p)  => API.get('/delegation/calendar', { params: p }),
   dashboard:  (p)  => API.get('/delegation/dashboard', { params: p }),

@@ -46,6 +46,11 @@ export function useDelegationApp() {
   const [editTask,   setEditTask]   = useState(null);   // task being edited, or null
   const [savingEdit, setSavingEdit] = useState(false);
 
+  /* ── reassignment + approvals + notifications ── */
+  const [reassignInst,     setReassignInst]     = useState(null);  // instance to reassign
+  const [reassignRequests, setReassignRequests] = useState([]);
+  const [notifications,    setNotifications]    = useState([]);
+
   /* ── delegatee assigner filter ── */
   const [assignerFilter, setAssignerFilter] = useState('');
 
@@ -160,6 +165,8 @@ export function useDelegationApp() {
   useEffect(() => { if (viewTab === 'reports')  loadReport();     }, [viewTab, loadReport]);
   useEffect(() => { if (viewTab === 'visits')   loadVisitTasks(); }, [viewTab, loadVisitTasks]);
   useEffect(() => { if (viewTab === 'calendar') loadCalendar();   }, [viewTab, loadCalendar]);
+  useEffect(() => { if (viewTab === 'approvals') loadReassignRequests('pending'); }, [viewTab, loadReassignRequests]);
+  useEffect(() => { loadNotifications(); }, [loadNotifications]);
 
   /* ─────────────── person drawer ─────────────────────────────────────── */
   const openDrawer = async (emp) => {
@@ -269,6 +276,57 @@ export function useDelegationApp() {
     } catch (e) {
       toast.error(e?.response?.data?.detail || 'Save failed');
     }
+  };
+
+  /* ─────────────── reassignment + approvals ──────────────────────────── */
+  const submitReassign = async (instanceId, toEmpId, reason) => {
+    try {
+      await delApi.instances.reassignRequest(instanceId, { to_emp_id: toEmpId, reason });
+      toast.success('Reassignment requested — awaiting approval');
+      setReassignInst(null);
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Request failed');
+    }
+  };
+
+  const loadReassignRequests = useCallback(async (status = 'pending') => {
+    try {
+      const r = await delApi.reassignRequests.list(status ? { status } : {});
+      setReassignRequests(r.data || []);
+    } catch { /* silent */ }
+  }, []);
+
+  const decideReassign = async (requestId, decision, note = '') => {
+    try {
+      await delApi.reassignRequests.decide(requestId, { decision, note });
+      toast.success(decision === 'approved' ? 'Approved' : 'Rejected');
+      loadReassignRequests('pending');
+      loadInstances();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Action failed');
+    }
+  };
+
+  /* ─────────────── notifications ─────────────────────────────────────── */
+  const loadNotifications = useCallback(async () => {
+    try {
+      const r = await delApi.notifications.list({});
+      setNotifications(r.data || []);
+    } catch { /* silent */ }
+  }, []);
+
+  const markNotifRead = async (notifId) => {
+    try {
+      await delApi.notifications.read(notifId);
+      setNotifications(ns => ns.map(n => n.notif_id === notifId ? { ...n, is_read: true } : n));
+    } catch { /* silent */ }
+  };
+
+  const markAllNotifsRead = async () => {
+    try {
+      await delApi.notifications.readAll();
+      setNotifications(ns => ns.map(n => ({ ...n, is_read: true })));
+    } catch { /* silent */ }
   };
 
   /* ─────────────── bulk assign ───────────────────────────────────────── */
@@ -396,6 +454,10 @@ export function useDelegationApp() {
     empOpen, setEmpOpen, editEmp, setEditEmp, empForm, setEmpForm,
     /* edit task */
     editTask, setEditTask, savingEdit, openEditTask, updateTask, patchInstance,
+    /* reassignment + approvals + notifications */
+    reassignInst, setReassignInst, submitReassign,
+    reassignRequests, loadReassignRequests, decideReassign,
+    notifications, loadNotifications, markNotifRead, markAllNotifsRead,
     /* handlers */
     openDrawer, completeInst, verifyInst, reopenInst, bulkClose,
     handleImageComplete, toggleRole, saveEmp, saveDept, syncUsersNow,
