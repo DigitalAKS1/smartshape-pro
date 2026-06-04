@@ -117,6 +117,11 @@ async def connect_db():
     await db.activity_logs.create_index([("entity_type", 1), ("entity_id", 1), ("created_at", -1)], background=True)
     await db.activity_logs.create_index("created_at", background=True)
 
+    # ── FMS ─────────────────────────────────────────────────────────────────
+    await db.fms_stage_logs.create_index([("flow_id", 1), ("at", 1)], background=True)
+    await db.fms_stages.create_index([("status", 1), ("plan_done", 1)], background=True)
+    await db.fms_notifications.create_index([("stage_id", 1), ("kind", 1), ("channel", 1)], background=True)
+
     # ── Customer portal ─────────────────────────────────────────────────────
     await db.school_notifications.create_index([("school_id", 1), ("read", 1)], background=True)
     await db.customer_accounts.create_index("catalogue_token", background=True)

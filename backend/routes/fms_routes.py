@@ -39,6 +39,22 @@ def gen_id(prefix: str) -> str:
 def today_str() -> str:
     return date.today().isoformat()
 
+async def _log_stage(flow_id: str, stage: dict, action: str,
+                     user: Optional[dict] = None, note: str = "",
+                     from_status: str = "", to_status: str = ""):
+    await db.fms_stage_logs.insert_one({
+        "log_id": gen_id("flog"),
+        "flow_id": flow_id,
+        "stage_id": stage.get("stage_id") if stage else None,
+        "stage_label": stage.get("label") if stage else None,
+        "action": action,
+        "from_status": from_status,
+        "to_status": to_status,
+        "by": (user or {}).get("email", "system"),
+        "note": note,
+        "at": now_iso(),
+    })
+
 # ── TAT Engine: office-hour-aware next plan time ──────────────────────────────
 
 DEFAULT_OFFICE_START = 10   # 10 AM
@@ -228,6 +244,13 @@ async def get_flow(flow_id: str, request: Request):
     stages = await db.fms_stages.find({"flow_id": flow_id}, {"_id": 0}).sort("order", 1).to_list(50)
     return {**flow, "stages": stages}
 
+@router.get("/flows/{flow_id}/logs")
+async def get_flow_logs(flow_id: str, request: Request):
+    await get_current_user(request)
+    return await db.fms_stage_logs.find(
+        {"flow_id": flow_id}, {"_id": 0}
+    ).sort("at", 1).to_list(500)
+
 @router.post("/flows")
 async def create_flow(body: FlowCreate, request: Request):
     user = await get_current_user(request)
@@ -289,6 +312,9 @@ async def create_flow(body: FlowCreate, request: Request):
 
     if stage_docs:
         await db.fms_stages.insert_many(stage_docs)
+
+    for sd in stage_docs:
+        await _log_stage(flow_id, sd, "created", user, to_status=sd["status"])
 
     # Create delegation task for first stage
     await _create_delegation_task_for_stage(stage_docs[0], body.title, flow_id)
@@ -369,6 +395,9 @@ async def complete_stage(stage_id: str, request: Request):
         "tat_status": t_status, "score": score,
     }
     await db.fms_stages.update_one({"stage_id": stage_id}, {"$set": update})
+    await _log_stage(stage["flow_id"], {**stage, **update}, "completed", user,
+                     note=body.get("note", ""), from_status=stage["status"],
+                     to_status=update["status"])
 
     # If needs approval → stop here, notify approver
     if stage.get("needs_approval"):
@@ -388,6 +417,7 @@ async def approve_stage(stage_id: str, request: Request):
         "status": "done", "approval_status": "approved",
         "approval_by": user.get("email"), "approval_at": now_iso(),
     }})
+    await _log_stage(stage["flow_id"], stage, "approved", user, to_status="done")
     await _advance_flow(stage["flow_id"], stage["order"], now_utc(), cfg)
     return {"message": "Approved and flow advanced"}
 
@@ -437,6 +467,8 @@ async def _advance_flow(flow_id: str, completed_order: int, now: datetime, cfg: 
             "plan_done": plan_done.isoformat(),
         }}
     )
+    await _log_stage(flow_id, {**next_stage, "stage_id": next_stage["stage_id"]},
+                     "activated", None, to_status="active")
     # Update flow's current stage
     await db.fms_flows.update_one(
         {"flow_id": flow_id},
@@ -847,3 +879,4 @@ async def fms_calendar(
         })
 
     return {"year": y, "month": m, "days": grouped}
+
