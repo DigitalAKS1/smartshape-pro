@@ -28,6 +28,22 @@ def gen_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:10]}"
 
 
+def _make_change(by: str, field: str, frm, to, note: str = "") -> dict:
+    """One append-only audit entry for an instance change_log."""
+    return {"at": now_iso(), "by": by, "field": field, "from": frm, "to": to, "note": note}
+
+
+# fields a delegator/boss may edit on a task definition
+TASK_EDITABLE = (
+    "title", "description", "priority", "score", "require_verification",
+    "requires_image", "is_active", "task_type", "frequency",
+    "target_date", "start_date", "end_date", "assignee_ids", "buddy_emp_id",
+)
+
+# fields a delegatee may soft-edit on their own instance
+INSTANCE_SOFT_FIELDS = ("due_date", "priority", "completion_note")
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # DEPARTMENTS
 # ══════════════════════════════════════════════════════════════════════════════
@@ -430,15 +446,105 @@ async def bulk_create_tasks(request: Request):
         created += 1
     return {"created": created}
 
+async def _resync_pending_instances(task: dict):
+    """Make PENDING instances match the task definition.
+    Never touches completed/verified instances (history is preserved)."""
+    task_id = task["task_id"]
+
+    # desired (emp_id, due_date) pairs from the current definition
+    if task.get("task_type") == "onetime":
+        dates = [task.get("target_date") or today_str()]
+    else:
+        dates = _recurring_dates(
+            task.get("frequency", "custom"),
+            task.get("start_date") or today_str(),
+            task.get("end_date") or today_str(),
+        )
+    assignees = task.get("assignees", [])
+    emp_by_id = {a["emp_id"]: a for a in assignees}
+    desired = {(a["emp_id"], d) for a in assignees for d in dates}
+
+    existing = await db.del_task_instances.find({"task_id": task_id}).to_list(5000)
+
+    # delete pending instances no longer wanted
+    kept = []
+    for inst in existing:
+        key = (inst["emp_id"], inst["due_date"])
+        if inst.get("status") == "pending" and key not in desired:
+            await db.del_task_instances.delete_one({"instance_id": inst["instance_id"]})
+        else:
+            kept.append(inst)
+
+    covered = {(i["emp_id"], i["due_date"]) for i in kept}
+
+    # create instances for newly-desired (emp, date) pairs
+    freq = "onetime" if task.get("task_type") == "onetime" else task.get("frequency", "custom")
+    kw = dict(
+        task_id=task_id, task_number=task["task_number"], title=task["title"],
+        priority=task.get("priority", "medium"), score=task.get("score", 0),
+        require_verification=task.get("require_verification", False),
+        requires_image=task.get("requires_image", False),
+        delegator_id=task.get("delegator_id"), delegator_name=task.get("delegator_name", ""),
+        linked_entity_id=task.get("linked_entity_id"),
+        linked_entity_type=task.get("linked_entity_type"),
+    )
+    new_insts = []
+    for (emp_id, d) in desired:
+        if (emp_id, d) in covered:
+            continue
+        emp = emp_by_id.get(emp_id)
+        if not emp:
+            continue
+        new_insts.append(_make_instance_v2(**kw, emp=emp, due=d, freq=freq))
+    if new_insts:
+        await db.del_task_instances.insert_many(new_insts)
+
+    # propagate field edits to all remaining pending instances
+    await db.del_task_instances.update_many(
+        {"task_id": task_id, "status": "pending"},
+        {"$set": {
+            "task_title": task["title"],
+            "priority": task.get("priority", "medium"),
+            "score": task.get("score", 0),
+            "require_verification": task.get("require_verification", False),
+            "requires_image": task.get("requires_image", False),
+            "updated_at": now_iso(),
+        }},
+    )
+
+    count = await db.del_task_instances.count_documents({"task_id": task_id})
+    await db.del_tasks.update_one({"task_id": task_id}, {"$set": {"instance_count": count}})
+
+
 @router.put("/tasks/{task_id}")
 async def update_task(task_id: str, request: Request):
-    await get_current_user(request)
+    user = await get_current_user(request)
     body = await request.json()
-    safe = {k: v for k, v in body.items() if k in (
-        "title", "description", "priority", "score", "require_verification", "is_active"
-    )}
-    if safe:
-        await db.del_tasks.update_one({"task_id": task_id}, {"$set": safe})
+    task = await db.del_tasks.find_one({"task_id": task_id}, {"_id": 0})
+    if not task:
+        raise HTTPException(404, "Task not found")
+
+    updates = {k: v for k, v in body.items() if k in TASK_EDITABLE}
+    if not updates:
+        return task
+    updates["updated_at"] = now_iso()
+    updates["updated_by"] = user.get("email")
+
+    # if assignees change, refresh the cached assignee details
+    if "assignee_ids" in updates:
+        assignees = []
+        for aid in updates["assignee_ids"]:
+            emp = await db.del_employees.find_one(
+                {"emp_id": aid},
+                {"_id": 0, "emp_id": 1, "name": 1, "department_id": 1, "department_name": 1},
+            )
+            if emp:
+                assignees.append(emp)
+        updates["assignees"] = assignees
+
+    await db.del_tasks.update_one({"task_id": task_id}, {"$set": updates})
+    new_task = await db.del_tasks.find_one({"task_id": task_id}, {"_id": 0})
+    await _resync_pending_instances(new_task)
     return await db.del_tasks.find_one({"task_id": task_id}, {"_id": 0})
 
 @router.delete("/tasks/{task_id}")
@@ -589,6 +695,30 @@ async def reopen_instance(instance_id: str, request: Request):
     await db.del_task_instances.update_one(
         {"instance_id": instance_id},
         {"$set": {"status": "pending", "completed_at": None, "verified_at": None}}
+    )
+    return await db.del_task_instances.find_one({"instance_id": instance_id}, {"_id": 0})
+
+
+@router.patch("/instances/{instance_id}")
+async def patch_instance(instance_id: str, request: Request):
+    """Delegatee soft-edit: due_date / priority / completion_note, all change-logged."""
+    user = await get_current_user(request)
+    body = await request.json()
+    inst = await db.del_task_instances.find_one({"instance_id": instance_id}, {"_id": 0})
+    if not inst:
+        raise HTTPException(404, "Instance not found")
+
+    updates, logs = {}, []
+    for f in INSTANCE_SOFT_FIELDS:
+        if f in body and body[f] != inst.get(f):
+            updates[f] = body[f]
+            logs.append(_make_change(user.get("email", ""), f, inst.get(f), body[f]))
+    if not updates:
+        return inst
+    updates["updated_at"] = now_iso()
+    await db.del_task_instances.update_one(
+        {"instance_id": instance_id},
+        {"$set": updates, "$push": {"change_log": {"$each": logs}}},
     )
     return await db.del_task_instances.find_one({"instance_id": instance_id}, {"_id": 0})
 
