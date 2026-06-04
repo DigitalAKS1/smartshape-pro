@@ -18,6 +18,8 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone, timedelta, date, time as dtime
 import uuid, math
 
+IST = timezone(timedelta(hours=5, minutes=30))
+
 from database import db
 from auth_utils import get_current_user
 
@@ -63,70 +65,55 @@ def calculate_plan_time(
     weekly_off: List[int],
     holidays: List[str],
 ) -> datetime:
-    """
-    Add tat_hours of working time to from_dt, respecting office hours and holidays.
-    If from_dt is outside office hours, starts from next available slot.
-    """
+    """Add tat_hours of working time to from_dt, respecting IST office hours,
+    weekly-off days and holidays. Input may be any tz; result is returned in UTC."""
     if from_dt.tzinfo is None:
         from_dt = from_dt.replace(tzinfo=timezone.utc)
-
-    # Convert to local naive for arithmetic (assume IST = UTC+5:30, but use UTC internally)
-    current = from_dt
+    current = from_dt.astimezone(IST)
     remaining = tat_hours * 60  # minutes
-
-    max_iter = 5000  # safety
-    iterations = 0
-
+    max_iter, iterations = 5000, 0
     while remaining > 0 and iterations < max_iter:
         iterations += 1
         d = current.date()
-
-        # Skip non-working days
         if not _is_working_day(d, weekly_off, holidays):
-            current = datetime.combine(d + timedelta(days=1),
-                                       dtime(office_start, 0), tzinfo=current.tzinfo)
+            current = datetime.combine(d + timedelta(days=1), dtime(office_start, 0), tzinfo=IST)
             continue
-
-        # Before office hours → jump to start
         if current.hour < office_start:
             current = current.replace(hour=office_start, minute=0, second=0, microsecond=0)
-
-        # After/at office end → jump to next working day start
         if current.hour >= office_end:
-            next_d = d + timedelta(days=1)
-            current = datetime.combine(next_d, dtime(office_start, 0), tzinfo=current.tzinfo)
+            current = datetime.combine(d + timedelta(days=1), dtime(office_start, 0), tzinfo=IST)
             continue
-
-        # Minutes left in this working slot
         end_today = current.replace(hour=office_end, minute=0, second=0, microsecond=0)
         slot_mins = (end_today - current).total_seconds() / 60
-
         if remaining <= slot_mins:
             current += timedelta(minutes=remaining)
             remaining = 0
         else:
             remaining -= slot_mins
-            next_d = d + timedelta(days=1)
-            current = datetime.combine(next_d, dtime(office_start, 0), tzinfo=current.tzinfo)
-
-    return current
+            current = datetime.combine(d + timedelta(days=1), dtime(office_start, 0), tzinfo=IST)
+    return current.astimezone(timezone.utc)
 
 def working_minutes_elapsed(start: datetime, end: datetime,
                              office_start: int, office_end: int,
                              weekly_off: List[int], holidays: List[str]) -> float:
-    """Count actual working minutes between two datetimes."""
+    """Count working minutes (IST office hours, skipping off-days/holidays) between two instants."""
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=timezone.utc)
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=timezone.utc)
+    start, end = start.astimezone(IST), end.astimezone(IST)
     if start >= end:
-        return 0
+        return 0.0
     total = 0.0
     cur = start
     while cur < end:
         d = cur.date()
         if _is_working_day(d, weekly_off, holidays):
-            day_start = max(cur, datetime.combine(d, dtime(office_start, 0), tzinfo=cur.tzinfo))
-            day_end   = min(end, datetime.combine(d, dtime(office_end,   0), tzinfo=cur.tzinfo))
+            day_start = max(cur, datetime.combine(d, dtime(office_start, 0), tzinfo=IST))
+            day_end = min(end, datetime.combine(d, dtime(office_end, 0), tzinfo=IST))
             if day_end > day_start:
                 total += (day_end - day_start).total_seconds() / 60
-        cur = datetime.combine(d + timedelta(days=1), dtime(office_start, 0), tzinfo=cur.tzinfo)
+        cur = datetime.combine(d + timedelta(days=1), dtime(office_start, 0), tzinfo=IST)
     return total
 
 def tat_status(planned_dt: datetime, actual_dt: Optional[datetime]) -> str:
