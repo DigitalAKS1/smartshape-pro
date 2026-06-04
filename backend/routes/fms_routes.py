@@ -22,7 +22,7 @@ IST = timezone(timedelta(hours=5, minutes=30))
 
 from database import db
 from auth_utils import get_current_user
-from rbac import get_team
+from rbac import get_team, require_admin
 
 router = APIRouter(prefix="/fms", tags=["fms"])
 
@@ -1005,3 +1005,25 @@ async def fms_calendar(
 
     return {"year": y, "month": m, "days": grouped}
 
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# DEBUG / ADMIN ENDPOINTS (Task 9b)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@router.post("/_run-sla")
+async def debug_run_sla(request: Request, dry: int = 0):
+    user = await get_current_user(request)
+    require_admin(user)
+    import os as _os
+    if dry:
+        _os.environ["FMS_NOTIFY_DRY_RUN"] = "1"
+    from scheduler import run_fms_sla_check   # local import avoids cycle at module load
+    await run_fms_sla_check()
+    return {"ok": True}
+
+
+@router.get("/_notifications/{flow_id}")
+async def debug_notifications(flow_id: str, request: Request):
+    user = await get_current_user(request)
+    require_admin(user)
+    return await db.fms_notifications.find({"flow_id": flow_id}, {"_id": 0}).to_list(200)

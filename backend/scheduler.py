@@ -1,15 +1,17 @@
 """
 SmartShape background automation engine.
 
-Four perpetual asyncio loops:
+Five perpetual asyncio loops:
   1. email_sender_loop    — every 2 min: flush email_scheduled queue via SMTP
   2. wa_sender_loop       — every 2 min: flush whatsapp_scheduled queue via WABA provider
   3. drip_executor_loop   — every 1 hr: advance drip enrollments whose next_step_at <= now
   4. greeting_loop        — daily 9am IST: fire greeting rules matching today's MM-DD
+  5. fms_sla_loop         — every 5 min: send SLA breach/escalate/warning notifications
 """
 
 import asyncio
 import logging
+import os
 import smtplib
 import uuid
 from datetime import datetime, timezone, timedelta
@@ -19,6 +21,8 @@ from email.mime.text import MIMEText
 import httpx
 
 from database import db
+from services.evolution_client import evolution
+from routes.fms_routes import get_fms_settings, render_template, pct_remaining
 
 log = logging.getLogger("scheduler")
 
@@ -520,10 +524,145 @@ async def greeting_loop():
             await asyncio.sleep(3600)
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# JOB 5 — FMS SLA Notification Engine
+# ══════════════════════════════════════════════════════════════════════════════
+
+FMS_DRY_RUN = os.getenv("FMS_NOTIFY_DRY_RUN", "0") == "1"
+
+
+async def _fms_send_wa(phone: str, text: str) -> tuple[bool, str]:
+    if not phone:
+        return False, "no_phone"
+    if FMS_DRY_RUN:
+        log.info(f"[fms][dry] WA -> {phone}: {text[:60]}")
+        return True, ""
+    try:
+        await evolution.send_text(phone, text)
+        return True, ""
+    except Exception as e:
+        return False, str(e)[:200]
+
+
+async def _fms_send_email(to_email: str, subject: str, body: str) -> tuple[bool, str]:
+    if not to_email or "@" not in to_email:
+        return False, "no_email"
+    if FMS_DRY_RUN:
+        log.info(f"[fms][dry] EMAIL -> {to_email}: {subject}")
+        return True, ""
+    cfg = await _email_cfg()
+    if not cfg:
+        return False, "email_not_configured"
+    se, ap, sn = cfg
+    try:
+        await asyncio.to_thread(_smtp_send, se, ap, sn, to_email, subject, body)
+        return True, ""
+    except Exception as e:
+        return False, str(e)[:200]
+
+
+async def _resolve_recipient(email: str) -> dict:
+    """Return {name, email, phone} for a staff member, looking in users then del_employees."""
+    if not email:
+        return {}
+    u = await db.users.find_one({"email": email}, {"_id": 0}) or {}
+    emp = await db.del_employees.find_one({"email": email}, {"_id": 0}) or {}
+    return {
+        "name": u.get("name") or emp.get("name") or email,
+        "email": email,
+        "phone": u.get("phone") or u.get("mobile") or emp.get("phone") or "",
+        "manager_email": emp.get("manager_email") or "",
+        "department_id": emp.get("department_id", ""),
+    }
+
+
+async def _fms_already_sent(stage_id: str, kind: str, channel: str) -> bool:
+    return bool(await db.fms_notifications.find_one(
+        {"stage_id": stage_id, "kind": kind, "channel": channel, "status": "sent"}))
+
+
+async def _fms_record(flow_id, stage_id, kind, channel, recipient, ok, err):
+    await db.fms_notifications.insert_one({
+        "notif_id": f"fnotif_{uuid.uuid4().hex[:10]}",
+        "flow_id": flow_id, "stage_id": stage_id, "kind": kind,
+        "channel": channel, "recipient": recipient,
+        "status": "sent" if ok else "failed", "error": err,
+        "sent_at": datetime.now(timezone.utc).isoformat(),
+    })
+
+
+async def _fms_notify(flow, stage, kind, channels, templates, recipient):
+    """Send `kind` notification to `recipient` over each channel, deduped, recorded."""
+    tpl = templates.get(kind, "")
+    due = (stage.get("plan_done") or "")[:16].replace("T", " ")
+    text = render_template(
+        tpl, stage=stage.get("label", ""), title=flow.get("title", ""),
+        ref=flow.get("reference_id") or flow.get("flow_id", ""),
+        due=due, customer_name=flow.get("customer_name", ""),
+        assignee=recipient.get("name", ""),
+    )
+    subject = f"[SmartShape FMS] {stage.get('label','')}"
+    for ch in channels:
+        if await _fms_already_sent(stage["stage_id"], kind, ch):
+            continue
+        if ch == "whatsapp":
+            ok, err = await _fms_send_wa(recipient.get("phone", ""), text)
+        elif ch == "email":
+            ok, err = await _fms_send_email(recipient.get("email", ""), subject, text)
+        else:
+            ok, err = False, "unknown_channel"
+        await _fms_record(flow["flow_id"], stage["stage_id"], kind, ch,
+                          recipient.get("email") or recipient.get("phone"), ok, err)
+
+
+async def run_fms_sla_check():
+    cfg = await get_fms_settings()
+    channels = cfg["notify_channels"]
+    templates = cfg["templates"]
+    now = datetime.now(timezone.utc)
+
+    stages = await db.fms_stages.find({"status": "active"}, {"_id": 0}).to_list(1000)
+    for stage in stages:
+        if not stage.get("plan_start") or not stage.get("plan_done"):
+            continue
+        ps = datetime.fromisoformat(stage["plan_start"])
+        pd = datetime.fromisoformat(stage["plan_done"])
+        rem = pct_remaining(ps, pd, stage.get("paused_intervals"))
+        flow = await db.fms_flows.find_one({"flow_id": stage["flow_id"]}, {"_id": 0})
+        if not flow or flow.get("status") not in ("active", "blocked"):
+            continue
+        recipient = await _resolve_recipient(stage.get("assigned_to", ""))
+
+        # breach
+        if cfg["notify_on_breach"] and now >= pd:
+            await _fms_notify(flow, stage, "staff_breach", channels, templates, recipient)
+            mgr = recipient.get("manager_email")
+            if mgr:
+                mgr_r = await _resolve_recipient(mgr)
+                await _fms_notify(flow, stage, "manager_breach", channels, templates, mgr_r)
+        # escalate
+        elif rem <= cfg["notify_escalate_pct"]:
+            await _fms_notify(flow, stage, "staff_escalate", channels, templates, recipient)
+        # warning
+        elif rem <= cfg["notify_warning_pct"]:
+            await _fms_notify(flow, stage, "staff_warning", channels, templates, recipient)
+
+
+async def fms_sla_loop():
+    log.info("[scheduler] FMS SLA checker started (interval: 5 min)")
+    while True:
+        try:
+            await run_fms_sla_check()
+        except Exception as exc:
+            log.error(f"[fms sla loop] {exc}")
+        await asyncio.sleep(300)
+
+
 async def start_scheduler():
     """Start all background automation loops. Call once from FastAPI startup."""
     asyncio.create_task(email_sender_loop())
     asyncio.create_task(wa_sender_loop())
     asyncio.create_task(drip_executor_loop())
     asyncio.create_task(greeting_loop())
-    log.info("[scheduler] all 4 background jobs running")
+    asyncio.create_task(fms_sla_loop())
+    log.info("[scheduler] all 5 background jobs running")
