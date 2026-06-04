@@ -216,6 +216,45 @@ def score_stage(plan_start: Optional[datetime], plan_done: Optional[datetime],
     late = (actual_done - plan_done).total_seconds() / 60
     return max(0, round(100 - (late / planned_mins) * 50))
 
+
+def render_template(tpl: str, **kw) -> str:
+    """Safe template fill: unknown placeholders render blank, never raise."""
+    class _Blank(dict):
+        def __missing__(self, k): return ""
+    try:
+        return tpl.format_map(_Blank(kw))
+    except Exception:
+        return tpl
+
+
+def pct_remaining(plan_start: datetime, plan_done: datetime,
+                  paused_intervals: Optional[list] = None) -> float:
+    """Fraction of the TAT window still remaining (0..1). Subtracts paused time."""
+    now = now_utc()
+    total = (plan_done - plan_start).total_seconds()
+    if total <= 0:
+        return 0.0 if now >= plan_done else 1.0
+    paused = _paused_seconds(paused_intervals or [], plan_start, now)
+    elapsed = max(0.0, (now - plan_start).total_seconds() - paused)
+    rem = 1.0 - (elapsed / total)
+    return max(0.0, min(1.0, rem))
+
+
+def _paused_seconds(intervals: list, lo: datetime, hi: datetime) -> float:
+    """Total seconds of paused intervals that fall within [lo, hi]."""
+    total = 0.0
+    for iv in intervals:
+        try:
+            a = datetime.fromisoformat(iv["from"])
+            b = datetime.fromisoformat(iv["to"]) if iv.get("to") else hi
+        except Exception:
+            continue
+        a = max(a, lo); b = min(b, hi)
+        if b > a:
+            total += (b - a).total_seconds()
+    return total
+
+
 # ── Stage definitions (configurable per flow type) ────────────────────────────
 
 ORDER_STAGES = [
