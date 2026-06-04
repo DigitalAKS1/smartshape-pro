@@ -194,7 +194,7 @@ export const quotations = {
   newVersion: (id) => API.post(`/quotations/${id}/new-version`),
   getVersions: (id) => API.get(`/quotations/${id}/versions`),
   downloadPdf: (id) => {
-    fetch(`${process.env.REACT_APP_BACKEND_URL}/api/quotations/${id}/pdf`, { credentials: 'include' })
+    fetch(`${process.env.REACT_APP_BACKEND_URL}/api/quotations/${id}/pdf?t=${Date.now()}`, { credentials: 'include', cache: 'no-store' })
       .then(r => r.blob())
       .then(blob => { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `Quotation_${id}.pdf`; document.body.appendChild(a); a.click(); document.body.removeChild(a); });
   },

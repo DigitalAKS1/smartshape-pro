@@ -1945,5 +1945,11 @@ async def download_quotation_pdf(quotation_id: str, request: Request):
     filename = f"Quotation_{quot.get('quote_number', quotation_id)}.pdf"
     return StreamingResponse(
         _io.BytesIO(pdf_bytes), media_type="application/pdf",
-        headers={"Content-Disposition": f"attachment; filename={filename}"}
+        headers={
+            "Content-Disposition": f"attachment; filename={filename}",
+            # Always regenerate — the PDF is built live from the latest data, so
+            # never let the browser serve a stale cached copy (no manual refresh).
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+        },
     )

@@ -49,7 +49,9 @@ export function useViewQuotation() {
   useEffect(() => {
     if (!id) return;
     setPdfLoading(true);
-    fetch(`${BACKEND}/api/quotations/${id}/pdf`, { credentials: 'include' })
+    // Cache-bust so a freshly edited quotation always renders the latest PDF
+    // (no manual hard-refresh needed).
+    fetch(`${BACKEND}/api/quotations/${id}/pdf?t=${Date.now()}`, { credentials: 'include', cache: 'no-store' })
       .then(r => r.ok ? r.blob() : Promise.reject(r.status))
       .then(blob => {
         const url = URL.createObjectURL(blob);
