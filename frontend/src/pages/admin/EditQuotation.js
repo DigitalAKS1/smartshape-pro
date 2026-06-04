@@ -192,9 +192,18 @@ export default function EditQuotation() {
                   <span className="font-mono text-[var(--text-secondary)]">{fmt(slab.amount)}</span>
                 </div>
               ))}
+              {Math.abs(Math.round(t.grand_total) - t.grand_total) >= 0.005 && (
+                <div className="flex justify-between text-sm">
+                  <span className="text-[var(--text-secondary)]">Round Off</span>
+                  <span className="font-mono text-[var(--text-secondary)]">
+                    {Math.round(t.grand_total) - t.grand_total >= 0 ? '+ ' : '− '}
+                    {fmt(Math.abs(Math.round(t.grand_total) - t.grand_total))}
+                  </span>
+                </div>
+              )}
               <div className="flex justify-between text-xl font-bold border-t-2 border-[#e94560] pt-3 mt-1">
                 <span className="text-[var(--text-primary)]">Total Payable</span>
-                <span className="font-mono text-[#e94560]">{fmt(t.grand_total)}</span>
+                <span className="font-mono text-[#e94560]">{`${sym} ${Math.round(t.grand_total).toLocaleString('en-IN')}`}</span>
               </div>
             </div>
           </div>

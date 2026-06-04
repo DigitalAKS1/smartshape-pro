@@ -436,9 +436,18 @@ export default function QuotationStep3Pricing({
                   <span className={`font-mono text-sm ${tSec}`}>{fmt(slab.amount)}</span>
                 </div>
               ))}
+              {Math.abs(Math.round(totals.grand_total) - totals.grand_total) >= 0.005 && (
+                <div className="flex justify-between items-center">
+                  <span className={`text-sm ${tSec}`}>Round Off</span>
+                  <span className={`font-mono text-sm ${tSec}`}>
+                    {Math.round(totals.grand_total) - totals.grand_total >= 0 ? '+ ' : '− '}
+                    {fmt(Math.abs(Math.round(totals.grand_total) - totals.grand_total))}
+                  </span>
+                </div>
+              )}
               <div className="flex justify-between items-center bg-[#1a1a2e] rounded-xl p-4 mt-2">
                 <span className="text-white font-bold text-base">Total Payable</span>
-                <span className="font-mono text-xl font-bold text-[#e94560]">{fmt(totals.grand_total)}</span>
+                <span className="font-mono text-xl font-bold text-[#e94560]">{`${sym} ${Math.round(totals.grand_total).toLocaleString('en-IN')}`}</span>
               </div>
             </div>
           );

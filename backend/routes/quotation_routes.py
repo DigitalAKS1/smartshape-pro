@@ -1803,6 +1803,14 @@ async def _generate_pdf_bytes(quot: dict, company: dict) -> bytes:
         sum_rows.append((Paragraph("GST", S['GstLbl']),
                          Paragraph(fc(gst_amount), S['GstVal'])))
 
+    # Round off Total Payable to the nearest rupee (standard on Indian invoices)
+    rounded_gt = round(gt)
+    round_off  = rounded_gt - gt
+    if abs(round_off) >= 0.005:
+        sign = "+" if round_off >= 0 else "&#8722;"
+        sum_rows.append((Paragraph("Round Off", S['SumLbl']),
+                         Paragraph(f"{sign} {fc(abs(round_off))}", S['SumVal'])))
+
     # Summary table
     sum_tbl = Table([[r[0], r[1]] for r in sum_rows], colWidths=[60*mm, 34*mm])
     style_cmds = [
@@ -1819,7 +1827,7 @@ async def _generate_pdf_bytes(quot: dict, company: dict) -> bytes:
 
     grand_row = [[
         Paragraph("TOTAL PAYABLE", S['GrandL']),
-        Paragraph(f"{SYM} {fc(gt)}", S['GrandR']),
+        Paragraph(f"{SYM} {rounded_gt:,.0f}", S['GrandR']),
     ]]
     grand_tbl = Table(grand_row, colWidths=[40*mm, 54*mm])
     grand_tbl.setStyle(TableStyle([
