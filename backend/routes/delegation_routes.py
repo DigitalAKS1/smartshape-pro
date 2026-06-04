@@ -724,6 +724,199 @@ async def patch_instance(instance_id: str, request: Request):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# REASSIGNMENT REQUESTS  +  NOTIFICATIONS
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def _resolve_actor(user: dict) -> dict:
+    """Resolve the logged-in user to a delegation actor (roles + boss flag)."""
+    emp = await db.del_employees.find_one({"email": user.get("email")}, {"_id": 0})
+    if not emp:
+        # unlinked → treat as boss (matches /my-context fallback)
+        return {"emp_id": None, "name": user.get("name") or user.get("email"),
+                "roles": ["boss"], "is_boss": True}
+    roles = emp.get("roles", [])
+    return {"emp_id": emp["emp_id"], "name": emp.get("name"),
+            "roles": roles, "is_boss": "boss" in roles}
+
+
+async def _notify(emp_id, ntype: str, title: str, body: str, link_instance_id=None):
+    """Insert a polled in-app notification. No-op if emp_id is falsy."""
+    if not emp_id:
+        return
+    await db.del_notifications.insert_one({
+        "notif_id": gen_id("ntf"), "emp_id": emp_id, "type": ntype,
+        "title": title, "body": body, "link_instance_id": link_instance_id,
+        "is_read": False, "created_at": now_iso(),
+    })
+
+
+@router.post("/instances/{instance_id}/reassign-request")
+async def create_reassign_request(instance_id: str, request: Request):
+    user = await get_current_user(request)
+    actor = await _resolve_actor(user)
+    body = await request.json()
+    to_emp_id = body.get("to_emp_id")
+    reason = (body.get("reason") or "").strip()
+    if not reason:
+        raise HTTPException(400, "A reason is required")
+    if not to_emp_id:
+        raise HTTPException(400, "Target employee is required")
+
+    inst = await db.del_task_instances.find_one({"instance_id": instance_id}, {"_id": 0})
+    if not inst:
+        raise HTTPException(404, "Instance not found")
+    if inst.get("status") in ("completed", "verified"):
+        raise HTTPException(400, "Task is already done")
+    if to_emp_id == inst.get("emp_id"):
+        raise HTTPException(400, "Already assigned to that person")
+
+    to_emp = await db.del_employees.find_one(
+        {"emp_id": to_emp_id, "is_active": True}, {"_id": 0})
+    if not to_emp:
+        raise HTTPException(400, "Target employee not found")
+
+    req = {
+        "request_id": gen_id("rr"), "instance_id": instance_id,
+        "task_id": inst.get("task_id"), "task_title": inst.get("task_title"),
+        "delegator_id": inst.get("delegator_id"),
+        "from_emp_id": inst.get("emp_id"), "from_emp_name": inst.get("emp_name"),
+        "to_emp_id": to_emp_id, "to_emp_name": to_emp.get("name"),
+        "requested_by": user.get("email"), "requested_by_name": actor["name"],
+        "reason": reason, "status": "pending",
+        "approver": None, "approver_name": None,
+        "decided_at": None, "decision_note": None,
+        "created_at": now_iso(),
+    }
+    await db.del_reassign_requests.insert_one(req)
+
+    # notify the delegator + all bosses (they can approve)
+    targets = set()
+    if inst.get("delegator_id"):
+        targets.add(inst["delegator_id"])
+    bosses = await db.del_employees.find(
+        {"roles": "boss", "is_active": True}, {"_id": 0, "emp_id": 1}).to_list(100)
+    for b in bosses:
+        targets.add(b["emp_id"])
+    for tid in targets:
+        await _notify(
+            tid, "reassign_requested", "Reassignment requested",
+            f"{actor['name']} asks to move \"{inst.get('task_title')}\" "
+            f"from {inst.get('emp_name')} to {to_emp.get('name')}.",
+            instance_id)
+    return await db.del_reassign_requests.find_one(
+        {"request_id": req["request_id"]}, {"_id": 0})
+
+
+@router.get("/reassign-requests")
+async def list_reassign_requests(request: Request, status: Optional[str] = None):
+    """Approvals inbox. Boss sees all; a delegator sees requests for tasks they delegate."""
+    user = await get_current_user(request)
+    actor = await _resolve_actor(user)
+    q = {}
+    if status:
+        q["status"] = status
+    rows = await db.del_reassign_requests.find(q, {"_id": 0}).sort("created_at", -1).to_list(500)
+    if actor["is_boss"]:
+        return rows
+    return [r for r in rows if r.get("delegator_id") == actor["emp_id"]]
+
+
+@router.post("/reassign-requests/{request_id}/decide")
+async def decide_reassign_request(request_id: str, request: Request):
+    user = await get_current_user(request)
+    actor = await _resolve_actor(user)
+    body = await request.json()
+    decision = body.get("decision")
+    note = (body.get("note") or "").strip()
+    if decision not in ("approved", "rejected"):
+        raise HTTPException(400, "decision must be 'approved' or 'rejected'")
+
+    req = await db.del_reassign_requests.find_one({"request_id": request_id}, {"_id": 0})
+    if not req:
+        raise HTTPException(404, "Request not found")
+    if req["status"] != "pending":
+        raise HTTPException(400, "Request already decided")
+
+    # authorization: a boss OR the task's delegator may decide
+    if not (actor["is_boss"] or (actor["emp_id"] and actor["emp_id"] == req.get("delegator_id"))):
+        raise HTTPException(403, "Only the delegator or a manager can decide")
+
+    decided = {"status": decision, "approver": user.get("email"),
+               "approver_name": actor["name"], "decided_at": now_iso(),
+               "decision_note": note}
+
+    if decision == "rejected":
+        await db.del_reassign_requests.update_one({"request_id": request_id}, {"$set": decided})
+        requester = await db.del_employees.find_one(
+            {"email": req["requested_by"]}, {"_id": 0, "emp_id": 1})
+        if requester:
+            await _notify(requester["emp_id"], "reassign_decided", "Reassignment rejected",
+                          f"Request to move \"{req['task_title']}\" was rejected."
+                          + (f" Note: {note}" if note else ""), req["instance_id"])
+        return await db.del_reassign_requests.find_one({"request_id": request_id}, {"_id": 0})
+
+    # approved → move the instance to the new owner
+    inst = await db.del_task_instances.find_one({"instance_id": req["instance_id"]}, {"_id": 0})
+    if not inst:
+        raise HTTPException(404, "Instance no longer exists")
+    if inst.get("status") in ("completed", "verified"):
+        await db.del_reassign_requests.update_one(
+            {"request_id": request_id},
+            {"$set": {**decided, "status": "rejected",
+                      "decision_note": "Task was completed before approval"}})
+        raise HTTPException(409, "Task was completed before approval")
+
+    to_emp = await db.del_employees.find_one({"emp_id": req["to_emp_id"]}, {"_id": 0}) or {}
+    await db.del_task_instances.update_one(
+        {"instance_id": req["instance_id"]},
+        {"$set": {
+            "emp_id": req["to_emp_id"], "emp_name": req["to_emp_name"],
+            "department_id": to_emp.get("department_id", inst.get("department_id", "")),
+            "department_name": to_emp.get("department_name", inst.get("department_name", "")),
+            "updated_at": now_iso(),
+         },
+         "$inc": {"reassignment_count": 1},
+         "$push": {"change_log": _make_change(
+             user.get("email", ""), "emp_id", req["from_emp_name"], req["to_emp_name"],
+             f"Reassigned: {req['reason']}")}})
+    await db.del_reassign_requests.update_one({"request_id": request_id}, {"$set": decided})
+    await _notify(req["to_emp_id"], "assigned", "New task assigned to you",
+                  f"\"{req['task_title']}\" was reassigned to you.", req["instance_id"])
+    await _notify(req["from_emp_id"], "reassign_decided", "Reassignment approved",
+                  f"\"{req['task_title']}\" moved to {req['to_emp_name']}.", req["instance_id"])
+    return await db.del_reassign_requests.find_one({"request_id": request_id}, {"_id": 0})
+
+
+@router.get("/notifications")
+async def list_notifications(request: Request, unread_only: bool = False):
+    user = await get_current_user(request)
+    actor = await _resolve_actor(user)
+    if not actor["emp_id"]:
+        return []
+    q = {"emp_id": actor["emp_id"]}
+    if unread_only:
+        q["is_read"] = False
+    return await db.del_notifications.find(q, {"_id": 0}).sort("created_at", -1).to_list(100)
+
+
+@router.post("/notifications/{notif_id}/read")
+async def mark_notification_read(notif_id: str, request: Request):
+    await get_current_user(request)
+    await db.del_notifications.update_one({"notif_id": notif_id}, {"$set": {"is_read": True}})
+    return {"ok": True}
+
+
+@router.post("/notifications/read-all")
+async def mark_all_notifications_read(request: Request):
+    user = await get_current_user(request)
+    actor = await _resolve_actor(user)
+    if actor["emp_id"]:
+        await db.del_notifications.update_many(
+            {"emp_id": actor["emp_id"], "is_read": False}, {"$set": {"is_read": True}})
+    return {"ok": True}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # DASHBOARD
 # ══════════════════════════════════════════════════════════════════════════════
 
