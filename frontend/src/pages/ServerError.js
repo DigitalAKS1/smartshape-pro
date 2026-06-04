@@ -1,9 +1,11 @@
 import React from 'react';
-import { useNavigate } from 'react-router-dom';
 import { RefreshCw, Home } from 'lucide-react';
 
+// NOTE: rendered by the top-level ErrorBoundary, which sits ABOVE <BrowserRouter>.
+// It must NOT use react-router hooks (useNavigate/Link) — they throw
+// "useNavigate() may be used only in the context of a <Router>" here. Use
+// window.location for navigation instead.
 export default function ServerError({ error }) {
-  const navigate = useNavigate();
   return (
     <div className="min-h-screen bg-[var(--bg-primary)] flex items-center justify-center p-6">
       <div className="text-center max-w-sm">
@@ -26,7 +28,7 @@ export default function ServerError({ error }) {
             <RefreshCw className="h-4 w-4" /> Retry
           </button>
           <button
-            onClick={() => navigate('/today')}
+            onClick={() => window.location.assign('/today')}
             className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#e94560] text-white text-sm font-semibold hover:bg-[#c73652] transition-colors"
           >
             <Home className="h-4 w-4" /> Dashboard

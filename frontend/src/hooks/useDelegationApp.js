@@ -171,9 +171,6 @@ export function useDelegationApp() {
   useEffect(() => { if (viewTab === 'reports')  loadReport();     }, [viewTab, loadReport]);
   useEffect(() => { if (viewTab === 'visits')   loadVisitTasks(); }, [viewTab, loadVisitTasks]);
   useEffect(() => { if (viewTab === 'calendar') loadCalendar();   }, [viewTab, loadCalendar]);
-  useEffect(() => { if (viewTab === 'approvals') loadReassignRequests('pending'); }, [viewTab, loadReassignRequests]);
-  useEffect(() => { if (viewTab === 'planner')   loadPlanner();                   }, [viewTab, loadPlanner]);
-  useEffect(() => { loadNotifications(); }, [loadNotifications]);
 
   /* ─────────────── person drawer ─────────────────────────────────────── */
   const openDrawer = async (emp) => {
@@ -351,6 +348,13 @@ export function useDelegationApp() {
     } catch { /* silent */ }
     finally { setPlannerLoading(false); }
   }, []);
+
+  /* ─── tab/load effects that depend on the loaders defined above ─────────
+     (must come AFTER the useCallback definitions or their dep arrays hit the
+     temporal dead zone and throw on render) */
+  useEffect(() => { if (viewTab === 'approvals') loadReassignRequests('pending'); }, [viewTab, loadReassignRequests]);
+  useEffect(() => { if (viewTab === 'planner')   loadPlanner();                   }, [viewTab, loadPlanner]);
+  useEffect(() => { loadNotifications(); }, [loadNotifications]);
 
   /* ─────────────── bulk assign ───────────────────────────────────────── */
   const updateRow = (id, field, val) =>
