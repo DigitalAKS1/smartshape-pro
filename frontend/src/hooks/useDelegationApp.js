@@ -8,7 +8,7 @@ const TODAY = new Date().toISOString().slice(0, 10);
 
 const newRow = (delegatorId = '') => ({
   _id: Math.random().toString(36).slice(2),
-  title: '', description: '', assignee_id: '', priority: 'medium',
+  title: '', description: '', assignee_id: '', buddy_emp_id: '', priority: 'medium',
   task_type: 'onetime', frequency: 'daily', target_date: TODAY,
   start_date: TODAY, end_date: '', delegator_id: delegatorId,
   requires_image: false, require_verification: false, score: 0,
@@ -346,6 +346,7 @@ export function useDelegationApp() {
         start_date:  r.task_type === 'recurring' ? r.start_date : null,
         end_date:    r.task_type === 'recurring' ? r.end_date   : null,
         priority: r.priority, assignee_ids: [r.assignee_id],
+        buddy_emp_id: r.buddy_emp_id || '',
         delegator_id: r.delegator_id || autoDelId,
         requires_image: r.requires_image, score: r.score,
         require_verification: r.require_verification,

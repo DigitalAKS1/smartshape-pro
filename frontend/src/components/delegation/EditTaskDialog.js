@@ -27,6 +27,7 @@ export default function EditTaskDialog({
     start_date: task.start_date || '',
     end_date: task.end_date || '',
     assignee_ids: task.assignee_ids || [],
+    buddy_emp_id: task.buddy_emp_id || '',
     require_verification: !!task.require_verification,
     requires_image: !!task.requires_image,
   });
@@ -49,6 +50,7 @@ export default function EditTaskDialog({
           start_date: form.task_type === 'recurring' ? form.start_date : null,
           end_date: form.task_type === 'recurring' ? form.end_date : null,
           assignee_ids: form.assignee_ids,
+          buddy_emp_id: form.buddy_emp_id,
           require_verification: form.require_verification,
           requires_image: form.requires_image,
         }
@@ -145,6 +147,20 @@ export default function EditTaskDialog({
                     );
                   })}
                 </div>
+              </div>
+
+              <div>
+                <label className={lbl}>Buddy <span className="font-normal normal-case opacity-70">(backup who can complete if owner is out)</span></label>
+                <select value={form.buddy_emp_id} onChange={e => set('buddy_emp_id', e.target.value)} className={fld}>
+                  <option value="">— No buddy —</option>
+                  {assignableEmployees
+                    .filter(e => !form.assignee_ids.includes(e.emp_id))
+                    .map(e => (
+                      <option key={e.emp_id} value={e.emp_id}>
+                        {e.name}{e.department_name ? ` (${e.department_name})` : ''}
+                      </option>
+                    ))}
+                </select>
               </div>
             </>
           )}

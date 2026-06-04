@@ -44,6 +44,14 @@ TASK_EDITABLE = (
 INSTANCE_SOFT_FIELDS = ("due_date", "priority", "completion_note")
 
 
+async def _emp_name(emp_id) -> str:
+    """Look up an employee's display name by id (empty string if missing)."""
+    if not emp_id:
+        return ""
+    e = await db.del_employees.find_one({"emp_id": emp_id}, {"_id": 0, "name": 1})
+    return e["name"] if e else ""
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # DEPARTMENTS
 # ══════════════════════════════════════════════════════════════════════════════
@@ -225,6 +233,7 @@ class TaskIn(BaseModel):
     end_date: Optional[str] = None
     priority: str = "medium"
     assignee_ids: List[str] = []
+    buddy_emp_id: Optional[str] = ""        # backup owner (can complete if main owner is out)
     delegator_id: Optional[str] = None
     department_ids: Optional[List[str]] = []
     score: int = 0
@@ -257,7 +266,8 @@ def _make_instance(task_id, task_number, title, priority, score,
 def _make_instance_v2(task_id, task_number, title, priority, score,
                       require_verification, requires_image, emp,
                       delegator_id, delegator_name, due, freq,
-                      linked_entity_id=None, linked_entity_type=None):
+                      linked_entity_id=None, linked_entity_type=None,
+                      buddy_emp_id="", buddy_name=""):
     return {
         "instance_id": gen_id("inst"),
         "task_id": task_id, "task_title": title, "task_number": task_number,
@@ -265,6 +275,7 @@ def _make_instance_v2(task_id, task_number, title, priority, score,
         "department_id": emp.get("department_id", ""),
         "department_name": emp.get("department_name", ""),
         "delegator_id": delegator_id, "delegator_name": delegator_name,
+        "buddy_emp_id": buddy_emp_id or "", "buddy_name": buddy_name or "",
         "due_date": due, "frequency": freq,
         "priority": priority, "score": score,
         "require_verification": require_verification,
@@ -273,6 +284,7 @@ def _make_instance_v2(task_id, task_number, title, priority, score,
         "linked_entity_type": linked_entity_type,
         "status": "pending",
         "completed_at": None, "verified_at": None, "verified_by": None,
+        "completed_by": "",
         "completion_note": "", "completion_image_url": None,
         "created_at": now_iso(),
     }
@@ -337,6 +349,8 @@ async def create_task(body: TaskIn, request: Request):
         if d:
             delegator_name = d["name"]
 
+    buddy_name = await _emp_name(body.buddy_emp_id)
+
     task_id = gen_id("task")
     task_number = f"TASK-{uuid.uuid4().hex[:6].upper()}"
     doc = {
@@ -346,6 +360,7 @@ async def create_task(body: TaskIn, request: Request):
         "target_date": body.target_date, "start_date": body.start_date,
         "end_date": body.end_date, "priority": body.priority,
         "assignee_ids": body.assignee_ids, "assignees": assignees,
+        "buddy_emp_id": body.buddy_emp_id or "", "buddy_name": buddy_name,
         "delegator_id": body.delegator_id, "delegator_name": delegator_name,
         "department_ids": body.department_ids,
         "score": body.score, "require_verification": body.require_verification,
@@ -361,6 +376,7 @@ async def create_task(body: TaskIn, request: Request):
               require_verification=body.require_verification,
               requires_image=body.requires_image,
               delegator_id=body.delegator_id, delegator_name=delegator_name,
+              buddy_emp_id=body.buddy_emp_id or "", buddy_name=buddy_name,
               linked_entity_id=body.linked_entity_id,
               linked_entity_type=body.linked_entity_type)
 
@@ -406,6 +422,7 @@ async def bulk_create_tasks(request: Request):
             d = await db.del_employees.find_one({"emp_id": tin.delegator_id}, {"_id": 0, "name": 1})
             if d:
                 delegator_name = d["name"]
+        buddy_name = await _emp_name(tin.buddy_emp_id)
         task_id = gen_id("task")
         task_number = f"TASK-{uuid.uuid4().hex[:6].upper()}"
         doc = {
@@ -415,6 +432,7 @@ async def bulk_create_tasks(request: Request):
             "target_date": tin.target_date, "start_date": tin.start_date,
             "end_date": tin.end_date, "priority": tin.priority,
             "assignee_ids": tin.assignee_ids, "assignees": assignees,
+            "buddy_emp_id": tin.buddy_emp_id or "", "buddy_name": buddy_name,
             "delegator_id": tin.delegator_id, "delegator_name": delegator_name,
             "score": tin.score, "require_verification": tin.require_verification,
             "requires_image": tin.requires_image,
@@ -429,6 +447,7 @@ async def bulk_create_tasks(request: Request):
                   require_verification=tin.require_verification,
                   requires_image=tin.requires_image,
                   delegator_id=tin.delegator_id, delegator_name=delegator_name,
+                  buddy_emp_id=tin.buddy_emp_id or "", buddy_name=buddy_name,
                   linked_entity_id=tin.linked_entity_id,
                   linked_entity_type=tin.linked_entity_type)
         instances = []
@@ -485,6 +504,7 @@ async def _resync_pending_instances(task: dict):
         require_verification=task.get("require_verification", False),
         requires_image=task.get("requires_image", False),
         delegator_id=task.get("delegator_id"), delegator_name=task.get("delegator_name", ""),
+        buddy_emp_id=task.get("buddy_emp_id", ""), buddy_name=task.get("buddy_name", ""),
         linked_entity_id=task.get("linked_entity_id"),
         linked_entity_type=task.get("linked_entity_type"),
     )
@@ -508,6 +528,8 @@ async def _resync_pending_instances(task: dict):
             "score": task.get("score", 0),
             "require_verification": task.get("require_verification", False),
             "requires_image": task.get("requires_image", False),
+            "buddy_emp_id": task.get("buddy_emp_id", ""),
+            "buddy_name": task.get("buddy_name", ""),
             "updated_at": now_iso(),
         }},
     )
@@ -542,6 +564,10 @@ async def update_task(task_id: str, request: Request):
                 assignees.append(emp)
         updates["assignees"] = assignees
 
+    # if buddy changes, refresh the cached buddy name
+    if "buddy_emp_id" in updates:
+        updates["buddy_name"] = await _emp_name(updates["buddy_emp_id"])
+
     await db.del_tasks.update_one({"task_id": task_id}, {"$set": updates})
     new_task = await db.del_tasks.find_one({"task_id": task_id}, {"_id": 0})
     await _resync_pending_instances(new_task)
@@ -562,6 +588,7 @@ async def archive_task(task_id: str, request: Request):
 async def list_instances(
     request: Request,
     emp_id: Optional[str] = None,
+    buddy_emp_id: Optional[str] = None,
     delegator_id: Optional[str] = None,
     status: Optional[str] = None,
     date_from: Optional[str] = None,
@@ -573,6 +600,7 @@ async def list_instances(
     await get_current_user(request)
     q = {}
     if emp_id:        q["emp_id"] = emp_id
+    if buddy_emp_id:  q["buddy_emp_id"] = buddy_emp_id
     if delegator_id:  q["delegator_id"] = delegator_id
     if status:        q["status"] = status
     if task_id:       q["task_id"] = task_id
@@ -626,9 +654,18 @@ async def get_instance_team(instance_id: str, request: Request):
     ).to_list(100)
     return siblings
 
+def _completed_by(actor: dict, inst: dict) -> str:
+    """'buddy' if the buddy (not the owner) closed it, else 'owner'."""
+    aid = actor.get("emp_id")
+    if aid and aid == inst.get("buddy_emp_id") and aid != inst.get("emp_id"):
+        return "buddy"
+    return "owner"
+
+
 @router.post("/instances/{instance_id}/complete")
 async def complete_instance(instance_id: str, request: Request):
-    await get_current_user(request)
+    user = await get_current_user(request)
+    actor = await _resolve_actor(user)
     body = await request.json()
     inst = await db.del_task_instances.find_one({"instance_id": instance_id})
     if not inst:
@@ -641,6 +678,7 @@ async def complete_instance(instance_id: str, request: Request):
         {"$set": {
             "status": new_status,
             "completed_at": now_iso(),
+            "completed_by": _completed_by(actor, inst),
             "completion_note": body.get("note", ""),
         }}
     )
@@ -670,7 +708,8 @@ async def verify_instance(instance_id: str, request: Request):
 
 @router.post("/instances/{instance_id}/complete-with-image")
 async def complete_with_image(instance_id: str, request: Request, file: UploadFile = File(...)):
-    await get_current_user(request)
+    user = await get_current_user(request)
+    actor = await _resolve_actor(user)
     inst = await db.del_task_instances.find_one({"instance_id": instance_id})
     if not inst:
         raise HTTPException(404, "Instance not found")
@@ -684,6 +723,7 @@ async def complete_with_image(instance_id: str, request: Request, file: UploadFi
     await db.del_task_instances.update_one(
         {"instance_id": instance_id},
         {"$set": {"status": new_status, "completed_at": now_iso(),
+                  "completed_by": _completed_by(actor, inst),
                   "completion_image_url": image_url, "completion_note": "Completed with photo"}}
     )
     return await db.del_task_instances.find_one({"instance_id": instance_id}, {"_id": 0})

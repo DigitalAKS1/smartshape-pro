@@ -56,7 +56,7 @@ export default function DelegationTaskForm({
         <table className="w-full text-sm">
           <thead>
             <tr className="bg-[var(--bg-primary)] border-b border-[var(--border-color)]">
-              {['#', 'Task Title', 'Assign To', 'Delegator', 'Priority', 'Type', 'Date / Range', '📷', '✓', ''].map((h, i) => (
+              {['#', 'Task Title', 'Assign To', 'Buddy', 'Delegator', 'Priority', 'Type', 'Date / Range', '📷', '✓', ''].map((h, i) => (
                 <th key={i} className={`py-2.5 px-3 text-left text-[10px] font-semibold uppercase tracking-wider ${textMuted} whitespace-nowrap`}>{h}</th>
               ))}
             </tr>
@@ -78,6 +78,15 @@ export default function DelegationTaskForm({
                       <option key={e.emp_id} value={e.emp_id}>
                         {e.name}{e.department_name ? ` (${e.department_name})` : ''}
                       </option>
+                    ))}
+                  </select>
+                </td>
+                <td className="px-2 py-1.5 min-w-[150px]">
+                  <select value={row.buddy_emp_id || ''} onChange={e => updateRow(row._id, 'buddy_emp_id', e.target.value)}
+                    className={`w-full h-8 px-2 rounded text-xs ${inputCls} border border-[var(--border-color)]`}>
+                    <option value="">— No buddy —</option>
+                    {assignableEmployees.filter(e => e.emp_id !== row.assignee_id).map(e => (
+                      <option key={e.emp_id} value={e.emp_id}>{e.name}</option>
                     ))}
                   </select>
                 </td>

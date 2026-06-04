@@ -709,6 +709,16 @@ export function DelegationPersonDrawer({
                         <UserCheck className="h-3 w-3" />{inst.delegator_name}
                       </span>
                     )}
+                    {inst.buddy_name && (
+                      <span className={`flex items-center gap-1 ${textMuted}`} title="Backup owner">
+                        <Users className="h-3 w-3" />Backup: {inst.buddy_name}
+                      </span>
+                    )}
+                    {inst.completed_by === 'buddy' && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-500/15 text-violet-400">
+                        done by buddy
+                      </span>
+                    )}
                   </div>
                 </div>
                 <div className="border-t border-[var(--border-color)] flex">
