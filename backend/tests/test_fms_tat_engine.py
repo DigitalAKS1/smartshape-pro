@@ -12,7 +12,7 @@ from routes.fms_routes import (
 )
 
 OFFICE_START, OFFICE_END = 10, 18      # 10am–6pm IST
-WEEKLY_OFF = [5, 6]                    # Saturday, Sunday
+WEEKLY_OFF = [6]                       # Sunday only (Sat is a working day)
 HOLIDAYS = []
 
 
@@ -27,12 +27,19 @@ class TestCalculatePlanTime:
         end = calculate_plan_time(start, 2, OFFICE_START, OFFICE_END, WEEKLY_OFF, HOLIDAYS)
         assert end.astimezone(IST) == _ist(2026, 6, 1, 13, 0)
 
-    def test_after_hours_friday_starts_monday(self):
-        # Fri 2026-06-05 17:50 IST + 2h -> Mon 2026-06-08 11:00 IST (skips Sat eve, Sun)
+    def test_after_hours_friday_spills_to_saturday(self):
+        # Sat is a working day (only Sun off). Fri 2026-06-05 17:50 IST + 2h:
+        # 10 min Fri (17:50->18:00), remaining 1h50m from Sat 10:00 -> 11:50 Sat.
         start = _ist(2026, 6, 5, 17, 50)
         end = calculate_plan_time(start, 2, OFFICE_START, OFFICE_END, WEEKLY_OFF, HOLIDAYS).astimezone(IST)
-        # 10 min left Friday (17:50->18:00), remaining 1h50m into Monday from 10:00 -> 11:50
-        assert end == _ist(2026, 6, 8, 11, 50)
+        assert end == _ist(2026, 6, 6, 11, 50)
+
+    def test_saturday_evening_skips_sunday_to_monday(self):
+        # Sat 2026-06-06 17:30 IST + 1h: 30 min Sat (17:30->18:00), Sun skipped,
+        # remaining 30 min from Mon 2026-06-08 10:00 -> 10:30 Mon.
+        start = _ist(2026, 6, 6, 17, 30)
+        end = calculate_plan_time(start, 1, OFFICE_START, OFFICE_END, WEEKLY_OFF, HOLIDAYS).astimezone(IST)
+        assert end == _ist(2026, 6, 8, 10, 30)
 
     def test_holiday_is_skipped(self):
         # Mon 2026-06-01 is a holiday; start Mon 10:00 +1h -> Tue 11:00
