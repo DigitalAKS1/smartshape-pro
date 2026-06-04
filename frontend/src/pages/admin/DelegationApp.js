@@ -10,12 +10,13 @@ import EditTaskDialog from '../../components/delegation/EditTaskDialog';
 import ReassignTaskDialog from '../../components/delegation/ReassignTaskDialog';
 import ApprovalsInbox from '../../components/delegation/ApprovalsInbox';
 import NotificationsBell from '../../components/delegation/NotificationsBell';
+import MyPlanner from '../../components/delegation/MyPlanner';
 import {
   DelegationOverviewTab, DelegationVisitsTab, DelegationReportsTab,
   DelegationCalendarTab, DelegationPersonDrawer,
 } from '../../components/delegation/DelegationTaskList';
 import {
-  LayoutGrid, ClipboardList, Calendar, Users, MapPin, BarChart2, Briefcase, Shield, UserCheck, User, CheckCircle2,
+  LayoutGrid, ClipboardList, Calendar, Users, MapPin, BarChart2, Briefcase, Shield, UserCheck, User, CheckCircle2, Sun,
 } from 'lucide-react';
 
 const PINK = '#e94560';
@@ -76,7 +77,7 @@ export default function DelegationApp() {
             const { Icon, label, desc } = ROLE_META[r];
             const active = s.activeRole === r;
             return (
-              <button key={r} onClick={() => { s.setActiveRole(r); s.setViewTab('overview'); s.setAssignerFilter(''); }}
+              <button key={r} onClick={() => { s.setActiveRole(r); s.setViewTab(r === 'delegatee' ? 'planner' : 'overview'); s.setAssignerFilter(''); }}
                 className={`border rounded-xl p-3 sm:p-4 text-center transition-all active:scale-[0.97]
                   ${active ? 'text-white shadow-lg' : `${card} ${textMuted} hover:border-[#e94560]/40`}`}
                 style={active ? { background: PINK, borderColor: PINK } : {}}>
@@ -94,6 +95,7 @@ export default function DelegationApp() {
         {/* Tab bar */}
         <div className={`${card} border rounded-xl p-1 flex gap-0.5 overflow-x-auto`}>
           {[
+            { id: 'planner', label: 'My Planner', icon: Sun },
             ...VIEWS,
             ...((s.activeRole === 'boss' || s.activeRole === 'delegator')
               ? [{ id: 'approvals', label: 'Approvals', icon: CheckCircle2 }]
@@ -108,6 +110,19 @@ export default function DelegationApp() {
             </button>
           ))}
         </div>
+
+        {/* My Planner */}
+        {s.viewTab === 'planner' && (
+          <MyPlanner
+            myEmp={s.myEmp}
+            plannerTasks={s.plannerTasks} buddyTasks={s.buddyTasks}
+            loading={s.plannerLoading} TODAY={s.TODAY}
+            completeInst={s.completeInst} handleImageComplete={s.handleImageComplete}
+            onEditTask={(inst) => s.openEditTask(inst, s.activeRole)}
+            onReassign={(inst) => s.setReassignInst(inst)}
+            {...sharedTheme}
+          />
+        )}
 
         {/* Overview */}
         {s.viewTab === 'overview' && (
@@ -132,6 +147,7 @@ export default function DelegationApp() {
             updateRow={s.updateRow} saveAllRows={s.saveAllRows} newRow={s.newRow}
             saving={s.saving} activeRole={s.activeRole} myEmp={s.myEmp}
             assignableEmployees={s.assignableEmployees} delegators={s.delegators}
+            teamSummary={s.teamSummary}
             {...sharedTheme}
           />
         )}

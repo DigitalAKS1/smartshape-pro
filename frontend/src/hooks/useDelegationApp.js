@@ -51,6 +51,11 @@ export function useDelegationApp() {
   const [reassignRequests, setReassignRequests] = useState([]);
   const [notifications,    setNotifications]    = useState([]);
 
+  /* ── personal planner (My Day / My Week) ── */
+  const [plannerTasks, setPlannerTasks] = useState([]);   // instances I own
+  const [buddyTasks,   setBuddyTasks]   = useState([]);   // instances I back up
+  const [plannerLoading, setPlannerLoading] = useState(false);
+
   /* ── delegatee assigner filter ── */
   const [assignerFilter, setAssignerFilter] = useState('');
 
@@ -161,11 +166,13 @@ export function useDelegationApp() {
 
   useEffect(() => {
     if (viewTab === 'overview') { loadTeamSummary(); loadInstances(); }
+    if (viewTab === 'assign')   { loadTeamSummary(); }
   }, [viewTab, activeRole, loadTeamSummary, loadInstances]);
   useEffect(() => { if (viewTab === 'reports')  loadReport();     }, [viewTab, loadReport]);
   useEffect(() => { if (viewTab === 'visits')   loadVisitTasks(); }, [viewTab, loadVisitTasks]);
   useEffect(() => { if (viewTab === 'calendar') loadCalendar();   }, [viewTab, loadCalendar]);
   useEffect(() => { if (viewTab === 'approvals') loadReassignRequests('pending'); }, [viewTab, loadReassignRequests]);
+  useEffect(() => { if (viewTab === 'planner')   loadPlanner();                   }, [viewTab, loadPlanner]);
   useEffect(() => { loadNotifications(); }, [loadNotifications]);
 
   /* ─────────────── person drawer ─────────────────────────────────────── */
@@ -329,6 +336,22 @@ export function useDelegationApp() {
     } catch { /* silent */ }
   };
 
+  /* ─────────────── personal planner ─────────────────────────────────── */
+  const loadPlanner = useCallback(async () => {
+    const id = myEmpRef.current?.emp_id;
+    if (!id) return;
+    setPlannerLoading(true);
+    try {
+      const [own, bud] = await Promise.all([
+        delApi.instances.list({ emp_id: id }),
+        delApi.instances.list({ buddy_emp_id: id }),
+      ]);
+      setPlannerTasks(own.data || []);
+      setBuddyTasks((bud.data || []).filter(t => t.emp_id !== id));
+    } catch { /* silent */ }
+    finally { setPlannerLoading(false); }
+  }, []);
+
   /* ─────────────── bulk assign ───────────────────────────────────────── */
   const updateRow = (id, field, val) =>
     setRows(rs => rs.map(r => r._id === id ? { ...r, [field]: val } : r));
@@ -459,6 +482,8 @@ export function useDelegationApp() {
     reassignInst, setReassignInst, submitReassign,
     reassignRequests, loadReassignRequests, decideReassign,
     notifications, loadNotifications, markNotifRead, markAllNotifsRead,
+    /* planner */
+    plannerTasks, buddyTasks, plannerLoading, loadPlanner,
     /* handlers */
     openDrawer, completeInst, verifyInst, reopenInst, bulkClose,
     handleImageComplete, toggleRole, saveEmp, saveDept, syncUsersNow,

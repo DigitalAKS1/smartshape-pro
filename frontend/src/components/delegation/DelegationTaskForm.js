@@ -16,9 +16,16 @@ function empInitials(name = '') {
 
 export default function DelegationTaskForm({
   rows, setRows, updateRow, saveAllRows, newRow,
-  saving, activeRole, myEmp, assignableEmployees, delegators,
+  saving, activeRole, myEmp, assignableEmployees, delegators, teamSummary = [],
   card, textPri, textSec, textMuted, inputCls,
 }) {
+  // workload visibility — open (pending) load per assignable person, so a
+  // delegator can see who is already heavy before piling on more.
+  const loadById = {};
+  (teamSummary || []).forEach(e => { loadById[e.emp_id] = e.pending || 0; });
+  const loads = assignableEmployees.map(e => ({ ...e, open: loadById[e.emp_id] || 0 }));
+  const maxLoad = Math.max(1, ...loads.map(l => l.open));
+
   return (
     <div className={`${card} border rounded-xl overflow-hidden`}>
       <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--border-color)]">
@@ -49,6 +56,33 @@ export default function DelegationTaskForm({
           <p className="text-xs" style={{ color: PINK }}>
             <strong>Assigning as:</strong> {myEmp.name} · All tasks below will be tagged to you as the {activeRole}
           </p>
+        </div>
+      )}
+
+      {loads.length > 0 && (
+        <div className="px-5 py-3 border-b border-[var(--border-color)]">
+          <p className={`text-[10px] font-semibold uppercase tracking-wider ${textMuted} mb-2`}>Current team load · open tasks</p>
+          <div className="flex flex-wrap gap-2">
+            {loads.map(l => {
+              const heavy = l.open >= 8;
+              const ratio = Math.round((l.open / maxLoad) * 100);
+              return (
+                <div key={l.emp_id}
+                  className="flex items-center gap-2 pl-1.5 pr-2.5 py-1 rounded-full border"
+                  style={{ borderColor: heavy ? PINK + '55' : 'var(--border-color)',
+                           background: heavy ? PINK + '10' : 'transparent' }}
+                  title={`${l.name}: ${l.open} open task${l.open === 1 ? '' : 's'}${heavy ? ' — already heavy' : ''}`}>
+                  <div className="w-5 h-5 rounded-full flex items-center justify-center text-[8px] font-bold text-white flex-shrink-0"
+                    style={{ background: empColor(l.emp_id) }}>{empInitials(l.name)}</div>
+                  <span className={`text-[11px] ${textSec}`}>{l.name.split(' ')[0]}</span>
+                  <span className="text-[11px] font-bold font-mono" style={{ color: heavy ? PINK : 'var(--text-muted)' }}>{l.open}</span>
+                  <div className="w-10 h-1 rounded-full bg-[var(--bg-hover)] overflow-hidden hidden sm:block">
+                    <div className="h-full rounded-full" style={{ width: `${ratio}%`, background: heavy ? PINK : '#10b981' }} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 
