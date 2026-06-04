@@ -102,10 +102,8 @@ export default function EditQuotation() {
               <thead><tr className="bg-[#1a1a2e] text-white">
                 <th className="text-left text-xs py-2.5 px-3 font-semibold">Item</th>
                 <th className="text-center text-xs py-2.5 px-3 font-semibold w-20">Qty</th>
-                <th className="text-right text-xs py-2.5 px-3 font-semibold w-28">Unit Price</th>
-                <th className="text-right text-xs py-2.5 px-3 font-semibold w-24">Subtotal</th>
-                <th className="text-center text-xs py-2.5 px-3 font-semibold w-20">GST %</th>
-                <th className="text-right text-xs py-2.5 px-3 font-semibold w-28">Total (incl. GST)</th>
+                <th className="text-right text-xs py-2.5 px-3 font-semibold w-28">Rate</th>
+                <th className="text-right text-xs py-2.5 px-3 font-semibold w-28">Amount</th>
                 <th className="w-8"></th>
               </tr></thead>
               <tbody>
@@ -114,14 +112,12 @@ export default function EditQuotation() {
                     <td className="py-2 px-3"><Input value={line.description} onChange={e => updateLine(idx, 'description', e.target.value)} className="bg-transparent border-none text-[var(--text-primary)] h-7 p-0 text-sm" /></td>
                     <td className="py-2 px-3"><Input type="number" value={line.qty} onChange={e => updateLine(idx, 'qty', e.target.value)} className="bg-transparent border-none text-[var(--text-primary)] h-7 p-0 text-sm text-center" /></td>
                     <td className="py-2 px-3"><Input type="number" value={line.unit_price} onChange={e => updateLine(idx, 'unit_price', e.target.value)} className="bg-transparent border-none text-[var(--text-primary)] h-7 p-0 text-sm text-right" /></td>
-                    <td className="py-2 px-3 text-right font-mono text-[var(--text-secondary)] text-xs">{formatCurrency(line.line_subtotal)}</td>
-                    <td className="py-2 px-3 text-center"><Input type="number" value={line.gst_pct ?? 18} onChange={e => updateLine(idx, 'gst_pct', e.target.value)} className="bg-transparent border-none text-[var(--text-primary)] h-7 p-0 text-sm text-center w-12 mx-auto" min="0" max="28" /></td>
-                    <td className="py-2 px-3 text-right font-mono text-[var(--text-primary)] font-semibold">{formatCurrency(line.line_total)}</td>
+                    <td className="py-2 px-3 text-right font-mono text-[var(--text-primary)] font-semibold">{formatCurrency(line.line_subtotal)}</td>
                     <td className="py-2 px-1"><button onClick={() => removeLine(idx)} className="text-red-400 hover:text-red-300"><X className="h-3 w-3" /></button></td>
                   </tr>
                 ))}
                 {(quot.lines || []).length === 0 && (
-                  <tr><td colSpan={7} className="py-8 text-center text-sm text-[var(--text-muted)]">No items — click Add Item</td></tr>
+                  <tr><td colSpan={5} className="py-8 text-center text-sm text-[var(--text-muted)]">No items — click Add Item</td></tr>
                 )}
               </tbody>
             </table>
@@ -187,10 +183,15 @@ export default function EditQuotation() {
                 <span className="text-[var(--text-primary)]">Sub Total</span>
                 <span className="font-mono text-[var(--text-primary)]">{fmt(t.sub_total)}</span>
               </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-[var(--text-secondary)]">GST</span>
-                <span className="font-mono text-[var(--text-secondary)]">{fmt(t.total_gst)}</span>
-              </div>
+              {(t.gst_breakup && t.gst_breakup.length > 0
+                ? t.gst_breakup
+                : [{ rate: 18, amount: t.total_gst }]
+              ).map((slab, i) => (
+                <div key={i} className="flex justify-between text-sm">
+                  <span className="text-[var(--text-secondary)]">GST @ {slab.rate}%</span>
+                  <span className="font-mono text-[var(--text-secondary)]">{fmt(slab.amount)}</span>
+                </div>
+              ))}
               <div className="flex justify-between text-xl font-bold border-t-2 border-[#e94560] pt-3 mt-1">
                 <span className="text-[var(--text-primary)]">Total Payable</span>
                 <span className="font-mono text-[#e94560]">{fmt(t.grand_total)}</span>

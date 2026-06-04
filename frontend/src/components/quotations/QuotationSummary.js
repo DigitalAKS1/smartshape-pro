@@ -18,9 +18,17 @@ export default function QuotationSummary({ quot, company, terms, bankLines }) {
   const d2a      = quot.disc2_amount   || 0;
   const subDisc  = quot.subtotal_after_disc ?? quot.after_disc2 ?? (quot.subtotal - d1a - d2a);
   const gst      = quot.gst_amount     || 0;
+  const freightBase = Number(quot.freight_amount) || 0;
+  const subTotal = quot.sub_total ?? (subDisc + freightBase);
   const frw      = quot.freight_with_gst ?? quot.freight_total ?? 0;
   const gt       = quot.grand_total    || 0;
   const itemsTotal = quot.subtotal     || 0;
+  const gstBreakup = (quot.gst_breakup && quot.gst_breakup.length > 0)
+    ? quot.gst_breakup
+    : (gst ? [{ rate: 18, amount: gst }] : []);
+  // format_version >= 2: AMOUNT excl. GST, freight in Sub Total, GST by slab.
+  // Older quotations keep the legacy layout (GST @ 18% + freight incl. GST).
+  const isNew = (quot.format_version ?? 1) >= 2;
 
   const coName = company.company_name || 'Divine Computers Private Limited';
 
@@ -45,24 +53,48 @@ export default function QuotationSummary({ quot, company, terms, bankLines }) {
               <span style={{ fontFamily: 'monospace' }}>− {fmt(d2a)}</span>
             </div>
           )}
-          {(d1p > 0 || d2p > 0) && (
+          {isNew ? (
             <>
+              {freightBase > 0 && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', fontSize: '8.5px', color: GRAY }}>
+                  <span>Freight</span>
+                  <span style={{ fontFamily: 'monospace' }}>+ {fmt(freightBase)}</span>
+                </div>
+              )}
               <div style={{ borderTop: `0.5px solid ${BORDER}`, marginTop: '3px' }} />
               <div style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', fontSize: '9px', fontWeight: 700, color: NAVY }}>
-                <span>Subtotal After Discounts</span>
-                <span style={{ fontFamily: 'monospace' }}>{fmt(subDisc)}</span>
+                <span>Sub Total</span>
+                <span style={{ fontFamily: 'monospace' }}>{fmt(subTotal)}</span>
               </div>
+              {gstBreakup.map((slab, i) => (
+                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', fontSize: '8.5px', color: GRAY }}>
+                  <span>GST @ {slab.rate}%</span>
+                  <span style={{ fontFamily: 'monospace' }}>{fmt(slab.amount)}</span>
+                </div>
+              ))}
             </>
-          )}
-          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', fontSize: '8.5px', color: GRAY }}>
-            <span>Total GST @ 18%</span>
-            <span style={{ fontFamily: 'monospace' }}>{fmt(gst)}</span>
-          </div>
-          {frw > 0 && (
-            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', fontSize: '8.5px', color: GRAY }}>
-              <span>Freight Charge incl. 18% GST</span>
-              <span style={{ fontFamily: 'monospace' }}>{fmt(frw)}</span>
-            </div>
+          ) : (
+            <>
+              {(d1p > 0 || d2p > 0) && (
+                <>
+                  <div style={{ borderTop: `0.5px solid ${BORDER}`, marginTop: '3px' }} />
+                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', fontSize: '9px', fontWeight: 700, color: NAVY }}>
+                    <span>Subtotal After Discounts</span>
+                    <span style={{ fontFamily: 'monospace' }}>{fmt(subDisc)}</span>
+                  </div>
+                </>
+              )}
+              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', fontSize: '8.5px', color: GRAY }}>
+                <span>Total GST @ 18%</span>
+                <span style={{ fontFamily: 'monospace' }}>{fmt(gst)}</span>
+              </div>
+              {frw > 0 && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', fontSize: '8.5px', color: GRAY }}>
+                  <span>Freight Charge incl. 18% GST</span>
+                  <span style={{ fontFamily: 'monospace' }}>{fmt(frw)}</span>
+                </div>
+              )}
+            </>
           )}
           {(() => {
             const roundedGt = Math.round(gt);

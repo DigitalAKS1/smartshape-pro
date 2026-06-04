@@ -108,7 +108,7 @@ export default function PackageFormPanel({
   summary,
   textPri, textSec, textMuted, borderCls, card, inputCls, bg,
 }) {
-  const { subtotal, gst, total } = summary;
+  const { subtotal, gst } = summary;
 
   if (!editPkg && !form.display_name && !form.items?.length) {
     return (
@@ -289,8 +289,8 @@ export default function PackageFormPanel({
                 <span className={`font-mono ${textSec}`}>{formatCurrency(gst)}</span>
               </div>
               <div className="flex items-center justify-between pt-2 border-t-2 border-[#e94560]/20">
-                <span className={`font-bold text-base ${textPri}`}>Total (incl. GST)</span>
-                <span className="font-bold font-mono text-2xl text-[#e94560]">{formatCurrency(total)}</span>
+                <span className={`font-bold text-base ${textPri}`}>Total (excl. GST)</span>
+                <span className="font-bold font-mono text-2xl text-[#e94560]">{formatCurrency(subtotal)}</span>
               </div>
             </div>
           </section>

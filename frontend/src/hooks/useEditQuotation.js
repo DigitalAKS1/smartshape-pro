@@ -91,7 +91,26 @@ export function useEditQuotation() {
     const freight_gst     = freight_base * 0.18;
     const total_gst       = items_gst + freight_gst;
     const grand_total     = sub_total + total_gst;
-    return { items_total, disc1, after1, disc2, after_disc, freight_base, sub_total, items_gst, freight_gst, total_gst, grand_total };
+
+    // GST grouped by rate slab (single line when all items are 18%)
+    const slabs = {};
+    lines.forEach((l) => {
+      const rate = l.gst_pct || 18;
+      if (!slabs[rate]) slabs[rate] = { rate, taxable: 0, amount: 0 };
+      slabs[rate].taxable += (l.line_subtotal || 0) * discount_factor;
+      slabs[rate].amount  += (l.line_subtotal || 0) * (rate / 100) * discount_factor;
+    });
+    if (freight_base > 0) {
+      if (!slabs[18]) slabs[18] = { rate: 18, taxable: 0, amount: 0 };
+      slabs[18].taxable += freight_base;
+      slabs[18].amount  += freight_gst;
+    }
+    const gst_breakup = Object.keys(slabs)
+      .map((r) => slabs[r])
+      .filter((s) => s.amount > 0)
+      .sort((a, b) => b.rate - a.rate);
+
+    return { items_total, disc1, after1, disc2, after_disc, freight_base, sub_total, items_gst, freight_gst, total_gst, gst_breakup, grand_total };
   };
 
   const doSave = async (status) => {

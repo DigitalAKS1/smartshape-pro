@@ -11,8 +11,6 @@ export default function PackageCard({ pkg, isSelected, onSelect, onDuplicate, on
   const items      = pkg.items || [];
   const inactive   = pkg.is_active === false;
   const pkgSubtotal = items.reduce((s, i) => s + (i.qty || 0) * (i.unit_price || 0), 0);
-  const pkgGst      = items.reduce((s, i) => s + (i.qty || 0) * (i.unit_price || 0) * ((i.gst_pct ?? pkg.gst_pct ?? 18) / 100), 0);
-  const pkgTotal    = pkgSubtotal + pkgGst;
 
   return (
     <div
@@ -80,9 +78,9 @@ export default function PackageCard({ pkg, isSelected, onSelect, onDuplicate, on
 
         {/* Price footer */}
         <div className={`flex items-center justify-between mt-2.5 pt-2.5 border-t ${borderCls}`}>
-          <span className={`text-[10px] ${textMuted}`}>Incl. GST</span>
+          <span className={`text-[10px] ${textMuted}`}>Excl. GST</span>
           <span className={`text-sm font-bold font-mono ${isSelected ? 'text-[#e94560]' : textPri}`}>
-            {formatCurrency(pkgTotal)}
+            {formatCurrency(pkgSubtotal)}
           </span>
         </div>
       </div>

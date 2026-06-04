@@ -257,22 +257,18 @@ export default function QuotationStep3Pricing({
                   <X className="h-4 w-4" />
                 </button>
               </div>
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-2 gap-2">
                 <div>
                   <p className={`text-[10px] ${tMut} mb-1`}>Qty</p>
                   <Input type="number" value={line.qty} onChange={e => updateLine(idx, 'qty', e.target.value)} className={`h-10 text-sm text-center ${inputCls}`} />
                 </div>
                 <div>
-                  <p className={`text-[10px] ${tMut} mb-1`}>Unit Price</p>
+                  <p className={`text-[10px] ${tMut} mb-1`}>Rate</p>
                   <Input type="number" value={line.unit_price} onChange={e => updateLine(idx, 'unit_price', e.target.value)} className={`h-10 text-sm ${inputCls}`} />
-                </div>
-                <div>
-                  <p className={`text-[10px] ${tMut} mb-1`}>GST %</p>
-                  <Input type="number" value={line.gst_pct} onChange={e => updateLine(idx, 'gst_pct', e.target.value)} className={`h-10 text-sm text-center ${inputCls}`} min="0" max="28" />
                 </div>
               </div>
               <div className="flex justify-between items-center mt-2.5 pt-2.5 border-t border-[var(--border-color)]">
-                <span className={`text-xs ${tMut}`}>Subtotal (excl. GST)</span>
+                <span className={`text-xs ${tMut}`}>Amount (excl. GST)</span>
                 <span className={`font-mono font-semibold text-sm ${tPri}`}>{formatCurrency(line.line_subtotal)}</span>
               </div>
             </div>
@@ -291,10 +287,8 @@ export default function QuotationStep3Pricing({
               <tr className="bg-[#1a1a2e] text-white">
                 <th className="text-left text-xs py-2.5 px-3 font-semibold uppercase tracking-wide">Item</th>
                 <th className="text-center text-xs py-2.5 px-3 font-semibold uppercase tracking-wide w-16">Qty</th>
-                <th className="text-right text-xs py-2.5 px-3 font-semibold uppercase tracking-wide w-28">Unit Price</th>
-                <th className="text-right text-xs py-2.5 px-3 font-semibold uppercase tracking-wide w-28">Subtotal</th>
-                <th className="text-center text-xs py-2.5 px-3 font-semibold uppercase tracking-wide w-20">GST %</th>
-                <th className="text-right text-xs py-2.5 px-3 font-semibold uppercase tracking-wide w-28">Total</th>
+                <th className="text-right text-xs py-2.5 px-3 font-semibold uppercase tracking-wide w-28">Rate</th>
+                <th className="text-right text-xs py-2.5 px-3 font-semibold uppercase tracking-wide w-28">Amount</th>
                 <th className="w-8"></th>
               </tr>
             </thead>
@@ -313,11 +307,7 @@ export default function QuotationStep3Pricing({
                   <td className="py-2 px-3 text-right">
                     <Input type="number" value={line.unit_price} onChange={e => updateLine(idx, 'unit_price', e.target.value)} className="bg-transparent border-none h-8 p-0 text-sm text-right text-[var(--text-primary)] w-24 ml-auto" />
                   </td>
-                  <td className={`py-2 px-3 text-right font-mono text-sm ${tPri}`}>{formatCurrency(line.line_subtotal)}</td>
-                  <td className="py-2 px-3 text-center">
-                    <Input type="number" value={line.gst_pct} onChange={e => updateLine(idx, 'gst_pct', e.target.value)} className="bg-transparent border-none h-8 p-0 text-sm text-center text-[var(--text-primary)] w-14 mx-auto" min="0" max="28" />
-                  </td>
-                  <td className={`py-2 px-3 text-right font-mono text-sm font-semibold ${tPri}`}>{formatCurrency(line.line_total)}</td>
+                  <td className={`py-2 px-3 text-right font-mono text-sm font-semibold ${tPri}`}>{formatCurrency(line.line_subtotal)}</td>
                   <td className="py-2 px-1">
                     <button onClick={() => handleRemoveLine(idx)} className="text-red-400 hover:text-red-300">
                       <X className="h-3.5 w-3.5" />
@@ -327,7 +317,7 @@ export default function QuotationStep3Pricing({
               ))}
               {formData.lines.length === 0 && (
                 <tr>
-                  <td colSpan={7} className={`py-10 text-center text-sm ${tMut}`}>
+                  <td colSpan={5} className={`py-10 text-center text-sm ${tMut}`}>
                     No items added — click "Add Item" above
                   </td>
                 </tr>
@@ -437,10 +427,15 @@ export default function QuotationStep3Pricing({
                 <span className={`text-sm font-semibold ${tPri}`}>Sub Total</span>
                 <span className={`font-mono text-sm font-semibold ${tPri}`}>{fmt(totals.sub_total)}</span>
               </div>
-              <div className="flex justify-between items-center">
-                <span className={`text-sm ${tSec}`}>GST</span>
-                <span className={`font-mono text-sm ${tSec}`}>{fmt(totals.total_gst)}</span>
-              </div>
+              {(totals.gst_breakup && totals.gst_breakup.length > 0
+                ? totals.gst_breakup
+                : [{ rate: 18, amount: totals.total_gst }]
+              ).map((slab, i) => (
+                <div key={i} className="flex justify-between items-center">
+                  <span className={`text-sm ${tSec}`}>GST @ {Number.isInteger(slab.rate) ? slab.rate : slab.rate}%</span>
+                  <span className={`font-mono text-sm ${tSec}`}>{fmt(slab.amount)}</span>
+                </div>
+              ))}
               <div className="flex justify-between items-center bg-[#1a1a2e] rounded-xl p-4 mt-2">
                 <span className="text-white font-bold text-base">Total Payable</span>
                 <span className="font-mono text-xl font-bold text-[#e94560]">{fmt(totals.grand_total)}</span>

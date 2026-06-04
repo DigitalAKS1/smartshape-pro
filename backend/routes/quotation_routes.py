@@ -37,6 +37,21 @@ def _compute_totals(lines: list, d1: float, d2: float, fr: float) -> dict:
     total_gst   = items_gst + freight_gst
     grand_total = sub_total + total_gst
 
+    # ── GST grouped by rate slab (for display) ─────────────────────────────────
+    # Legally GST must be shown per rate, not blended. Freight (18%) folds into
+    # the 18% slab. Discounts scale each slab's taxable base proportionally.
+    slabs: dict = {}
+    for l in lines:
+        rate = l.get("gst_pct", 18)
+        slab = slabs.setdefault(rate, {"rate": rate, "taxable": 0.0, "amount": 0.0})
+        slab["taxable"] += l.get("line_subtotal", 0) * discount_factor
+        slab["amount"]  += l.get("line_subtotal", 0) * (rate / 100) * discount_factor
+    if freight_base > 0:
+        slab = slabs.setdefault(18, {"rate": 18, "taxable": 0.0, "amount": 0.0})
+        slab["taxable"] += freight_base
+        slab["amount"]  += freight_gst
+    gst_breakup = [slabs[r] for r in sorted(slabs, reverse=True) if slabs[r]["amount"] > 0]
+
     return dict(
         subtotal            = items_total,
         disc1_amount        = disc1_amount,
@@ -51,6 +66,7 @@ def _compute_totals(lines: list, d1: float, d2: float, fr: float) -> dict:
         freight_with_gst    = freight_base + freight_gst,
         freight_total       = freight_base + freight_gst,
         gst_amount          = total_gst,
+        gst_breakup         = gst_breakup,
         total_with_gst      = after_disc + total_gst,
         grand_total         = grand_total,
     )
@@ -441,6 +457,7 @@ async def create_quotation(request: Request):
         "discount2_pct": d2,
         "freight_amount": fr,
         "freight_gst_pct": 18,
+        "format_version": 2,  # 2 = AMOUNT excl. GST, GST shown by slab after subtotal
         **t,
         "font_size_mode": body.get("font_size_mode", "medium"),
         "quotation_status": "draft",
@@ -509,6 +526,9 @@ async def edit_quotation(quotation_id: str, request: Request):
         d2 = allowed.get("discount2_pct", existing.get("discount2_pct", 0))
         fr = allowed.get("freight_amount", existing.get("freight_amount", 0))
         allowed.update(_compute_totals(lines, d1, d2, fr))
+        # Editing upgrades the quotation to the new format (AMOUNT excl. GST,
+        # GST by slab after subtotal). Un-edited quotations keep their old layout.
+        allowed["format_version"] = 2
 
     await db.quotations.update_one({"quotation_id": quotation_id}, {"$set": allowed})
     updated = await db.quotations.find_one({"quotation_id": quotation_id}, {"_id": 0})
@@ -1010,7 +1030,7 @@ async def send_quotation_email(quotation_id: str, request: Request):
     grand = quot.get("grand_total", 0)
     lines = quot.get("lines", [])
     line_summary = "\n".join(
-        f"  • {l.get('description', 'Item')}  Qty: {l.get('qty', 1)}  ₹{l.get('line_total', 0):,.0f}"
+        f"  • {l.get('description', 'Item')}  Qty: {l.get('qty', 1)}  ₹{l.get('line_subtotal', l.get('qty', 1) * l.get('unit_price', 0)):,.0f}"
         for l in lines
     )
     freight_line = f"Freight      : ₹{freight:,.0f}\n" if freight else ""
@@ -1055,18 +1075,47 @@ async def send_quotation_email(quotation_id: str, request: Request):
     )
     pkg_name = "Custom Package" if _is_custom else (quot.get("package_name", "") or "Custom Package")
 
-    # Build items rows HTML
+    # Build items rows HTML. New format (v2): AMOUNT = qty × rate (excl. GST),
+    # GST shown by slab below. Legacy: AMOUNT incl. GST, single GST line.
+    is_new_fmt_email = quot.get("format_version", 1) >= 2
     items_rows_html = ""
     for ln in lines:
+        if is_new_fmt_email:
+            amount = ln.get("line_subtotal", ln.get("qty", 1) * ln.get("unit_price", 0))
+        else:
+            amount = ln.get("line_total", 0)
         items_rows_html += (
             f'<tr>'
             f'<td style="padding:8px 10px; font-size:14px; color:#333; border-bottom:1px solid #e8ecf0;">{ln.get("description","Item")}</td>'
             f'<td style="padding:8px 10px; font-size:14px; color:#333; border-bottom:1px solid #e8ecf0; text-align:center;">{ln.get("qty",1)}</td>'
-            f'<td style="padding:8px 10px; font-size:14px; color:#333; border-bottom:1px solid #e8ecf0; text-align:right;">&#8377;{ln.get("line_total",0):,.0f}</td>'
+            f'<td style="padding:8px 10px; font-size:14px; color:#333; border-bottom:1px solid #e8ecf0; text-align:right;">&#8377;{amount:,.0f}</td>'
             f'</tr>'
         )
     if not items_rows_html:
         items_rows_html = '<tr><td colspan="3" style="padding:10px; color:#888; font-size:13px; text-align:center;">—</td></tr>'
+
+    # GST rows — by rate slab (v2) or single legacy line
+    gst_rows_html = ""
+    if is_new_fmt_email:
+        gst_breakup = quot.get("gst_breakup")
+        if not gst_breakup:
+            gst_breakup = [{"rate": 18, "amount": gst}] if gst else []
+        for slab in gst_breakup:
+            rate = slab.get("rate", 18)
+            rate_lbl = f"{int(rate)}" if rate == int(rate) else f"{rate}"
+            gst_rows_html += (
+                f'<tr style="background:#fdf6f7;">'
+                f'<td style="padding:7px 16px; font-size:13px; color:#777;">GST @ {rate_lbl}%</td><td></td>'
+                f'<td style="padding:7px 16px; font-size:13px; color:#777; text-align:right;">&#8377;{slab.get("amount",0):,.0f}</td>'
+                f'</tr>'
+            )
+    else:
+        gst_rows_html = (
+            f'<tr style="background:#fdf6f7;">'
+            f'<td style="padding:7px 16px; font-size:13px; color:#777;">GST (18%)</td><td></td>'
+            f'<td style="padding:7px 16px; font-size:13px; color:#777; text-align:right;">&#8377;{gst:,.0f}</td>'
+            f'</tr>'
+        )
 
     freight_row_html = ""
     if freight:
@@ -1144,10 +1193,7 @@ async def send_quotation_email(quotation_id: str, request: Request):
                     <th style="padding:8px 16px; font-size:12px; color:#e94560; text-align:right; font-weight:700; text-transform:uppercase; letter-spacing:0.4px;">Amount</th>
                   </tr>
                   {items_rows_html}
-                  <tr style="background:#fdf6f7;">
-                    <td style="padding:7px 16px; font-size:13px; color:#777;">GST (18%)</td><td></td>
-                    <td style="padding:7px 16px; font-size:13px; color:#777; text-align:right;">&#8377;{gst:,.0f}</td>
-                  </tr>
+                  {gst_rows_html}
                   {freight_row_html}
                   <tr style="background:#e94560;">
                     <td style="padding:12px 16px; font-size:15px; font-weight:800; color:#fff;">Total Payable</td>
@@ -1646,32 +1692,55 @@ async def _generate_pdf_bytes(quot: dict, company: dict) -> bytes:
     elements.append(Spacer(1, 5*mm))
 
     # ── Items table ────────────────────────────────────────────────────────────
-    # Sr(8) + Description(85) + Qty(12) + Rate(28) + GST%(15) + Amount(34) = 182 mm
+    # format_version >= 2: AMOUNT = qty × rate (excl. GST); GST shown by slab in
+    # the summary. Older quotations keep the legacy per-item GST % + incl-GST layout.
     lines = quot.get("lines", [])
-    cw = [8*mm, 85*mm, 12*mm, 28*mm, 15*mm, 34*mm]
+    is_new_fmt = quot.get("format_version", 1) >= 2
 
     rate_hdr  = f"RATE ({SYM})"
     amt_hdr   = f"AMOUNT ({SYM})"
 
-    tbl_data = [[
-        Paragraph("SR",          S['TblHdrC']),
-        Paragraph("DESCRIPTION", S['TblHdrL']),
-        Paragraph("QTY",         S['TblHdrC']),
-        Paragraph(rate_hdr,      S['TblHdrR']),
-        Paragraph("GST %",       S['TblHdrC']),
-        Paragraph(amt_hdr,       S['TblHdrR']),
-    ]]
-    for i, l in enumerate(lines):
-        gst_pct  = l.get("gst_pct", 18)
-        gst_label = f"{int(gst_pct)}%" if gst_pct == int(gst_pct) else f"{gst_pct}%"
-        tbl_data.append([
-            Paragraph(str(i + 1),                                     S['TblC']),
-            Paragraph(l.get("description", ""),                       S['TblL']),
-            Paragraph(str(l.get("qty", 0)),                           S['TblC']),
-            Paragraph(f"{l.get('unit_price', 0):,.0f}",               S['TblR']),
-            Paragraph(gst_label,                                       S['TblGst']),
-            Paragraph(f"<b>{l.get('line_total', 0):,.0f}</b>",        S['TblRB']),
-        ])
+    if is_new_fmt:
+        # Sr(8) + Description(100) + Qty(12) + Rate(28) + Amount(34) = 182 mm
+        cw = [8*mm, 100*mm, 12*mm, 28*mm, 34*mm]
+        tbl_data = [[
+            Paragraph("SR",          S['TblHdrC']),
+            Paragraph("DESCRIPTION", S['TblHdrL']),
+            Paragraph("QTY",         S['TblHdrC']),
+            Paragraph(rate_hdr,      S['TblHdrR']),
+            Paragraph(amt_hdr,       S['TblHdrR']),
+        ]]
+        for i, l in enumerate(lines):
+            amount = l.get("line_subtotal", l.get("qty", 0) * l.get("unit_price", 0))
+            tbl_data.append([
+                Paragraph(str(i + 1),                                 S['TblC']),
+                Paragraph(l.get("description", ""),                   S['TblL']),
+                Paragraph(str(l.get("qty", 0)),                       S['TblC']),
+                Paragraph(f"{l.get('unit_price', 0):,.0f}",           S['TblR']),
+                Paragraph(f"<b>{amount:,.0f}</b>",                    S['TblRB']),
+            ])
+    else:
+        # Legacy: Sr(8) + Description(85) + Qty(12) + Rate(28) + GST%(15) + Amount(34)
+        cw = [8*mm, 85*mm, 12*mm, 28*mm, 15*mm, 34*mm]
+        tbl_data = [[
+            Paragraph("SR",          S['TblHdrC']),
+            Paragraph("DESCRIPTION", S['TblHdrL']),
+            Paragraph("QTY",         S['TblHdrC']),
+            Paragraph(rate_hdr,      S['TblHdrR']),
+            Paragraph("GST %",       S['TblHdrC']),
+            Paragraph(amt_hdr,       S['TblHdrR']),
+        ]]
+        for i, l in enumerate(lines):
+            gst_pct  = l.get("gst_pct", 18)
+            gst_label = f"{int(gst_pct)}%" if gst_pct == int(gst_pct) else f"{gst_pct}%"
+            tbl_data.append([
+                Paragraph(str(i + 1),                                 S['TblC']),
+                Paragraph(l.get("description", ""),                   S['TblL']),
+                Paragraph(str(l.get("qty", 0)),                       S['TblC']),
+                Paragraph(f"{l.get('unit_price', 0):,.0f}",           S['TblR']),
+                Paragraph(gst_label,                                   S['TblGst']),
+                Paragraph(f"<b>{l.get('line_total', 0):,.0f}</b>",    S['TblRB']),
+            ])
 
     it = Table(tbl_data, colWidths=cw)
     it.setStyle(TableStyle([
@@ -1720,8 +1789,19 @@ async def _generate_pdf_bytes(quot: dict, company: dict) -> bytes:
     sum_rows.append((Paragraph("Sub Total", S['SubLbl']),
                      Paragraph(fc(sub_total), S['SubVal'])))
 
-    sum_rows.append((Paragraph("GST", S['GstLbl']),
-                     Paragraph(fc(gst_amount), S['GstVal'])))
+    if is_new_fmt:
+        # GST shown by rate slab (single line in the all-18% case)
+        gst_breakup = quot.get("gst_breakup")
+        if not gst_breakup:
+            gst_breakup = [{"rate": 18, "amount": gst_amount}] if gst_amount else []
+        for slab in gst_breakup:
+            rate = slab.get("rate", 18)
+            rate_lbl = f"{int(rate)}" if rate == int(rate) else f"{rate}"
+            sum_rows.append((Paragraph(f"GST @ {rate_lbl}%", S['GstLbl']),
+                             Paragraph(fc(slab.get("amount", 0)), S['GstVal'])))
+    else:
+        sum_rows.append((Paragraph("GST", S['GstLbl']),
+                         Paragraph(fc(gst_amount), S['GstVal'])))
 
     # Summary table
     sum_tbl = Table([[r[0], r[1]] for r in sum_rows], colWidths=[60*mm, 34*mm])

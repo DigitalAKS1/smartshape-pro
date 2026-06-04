@@ -124,7 +124,7 @@ export default function ViewQuotation() {
                 fmtDate={fmtDate}
                 addDays={addDays}
               />
-              <QuotationLineItems lines={quot.lines || []} />
+              <QuotationLineItems lines={quot.lines || []} formatVersion={quot.format_version} />
               <QuotationSummary
                 quot={quot}
                 company={company}
