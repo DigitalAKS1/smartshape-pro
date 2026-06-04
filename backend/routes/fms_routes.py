@@ -97,13 +97,28 @@ DEFAULT_OFFICE_START = 10   # 10 AM
 DEFAULT_OFFICE_END   = 18   # 6 PM
 DEFAULT_WEEKLY_OFF   = [6]  # Sunday = 6
 
+_DEFAULT_TEMPLATES = {
+    "staff_warning":  "Reminder: {stage} for {title} ({ref}) is due by {due}.",
+    "staff_escalate": "URGENT: {stage} for {title} ({ref}) is nearly overdue (due {due}).",
+    "staff_breach":   "OVERDUE: {stage} for {title} ({ref}) missed its deadline ({due}).",
+    "manager_breach": "{assignee} missed {stage} for {title} ({ref}), due {due}.",
+    "customer_stage": "Hi {customer_name}, update on your order {ref}: {stage} is complete.",
+}
+
 async def get_fms_settings() -> dict:
     s = await db.fms_settings.find_one({"type": "fms"}, {"_id": 0}) or {}
     return {
-        "office_start":  s.get("office_start", DEFAULT_OFFICE_START),
-        "office_end":    s.get("office_end",   DEFAULT_OFFICE_END),
-        "weekly_off":    s.get("weekly_off",   DEFAULT_WEEKLY_OFF),
-        "holidays":      s.get("holidays",     []),   # list of "YYYY-MM-DD"
+        "office_start":        s.get("office_start",        DEFAULT_OFFICE_START),
+        "office_end":          s.get("office_end",          DEFAULT_OFFICE_END),
+        "weekly_off":          s.get("weekly_off",          DEFAULT_WEEKLY_OFF),
+        "holidays":            s.get("holidays",            []),
+        "status_warning_pct":  s.get("status_warning_pct",  0.5),
+        "status_red_pct":      s.get("status_red_pct",      0.8),
+        "notify_warning_pct":  s.get("notify_warning_pct",  0.5),
+        "notify_escalate_pct": s.get("notify_escalate_pct", 0.2),
+        "notify_on_breach":    s.get("notify_on_breach",    True),
+        "notify_channels":     s.get("notify_channels",     ["whatsapp", "email"]),
+        "templates":           {**_DEFAULT_TEMPLATES, **(s.get("templates") or {})},
     }
 
 def _is_working_day(d: date, weekly_off: List[int], holidays: List[str]) -> bool:
@@ -238,8 +253,12 @@ async def get_settings(request: Request):
 async def update_settings(request: Request):
     await get_current_user(request)
     body = await request.json()
-    safe = {k: v for k, v in body.items() if k in
-            ("office_start", "office_end", "weekly_off", "holidays")}
+    safe = {k: v for k, v in body.items() if k in (
+        "office_start", "office_end", "weekly_off", "holidays",
+        "status_warning_pct", "status_red_pct",
+        "notify_warning_pct", "notify_escalate_pct", "notify_on_breach",
+        "notify_channels", "templates",
+    )}
     await db.fms_settings.update_one(
         {"type": "fms"}, {"$set": {"type": "fms", **safe}}, upsert=True
     )
