@@ -116,29 +116,38 @@ def working_minutes_elapsed(start: datetime, end: datetime,
         cur = datetime.combine(d + timedelta(days=1), dtime(office_start, 0), tzinfo=IST)
     return total
 
-def tat_status(planned_dt: datetime, actual_dt: Optional[datetime]) -> str:
-    """green = done on time, orange = close, red = late, pending = not done yet."""
-    if not planned_dt:
+def tat_status(plan_start: Optional[datetime], plan_done: Optional[datetime],
+               actual_done: Optional[datetime] = None,
+               warn_pct: float = 0.5, red_pct: float = 0.8) -> str:
+    """green / orange / red / overdue / pending based on elapsed fraction of the TAT window."""
+    if not plan_done or not plan_start:
         return "pending"
+    if actual_done:
+        return "green" if actual_done <= plan_done else "red"
     now = now_utc()
-    if actual_dt:
-        return "green" if actual_dt <= planned_dt else "red"
-    if now >= planned_dt:
+    total = (plan_done - plan_start).total_seconds()
+    if total <= 0:
+        return "overdue" if now >= plan_done else "green"
+    pct = max(0.0, (now - plan_start).total_seconds() / total)
+    if pct >= 1.0:
         return "overdue"
-    pct = (now - planned_dt + (planned_dt - planned_dt)).total_seconds()  # placeholder
-    # % of TAT elapsed = (now - stage_start) / (plan - stage_start) — simplified
-    return "pending"
+    if pct >= red_pct:
+        return "red"
+    if pct >= warn_pct:
+        return "orange"
+    return "green"
 
-def score_stage(planned_dt: Optional[datetime], actual_dt: Optional[datetime]) -> int:
-    """100 = done before plan. 0 = 2x over. Linear scale."""
-    if not planned_dt or not actual_dt:
+
+def score_stage(plan_start: Optional[datetime], plan_done: Optional[datetime],
+                actual_done: Optional[datetime]) -> int:
+    """100 = on time or early. Linear down to 0 at 2x-budget late. Missing data = 0."""
+    if not plan_start or not plan_done or not actual_done:
         return 0
-    planned_mins = 60  # normalised placeholder
-    late = max(0, (actual_dt - planned_dt).total_seconds() / 60)
-    early = max(0, (planned_dt - actual_dt).total_seconds() / 60)
-    if actual_dt <= planned_dt:
-        return min(100, 100 + int(early / planned_mins * 10))
-    return max(0, 100 - int(late / planned_mins * 50))
+    planned_mins = max(1.0, (plan_done - plan_start).total_seconds() / 60)
+    if actual_done <= plan_done:
+        return 100
+    late = (actual_done - plan_done).total_seconds() / 60
+    return max(0, round(100 - (late / planned_mins) * 50))
 
 # ── Stage definitions (configurable per flow type) ────────────────────────────
 
@@ -346,11 +355,12 @@ async def complete_stage(stage_id: str, request: Request):
         raise HTTPException(400, "Stage already completed")
 
     now = now_utc()
+    plan_start = datetime.fromisoformat(stage["plan_start"]) if stage.get("plan_start") else now
     plan_done = datetime.fromisoformat(stage["plan_done"]) if stage.get("plan_done") else now
 
     # Calculate tat status and score
     t_status = "green" if now <= plan_done else "red"
-    score = score_stage(plan_done, now)
+    score = score_stage(plan_start, plan_done, now)
 
     update = {
         "status": "pending_approval" if stage.get("needs_approval") else "done",

@@ -52,3 +52,59 @@ class TestCalculatePlanTime:
         start = datetime(2026, 6, 1, 5, 30, tzinfo=timezone.utc)
         end = calculate_plan_time(start, 1, OFFICE_START, OFFICE_END, WEEKLY_OFF, HOLIDAYS).astimezone(IST)
         assert end == _ist(2026, 6, 1, 12, 0)
+
+
+class TestTatStatus:
+    def test_done_on_time_is_green(self):
+        ps = datetime(2026, 6, 1, 4, 0, tzinfo=timezone.utc)
+        pd = datetime(2026, 6, 1, 8, 0, tzinfo=timezone.utc)
+        ad = datetime(2026, 6, 1, 7, 0, tzinfo=timezone.utc)
+        assert tat_status(ps, pd, ad) == "green"
+
+    def test_done_late_is_red(self):
+        ps = datetime(2026, 6, 1, 4, 0, tzinfo=timezone.utc)
+        pd = datetime(2026, 6, 1, 8, 0, tzinfo=timezone.utc)
+        ad = datetime(2026, 6, 1, 9, 0, tzinfo=timezone.utc)
+        assert tat_status(ps, pd, ad) == "red"
+
+    def test_open_past_plan_is_overdue(self):
+        ps = datetime(2020, 1, 1, 0, 0, tzinfo=timezone.utc)
+        pd = datetime(2020, 1, 1, 1, 0, tzinfo=timezone.utc)  # long past
+        assert tat_status(ps, pd, None) == "overdue"
+
+    def test_open_early_is_green(self):
+        now = datetime.now(timezone.utc)
+        ps = now - timedelta(minutes=1)
+        pd = now + timedelta(hours=10)   # ~0% elapsed
+        assert tat_status(ps, pd, None) == "green"
+
+    def test_open_past_warn_is_orange(self):
+        now = datetime.now(timezone.utc)
+        ps = now - timedelta(minutes=60)
+        pd = now + timedelta(minutes=40)  # 60/100 = 60% elapsed -> orange (>=0.5, <0.8)
+        assert tat_status(ps, pd, None) == "orange"
+
+
+class TestScoreStage:
+    def test_on_time_is_100(self):
+        ps = datetime(2026, 6, 1, 4, 0, tzinfo=timezone.utc)
+        pd = datetime(2026, 6, 1, 8, 0, tzinfo=timezone.utc)
+        ad = datetime(2026, 6, 1, 6, 0, tzinfo=timezone.utc)
+        assert score_stage(ps, pd, ad) == 100
+
+    def test_one_budget_late_is_50(self):
+        ps = datetime(2026, 6, 1, 4, 0, tzinfo=timezone.utc)
+        pd = datetime(2026, 6, 1, 8, 0, tzinfo=timezone.utc)   # 240 min budget
+        ad = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)  # 240 min late
+        assert score_stage(ps, pd, ad) == 50
+
+    def test_two_budget_late_is_0(self):
+        ps = datetime(2026, 6, 1, 4, 0, tzinfo=timezone.utc)
+        pd = datetime(2026, 6, 1, 8, 0, tzinfo=timezone.utc)   # 240 min budget
+        ad = datetime(2026, 6, 1, 16, 0, tzinfo=timezone.utc)  # 480 min late
+        assert score_stage(ps, pd, ad) == 0
+
+    def test_missing_actual_is_0(self):
+        ps = datetime(2026, 6, 1, 4, 0, tzinfo=timezone.utc)
+        pd = datetime(2026, 6, 1, 8, 0, tzinfo=timezone.utc)
+        assert score_stage(ps, pd, None) == 0
