@@ -602,6 +602,57 @@ async def reject_stage(stage_id: str, request: Request):
     await _log_stage(stage["flow_id"], redo, "reworked", user, to_status="active")
     return {"message": "Rejected — redo stage created"}
 
+
+@router.post("/stages/{stage_id}/pause")
+async def pause_stage(stage_id: str, request: Request):
+    user = await get_current_user(request)
+    body = await request.json()
+    stage = await db.fms_stages.find_one({"stage_id": stage_id})
+    if not stage:
+        raise HTTPException(404, "Stage not found")
+    _require_stage_team(user, stage)
+    if stage["status"] != "active":
+        raise HTTPException(400, "Only active stages can be paused")
+    intervals = stage.get("paused_intervals", [])
+    intervals.append({"from": now_iso(), "to": None, "reason": body.get("reason", "")})
+    await db.fms_stages.update_one({"stage_id": stage_id},
+        {"$set": {"status": "paused", "paused_intervals": intervals}})
+    await _log_stage(stage["flow_id"], stage, "paused", user,
+                     note=body.get("reason", ""), from_status="active", to_status="paused")
+    return {"message": "Stage paused"}
+
+
+@router.post("/stages/{stage_id}/resume")
+async def resume_stage(stage_id: str, request: Request):
+    user = await get_current_user(request)
+    cfg = await get_fms_settings()
+    stage = await db.fms_stages.find_one({"stage_id": stage_id})
+    if not stage:
+        raise HTTPException(404, "Stage not found")
+    _require_stage_team(user, stage)
+    if stage["status"] != "paused":
+        raise HTTPException(400, "Stage is not paused")
+    intervals = stage.get("paused_intervals", [])
+    if intervals and intervals[-1].get("to") is None:
+        intervals[-1]["to"] = now_iso()
+    # Shift plan_done forward by the working-time spent in the just-closed pause.
+    last = intervals[-1]
+    paused_from = datetime.fromisoformat(last["from"])
+    paused_to = datetime.fromisoformat(last["to"])
+    paused_work_mins = working_minutes_elapsed(
+        paused_from, paused_to, cfg["office_start"], cfg["office_end"],
+        cfg["weekly_off"], cfg["holidays"])
+    old_pd = datetime.fromisoformat(stage["plan_done"])
+    new_pd = calculate_plan_time(old_pd, paused_work_mins / 60.0,
+        cfg["office_start"], cfg["office_end"], cfg["weekly_off"], cfg["holidays"])
+    await db.fms_stages.update_one({"stage_id": stage_id}, {"$set": {
+        "status": "active", "paused_intervals": intervals,
+        "plan_done": new_pd.isoformat()}})
+    await _log_stage(stage["flow_id"], stage, "resumed", user,
+                     from_status="paused", to_status="active")
+    return {"message": "Stage resumed", "plan_done": new_pd.isoformat()}
+
+
 async def _advance_flow(flow_id: str, completed_order: int, now: datetime, cfg: dict):
     """Find next stage, activate it, recalculate plan times from now."""
     next_stage = await db.fms_stages.find_one(
