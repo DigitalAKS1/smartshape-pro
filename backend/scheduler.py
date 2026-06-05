@@ -23,6 +23,10 @@ import httpx
 from database import db
 from services.evolution_client import evolution
 from routes.fms_routes import get_fms_settings, render_template, pct_remaining
+from routes.crm_routes import (
+    get_crm_settings, compute_attention, resolve_lead_value,
+    _build_quote_map, OPEN_STAGES,
+)
 
 log = logging.getLogger("scheduler")
 
@@ -529,6 +533,7 @@ async def greeting_loop():
 # ══════════════════════════════════════════════════════════════════════════════
 
 FMS_DRY_RUN = os.getenv("FMS_NOTIFY_DRY_RUN", "0") == "1"
+CRM_DIGEST_DRY_RUN = os.getenv("CRM_DIGEST_DRY_RUN", "0") == "1"
 
 
 async def _fms_send_wa(phone: str, text: str) -> tuple[bool, str]:
@@ -658,6 +663,119 @@ async def fms_sla_loop():
         await asyncio.sleep(300)
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# JOB 6 — CRM "Needs Attention" Daily Digest
+# ══════════════════════════════════════════════════════════════════════════════
+
+REASON_LABEL = {"overdue": "overdue follow-up", "stuck": "no recent activity",
+                "no_next_action": "no next step"}
+
+
+async def _digest_compute() -> dict:
+    """Return {rep_email: [attention rows]} across all open leads. Read-only."""
+    now = datetime.now(timezone.utc)
+    today = now.date().isoformat()
+    settings = await get_crm_settings()
+    leads = await db.leads.find(
+        {"stage": {"$in": OPEN_STAGES}}, {"_id": 0}).to_list(20000)
+    lead_ids = [l["lead_id"] for l in leads]
+    upcoming, open_tasks = set(), set()
+    async for fu in db.followups.find(
+        {"lead_id": {"$in": lead_ids}, "status": "pending",
+         "followup_date": {"$gte": today}}, {"_id": 0, "lead_id": 1}):
+        upcoming.add(fu["lead_id"])
+    async for t in db.tasks.find(
+        {"lead_id": {"$in": lead_ids}, "status": "pending"}, {"_id": 0, "lead_id": 1}):
+        open_tasks.add(t["lead_id"])
+    quote_map = await _build_quote_map(leads)
+    by_rep = {}
+    for lead in leads:
+        reasons = compute_attention(lead, now, settings,
+                                    lead["lead_id"] in upcoming,
+                                    lead["lead_id"] in open_tasks)
+        if not reasons:
+            continue
+        rep = lead.get("assigned_to") or ""
+        by_rep.setdefault(rep, []).append({
+            "company": lead.get("company_name", ""),
+            "value": resolve_lead_value(lead, quote_map),
+            "reasons": reasons,
+        })
+    return by_rep
+
+
+def _format_rep_digest(rows: list) -> str:
+    rows = sorted(rows, key=lambda r: r["value"], reverse=True)
+    lines = [f"Good morning! You have {len(rows)} lead(s) needing attention today:"]
+    for r in rows[:15]:
+        why = ", ".join(REASON_LABEL.get(x, x) for x in r["reasons"])
+        val = f" (₹{int(r['value']):,})" if r["value"] else ""
+        lines.append(f"• {r['company']}{val} — {why}")
+    if len(rows) > 15:
+        lines.append(f"…and {len(rows) - 15} more. Open SmartShape CRM to review.")
+    return "\n".join(lines)
+
+
+async def run_crm_digest():
+    settings = await get_crm_settings()
+    if not settings.get("digest_enabled"):
+        log.debug("[digest] disabled — skipping")
+        return
+    by_rep = await _digest_compute()
+    if not by_rep:
+        log.info("[digest] nothing to send")
+        return
+    admin_summary = []
+    total_at_risk = 0.0
+    for rep_email, rows in by_rep.items():
+        at_risk = sum(r["value"] for r in rows)
+        total_at_risk += at_risk
+        admin_summary.append((rep_email, len(rows), at_risk))
+        if not rep_email:
+            continue
+        recipient = await _resolve_recipient(rep_email)
+        text = _format_rep_digest(rows)
+        if CRM_DIGEST_DRY_RUN:
+            log.info(f"[digest][dry] -> {rep_email}\n{text}")
+            continue
+        await _fms_send_wa(recipient.get("phone", ""), text)
+        await _fms_send_email(recipient.get("email", ""),
+                              "SmartShape CRM — leads needing attention", text)
+    admins = await db.users.find({"role": "admin"}, {"_id": 0, "email": 1}).to_list(20)
+    summary_lines = ["CRM daily summary — leads needing attention by rep:"]
+    for rep_email, n, at_risk in sorted(admin_summary, key=lambda x: x[2], reverse=True):
+        summary_lines.append(f"• {rep_email or 'Unassigned'}: {n} leads, ₹{int(at_risk):,} at risk")
+    summary_lines.append(f"Total at risk: ₹{int(total_at_risk):,}")
+    summary = "\n".join(summary_lines)
+    for a in admins:
+        if CRM_DIGEST_DRY_RUN:
+            log.info(f"[digest][dry] admin -> {a['email']}\n{summary}")
+            continue
+        r = await _resolve_recipient(a["email"])
+        await _fms_send_wa(r.get("phone", ""), summary)
+        await _fms_send_email(a["email"], "SmartShape CRM — daily summary", summary)
+
+
+async def crm_digest_loop():
+    log.info("[scheduler] CRM digest loop started")
+    while True:
+        try:
+            settings = await get_crm_settings()
+            hhmm = (settings.get("digest_time") or "08:00").split(":")
+            hh, mm = int(hhmm[0]), int(hhmm[1])
+            now_ist = datetime.now(IST)
+            target = now_ist.replace(hour=hh, minute=mm, second=0, microsecond=0)
+            if now_ist >= target:
+                target += timedelta(days=1)
+            sleep_secs = (target - now_ist).total_seconds()
+            log.info(f"[digest] next run in {sleep_secs/3600:.1f}h")
+            await asyncio.sleep(max(60, sleep_secs))
+            await run_crm_digest()
+        except Exception as exc:
+            log.error(f"[digest loop] {exc}")
+            await asyncio.sleep(3600)
+
+
 async def start_scheduler():
     """Start all background automation loops. Call once from FastAPI startup."""
     asyncio.create_task(email_sender_loop())
@@ -665,4 +783,5 @@ async def start_scheduler():
     asyncio.create_task(drip_executor_loop())
     asyncio.create_task(greeting_loop())
     asyncio.create_task(fms_sla_loop())
-    log.info("[scheduler] all 5 background jobs running")
+    asyncio.create_task(crm_digest_loop())
+    log.info("[scheduler] all 6 background jobs running")

@@ -353,6 +353,9 @@ export const leads = {
   delete: (id) => API.delete(`/leads/${id}`),
   getNotes: (id) => API.get(`/leads/${id}/notes`),
   addNote: (id, data) => API.post(`/leads/${id}/notes`, data),
+  forecast: () => API.get('/leads/forecast'),
+  funnel: (params) => API.get('/leads/funnel', { params }),
+  needsAttention: () => API.get('/leads/needs-attention'),
   autoAssign: (leadIds) => API.post('/leads/auto-assign', leadIds ? { lead_ids: leadIds } : {}),
   reassign: (data) => API.post('/leads/reassign', data),
   bulkAssign: (data) => API.post('/leads/bulk-assign', data),
@@ -364,6 +367,12 @@ export const leads = {
     fd.append('file', file);
     return API.post('/leads/import', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
   },
+};
+
+// Pipeline settings (probabilities, idle limits, lost reasons, digest)
+export const pipelineSettings = {
+  get: () => API.get('/pipeline-settings'),
+  update: (data) => API.put('/pipeline-settings', data),
 };
 
 // Follow-ups

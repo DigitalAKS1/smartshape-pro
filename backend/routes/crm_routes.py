@@ -130,6 +130,128 @@ def compute_visit_required(lead: dict, now: datetime = None) -> bool:
         return True
 
 
+# ==================== PHASE 1: PIPELINE SETTINGS + COMPUTE ====================
+
+OPEN_STAGES = ["new", "contacted", "demo", "quoted", "negotiation"]
+
+DEFAULT_PIPELINE_SETTINGS = {
+    "type": "crm_pipeline",
+    "stage_probabilities": {
+        "new": 10, "contacted": 20, "demo": 30, "quoted": 50,
+        "negotiation": 70, "won": 100, "lost": 0, "retention": 0, "resell": 0,
+    },
+    "stage_idle_limits": {
+        "new": 7, "contacted": 5, "demo": 4, "quoted": 4,
+        "negotiation": 3, "retention": 30, "resell": 14,
+    },
+    "lost_reasons": ["Price", "Competitor", "No budget", "No response", "Timing", "Other"],
+    "digest_time": "08:00",
+    "digest_enabled": False,
+}
+
+
+async def get_crm_settings() -> dict:
+    doc = await db.settings.find_one({"type": "crm_pipeline"}, {"_id": 0})
+    if not doc:
+        await db.settings.insert_one(dict(DEFAULT_PIPELINE_SETTINGS))
+        doc = {}
+    merged = {**DEFAULT_PIPELINE_SETTINGS, **doc}
+    for mk in ("stage_probabilities", "stage_idle_limits"):
+        merged[mk] = {**DEFAULT_PIPELINE_SETTINGS[mk], **(doc.get(mk) or {})}
+    merged.pop("_id", None)
+    return merged
+
+
+def resolve_lead_value(lead: dict, quote_map: dict) -> float:
+    """Linked quotation grand_total (latest) wins; else manual expected_value."""
+    qids = lead.get("quotation_ids") or []
+    linked = [quote_map[q] for q in qids if q in quote_map]
+    if linked:
+        latest = max(linked, key=lambda q: q.get("created_at", "") or "")
+        return float(latest.get("grand_total", 0) or 0)
+    return float(lead.get("expected_value", 0) or 0)
+
+
+def stage_probability(stage: str, settings: dict) -> int:
+    return int((settings.get("stage_probabilities") or {}).get(stage, 0) or 0)
+
+
+async def _build_quote_map(leads: list) -> dict:
+    ids = [q for l in leads for q in (l.get("quotation_ids") or [])]
+    qmap = {}
+    if ids:
+        async for q in db.quotations.find(
+            {"quotation_id": {"$in": ids}},
+            {"_id": 0, "quotation_id": 1, "grand_total": 1, "created_at": 1},
+        ):
+            qmap[q["quotation_id"]] = q
+    return qmap
+
+
+def _parse_dt(val):
+    if not val:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(val).replace("Z", "+00:00"))
+    except Exception:
+        try:
+            dt = datetime.fromisoformat(str(val)[:10])
+        except Exception:
+            return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def compute_attention(lead: dict, now: datetime, settings: dict,
+                      has_upcoming: bool, has_open_task: bool) -> list:
+    """Return list of reason codes; empty if the lead is fine. Open stages only."""
+    if lead.get("stage") not in OPEN_STAGES:
+        return []
+    reasons = []
+    nfd = _parse_dt(lead.get("next_followup_date"))
+    if nfd and nfd < now:
+        reasons.append("overdue")
+    last = _parse_dt(lead.get("last_activity_date"))
+    limit = (settings.get("stage_idle_limits") or {}).get(lead.get("stage"), 7)
+    if last and (now - last).days >= int(limit or 7):
+        reasons.append("stuck")
+    if not has_upcoming and not has_open_task:
+        reasons.append("no_next_action")
+    return reasons
+
+
+FUNNEL_ORDER = ["new", "contacted", "demo", "quoted", "negotiation", "won"]
+FUNNEL_RANK = {s: i for i, s in enumerate(FUNNEL_ORDER)}
+
+
+def _max_stage_reached(lead: dict) -> int:
+    """Highest funnel rank this lead has touched, from pipeline_history + current stage."""
+    best = FUNNEL_RANK.get(lead.get("stage", ""), -1)
+    for h in lead.get("pipeline_history", []) or []:
+        best = max(best, FUNNEL_RANK.get(h.get("to_stage", ""), -1))
+    return best
+
+
+def _avg_days_in_stage(leads: list, stage: str) -> float:
+    """Average days a lead spent in `stage`, from consecutive pipeline_history timestamps."""
+    spans = []
+    for lead in leads:
+        hist = sorted((lead.get("pipeline_history") or []), key=lambda h: h.get("at", "") or "")
+        for i, h in enumerate(hist):
+            if h.get("to_stage") != stage:
+                continue
+            start = h.get("at")
+            end = hist[i + 1].get("at") if i + 1 < len(hist) else None
+            if not start or not end:
+                continue
+            d0 = _parse_dt(start)
+            d1 = _parse_dt(end)
+            if d0 and d1:
+                spans.append((d1 - d0).total_seconds() / 86400)
+    return round(sum(spans) / len(spans), 1) if spans else 0.0
+
+
 # ==================== GROUP MASTER ====================
 
 @router.get("/groups")
@@ -222,6 +344,32 @@ async def delete_source(source_id: str, request: Request):
     await get_current_user(request)
     await db.sources.delete_one({"source_id": source_id})
     return {"message": "Source deleted"}
+
+
+# ==================== PIPELINE SETTINGS ====================
+
+@router.get("/pipeline-settings")
+async def get_pipeline_settings(request: Request):
+    await get_current_user(request)
+    return await get_crm_settings()
+
+
+@router.put("/pipeline-settings")
+async def update_pipeline_settings(request: Request):
+    user = await get_current_user(request)
+    if get_team(user) != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    body = await request.json()
+    allowed = {}
+    for k in ("stage_probabilities", "stage_idle_limits", "lost_reasons",
+              "digest_time", "digest_enabled"):
+        if k in body:
+            allowed[k] = body[k]
+    if allowed:
+        await db.settings.update_one(
+            {"type": "crm_pipeline"}, {"$set": allowed}, upsert=True
+        )
+    return await get_crm_settings()
 
 
 # ==================== CONTACT ROLE MASTER ====================
@@ -1137,6 +1285,8 @@ async def get_leads(request: Request):
     leads = await db.leads.find(query, {"_id": 0}).sort("created_at", -1).to_list(10000)
     school_cache = {}
     now = datetime.now(timezone.utc)
+    settings = await get_crm_settings()
+    quote_map = await _build_quote_map(leads)
 
     # Batch-fetch linked contact names (P1-B)
     cfc_ids = [l.get("converted_from_contact") for l in leads if l.get("converted_from_contact")]
@@ -1159,6 +1309,9 @@ async def get_leads(request: Request):
         lead["school_strength"] = school.get("school_strength", 0) if school else 0
         lead["lead_score"] = calc_lead_score(lead, school)
         lead["visit_required"] = compute_visit_required(lead, now)
+        lead["deal_value"] = resolve_lead_value(lead, quote_map)
+        lead["probability"] = stage_probability(lead.get("stage", ""), settings)
+        lead["weighted_value"] = round(lead["deal_value"] * lead["probability"] / 100, 2)
         lead["linked_contact_name"] = linked_map.get(lead.get("converted_from_contact"))
     return leads
 
@@ -1230,6 +1383,9 @@ async def create_lead(request: Request):
         }],
         "last_visit_date": None,
         "notes": body.get("notes", ""),
+        "expected_value": float(body.get("expected_value", 0) or 0),
+        "lost_reason": body.get("lost_reason", ""),
+        "lost_reason_note": body.get("lost_reason_note", ""),
         "referred_by_contact_id": body.get("referred_by_contact_id", ""),
         "referral_reward_status": body.get("referral_reward_status", "none"),
         "tags": await _resolve_tags(body.get("tags", []), user["email"]),
@@ -1258,9 +1414,12 @@ async def update_lead(lead_id: str, request: Request):
               "lead_type", "interested_product", "stage", "priority",
               "next_followup_date", "assigned_to", "assigned_name", "notes",
               "assignment_type", "likely_closure_date",
+              "expected_value", "lost_reason", "lost_reason_note",
               "referred_by_contact_id", "referral_reward_status"):
         if k in body:
             allowed[k] = body[k]
+    if "expected_value" in allowed:
+        allowed["expected_value"] = float(allowed["expected_value"] or 0)
     if "tags" in body:
         allowed["tags"] = await _resolve_tags(body["tags"], user["email"])
     now_iso = datetime.now(timezone.utc).isoformat()
@@ -1269,6 +1428,11 @@ async def update_lead(lead_id: str, request: Request):
 
     if existing.get("is_locked") and user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Lead is locked after order conversion. Admin unlock required.")
+
+    if body.get("stage") == "lost" and existing.get("stage") != "lost":
+        reason = (body.get("lost_reason") or existing.get("lost_reason") or "").strip()
+        if not reason:
+            raise HTTPException(status_code=400, detail="lost_reason is required when marking a lead Lost")
 
     if "stage" in body and body["stage"] != existing.get("stage"):
         history = existing.get("pipeline_history", []) or []
@@ -1325,6 +1489,149 @@ async def referral_leaderboard(request: Request):
             "pending": r["pending"],
         })
     return result
+
+
+@router.get("/leads/forecast")
+async def leads_forecast(request: Request):
+    """Weighted pipeline forecast over OPEN stages, RBAC-scoped, per-stage + per-rep."""
+    user = await get_current_user(request)
+    team = get_team(user)
+    if team in ("accounts", "store"):
+        return {"total_value": 0, "total_weighted": 0, "by_stage": {}, "by_rep": {}}
+    query = {} if team == "admin" else {"assigned_to": user["email"]}
+    query["stage"] = {"$in": OPEN_STAGES}
+    leads = await db.leads.find(query, {"_id": 0}).to_list(10000)
+    settings = await get_crm_settings()
+    quote_map = await _build_quote_map(leads)
+
+    by_stage = {s: {"count": 0, "value": 0.0, "weighted": 0.0} for s in OPEN_STAGES}
+    by_rep = {}
+    total_value = total_weighted = 0.0
+    for lead in leads:
+        stage = lead.get("stage", "")
+        if stage not in by_stage:
+            continue
+        value = resolve_lead_value(lead, quote_map)
+        weighted = round(value * stage_probability(stage, settings) / 100, 2)
+        by_stage[stage]["count"] += 1
+        by_stage[stage]["value"] = round(by_stage[stage]["value"] + value, 2)
+        by_stage[stage]["weighted"] = round(by_stage[stage]["weighted"] + weighted, 2)
+        rep = lead.get("assigned_name") or lead.get("assigned_to") or "Unassigned"
+        rr = by_rep.setdefault(rep, {"count": 0, "value": 0.0, "weighted": 0.0})
+        rr["count"] += 1
+        rr["value"] = round(rr["value"] + value, 2)
+        rr["weighted"] = round(rr["weighted"] + weighted, 2)
+        total_value += value
+        total_weighted += weighted
+    return {
+        "total_value": round(total_value, 2),
+        "total_weighted": round(total_weighted, 2),
+        "by_stage": by_stage,
+        "by_rep": by_rep,
+    }
+
+
+@router.get("/leads/funnel")
+async def leads_funnel(request: Request,
+                       start: Optional[str] = None, end: Optional[str] = None,
+                       rep: Optional[str] = None, source: Optional[str] = None):
+    """Stage-to-stage conversion %, avg days/stage, win/loss + lost-reason breakdown."""
+    user = await get_current_user(request)
+    team = get_team(user)
+    if team in ("accounts", "store"):
+        return {"stages": [], "won": {"count": 0, "value": 0}, "lost": {"count": 0}, "lost_reasons": {}}
+    query = {} if team == "admin" else {"assigned_to": user["email"]}
+    if rep and team == "admin":
+        query["assigned_to"] = rep
+    if source:
+        query["source"] = source
+    if start or end:
+        cq = {}
+        if start:
+            cq["$gte"] = start
+        if end:
+            cq["$lte"] = end + "T23:59:59"
+        query["created_at"] = cq
+    leads = await db.leads.find(query, {"_id": 0}).to_list(20000)
+
+    reached = {s: 0 for s in FUNNEL_ORDER}
+    for lead in leads:
+        top = _max_stage_reached(lead)
+        for s in FUNNEL_ORDER:
+            if top >= FUNNEL_RANK[s]:
+                reached[s] += 1
+
+    stages = []
+    prev = None
+    for s in FUNNEL_ORDER:
+        cnt = reached[s]
+        adv = round(cnt / prev * 100, 1) if prev else 100.0
+        stages.append({"stage": s, "count": cnt, "advanced_pct": adv,
+                       "avg_days": _avg_days_in_stage(leads, s)})
+        prev = cnt if cnt else prev
+
+    quote_map = await _build_quote_map(leads)
+    won = [l for l in leads if l.get("stage") == "won"]
+    won_value = round(sum(resolve_lead_value(l, quote_map) for l in won), 2)
+    lost = [l for l in leads if l.get("stage") == "lost"]
+    lost_reasons = {}
+    for l in lost:
+        key = l.get("lost_reason") or "Unspecified"
+        lost_reasons[key] = lost_reasons.get(key, 0) + 1
+
+    return {
+        "stages": stages,
+        "won": {"count": len(won), "value": won_value},
+        "lost": {"count": len(lost)},
+        "lost_reasons": lost_reasons,
+    }
+
+
+@router.get("/leads/needs-attention")
+async def leads_needs_attention(request: Request):
+    """Open leads flagged overdue / stuck / no-next-action, RBAC-scoped, sorted by value."""
+    user = await get_current_user(request)
+    team = get_team(user)
+    if team in ("accounts", "store"):
+        return []
+    query = {"stage": {"$in": OPEN_STAGES}}
+    if team != "admin":
+        query["assigned_to"] = user["email"]
+    leads = await db.leads.find(query, {"_id": 0}).to_list(20000)
+    lead_ids = [l["lead_id"] for l in leads]
+    now = datetime.now(timezone.utc)
+    today = now.date().isoformat()
+    settings = await get_crm_settings()
+
+    upcoming = set()
+    async for fu in db.followups.find(
+        {"lead_id": {"$in": lead_ids}, "status": "pending",
+         "followup_date": {"$gte": today}}, {"_id": 0, "lead_id": 1}):
+        upcoming.add(fu["lead_id"])
+    open_tasks = set()
+    async for t in db.tasks.find(
+        {"lead_id": {"$in": lead_ids}, "status": "pending"}, {"_id": 0, "lead_id": 1}):
+        open_tasks.add(t["lead_id"])
+
+    quote_map = await _build_quote_map(leads)
+    out = []
+    for lead in leads:
+        reasons = compute_attention(
+            lead, now, settings,
+            lead["lead_id"] in upcoming, lead["lead_id"] in open_tasks)
+        if reasons:
+            out.append({
+                "lead_id": lead["lead_id"],
+                "company_name": lead.get("company_name", ""),
+                "contact_name": lead.get("contact_name", ""),
+                "stage": lead.get("stage", ""),
+                "assigned_to": lead.get("assigned_to", ""),
+                "assigned_name": lead.get("assigned_name", ""),
+                "deal_value": resolve_lead_value(lead, quote_map),
+                "reasons": reasons,
+            })
+    out.sort(key=lambda x: x["deal_value"], reverse=True)
+    return out
 
 
 @router.post("/leads/reassign")
