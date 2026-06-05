@@ -23,6 +23,7 @@ import { leads as leadsApiObj, quotations as quotationsApi2, adminApi } from '..
 import useLeadsCRM from '../../hooks/useLeadsCRM';
 import LeadDetailPanel from '../../components/crm/LeadDetailPanel';
 import LeadFormDialog from '../../components/crm/LeadFormDialog';
+import ForecastBar from '../../components/crm/ForecastBar';
 import SchoolFormDialog from '../../components/crm/SchoolFormDialog';
 import ContactFormDialog from '../../components/crm/ContactFormDialog';
 import ContactsTab from '../../components/crm/ContactsTab';
@@ -135,6 +136,9 @@ export default function LeadsCRM() {
             </Button>
           </div>
         </div>
+
+        {/* ── Forecast + needs-attention summary ─────────────────────── */}
+        <ForecastBar />
 
         {/* ── View Toggle + Bulk Actions ─────────────────────────────── */}
         {crm.activeTab === 'pipeline' && (

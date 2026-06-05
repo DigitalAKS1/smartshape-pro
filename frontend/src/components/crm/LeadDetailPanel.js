@@ -9,7 +9,7 @@ import {
   AlertTriangle, User, UserCog, Edit2, MapPin, Target,
   ChevronRight, UserPlus, Package, Lock, FileText, Zap, X,
 } from 'lucide-react';
-import { STAGES } from '../../lib/crmConstants';
+import { STAGES, LOST_REASONS } from '../../lib/crmConstants';
 import { formatDate } from '../../lib/utils';
 import { dripSequences as dripSequencesApi } from '../../lib/api';
 import EmptyState, { EMPTY_STATES } from '../ui/EmptyState';
@@ -44,6 +44,18 @@ export default function LeadDetailPanel({
 }) {
   const navigate = useNavigate();
   const { isDark } = useTheme();
+  const [lostOpen, setLostOpen] = React.useState(false);
+  const [lostReason, setLostReason] = React.useState('');
+  const [lostNote, setLostNote] = React.useState('');
+
+  // Intercept stage change: moving to "lost" requires a reason
+  const handleStageClick = (stageId) => {
+    if (stageId === 'lost' && detailLead.stage !== 'lost') {
+      setLostReason(''); setLostNote(''); setLostOpen(true);
+      return;
+    }
+    changeStage(detailLead.lead_id, stageId);
+  };
 
   const card = isDark ? 'bg-[var(--bg-card)] border-[var(--border-color)]' : 'bg-white border-[var(--border-color)]';
   const inputCls = 'bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]';
@@ -81,6 +93,17 @@ export default function LeadDetailPanel({
               <span className="flex items-center gap-1"><User className="h-3 w-3" /> {detailLead.contact_name}</span>
               {detailLead.contact_phone && <span className="flex items-center gap-1"><Phone className="h-3 w-3" /> {detailLead.contact_phone}</span>}
               {detailLead.school_city && <span className="flex items-center gap-1"><MapPin className="h-3 w-3" /> {detailLead.school_city}</span>}
+              {detailLead.deal_value > 0 && (
+                <span className="flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-green-500/15 text-green-400 border border-green-500/30" data-testid="detail-deal-value">
+                  <Target className="h-3 w-3" /> ₹{Math.round(detailLead.deal_value).toLocaleString('en-IN')}
+                  {detailLead.probability != null && <span className="opacity-70">· {detailLead.probability}% → ₹{Math.round(detailLead.weighted_value || 0).toLocaleString('en-IN')}</span>}
+                </span>
+              )}
+              {detailLead.lost_reason && detailLead.stage === 'lost' && (
+                <span className="flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-red-500/15 text-red-400 border border-red-500/30">
+                  <X className="h-3 w-3" /> Lost: {detailLead.lost_reason}
+                </span>
+              )}
               {detailLead.likely_closure_date && (
                 <span className="flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-purple-500/15 text-purple-400 border border-purple-500/30" data-testid="detail-likely-closure">
                   <Target className="h-3 w-3" /> Likely close: {detailLead.likely_closure_date}
@@ -120,7 +143,7 @@ export default function LeadDetailPanel({
             {/* Stage selector */}
             <div className="flex gap-1 flex-wrap">
               {STAGES.map(s => (
-                <button key={s.id} onClick={() => changeStage(detailLead.lead_id, s.id)}
+                <button key={s.id} onClick={() => handleStageClick(s.id)}
                   className={`px-2 py-1 rounded text-xs font-medium border transition-all ${detailLead.stage === s.id ? s.color + ' ring-1' : `${isDark ? 'border-[var(--border-color)] text-[var(--text-muted)]' : 'border-[var(--border-color)] text-[#888]'} ${hoverBg}`}`}>
                   {s.label}
                 </button>
@@ -392,6 +415,30 @@ export default function LeadDetailPanel({
                 </div>
               ) : <p className={`text-xs ${textMuted}`}>Not enrolled in any sequence</p>}
             </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Lost Reason Dialog */}
+      <Dialog open={lostOpen} onOpenChange={setLostOpen}>
+        <DialogContent className={`${dlgCls} w-[calc(100vw-1rem)] sm:max-w-sm`}>
+          <DialogHeader><DialogTitle className={textPri}>Why was this lead lost?</DialogTitle></DialogHeader>
+          <div className="space-y-3 py-2">
+            <select value={lostReason} onChange={e => setLostReason(e.target.value)}
+              className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`} data-testid="lost-reason-select">
+              <option value="">-- Select a reason --</option>
+              {LOST_REASONS.map(r => <option key={r} value={r}>{r}</option>)}
+            </select>
+            <Input value={lostNote} onChange={e => setLostNote(e.target.value)} placeholder="Optional note" className={`${inputCls} text-sm`} />
+          </div>
+          <div className="flex justify-end gap-2 mt-2">
+            <Button variant="outline" onClick={() => setLostOpen(false)} className="border-[var(--border-color)] text-[var(--text-secondary)]">Cancel</Button>
+            <Button disabled={!lostReason} data-testid="lost-reason-confirm"
+              onClick={async () => {
+                await changeStage(detailLead.lead_id, 'lost', { lost_reason: lostReason, lost_reason_note: lostNote });
+                setLostOpen(false);
+              }}
+              className="bg-red-600 hover:bg-red-700 text-white">Mark Lost</Button>
           </div>
         </DialogContent>
       </Dialog>

@@ -20,6 +20,16 @@ export const DESIGNATIONS = ['Principal', 'Admin', 'Trustee', 'Purchase Head', '
 
 export const LEAD_TYPES = ['hot', 'warm', 'cold'];
 
+// Default lost reasons (admin can tune the backend list via pipeline-settings)
+export const LOST_REASONS = ['Price', 'Competitor', 'No budget', 'No response', 'Timing', 'Other'];
+
+// Human labels for needs-attention reason codes from /leads/needs-attention
+export const ATTENTION_LABELS = {
+  overdue: 'Overdue follow-up',
+  stuck: 'No recent activity',
+  no_next_action: 'No next step',
+};
+
 export const STAGE_COLORS = {
   new:         'bg-blue-500/20 text-blue-400',
   contacted:   'bg-cyan-500/20 text-cyan-400',

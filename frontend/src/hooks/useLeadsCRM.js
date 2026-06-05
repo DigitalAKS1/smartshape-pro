@@ -85,7 +85,7 @@ export default function useLeadsCRM() {
     contact_phone: '', contact_email: '', source: '', source_id: '',
     lead_type: 'warm', interested_product: '', priority: 'medium',
     next_followup_date: '', likely_closure_date: '', assignment_type: 'manual',
-    assigned_to: '', notes: '', tags: [], referred_by_contact_id: '', referral_reward_status: 'none',
+    assigned_to: '', notes: '', expected_value: '', tags: [], referred_by_contact_id: '', referral_reward_status: 'none',
   });
   const [newSchool, setNewSchool] = useState({ school_name: '', school_type: 'CBSE', phone: '', email: '', city: '', state: '', pincode: '', school_strength: 0 });
 
@@ -180,7 +180,7 @@ export default function useLeadsCRM() {
   const openCreateLead = () => {
     setEditLead(null);
     setAddNewSchool(false);
-    setLeadForm({ school_id: '', contact_name: '', designation: '', contact_role_id: '', contact_phone: '', contact_email: '', source: '', source_id: '', lead_type: 'warm', interested_product: '', priority: 'medium', next_followup_date: '', likely_closure_date: '', assignment_type: 'manual', assigned_to: '', notes: '', tags: [], referred_by_contact_id: '', referral_reward_status: 'none' });
+    setLeadForm({ school_id: '', contact_name: '', designation: '', contact_role_id: '', contact_phone: '', contact_email: '', source: '', source_id: '', lead_type: 'warm', interested_product: '', priority: 'medium', next_followup_date: '', likely_closure_date: '', assignment_type: 'manual', assigned_to: '', notes: '', expected_value: '', tags: [], referred_by_contact_id: '', referral_reward_status: 'none' });
     setNewTagInput('');
     setNewSchool({ school_name: '', school_type: 'CBSE', phone: '', email: '', city: '', state: '', pincode: '', school_strength: 0 });
     setLeadDialogOpen(true);
@@ -234,10 +234,15 @@ export default function useLeadsCRM() {
     } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
   };
 
-  const changeStage = async (leadId, newStage) => {
-    await leadsApi.update(leadId, { stage: newStage });
+  const changeStage = async (leadId, newStage, extra = {}) => {
+    try {
+      await leadsApi.update(leadId, { stage: newStage, ...extra });
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Stage change failed');
+      return;
+    }
     fetchData();
-    if (detailLead?.lead_id === leadId) setDetailLead(prev => ({ ...prev, stage: newStage }));
+    if (detailLead?.lead_id === leadId) setDetailLead(prev => ({ ...prev, stage: newStage, ...extra }));
   };
 
   const addNote = async () => {
@@ -316,8 +321,14 @@ export default function useLeadsCRM() {
       const confirmProceed = window.confirm(`Move recommended only after ${missing}. Proceed anyway?`);
       if (!confirmProceed) return;
     }
+    const extra = {};
+    if (to === 'lost') {
+      const reason = window.prompt('Reason for marking this lead Lost? (Price / Competitor / No budget / No response / Timing / Other)');
+      if (!reason || !reason.trim()) { toast.error('Lost reason required'); return; }
+      extra.lost_reason = reason.trim();
+    }
     try {
-      await leadsApi.update(itemId, { stage: to, stage_change_note: `Drag from ${from} to ${to}` });
+      await leadsApi.update(itemId, { stage: to, stage_change_note: `Drag from ${from} to ${to}`, ...extra });
       toast.success(`Moved to ${STAGES.find(s => s.id === to)?.label || to}`);
       fetchData();
     } catch (e) {

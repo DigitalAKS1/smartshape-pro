@@ -125,7 +125,14 @@ export default function LeadFormDialog({
             <div><Label className={`${textSec} text-xs`}>Likely Closure Date</Label><Input type="date" value={leadForm.likely_closure_date || ''} onChange={e => setLeadForm({...leadForm, likely_closure_date: e.target.value})} className={inputCls} data-testid="lead-likely-closure-input" /></div>
           </div>
 
-          <div><Label className={`${textSec} text-xs`}>Notes</Label><Input value={leadForm.notes} onChange={e => setLeadForm({...leadForm, notes: e.target.value})} className={inputCls} /></div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <Label className={`${textSec} text-xs`}>Expected Value (₹)</Label>
+              <Input type="number" min="0" value={leadForm.expected_value ?? ''} onChange={e => setLeadForm({...leadForm, expected_value: e.target.value})} placeholder="Estimated deal size" className={inputCls} data-testid="lead-expected-value-input" />
+              <p className={`${textMuted} text-[10px] mt-0.5`}>Auto-overridden by a linked quotation total.</p>
+            </div>
+            <div><Label className={`${textSec} text-xs`}>Notes</Label><Input value={leadForm.notes} onChange={e => setLeadForm({...leadForm, notes: e.target.value})} className={inputCls} /></div>
+          </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
