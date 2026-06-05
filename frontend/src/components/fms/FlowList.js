@@ -9,7 +9,7 @@ export default function FlowList({
   filtered, loading, search, setSearch, filterType, setFType,
   templates, expandedFlow, setExpanded, activeFlowData, setAFD,
   loadFlow, setTab,
-  openComplete, doApprove, doReject, openPayment,
+  openComplete, doApprove, doReject, doPause, doResume, fetchLogs, openPayment,
   card, textPri, textSec, textMuted, inputCls,
 }) {
   return (
@@ -54,6 +54,7 @@ export default function FlowList({
               else { setExpanded(flow.flow_id); const d = await loadFlow(flow.flow_id); setAFD(d); }
             }}
             onComplete={openComplete} onApprove={doApprove} onReject={doReject}
+            onPause={doPause} onResume={doResume} fetchLogs={fetchLogs}
             onPayment={() => openPayment(flow)}
             card={card} textPri={textPri} textSec={textSec} textMuted={textMuted}
           />

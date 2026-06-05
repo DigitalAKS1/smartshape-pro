@@ -78,6 +78,7 @@ export default function FlowManagement() {
             activeFlowData={s.activeFlowData} setAFD={s.setAFD}
             loadFlow={s.loadFlow} setTab={s.setTab}
             openComplete={s.openComplete} doApprove={s.doApprove} doReject={s.doReject}
+            doPause={s.doPause} doResume={s.doResume} fetchLogs={s.fetchLogs}
             openPayment={s.openPayment}
             {...theme}
           />

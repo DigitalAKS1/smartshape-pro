@@ -179,6 +179,30 @@ export function useFlowManagement() {
     if (expandedFlow) loadFlow(expandedFlow).then(setAFD);
     loadBoard();
   };
+  const doPause = async (stage) => {
+    const reason = window.prompt('Pause reason (e.g. waiting on customer):');
+    if (reason === null) return;
+    try {
+      await fmsApi.pauseStage(stage.stage_id, { reason });
+      toast.success('Stage paused');
+      if (expandedFlow) loadFlow(expandedFlow).then(setAFD);
+      loadBoard();
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Failed to pause'); }
+  };
+  const doResume = async (stage) => {
+    try {
+      await fmsApi.resumeStage(stage.stage_id);
+      toast.success('Stage resumed');
+      if (expandedFlow) loadFlow(expandedFlow).then(setAFD);
+      loadBoard();
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Failed to resume'); }
+  };
+  const fetchLogs = async (flowId) => {
+    try {
+      const r = await fmsApi.getFlowLogs(flowId);
+      return r.data || [];
+    } catch { return []; }
+  };
 
   /* QC */
   const openQC = async (stage) => {
@@ -326,7 +350,7 @@ export function useFlowManagement() {
     settForm, setSettForm,
     /* handlers */
     loadBoard, loadFlow, loadCalendar,
-    openComplete, doComplete, doApprove, doReject,
+    openComplete, doComplete, doApprove, doReject, doPause, doResume, fetchLogs,
     openPayment, openChecklist,
     createFlow, selectLead,
     startNewTemplate, startEditTemplate, saveTmpl, deleteTmpl,

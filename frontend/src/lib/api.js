@@ -617,6 +617,9 @@ export const fms = {
   settings:        ()     => API.get('/fms/settings'),
   updateSettings:  (d)    => API.put('/fms/settings', d),
   calendar:        (p)    => API.get('/fms/calendar', { params: p }),
+  pauseStage:      (id,d) => API.post(`/fms/stages/${id}/pause`, d),
+  resumeStage:     (id)   => API.post(`/fms/stages/${id}/resume`, {}),
+  getFlowLogs:     (fid)  => API.get(`/fms/flows/${fid}/logs`),
   templates: {
     list:   ()     => API.get('/fms/templates'),
     create: (d)    => API.post('/fms/templates', d),
