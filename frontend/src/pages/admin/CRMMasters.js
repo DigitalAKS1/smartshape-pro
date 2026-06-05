@@ -1,11 +1,14 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import AdminLayout from '../../components/layouts/AdminLayout';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../../components/ui/dialog';
-import { Plus, Building2, Tag, UserCheck, Send, Briefcase, Edit2, Trash2 } from 'lucide-react';
+import { Plus, Building2, Tag, UserCheck, Send, Briefcase, Edit2, Trash2, SlidersHorizontal } from 'lucide-react';
+import { toast } from 'sonner';
 import { useCRMMasters } from '../../hooks/useCRMMasters';
+import { pipelineSettings } from '../../lib/api';
+import { STAGES } from '../../lib/crmConstants';
 import MasterEntityTable from '../../components/crm/MasterEntityTable';
 
 const TABS = [
@@ -14,6 +17,7 @@ const TABS = [
   { id: 'roles',        label: 'Contact Roles',        icon: UserCheck, desc: 'Role / designation taxonomy for school contacts (Principal, Trustee, Director, ...)' },
   { id: 'designations', label: 'Designation Master',   icon: Briefcase, desc: 'Job designations for school contacts — CEO, Principal, Vice Principal, Coordinator, ...' },
   { id: 'tags',         label: 'Tag Master',           icon: Tag,       desc: 'Color-coded tags to segment leads and run targeted WhatsApp / email campaigns' },
+  { id: 'pipeline',     label: 'Pipeline Settings',    icon: SlidersHorizontal, desc: 'Win probability per stage, idle limits before a lead is "stuck", lost reasons, and the daily digest' },
 ];
 
 const card      = 'bg-[var(--bg-card)] border-[var(--border-color)]';
@@ -26,6 +30,26 @@ const dlgCls    = 'bg-[var(--bg-card)] border-[var(--border-color)] text-[var(--
 export default function CRMMasters() {
   const [activeTab, setActiveTab] = useState('groups');
   const m = useCRMMasters();
+
+  // Pipeline settings (Phase 1)
+  const [pipe, setPipe] = useState(null);
+  const [pipeSaving, setPipeSaving] = useState(false);
+  useEffect(() => { pipelineSettings.get().then(r => setPipe(r.data)).catch(() => {}); }, []);
+  const savePipe = async () => {
+    setPipeSaving(true);
+    try {
+      const payload = {
+        ...pipe,
+        lost_reasons: (Array.isArray(pipe.lost_reasons) ? pipe.lost_reasons : String(pipe.lost_reasons || '').split(','))
+          .map(s => s.trim()).filter(Boolean),
+      };
+      const r = await pipelineSettings.update(payload);
+      setPipe(r.data);
+      toast.success('Pipeline settings saved');
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Save failed');
+    } finally { setPipeSaving(false); }
+  };
 
   if (m.loading) return (
     <AdminLayout>
@@ -226,6 +250,71 @@ export default function CRMMasters() {
                 </p>
               )}
             </div>
+          </div>
+        )}
+
+        {/* PIPELINE SETTINGS */}
+        {activeTab === 'pipeline' && (
+          <div className={`${card} border rounded-md p-5 space-y-6`}>
+            {!pipe ? (
+              <p className={`text-sm ${textMuted} text-center py-6`}>Loading settings…</p>
+            ) : (
+              <>
+                <div>
+                  <h2 className={`text-lg font-medium ${textPri} mb-1`}>Win probability & idle limits per stage</h2>
+                  <p className={`text-xs ${textMuted} mb-3`}>Probability drives the weighted forecast. Idle limit = days without activity before a lead is flagged "stuck".</p>
+                  <div className="space-y-2">
+                    {STAGES.map(s => (
+                      <div key={s.id} className="flex items-center gap-3">
+                        <span className={`w-28 text-sm ${textPri}`}>{s.label}</span>
+                        <div className="flex items-center gap-1">
+                          <Input type="number" min="0" max="100" value={pipe.stage_probabilities?.[s.id] ?? 0}
+                            onChange={e => setPipe({ ...pipe, stage_probabilities: { ...pipe.stage_probabilities, [s.id]: parseInt(e.target.value) || 0 } })}
+                            className={`${inputCls} w-20 h-8`} />
+                          <span className={`text-xs ${textMuted}`}>% win</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <Input type="number" min="0" value={pipe.stage_idle_limits?.[s.id] ?? ''}
+                            onChange={e => setPipe({ ...pipe, stage_idle_limits: { ...pipe.stage_idle_limits, [s.id]: e.target.value === '' ? '' : (parseInt(e.target.value) || 0) } })}
+                            className={`${inputCls} w-20 h-8`} placeholder="—" />
+                          <span className={`text-xs ${textMuted}`}>days idle</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <Label className={`${textSec} text-xs`}>Lost reasons (comma-separated)</Label>
+                    <Input value={Array.isArray(pipe.lost_reasons) ? pipe.lost_reasons.join(', ') : (pipe.lost_reasons || '')}
+                      onChange={e => setPipe({ ...pipe, lost_reasons: e.target.value })}
+                      className={inputCls} placeholder="Price, Competitor, No budget…" />
+                  </div>
+                  <div>
+                    <Label className={`${textSec} text-xs`}>Daily digest time (IST)</Label>
+                    <Input type="time" value={pipe.digest_time || '08:00'}
+                      onChange={e => setPipe({ ...pipe, digest_time: e.target.value })}
+                      className={inputCls} />
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <input type="checkbox" id="digest-enabled" checked={!!pipe.digest_enabled}
+                    onChange={e => setPipe({ ...pipe, digest_enabled: e.target.checked })} className="rounded" />
+                  <label htmlFor="digest-enabled" className={`text-sm ${textSec}`}>
+                    Send the daily "needs attention" digest to reps + admin
+                  </label>
+                </div>
+                <p className={`text-xs ${textMuted} -mt-3`}>Leave off until WhatsApp/email recipients are verified — it sends real messages.</p>
+
+                <div className="flex justify-end">
+                  <Button onClick={savePipe} disabled={pipeSaving} className="bg-[#e94560] hover:bg-[#f05c75] text-white" data-testid="save-pipeline-settings-btn">
+                    {pipeSaving ? 'Saving…' : 'Save Pipeline Settings'}
+                  </Button>
+                </div>
+              </>
+            )}
           </div>
         )}
 

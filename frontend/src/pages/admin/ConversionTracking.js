@@ -1,18 +1,30 @@
 import React, { useState, useEffect } from 'react';
 import AdminLayout from '../../components/layouts/AdminLayout';
-import { conversionAnalytics } from '../../lib/api';
+import { conversionAnalytics, leads as leadsApi } from '../../lib/api';
 import { formatCurrency } from '../../lib/utils';
+import { STAGES } from '../../lib/crmConstants';
 import { TrendingUp, Users, Target, Trophy, AlertTriangle, CheckCircle, Clock } from 'lucide-react';
+
+const inr = (n) => `₹${Math.round(n || 0).toLocaleString('en-IN')}`;
+const stageLabel = (id) => STAGES.find(s => s.id === id)?.label || id;
 
 export default function ConversionTracking() {
   const [data, setData] = useState(null);
+  const [funnel, setFunnel] = useState(null);
+  const [forecast, setForecast] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const fetch = async () => {
       try {
-        const res = await conversionAnalytics.get();
+        const [res, fn, fc] = await Promise.all([
+          conversionAnalytics.get(),
+          leadsApi.funnel().catch(() => ({ data: null })),
+          leadsApi.forecast().catch(() => ({ data: null })),
+        ]);
         setData(res.data);
+        setFunnel(fn.data);
+        setForecast(fc.data);
       } catch { }
       finally { setLoading(false); }
     };
@@ -64,6 +76,92 @@ export default function ConversionTracking() {
             })}
           </div>
         </div>
+
+        {/* Weighted Forecast (Phase 1) */}
+        {forecast && (
+          <div className="bg-[var(--bg-card)] border border-[var(--border-color)] rounded-md p-6">
+            <h2 className="text-lg font-medium text-[var(--text-primary)] mb-4">Revenue Forecast (open pipeline)</h2>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+              <div className="bg-[var(--bg-primary)] rounded-md p-4">
+                <p className="text-xs text-[var(--text-muted)]">Open pipeline value</p>
+                <p className="text-2xl font-mono font-bold text-[var(--text-primary)]">{inr(forecast.total_value)}</p>
+              </div>
+              <div className="bg-[var(--bg-primary)] rounded-md p-4">
+                <p className="text-xs text-[var(--text-muted)]">Weighted forecast</p>
+                <p className="text-2xl font-mono font-bold text-[#e94560]">{inr(forecast.total_weighted)}</p>
+              </div>
+              <div className="bg-[var(--bg-primary)] rounded-md p-4">
+                <p className="text-xs text-[var(--text-muted)]">Reps with pipeline</p>
+                <p className="text-2xl font-mono font-bold text-[var(--text-primary)]">{Object.keys(forecast.by_rep || {}).length}</p>
+              </div>
+            </div>
+            {Object.keys(forecast.by_stage || {}).length > 0 && (
+              <div className="mt-4 space-y-2">
+                {Object.entries(forecast.by_stage).filter(([, v]) => v.count > 0).map(([stage, v]) => (
+                  <div key={stage} className="flex items-center gap-3 text-sm">
+                    <span className="w-24 text-[var(--text-secondary)]">{stageLabel(stage)}</span>
+                    <span className="text-[var(--text-muted)] w-16">{v.count} leads</span>
+                    <span className="text-[var(--text-primary)] font-mono">{inr(v.value)}</span>
+                    <span className="text-[var(--text-muted)]">→</span>
+                    <span className="text-[#e94560] font-mono">{inr(v.weighted)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Stage conversion & velocity + lost reasons (Phase 1) */}
+        {funnel && (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div className="bg-[var(--bg-card)] border border-[var(--border-color)] rounded-md p-6">
+              <h2 className="text-lg font-medium text-[var(--text-primary)] mb-4">Stage Conversion & Velocity</h2>
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-[var(--border-color)] text-xs uppercase text-[var(--text-secondary)]">
+                    <th className="text-left py-2">Stage</th>
+                    <th className="text-center py-2">Reached</th>
+                    <th className="text-center py-2">Advanced</th>
+                    <th className="text-right py-2">Avg days</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(funnel.stages || []).map(s => (
+                    <tr key={s.stage} className="border-b border-[var(--border-color)]">
+                      <td className="py-2 text-[var(--text-primary)]">{stageLabel(s.stage)}</td>
+                      <td className="py-2 text-center font-mono text-[var(--text-primary)]">{s.count}</td>
+                      <td className="py-2 text-center font-mono text-[var(--text-secondary)]">{s.advanced_pct}%</td>
+                      <td className="py-2 text-right font-mono text-[var(--text-muted)]">{s.avg_days || '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="bg-[var(--bg-card)] border border-[var(--border-color)] rounded-md p-6">
+              <h2 className="text-lg font-medium text-[var(--text-primary)] mb-1">Why We Lose</h2>
+              <p className="text-xs text-[var(--text-muted)] mb-4">{funnel.lost?.count || 0} lost leads, by reason</p>
+              {Object.keys(funnel.lost_reasons || {}).length === 0 ? (
+                <p className="text-sm text-[var(--text-muted)] py-6 text-center">No lost leads recorded yet.</p>
+              ) : (
+                <div className="space-y-2">
+                  {Object.entries(funnel.lost_reasons).sort((a, b) => b[1] - a[1]).map(([reason, count]) => {
+                    const max = Math.max(...Object.values(funnel.lost_reasons));
+                    return (
+                      <div key={reason} className="flex items-center gap-3">
+                        <span className="w-28 text-sm text-[var(--text-secondary)] truncate">{reason}</span>
+                        <div className="flex-1 h-6 bg-[var(--bg-primary)] rounded overflow-hidden">
+                          <div className="h-full bg-red-500/60 rounded" style={{ width: `${Math.max((count / max) * 100, 6)}%` }} />
+                        </div>
+                        <span className="w-8 text-right font-mono text-sm text-[var(--text-primary)]">{count}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Salesperson Leaderboard */}
         <div className="bg-[var(--bg-card)] border border-[var(--border-color)] rounded-md p-6">

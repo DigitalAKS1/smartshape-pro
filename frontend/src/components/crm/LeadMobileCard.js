@@ -9,6 +9,8 @@ import { LeadTypeBadge } from './StageBadge';
  */
 export default function LeadMobileCard({ lead, onDetail, tagsList = [], borderCls, card, textPri, textSec, textMuted }) {
   const phone = lead.contact_phone;
+  const overdue = !!lead.next_followup_date &&
+    new Date(lead.next_followup_date) < new Date(new Date().toDateString());
 
   return (
     <div className={`${card} border rounded-xl overflow-hidden`} data-testid={`lead-card-${lead.lead_id}`}>
@@ -32,13 +34,23 @@ export default function LeadMobileCard({ lead, onDetail, tagsList = [], borderCl
 
         <div className="flex items-center gap-2 mt-2 flex-wrap">
           {lead.lead_type && <LeadTypeBadge type={lead.lead_type} size="xs" />}
+          {lead.deal_value > 0 && (
+            <span className="text-[10px] px-2 py-0.5 rounded-full bg-green-500/15 text-green-400 font-semibold">
+              ₹{Math.round(lead.deal_value).toLocaleString('en-IN')}
+            </span>
+          )}
+          {overdue && (
+            <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-500/20 text-red-400 font-medium flex items-center gap-1">
+              <AlertTriangle className="h-2.5 w-2.5" /> Overdue
+            </span>
+          )}
           {lead.visit_required && (
             <span className="text-[10px] px-2 py-0.5 rounded-full bg-orange-500/20 text-orange-400 font-medium flex items-center gap-1">
               <AlertTriangle className="h-2.5 w-2.5" /> Visit
             </span>
           )}
           {lead.next_followup_date && (
-            <span className={`text-[10px] ${textMuted} flex items-center gap-1`}>
+            <span className={`text-[10px] ${overdue ? 'text-red-400' : textMuted} flex items-center gap-1`}>
               <Clock className="h-3 w-3" />{lead.next_followup_date}
             </span>
           )}
