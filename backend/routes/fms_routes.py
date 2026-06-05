@@ -262,9 +262,9 @@ ORDER_STAGES = [
     {"key": "inventory_check",   "label": "Inventory Check",       "team": "store",      "tat_hours": 4,   "needs_approval": False},
     {"key": "qc_check",          "label": "QC Inspection",         "team": "store",      "tat_hours": 4,   "needs_approval": True},
     {"key": "predispatch",       "label": "Pre-Dispatch Checklist","team": "store",      "tat_hours": 2,   "needs_approval": False},
-    {"key": "dispatch",          "label": "Dispatch",              "team": "dispatch",   "tat_hours": 4,   "needs_approval": False},
+    {"key": "dispatch",          "label": "Dispatch",              "team": "dispatch",   "tat_hours": 4,   "needs_approval": False, "customer_notify": True},
     {"key": "payment_advance",   "label": "Advance Payment",       "team": "accounts",   "tat_hours": 24,  "needs_approval": False},
-    {"key": "delivery_confirm",  "label": "Delivery Confirmation", "team": "sales",      "tat_hours": 48,  "needs_approval": False},
+    {"key": "delivery_confirm",  "label": "Delivery Confirmation", "team": "sales",      "tat_hours": 48,  "needs_approval": False, "customer_notify": True},
     {"key": "payment_final",     "label": "Final Payment",         "team": "accounts",   "tat_hours": 72,  "needs_approval": False},
 ]
 
@@ -314,6 +314,7 @@ class FlowCreate(BaseModel):
     reference_id: Optional[str] = None
     customer_name: Optional[str] = ""
     customer_phone: Optional[str] = ""
+    customer_email: Optional[str] = ""
     amount: Optional[float] = 0
     notes: Optional[str] = ""
     lead_id: Optional[str] = None         # CRM lead link
@@ -365,6 +366,7 @@ async def create_flow(body: FlowCreate, request: Request):
         "template_id": body.template_id,
         "title": body.title, "reference_id": body.reference_id,
         "customer_name": body.customer_name, "customer_phone": body.customer_phone,
+        "customer_email": body.customer_email,
         "amount": body.amount, "notes": body.notes,
         "lead_id": body.lead_id, "school_id": body.school_id,
         "assigned_teams": body.assigned_teams,
@@ -389,6 +391,7 @@ async def create_flow(body: FlowCreate, request: Request):
             "order": i, "key": sd["key"], "label": sd["label"],
             "team": sd["team"], "tat_hours": sd["tat_hours"],
             "needs_approval": sd["needs_approval"],
+            "customer_notify": sd.get("customer_notify", False),
             "status": "waiting" if i > 0 else "active",
             # waiting → active → done / rejected
             "plan_start": plan_from.isoformat(),
@@ -464,6 +467,34 @@ async def _create_delegation_task_for_stage(stage: dict, flow_title: str, flow_i
 # STAGE ACTIONS: complete, approve, reject
 # ═══════════════════════════════════════════════════════════════════════════════
 
+async def _maybe_notify_customer(flow: dict, stage: dict):
+    if not stage.get("customer_notify"):
+        return
+    cfg = await get_fms_settings()
+    tpl = cfg["templates"].get("customer_stage", "")
+    text = render_template(
+        tpl, stage=stage.get("label", ""),
+        ref=flow.get("reference_id") or flow.get("flow_id", ""),
+        customer_name=flow.get("customer_name", ""),
+        title=flow.get("title", ""),
+    )
+    from scheduler import _fms_send_wa, _fms_send_email   # local import avoids cycle
+    if "whatsapp" in cfg["notify_channels"] and flow.get("customer_phone"):
+        ok, err = await _fms_send_wa(flow["customer_phone"], text)
+        await db.fms_notifications.insert_one({
+            "notif_id": gen_id("fnotif"), "flow_id": flow["flow_id"], "stage_id": stage["stage_id"],
+            "kind": "customer_stage", "channel": "whatsapp", "recipient": flow["customer_phone"],
+            "status": "sent" if ok else "failed", "error": err, "sent_at": now_iso(),
+        })
+    if "email" in cfg["notify_channels"] and flow.get("customer_email"):
+        ok, err = await _fms_send_email(flow["customer_email"], "Order update", text)
+        await db.fms_notifications.insert_one({
+            "notif_id": gen_id("fnotif"), "flow_id": flow["flow_id"], "stage_id": stage["stage_id"],
+            "kind": "customer_stage", "channel": "email", "recipient": flow["customer_email"],
+            "status": "sent" if ok else "failed", "error": err, "sent_at": now_iso(),
+        })
+
+
 @router.post("/stages/{stage_id}/complete")
 async def complete_stage(stage_id: str, request: Request):
     user = await get_current_user(request)
@@ -499,6 +530,11 @@ async def complete_stage(stage_id: str, request: Request):
     if stage.get("needs_approval"):
         return {"message": "Submitted for approval", "tat_status": t_status}
 
+    # Notify customer if this stage is flagged
+    flow = await db.fms_flows.find_one({"flow_id": stage["flow_id"]}, {"_id": 0})
+    if flow:
+        await _maybe_notify_customer(flow, {**stage, **update})
+
     # Otherwise advance to next stage
     await _advance_flow(stage["flow_id"], stage["order"], now, cfg)
     return {"message": "Stage completed", "tat_status": t_status, "score": score}
@@ -515,6 +551,9 @@ async def approve_stage(stage_id: str, request: Request):
         "approval_by": user.get("email"), "approval_at": now_iso(),
     }})
     await _log_stage(stage["flow_id"], stage, "approved", user, to_status="done")
+    flow = await db.fms_flows.find_one({"flow_id": stage["flow_id"]}, {"_id": 0})
+    if flow:
+        await _maybe_notify_customer(flow, stage)
     await _advance_flow(stage["flow_id"], stage["order"], now_utc(), cfg)
     return {"message": "Approved and flow advanced"}
 
