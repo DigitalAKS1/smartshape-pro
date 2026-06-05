@@ -4,7 +4,8 @@ import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Label } from '../ui/label';
 import { useTheme } from '../../contexts/ThemeContext';
-import { SCHOOL_TYPES } from '../../lib/crmConstants';
+import { toast } from 'sonner';
+import { SCHOOL_TYPES, INDIAN_STATES, BUDGET_RANGES } from '../../lib/crmConstants';
 
 export default function SchoolFormDialog({
   open, onOpenChange,
@@ -17,7 +18,22 @@ export default function SchoolFormDialog({
   const inputCls = 'bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]';
   const textPri = 'text-[var(--text-primary)]';
   const textSec = 'text-[var(--text-secondary)]';
+  const textMuted = 'text-[var(--text-muted)]';
   const dlgCls = isDark ? 'bg-[var(--bg-card)] border-[var(--border-color)] text-[var(--text-primary)]' : 'bg-white border-[var(--border-color)] text-[var(--text-primary)]';
+
+  const f = editSchoolForm;
+  const isPhone = (v) => /^[0-9+\-\s]{7,15}$/.test(v);
+  // Save with lightweight validation — blocks only on clearly malformed input
+  const handleValidatedSave = () => {
+    if (!f.school_name || !f.school_name.trim()) { toast.error('School name is required'); return; }
+    if (f.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.email)) { toast.error('Email looks invalid'); return; }
+    if (f.phone && !isPhone(f.phone)) { toast.error('Phone looks invalid'); return; }
+    if (f.alternate_contact && !isPhone(f.alternate_contact)) { toast.error('Alternate phone looks invalid'); return; }
+    if (f.pincode && !/^[1-9][0-9]{5}$/.test(String(f.pincode))) { toast.error('Pincode must be 6 digits'); return; }
+    if (f.website && !/^https?:\/\/.+/.test(f.website)) { toast.error('Website must start with http:// or https://'); return; }
+    if (!f.phone && !f.email) { toast.error('Add at least a phone or an email — a school with neither is unreachable'); return; }
+    handleSaveSchool();
+  };
 
   return (
     <Dialog open={open} onOpenChange={(v) => { onOpenChange(v); if (!v) setEditSchool(null); }}>
@@ -52,13 +68,24 @@ export default function SchoolFormDialog({
             </div>
             <div>
               <Label className={`${textSec} text-xs`}>Phone</Label>
-              <Input value={editSchoolForm.phone || ''} onChange={e => setEditSchoolForm({...editSchoolForm, phone: e.target.value})} className={inputCls} />
+              <Input value={editSchoolForm.phone || ''} onChange={e => setEditSchoolForm({...editSchoolForm, phone: e.target.value})} placeholder="10-digit number" className={inputCls} />
             </div>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div><Label className={`${textSec} text-xs`}>Alternate Phone</Label><Input value={editSchoolForm.alternate_contact || ''} onChange={e => setEditSchoolForm({...editSchoolForm, alternate_contact: e.target.value})} className={inputCls} data-testid="school-alt-phone-input" /></div>
+            <div><Label className={`${textSec} text-xs`}>No. of Branches</Label><Input type="number" min="0" value={editSchoolForm.number_of_branches ?? ''} onChange={e => setEditSchoolForm({...editSchoolForm, number_of_branches: e.target.value === '' ? '' : (parseInt(e.target.value) || 0)})} placeholder="e.g. 1" className={inputCls} /></div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div><Label className={`${textSec} text-xs`}>City</Label><Input value={editSchoolForm.city || ''} onChange={e => setEditSchoolForm({...editSchoolForm, city: e.target.value})} className={inputCls} /></div>
-            <div><Label className={`${textSec} text-xs`}>State</Label><Input value={editSchoolForm.state || ''} onChange={e => setEditSchoolForm({...editSchoolForm, state: e.target.value})} className={inputCls} /></div>
+            <div>
+              <Label className={`${textSec} text-xs`}>State</Label>
+              <select value={editSchoolForm.state || ''} onChange={e => setEditSchoolForm({...editSchoolForm, state: e.target.value})} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`} data-testid="school-state-select">
+                <option value="">Select state</option>
+                {INDIAN_STATES.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </div>
           </div>
 
           <div>
@@ -83,8 +110,22 @@ export default function SchoolFormDialog({
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div><Label className={`${textSec} text-xs`}>Strength</Label><Input type="number" value={editSchoolForm.school_strength || 0} onChange={e => setEditSchoolForm({...editSchoolForm, school_strength: parseInt(e.target.value) || 0})} className={inputCls} /></div>
-            <div><Label className={`${textSec} text-xs`}>Existing Vendor</Label><Input value={editSchoolForm.existing_vendor || ''} onChange={e => setEditSchoolForm({...editSchoolForm, existing_vendor: e.target.value})} className={inputCls} /></div>
+            <div>
+              <Label className={`${textSec} text-xs`}>Strength (students)</Label>
+              <Input type="number" min="0" value={editSchoolForm.school_strength || ''} onChange={e => setEditSchoolForm({...editSchoolForm, school_strength: e.target.value === '' ? '' : (parseInt(e.target.value) || 0)})} placeholder="e.g. 1200" className={inputCls} data-testid="school-strength-input" />
+            </div>
+            <div>
+              <Label className={`${textSec} text-xs`}>Annual Budget</Label>
+              <select value={editSchoolForm.annual_budget_range || ''} onChange={e => setEditSchoolForm({...editSchoolForm, annual_budget_range: e.target.value})} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`} data-testid="school-budget-select">
+                <option value="">Not set</option>
+                {BUDGET_RANGES.map(b => <option key={b} value={b}>{b}</option>)}
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <Label className={`${textSec} text-xs`}>Existing Vendor</Label>
+            <Input value={editSchoolForm.existing_vendor || ''} onChange={e => setEditSchoolForm({...editSchoolForm, existing_vendor: e.target.value})} placeholder="Current supplier, if any" className={inputCls} />
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -100,7 +141,7 @@ export default function SchoolFormDialog({
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => { onOpenChange(false); setEditSchool(null); }} className="border-[var(--border-color)] text-[var(--text-secondary)]">Cancel</Button>
-          <Button onClick={handleSaveSchool} className="bg-[#e94560] hover:bg-[#f05c75] text-white" data-testid="save-school-button">{editSchool ? 'Update School' : 'Add School'}</Button>
+          <Button onClick={handleValidatedSave} className="bg-[#e94560] hover:bg-[#f05c75] text-white" data-testid="save-school-button">{editSchool ? 'Update School' : 'Add School'}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

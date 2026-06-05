@@ -16,6 +16,20 @@ export const ACTIVE_STAGES = ['new', 'contacted', 'demo', 'quoted', 'negotiation
 
 export const SCHOOL_TYPES = ['CBSE', 'ICSE', 'IB', 'State Board', 'Coaching', 'College'];
 
+// Indian states + union territories — for clean, filterable State data
+export const INDIAN_STATES = [
+  'Andhra Pradesh', 'Arunachal Pradesh', 'Assam', 'Bihar', 'Chhattisgarh', 'Goa',
+  'Gujarat', 'Haryana', 'Himachal Pradesh', 'Jharkhand', 'Karnataka', 'Kerala',
+  'Madhya Pradesh', 'Maharashtra', 'Manipur', 'Meghalaya', 'Mizoram', 'Nagaland',
+  'Odisha', 'Punjab', 'Rajasthan', 'Sikkim', 'Tamil Nadu', 'Telangana', 'Tripura',
+  'Uttar Pradesh', 'Uttarakhand', 'West Bengal',
+  'Andaman & Nicobar Islands', 'Chandigarh', 'Dadra & Nagar Haveli and Daman & Diu',
+  'Delhi', 'Jammu & Kashmir', 'Ladakh', 'Lakshadweep', 'Puducherry',
+];
+
+// Coarse annual-budget bands — a key sales-qualification signal
+export const BUDGET_RANGES = ['< ₹1 Lakh', '₹1–5 Lakh', '₹5–10 Lakh', '₹10–25 Lakh', '₹25 Lakh+'];
+
 export const DESIGNATIONS = ['Principal', 'Admin', 'Trustee', 'Purchase Head', 'Director', 'Other'];
 
 export const LEAD_TYPES = ['hot', 'warm', 'cold'];
