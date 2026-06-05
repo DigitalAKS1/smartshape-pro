@@ -211,6 +211,9 @@ export default function useLeadsCRM() {
 
   const saveLead = async () => {
     if (!leadForm.contact_name || !leadForm.contact_phone) { toast.error('Contact name and phone required'); return; }
+    if (!/^[0-9+\-\s]{7,15}$/.test(leadForm.contact_phone)) { toast.error('Phone looks invalid'); return; }
+    if (leadForm.contact_email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(leadForm.contact_email)) { toast.error('Email looks invalid'); return; }
+    if (!editLead && !addNewSchool && !leadForm.school_id) { toast.error('Select a school or add a new one'); return; }
     try {
       const payload = { ...leadForm };
       if (addNewSchool && newSchool.school_name) {

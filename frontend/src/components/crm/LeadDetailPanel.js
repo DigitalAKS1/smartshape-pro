@@ -48,6 +48,12 @@ export default function LeadDetailPanel({
   const [lostReason, setLostReason] = React.useState('');
   const [lostNote, setLostNote] = React.useState('');
 
+  const OPEN_STAGES = ['new', 'contacted', 'demo', 'quoted', 'negotiation'];
+  const fuOverdue = !!detailLead.next_followup_date &&
+    new Date(detailLead.next_followup_date) < new Date(new Date().toDateString());
+  const noNext = !detailLead.next_followup_date;
+  const needsNextAction = OPEN_STAGES.includes(detailLead.stage) && (fuOverdue || noNext);
+
   // Intercept stage change: moving to "lost" requires a reason
   const handleStageClick = (stageId) => {
     if (stageId === 'lost' && detailLead.stage !== 'lost') {
@@ -149,6 +155,16 @@ export default function LeadDetailPanel({
                 </button>
               ))}
             </div>
+
+            {/* Next-action nudge */}
+            {needsNextAction && (
+              <div className="flex items-center gap-2 text-xs px-3 py-2 rounded-md bg-orange-500/10 border border-orange-500/30 text-orange-400" data-testid="next-action-nudge">
+                <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0" />
+                <span className="flex-1">
+                  {fuOverdue ? 'Follow-up is overdue.' : 'No next step scheduled.'} Set one below to keep this lead moving.
+                </span>
+              </div>
+            )}
 
             {/* Convert to Order */}
             {['negotiation', 'won'].includes(detailLead.stage) && !detailLead.is_locked && (

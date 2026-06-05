@@ -6,6 +6,7 @@ import { Input } from '../ui/input';
 import { Label } from '../ui/label';
 import { useTheme } from '../../contexts/ThemeContext';
 import { useAuth } from '../../contexts/AuthContext';
+import { toast } from 'sonner';
 import { SCHOOL_TYPES } from '../../lib/crmConstants';
 import {
   Upload, Download, FileText, CheckCircle, Building2,
@@ -18,6 +19,7 @@ export default function ContactFormDialog({
   editContact,
   contactForm, setContactForm,
   schoolsList, rolesList, sourcesList, spList, tagsList, designationsList,
+  contactsList = [],
   saveContact,
   // Convert to lead dialog
   convertDialogOpen, setConvertDialogOpen,
@@ -48,6 +50,21 @@ export default function ContactFormDialog({
   const textMuted = 'text-[var(--text-muted)]';
   const dlgCls = isDark ? 'bg-[var(--bg-card)] border-[var(--border-color)] text-[var(--text-primary)]' : 'bg-white border-[var(--border-color)] text-[var(--text-primary)]';
 
+  // Live duplicate detection (new contacts only) — matches on last-10-digit phone
+  const normPhone = (p) => (p || '').replace(/\D/g, '').slice(-10);
+  const typedPhone = normPhone(contactForm.phone);
+  const dupContact = !editContact && typedPhone.length >= 10
+    ? contactsList.find(c => normPhone(c.phone) === typedPhone)
+    : null;
+
+  const handleSaveContact = () => {
+    if (!contactForm.name || !contactForm.name.trim()) { toast.error('Name is required'); return; }
+    if (!contactForm.phone || !contactForm.phone.trim()) { toast.error('Phone is required'); return; }
+    if (!/^[0-9+\-\s]{7,15}$/.test(contactForm.phone)) { toast.error('Phone looks invalid'); return; }
+    if (contactForm.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactForm.email)) { toast.error('Email looks invalid'); return; }
+    saveContact();
+  };
+
   return (
     <>
       {/* CONTACT DIALOG */}
@@ -60,6 +77,16 @@ export default function ContactFormDialog({
               <div><Label className={`${textSec} text-xs`}>Phone *</Label><Input value={contactForm.phone} onChange={e => setContactForm({...contactForm, phone: e.target.value})} className={inputCls} placeholder="+91..." data-testid="contact-phone-input" /></div>
             </div>
             <div><Label className={`${textSec} text-xs`}>Email</Label><Input value={contactForm.email} onChange={e => setContactForm({...contactForm, email: e.target.value})} className={inputCls} placeholder="email@example.com" data-testid="contact-email-input" /></div>
+
+            {dupContact && (
+              <div className="flex items-start gap-2 text-xs px-3 py-2 rounded-md bg-amber-500/10 border border-amber-500/30 text-amber-500" data-testid="contact-dup-warning">
+                <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0 mt-0.5" />
+                <span>
+                  A contact with this phone already exists: <strong>{dupContact.name}</strong>
+                  {dupContact.company ? ` (${dupContact.company})` : ''}. Saving will create a duplicate.
+                </span>
+              </div>
+            )}
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
@@ -158,7 +185,7 @@ export default function ContactFormDialog({
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setContactDialogOpen(false)} className="border-[var(--border-color)] text-[var(--text-secondary)]">Cancel</Button>
-            <Button onClick={saveContact} className="bg-[#e94560] hover:bg-[#f05c75] text-white" data-testid="save-contact-button">{editContact ? 'Update' : 'Add Contact'}</Button>
+            <Button onClick={handleSaveContact} className="bg-[#e94560] hover:bg-[#f05c75] text-white" data-testid="save-contact-button">{editContact ? 'Update' : 'Add Contact'}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

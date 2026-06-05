@@ -89,6 +89,19 @@ export default function SchoolProfile() {
   const { school, leads, contacts, quotations, visits, call_notes, meetings, dispatches, metrics } = profile;
   const rv = (delay = '') => `transition-all duration-500 ease-out ${delay} ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-3'}`;
 
+  // Profile completeness — nudges reps to fill the fields that power scoring & segmentation
+  const PROFILE_FIELDS = [
+    { k: 'phone', label: 'Phone' }, { k: 'email', label: 'Email' },
+    { k: 'address', label: 'Address' }, { k: 'city', label: 'City' },
+    { k: 'state', label: 'State' }, { k: 'website', label: 'Website' },
+    { k: 'primary_contact_name', label: 'Contact' }, { k: 'school_strength', label: 'Strength' },
+    { k: 'annual_budget_range', label: 'Budget' },
+  ];
+  const hasVal = (v) => v !== undefined && v !== null && v !== '' && v !== 0;
+  const missingFields = PROFILE_FIELDS.filter(f => !hasVal(school[f.k]));
+  const completeness = Math.round(((PROFILE_FIELDS.length - missingFields.length) / PROFILE_FIELDS.length) * 100);
+  const complColor = completeness >= 80 ? '#10b981' : completeness >= 50 ? '#f59e0b' : '#ef4444';
+
   return (
     <AdminLayout>
       <style>{`
@@ -133,6 +146,22 @@ export default function SchoolProfile() {
                   <p className={`text-[10px] uppercase tracking-[0.18em] font-semibold ${tk.tm}`}>School Information</p>
                   <button onClick={() => navigate(`/leads?school=${school.school_id}`)}
                     className="text-[10px] text-[#e94560] hover:underline">Edit →</button>
+                </div>
+                {/* Profile completeness */}
+                <div className={`px-5 py-3 border-b ${tk.border}`}>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className={`text-[11px] font-semibold ${tk.t2}`}>Profile completeness</span>
+                    <span className="text-[11px] font-mono font-bold" style={{ color: complColor }}>{completeness}%</span>
+                  </div>
+                  <div className={`h-1.5 rounded-full overflow-hidden ${isDark ? 'bg-[var(--bg-primary)]' : 'bg-[#eef2f7]'}`}>
+                    <div className="h-full rounded-full transition-all" style={{ width: `${completeness}%`, backgroundColor: complColor }} />
+                  </div>
+                  {missingFields.length > 0 && (
+                    <p className={`text-[10px] ${tk.tm} mt-1.5`}>
+                      Missing: {missingFields.map(f => f.label).join(', ')} —{' '}
+                      <button onClick={() => navigate(`/leads?school=${school.school_id}`)} className="text-[#e94560] hover:underline">add now</button>
+                    </p>
+                  )}
                 </div>
                 <div className="px-5 py-1">
                   <InfoRow label="Address"  value={school.address} tm={tk.tm} t2={tk.t2} />

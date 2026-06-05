@@ -934,6 +934,7 @@ export default function LeadsCRM() {
           spList={crm.spList}
           tagsList={crm.tagsList}
           designationsList={crm.designationsList}
+          contactsList={crm.contactsList}
           saveContact={crm.saveContact}
           convertDialogOpen={crm.convertDialogOpen}
           setConvertDialogOpen={crm.setConvertDialogOpen}
