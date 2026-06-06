@@ -143,6 +143,11 @@ async def connect_db():
     await db.goods_receipts.create_index([("status", 1), ("created_at", -1)], background=True)
     await db.procurement_stage_logs.create_index([("doc_type", 1), ("doc_id", 1), ("at", 1)], background=True)
 
+    # ── Certificates ─────────────────────────────────────────────────────────
+    await db.cert_templates.create_index("is_active", background=True)
+    await db.cert_batches.create_index([("created_at", -1)], background=True)
+    await db.cert_items.create_index([("batch_id", 1), ("gen_status", 1)], background=True)
+
     logging.info("Database indexes created/verified (%d collections indexed)", 30)
 
 
