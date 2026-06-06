@@ -4,6 +4,8 @@ import uuid
 
 from database import db
 from auth_utils import get_current_user
+from rbac import get_team
+from routes.crm_routes import create_physical_from_drip
 
 router = APIRouter()
 
@@ -267,6 +269,7 @@ def _normalise_steps(raw_steps: list) -> list:
             "message_type": s.get("message_type", "whatsapp"),
             "message_template": s.get("message_template", ""),
             "message_plain": s.get("message_plain", ""),
+            "material_type": s.get("material_type", ""),
         }
         if s.get("attachment_id"):
             step["attachment_id"] = s["attachment_id"]
@@ -438,3 +441,18 @@ async def cancel_enrollment(enrollment_id: str, request: Request):
         {"$set": {"status": "cancelled", "completed_at": datetime.now(timezone.utc).isoformat()}},
     )
     return {"ok": True}
+
+
+# ── Admin test trigger for physical dispatch helper ────────────────────────────
+
+@router.post("/drip/_test-fire-physical")
+async def _test_fire_physical(request: Request):
+    user = await get_current_user(request)
+    if get_team(user) != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    body = await request.json()
+    lead = await db.leads.find_one({"lead_id": body.get("lead_id")}, {"_id": 0})
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    did = await create_physical_from_drip(lead, body.get("material_type", "brochure"), body.get("seq_name", "drip"))
+    return {"dispatch_id": did}

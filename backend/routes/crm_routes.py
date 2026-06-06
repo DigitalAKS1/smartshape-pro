@@ -94,6 +94,33 @@ async def log_activity(user_email: str, action: str, entity_type: str, entity_id
         pass
 
 
+async def create_physical_from_drip(lead: dict, material_type: str, seq_name: str) -> str:
+    """Queue a physical dispatch + a rep task from a drip step. Returns dispatch_id."""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    dispatch_id = f"pd_{uuid.uuid4().hex[:12]}"
+    await db.physical_dispatches.insert_one({
+        "dispatch_id": dispatch_id,
+        "lead_id": lead.get("lead_id", ""),
+        "lead_name": lead.get("contact_name", ""),
+        "material_type": material_type or "brochure",
+        "description": f"Auto-queued by drip: {seq_name}",
+        "courier_name": "", "tracking_number": "", "sent_date": "",
+        "received_confirmed": False,
+        "auto_from_drip": True, "needs_dispatch": True,
+        "created_by": "system", "created_at": now_iso,
+    })
+    await db.tasks.insert_one({
+        "task_id": f"task_{uuid.uuid4().hex[:10]}",
+        "title": f"Ship {material_type or 'material'} → {lead.get('company_name', '')}",
+        "description": f"Auto-created by drip sequence '{seq_name}'. Add courier + tracking after shipping.",
+        "type": "other", "lead_id": lead.get("lead_id", ""),
+        "assigned_to": lead.get("assigned_to", ""),
+        "due_date": "", "due_time": "", "priority": "medium",
+        "status": "pending", "created_by": "system", "created_at": now_iso,
+    })
+    return dispatch_id
+
+
 import os as _os
 DEMO_WA_DRY_RUN = _os.getenv("DEMO_WA_DRY_RUN", "0") == "1"
 

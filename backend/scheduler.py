@@ -25,7 +25,7 @@ from services.evolution_client import evolution
 from routes.fms_routes import get_fms_settings, render_template, pct_remaining
 from routes.crm_routes import (
     get_crm_settings, compute_attention, resolve_lead_value,
-    _build_quote_map, OPEN_STAGES,
+    _build_quote_map, OPEN_STAGES, create_physical_from_drip,
 )
 
 log = logging.getLogger("scheduler")
@@ -336,7 +336,14 @@ async def run_drip_executor():
             sent = False
             err_detail = ""
 
-            if msg_type == "whatsapp" and wa_cfg:
+            if msg_type == "physical_material":
+                try:
+                    await create_physical_from_drip(lead, step.get("material_type", "brochure"), seq.get("name", "drip"))
+                    sent = True
+                except Exception as e:
+                    err_detail = str(e)[:200]
+
+            elif msg_type == "whatsapp" and wa_cfg:
                 phone = lead.get("contact_phone", "")
                 if phone:
                     try:
