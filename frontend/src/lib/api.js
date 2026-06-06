@@ -802,6 +802,8 @@ export const procurement = {
   },
   // Unified item catalog (dies + purchase_items) for the image picker
   itemCatalog: (params = {}) => API.get('/procurement/item-catalog', { params }),
+  // Dashboard KPIs
+  summary: () => API.get('/procurement/summary'),
   // Vendor price list
   vendorItems: {
     getAll: (params = {}) => API.get('/vendor-items', { params }),
@@ -836,6 +838,7 @@ export const procurement = {
     approve: (id) => API.post(`/purchase-orders/${id}/approve`),
     send: (id) => API.post(`/purchase-orders/${id}/send`),
     cancel: (id) => API.post(`/purchase-orders/${id}/cancel`),
+    close: (id) => API.post(`/purchase-orders/${id}/close`),
     pdfUrl: (id) => `${process.env.REACT_APP_BACKEND_URL}/api/purchase-orders/${id}/pdf`,
     downloadPdf: (id, poNo) => downloadFile(`/purchase-orders/${id}/pdf`, `${poNo || 'PO'}.pdf`),
     receive: (id) => API.post(`/purchase-orders/${id}/receive`),

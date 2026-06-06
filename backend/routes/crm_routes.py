@@ -123,6 +123,33 @@ async def _send_demo_wa(phone: str, message: str) -> bool:
         return False
 
 
+INTRO_WA_DRY_RUN = _os.getenv("INTRO_WA_DRY_RUN", "0") == "1"
+
+async def _send_intro_wa(phone: str, message: str) -> bool:
+    if not phone or not message:
+        return False
+    if INTRO_WA_DRY_RUN:
+        import logging as _log
+        _log.getLogger("crm").info(f"[intro][dry] WA -> {phone}: {message[:60]}")
+        return True
+    wa = await db.settings.find_one({"type": "whatsapp"}, {"_id": 0})
+    if not wa or not wa.get("username"):
+        return False
+    import httpx as _httpx
+    try:
+        async with _httpx.AsyncClient(timeout=15) as client:
+            await client.post("https://app.messageautosender.com/message/new", data={
+                "username": wa["username"], "password": wa["password"],
+                "receiverMobileNo": phone, "message": message})
+        await db.whatsapp_logs.insert_one({
+            "log_id": f"wal_{uuid.uuid4().hex[:10]}", "phone": phone, "body": message,
+            "send_mode": "lead_intro", "status": "sent", "sent_by": "system",
+            "sent_at": datetime.now(timezone.utc).isoformat()})
+        return True
+    except Exception:
+        return False
+
+
 def calc_lead_score(lead, school=None):
     score = 0
     if school and school.get("school_strength", 0) > 1000:
@@ -1261,6 +1288,9 @@ async def convert_contact_to_lead(contact_id: str, request: Request):
     }})
     if school_id:
         await touch_last_activity("school", school_id)
+    intro = (body.get("intro_message") or "").strip()
+    if intro:
+        await _send_intro_wa(lead_doc.get("contact_phone", ""), intro)
     return await db.leads.find_one({"lead_id": lead_id}, {"_id": 0})
 
 
