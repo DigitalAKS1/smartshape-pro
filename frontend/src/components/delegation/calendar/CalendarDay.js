@@ -9,7 +9,7 @@ const isDone = (e) => ['completed', 'verified', 'done'].includes(e.status);
 
 export default function CalendarDay({
   date, events, onEventClick, onAddBlock, onEditBlock, onDropItem, onMoveBlock,
-  card, textPri, textSec, textMuted,
+  card, textPri, textSec, textMuted, readOnly,
 }) {
   const timed = events.filter(e => e.start_time);
   const unscheduled = events.filter(e => !e.start_time);
@@ -19,6 +19,7 @@ export default function CalendarDay({
 
   const handleDrop = (h) => (ev) => {
     ev.preventDefault();
+    if (readOnly) return;
     const raw = ev.dataTransfer.getData('text/plain');
     if (!raw) return;
     try {
@@ -36,7 +37,7 @@ export default function CalendarDay({
           <p className={`text-[10px] font-semibold uppercase tracking-wide mb-2 ${textMuted}`}>Unscheduled · drag onto an hour to plan</p>
           <div className="flex flex-wrap gap-1.5">
             {unscheduled.map(e => (
-              <button key={e.event_id} draggable onDragStart={dragStart({ kind: 'item', event: e })}
+              <button key={e.event_id} draggable={!readOnly} onDragStart={dragStart({ kind: 'item', event: e })}
                 onClick={() => onEventClick?.(e)}
                 className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs border border-[var(--border-color)] cursor-grab active:cursor-grabbing ${isDone(e) ? 'opacity-50 line-through' : ''}`}
                 style={{ background: e.color + '14' }}>
@@ -57,7 +58,7 @@ export default function CalendarDay({
               {eventsAtHour(h).map(e => {
                 const isBlock = e.source === 'plan';
                 return (
-                  <div key={e.event_id} draggable={isBlock} onDragStart={isBlock ? dragStart({ kind: 'block', id: e.entity_id }) : undefined}
+                  <div key={e.event_id} draggable={isBlock && !readOnly} onDragStart={isBlock && !readOnly ? dragStart({ kind: 'block', id: e.entity_id }) : undefined}
                     onClick={() => isBlock ? onEditBlock?.(e) : onEventClick?.(e)}
                     className={`rounded-lg px-2.5 py-1.5 text-xs cursor-pointer flex items-center gap-2 ${isBlock ? 'cursor-grab active:cursor-grabbing' : ''} ${isDone(e) ? 'opacity-50 line-through' : ''}`}
                     style={{ background: e.color + '1f', borderLeft: `3px solid ${e.color}` }}>
@@ -67,10 +68,12 @@ export default function CalendarDay({
                   </div>
                 );
               })}
-              <button onClick={() => onAddBlock?.(hhmm(h))}
-                className={`absolute right-1.5 top-1.5 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded ${textMuted} hover:bg-[var(--bg-hover)]`} title="Add block">
-                <Plus className="h-3.5 w-3.5" />
-              </button>
+              {!readOnly && (
+                <button onClick={() => onAddBlock?.(hhmm(h))}
+                  className={`absolute right-1.5 top-1.5 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded ${textMuted} hover:bg-[var(--bg-hover)]`} title="Add block">
+                  <Plus className="h-3.5 w-3.5" />
+                </button>
+              )}
             </div>
           </div>
         ))}

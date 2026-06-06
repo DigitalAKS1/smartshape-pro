@@ -21,6 +21,25 @@ export function useDelegationCalendar() {
   const [hidden, setHidden] = useState(new Set());         // hidden source keys
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [teamOptions, setTeamOptions] = useState([]);
+  const [canViewTeam, setCanViewTeam] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const ctx = (await delApi.myContext()).data || {};
+        const roles = ctx.roles || [];
+        if (roles.includes('boss')) {
+          const emps = (await delApi.employees.list()).data || [];
+          setTeamOptions(emps.map(e => ({ emp_id: e.emp_id, name: e.name })));
+          setCanViewTeam(true);
+        } else if (roles.includes('delegator') && (ctx.target_employees || []).length) {
+          setTeamOptions(ctx.target_employees.map(e => ({ emp_id: e.emp_id, name: e.name })));
+          setCanViewTeam(true);
+        }
+      } catch { /* not linked / no team */ }
+    })();
+  }, []);
 
   const range = useMemo(() => {
     if (view === 'month') {
@@ -135,6 +154,7 @@ export function useDelegationCalendar() {
   return {
     view, setView, cursor, setCursor, range,
     subjectEmp, setSubjectEmp,
+    teamOptions, canViewTeam,
     hidden, toggleSource, ALL_SOURCES,
     events, visibleEvents, eventsByDate, loading, reload: load,
     goPrev, goNext, goToday,

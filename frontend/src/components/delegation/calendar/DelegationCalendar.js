@@ -32,18 +32,26 @@ export default function DelegationCalendar({ onEventClick, card, textPri, textSe
 
   return (
     <div className="space-y-3">
+      <style>{`@keyframes calReveal{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}} .cal-reveal{animation:calReveal .2s ease both}`}</style>
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-1.5">
           <button onClick={c.goPrev} className={`p-2 rounded-lg hover:bg-[var(--bg-hover)] ${textSec}`}><ChevronLeft className="h-4 w-4" /></button>
           <button onClick={c.goToday} className={`px-3 py-1.5 rounded-lg text-xs font-medium border border-[var(--border-color)] ${textSec} hover:bg-[var(--bg-hover)]`}>Today</button>
           <button onClick={c.goNext} className={`p-2 rounded-lg hover:bg-[var(--bg-hover)] ${textSec}`}><ChevronRight className="h-4 w-4" /></button>
-          <h2 className={`text-base font-semibold ${textPri} ml-2`}>
+          <h2 className={`text-base font-bold tracking-tight ${textPri} ml-2`}>
             {c.view === 'month' ? monthLabel
               : c.view === 'week' ? `Week of ${c.range.from}`
               : new Date(c.range.from + 'T00:00:00').toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}
           </h2>
         </div>
         <div className="flex items-center gap-2">
+          {c.canViewTeam && (
+            <select value={c.subjectEmp} onChange={(e) => c.setSubjectEmp(e.target.value)}
+              className={`h-9 px-2.5 rounded-lg text-xs border border-[var(--border-color)] ${inputCls}`}>
+              <option value="">My calendar</option>
+              {c.teamOptions.map(o => <option key={o.emp_id} value={o.emp_id}>{o.name}</option>)}
+            </select>
+          )}
           <div className={`${card} border rounded-xl p-1 flex gap-0.5`}>
             {['month', 'week', 'day'].map(v => (
               <button key={v} onClick={() => c.setView(v)}
@@ -51,7 +59,7 @@ export default function DelegationCalendar({ onEventClick, card, textPri, textSe
                 style={c.view === v ? { background: PINK } : {}}>{v}</button>
             ))}
           </div>
-          {c.view === 'day' && (
+          {c.view === 'day' && !c.subjectEmp && (
             <button onClick={() => setBlockDialog({ start: '09:00' })}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-white" style={{ background: PINK }}>
               <Plus className="h-3.5 w-3.5" /> Block
@@ -59,6 +67,13 @@ export default function DelegationCalendar({ onEventClick, card, textPri, textSe
           )}
         </div>
       </div>
+
+      {c.subjectEmp && (
+        <div className="px-3 py-1.5 rounded-lg text-xs flex items-center gap-2"
+          style={{ background: '#e9456012', color: '#e94560' }}>
+          Viewing {(c.teamOptions.find(o => o.emp_id === c.subjectEmp) || {}).name || 'team member'}'s calendar (read-only).
+        </div>
+      )}
 
       <div className="flex flex-wrap gap-1.5">
         {c.ALL_SOURCES.map(s => {
@@ -80,32 +95,35 @@ export default function DelegationCalendar({ onEventClick, card, textPri, textSe
         </div>
       )}
 
-      {!c.loading && c.view === 'month' && (
-        <CalendarMonth cursor={c.cursor} eventsByDate={c.eventsByDate}
-          onDayClick={(d) => { c.setCursor(d); c.setView('day'); }}
-          helpers={c.helpers} card={card} textPri={textPri} textSec={textSec} textMuted={textMuted} />
-      )}
-      {!c.loading && c.view === 'week' && (
-        <AgendaList dates={rangeDates()} eventsByDate={c.eventsByDate}
-          onEventClick={(e) => e.source === 'plan' ? setBlockDialog({ block: e }) : setSelectedEvent(e)} card={card} textPri={textPri} textSec={textSec} textMuted={textMuted} />
-      )}
-      {!c.loading && c.view === 'day' && (
-        <CalendarDay
-          date={c.range.from} events={c.eventsByDate[c.range.from] || []}
-          onEventClick={(e) => setSelectedEvent(e)}
-          onAddBlock={(start) => setBlockDialog({ start })}
-          onEditBlock={(e) => setBlockDialog({ block: e })}
-          onDropItem={(ev, start) => c.scheduleItem(ev, c.range.from, start)}
-          onMoveBlock={(id, start) => {
-            const endHH = String(Math.min(23, parseInt(start.slice(0,2),10) + 1)).padStart(2,'0');
-            c.updateBlock(id, { start_time: start, end_time: `${endHH}:00` });
-          }}
-          card={card} textPri={textPri} textSec={textSec} textMuted={textMuted} />
-      )}
+      <div key={c.view + c.range.from} className="cal-reveal">
+        {!c.loading && c.view === 'month' && (
+          <CalendarMonth cursor={c.cursor} eventsByDate={c.eventsByDate}
+            onDayClick={(d) => { c.setCursor(d); c.setView('day'); }}
+            helpers={c.helpers} card={card} textPri={textPri} textSec={textSec} textMuted={textMuted} />
+        )}
+        {!c.loading && c.view === 'week' && (
+          <AgendaList dates={rangeDates()} eventsByDate={c.eventsByDate}
+            onEventClick={(e) => e.source === 'plan' ? setBlockDialog({ block: e }) : setSelectedEvent(e)} card={card} textPri={textPri} textSec={textSec} textMuted={textMuted} />
+        )}
+        {!c.loading && c.view === 'day' && (
+          <CalendarDay
+            date={c.range.from} events={c.eventsByDate[c.range.from] || []}
+            onEventClick={(e) => setSelectedEvent(e)}
+            onAddBlock={(start) => setBlockDialog({ start })}
+            onEditBlock={(e) => setBlockDialog({ block: e })}
+            onDropItem={(ev, start) => c.scheduleItem(ev, c.range.from, start)}
+            onMoveBlock={(id, start) => {
+              const endHH = String(Math.min(23, parseInt(start.slice(0,2),10) + 1)).padStart(2,'0');
+              c.updateBlock(id, { start_time: start, end_time: `${endHH}:00` });
+            }}
+            readOnly={!!c.subjectEmp}
+            card={card} textPri={textPri} textSec={textSec} textMuted={textMuted} />
+        )}
 
-      {c.view === 'month' && (
-        <p className={`text-[11px] ${textMuted} text-center`}>Tip: click a day to open it.</p>
-      )}
+        {c.view === 'month' && (
+          <p className={`text-[11px] ${textMuted} text-center`}>Tip: click a day to open it.</p>
+        )}
+      </div>
 
       {blockDialog && (
         <DayPlanBlockDialog
