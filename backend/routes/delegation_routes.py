@@ -1248,6 +1248,119 @@ async def _agenda_delegation(emp_id, dfrom, dto):
     return out
 
 
+async def _agenda_fms(team, dfrom, dto):
+    # FMS stages are team-scoped (no per-person owner). plan_done is an ISO datetime.
+    q = {"plan_done": {"$gte": dfrom, "$lte": dto + "T23:59:59"}}
+    stages = await db.fms_stages.find(q, {"_id": 0}).to_list(2000)
+    if team and team != "admin":
+        stages = [s for s in stages if s.get("team") in (team, None, "")]
+    flow_ids = list({s["flow_id"] for s in stages if s.get("flow_id")})
+    flows = await db.fms_flows.find(
+        {"flow_id": {"$in": flow_ids}}, {"_id": 0, "flow_id": 1, "title": 1, "customer_name": 1}
+    ).to_list(500)
+    fmap = {f["flow_id"]: f for f in flows}
+    out = []
+    for s in stages:
+        pd = s.get("plan_done") or ""
+        d, t = (pd[:10], pd[11:16]) if len(pd) >= 16 else (pd[:10], None)
+        flow = fmap.get(s.get("flow_id"), {})
+        label = s.get("label") or s.get("stage_label") or "Stage"
+        acts = ["complete_stage", "open"] if s.get("status") != "done" else ["open"]
+        out.append(_ev(
+            "fms", "fms_stage", f"{label} — {flow.get('title', '')}".strip(" —"),
+            d, s.get("stage_id", ""), "/flow-management",
+            start_time=t, status=s.get("status"), actions=acts,
+            meta={"flow_id": s.get("flow_id"), "customer_name": flow.get("customer_name", ""),
+                  "tat_status": s.get("tat_status", "")},
+        ))
+    return out
+
+
+async def _agenda_visits(email, dfrom, dto):
+    if not email:
+        return []
+    rows = await db.visit_plans.find(
+        {"assigned_to": email, "visit_date": {"$gte": dfrom, "$lte": dto}}, {"_id": 0}
+    ).to_list(2000)
+    out = []
+    for r in rows:
+        st = r.get("status")
+        acts = ["open"]
+        if st in (None, "", "planned"):
+            acts = ["checkin", "reschedule", "open"]
+        elif st == "checked_in":
+            acts = ["checkout", "open"]
+        out.append(_ev(
+            "visit", "visit", r.get("school_name") or "Visit", r["visit_date"],
+            r.get("plan_id", ""), "/visit-planning",
+            start_time=(r.get("visit_time") or None), status=st, actions=acts,
+            meta={"school_id": r.get("school_id", ""), "assigned_name": r.get("assigned_name", "")},
+        ))
+    return out
+
+
+async def _agenda_crm_tasks(email, dfrom, dto):
+    if not email:
+        return []
+    rows = await db.tasks.find(
+        {"assigned_to": email, "due_date": {"$gte": dfrom, "$lte": dto}}, {"_id": 0}
+    ).to_list(2000)
+    out = []
+    for r in rows:
+        done = r.get("status") in ("done", "completed")
+        acts = ["open"] if done else ["complete", "reschedule", "open"]
+        out.append(_ev(
+            "task", "my_task", r.get("title") or "Task", r["due_date"],
+            r.get("task_id", ""), "/leads",
+            start_time=(r.get("due_time") or None), status=r.get("status"),
+            priority=r.get("priority"), actions=acts,
+            meta={"lead_id": r.get("lead_id", ""), "lead_name": r.get("lead_name", "")},
+        ))
+    return out
+
+
+async def _agenda_followups(email, dfrom, dto):
+    if not email:
+        return []
+    rows = await db.followups.find(
+        {"assigned_to": email, "followup_date": {"$gte": dfrom, "$lte": dto}}, {"_id": 0}
+    ).to_list(2000)
+    out = []
+    for r in rows:
+        ftype = r.get("followup_type") or "call"   # call|meeting|demo
+        done = r.get("status") in ("done", "completed")
+        acts = ["open"] if done else ["log_outcome", "reschedule", "open"]
+        out.append(_ev(
+            "followup", ftype, f"{ftype.title()} · {r.get('lead_name', '') or r.get('lead_id', '')}".strip(" ·"),
+            r["followup_date"], r.get("followup_id", ""), "/leads",
+            start_time=(r.get("followup_time") or None), status=r.get("status"), actions=acts,
+            meta={"lead_id": r.get("lead_id", ""), "outcome": r.get("outcome", "")},
+        ))
+    return out
+
+
+async def _agenda_workshops(dfrom, dto):
+    # org-wide; platform zoom/meet/physical
+    rows = await db.training_sessions.find(
+        {"date": {"$gte": dfrom, "$lte": dto}}, {"_id": 0}
+    ).to_list(1000)
+    out = []
+    for r in rows:
+        platform = r.get("platform", "zoom")
+        type_ = "physical_workshop" if platform == "physical" else "zoom_workshop"
+        acts = ["open"]
+        if r.get("meeting_link"):
+            acts = ["join", "set_status", "open"]
+        out.append(_ev(
+            "workshop", type_, r.get("title") or "Workshop", r.get("date", ""),
+            r.get("session_id", ""), "/leads",
+            start_time=(r.get("time") or None), status=r.get("status"), actions=acts,
+            meta={"platform": platform, "meeting_link": r.get("meeting_link", ""),
+                  "location": r.get("location", ""), "org_wide": True},
+        ))
+    return out
+
+
 @router.get("/agenda")
 async def get_agenda(request: Request):
     from_ = request.query_params.get("from")
@@ -1274,7 +1387,22 @@ async def get_agenda(request: Request):
 
     events = []
     events += await _agenda_delegation(s_emp, from_, to_)
-    # (further sources added in a later task)
+    events += await _agenda_fms(s_team, from_, to_)
+    events += await _agenda_visits(s_email, from_, to_)
+    events += await _agenda_crm_tasks(s_email, from_, to_)
+    events += await _agenda_followups(s_email, from_, to_)
+    events += await _agenda_workshops(from_, to_)
+    if is_self:
+        blocks = await db.del_plan_blocks.find(
+            {"emp_id": s_emp, "date": {"$gte": from_, "$lte": to_}}, {"_id": 0}
+        ).to_list(500)
+        for b in blocks:
+            events.append(_ev(
+                "plan", "plan_block", b.get("title"), b["date"], b["block_id"], "/delegation",
+                start_time=b.get("start_time") or None, end_time=b.get("end_time") or None,
+                actions=["edit", "delete"], meta={"note": b.get("note", ""),
+                                                  "linked_event_id": b.get("linked_event_id", "")},
+            ))
 
     return {"from": from_, "to": to_, "subject_emp_id": s_emp, "is_self": is_self,
             "subject_team": s_team, "events": events}
