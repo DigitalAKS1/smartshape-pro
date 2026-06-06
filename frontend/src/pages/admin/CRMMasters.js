@@ -29,6 +29,25 @@ const textSec   = 'text-[var(--text-secondary)]';
 const textMuted = 'text-[var(--text-muted)]';
 const dlgCls    = 'bg-[var(--bg-card)] border-[var(--border-color)] text-[var(--text-primary)]';
 
+// Accent-tinted count pill shown beside a master's title.
+const CountPill = ({ n }) => (
+  <span className="inline-flex items-center justify-center min-w-[1.5rem] h-6 px-2 rounded-full text-xs font-semibold bg-[var(--accent-bg)] text-[#e94560]">{n}</span>
+);
+
+// Crafted empty state for name-only master tabs — icon chip + headline + subtext.
+const MasterEmpty = ({ icon: Icon, title, sub }) => (
+  <div className="col-span-full flex flex-col items-center text-center py-12 px-4">
+    <div className="w-14 h-14 rounded-2xl bg-[var(--accent-bg)] flex items-center justify-center mb-3.5">
+      <Icon className="h-6 w-6 text-[#e94560]" />
+    </div>
+    <p className={`text-sm font-semibold ${textPri}`}>{title}</p>
+    <p className={`text-xs ${textMuted} mt-1 max-w-xs leading-relaxed`}>{sub}</p>
+  </div>
+);
+
+// Shared classes for the interactive name chips (hover = crimson affordance + lift).
+const chipCls = `flex items-center justify-between ${card} border rounded-md p-2.5 transition-all hover:border-[#e94560]/40 hover:shadow-[var(--shadow-sm)]`;
+
 export default function CRMMasters() {
   const [activeTab, setActiveTab] = useState('groups');
   const m = useCRMMasters();
@@ -142,7 +161,7 @@ export default function CRMMasters() {
       <div className="max-w-5xl mx-auto space-y-5">
         <div>
           <h1 className={`text-3xl sm:text-4xl font-semibold ${textPri} tracking-tight`} data-testid="crm-masters-title">CRM Masters</h1>
-          <p className={`${textSec} mt-1 text-sm`}>Manage Groups, Sources, and Contact Roles used across CRM dropdowns.</p>
+          <p className={`${textSec} mt-1 text-sm`}>Manage the shared lists — groups, sources, roles, products, tags — that power every CRM dropdown and the lead pipeline.</p>
         </div>
 
         {/* Tabs */}
@@ -160,7 +179,7 @@ export default function CRMMasters() {
         {activeTab === 'groups' && (
           <div className={`${card} border rounded-md p-5`}>
             <div className="flex items-center justify-between mb-4">
-              <h2 className={`text-lg font-medium ${textPri}`}>Groups ({m.groupsList.length})</h2>
+              <h2 className={`text-lg font-medium ${textPri} flex items-center gap-2`}>Groups <CountPill n={m.groupsList.length} /></h2>
               <Button onClick={m.openNewGroup} size="sm" className="bg-[#e94560] hover:bg-[#f05c75] text-white" data-testid="add-group-btn">
                 <Plus className="mr-1 h-3 w-3" /> Add Group
               </Button>
@@ -181,14 +200,14 @@ export default function CRMMasters() {
         {activeTab === 'sources' && (
           <div className={`${card} border rounded-md p-5`}>
             <div className="flex items-center justify-between mb-4">
-              <h2 className={`text-lg font-medium ${textPri}`}>Sources ({m.sourcesList.length})</h2>
+              <h2 className={`text-lg font-medium ${textPri} flex items-center gap-2`}>Sources <CountPill n={m.sourcesList.length} /></h2>
               <Button onClick={m.openNewSrc} size="sm" className="bg-[#e94560] hover:bg-[#f05c75] text-white" data-testid="add-source-btn">
                 <Plus className="mr-1 h-3 w-3" /> Add Source
               </Button>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
               {m.sourcesList.map(s => (
-                <div key={s.source_id} className={`flex items-center justify-between ${card} border rounded-md p-2.5`} data-testid={`source-row-${s.source_id}`}>
+                <div key={s.source_id} className={chipCls} data-testid={`source-row-${s.source_id}`}>
                   <span className={`${textPri} text-sm`}>{s.name}</span>
                   <div className="flex">
                     <Button size="sm" variant="ghost" onClick={() => m.openEditSrc(s)} className={`${textSec} h-7 px-1.5`} data-testid={`edit-source-${s.source_id}`}><Edit2 className="h-3 w-3" /></Button>
@@ -196,7 +215,7 @@ export default function CRMMasters() {
                   </div>
                 </div>
               ))}
-              {m.sourcesList.length === 0 && <p className={`text-xs ${textMuted} col-span-full text-center py-6`}>No sources yet</p>}
+              {m.sourcesList.length === 0 && <MasterEmpty icon={Tag} title="No sources yet" sub="Add where your leads come from — Call, Exhibition, Website, Referral — to track and filter by channel." />}
             </div>
           </div>
         )}
@@ -205,14 +224,14 @@ export default function CRMMasters() {
         {activeTab === 'roles' && (
           <div className={`${card} border rounded-md p-5`}>
             <div className="flex items-center justify-between mb-4">
-              <h2 className={`text-lg font-medium ${textPri}`}>Contact Roles ({m.rolesList.length})</h2>
+              <h2 className={`text-lg font-medium ${textPri} flex items-center gap-2`}>Contact Roles <CountPill n={m.rolesList.length} /></h2>
               <Button onClick={m.openNewRole} size="sm" className="bg-[#e94560] hover:bg-[#f05c75] text-white" data-testid="add-role-btn">
                 <Plus className="mr-1 h-3 w-3" /> Add Role
               </Button>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
               {m.rolesList.map(r => (
-                <div key={r.role_id} className={`flex items-center justify-between ${card} border rounded-md p-2.5`} data-testid={`role-row-${r.role_id}`}>
+                <div key={r.role_id} className={chipCls} data-testid={`role-row-${r.role_id}`}>
                   <span className={`${textPri} text-sm`}>{r.name}</span>
                   <div className="flex">
                     <Button size="sm" variant="ghost" onClick={() => m.openEditRole(r)} className={`${textSec} h-7 px-1.5`} data-testid={`edit-role-${r.role_id}`}><Edit2 className="h-3 w-3" /></Button>
@@ -220,7 +239,7 @@ export default function CRMMasters() {
                   </div>
                 </div>
               ))}
-              {m.rolesList.length === 0 && <p className={`text-xs ${textMuted} col-span-full text-center py-6`}>No roles yet</p>}
+              {m.rolesList.length === 0 && <MasterEmpty icon={UserCheck} title="No contact roles yet" sub="Add the role taxonomy for school contacts — Principal, Trustee, Director — used across CRM forms." />}
             </div>
           </div>
         )}
@@ -230,7 +249,7 @@ export default function CRMMasters() {
           <div className={`${card} border rounded-md p-5`}>
             <div className="flex items-center justify-between mb-4">
               <div>
-                <h2 className={`text-lg font-medium ${textPri}`}>Designation Master ({m.designationsList.length})</h2>
+                <h2 className={`text-lg font-medium ${textPri} flex items-center gap-2`}>Designation Master <CountPill n={m.designationsList.length} /></h2>
                 <p className={`text-xs ${textMuted} mt-0.5`}>Job titles used in contact forms — CEO, Principal, Coordinator, etc.</p>
               </div>
               <Button onClick={m.openNewDes} size="sm" className="bg-[#e94560] hover:bg-[#f05c75] text-white">
@@ -253,14 +272,14 @@ export default function CRMMasters() {
           <div className="space-y-4">
             <div className={`${card} border rounded-md p-5`}>
               <div className="flex items-center justify-between mb-4">
-                <h2 className={`text-lg font-medium ${textPri}`}>Tags ({m.tagsList.length})</h2>
+                <h2 className={`text-lg font-medium ${textPri} flex items-center gap-2`}>Tags <CountPill n={m.tagsList.length} /></h2>
                 <Button onClick={m.openNewTag} size="sm" className="bg-[#e94560] hover:bg-[#f05c75] text-white" data-testid="add-tag-btn">
                   <Plus className="mr-1 h-3 w-3" /> Add Tag
                 </Button>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
                 {m.tagsList.map(t => (
-                  <div key={t.tag_id} className={`flex items-center justify-between ${card} border rounded-md p-2.5`} data-testid={`tag-row-${t.tag_id}`}>
+                  <div key={t.tag_id} className={chipCls} data-testid={`tag-row-${t.tag_id}`}>
                     <div className="flex items-center gap-2">
                       <span className="w-3.5 h-3.5 rounded-full flex-shrink-0" style={{ backgroundColor: t.color }} />
                       <span className={`${textPri} text-sm`}>{t.name}</span>
@@ -271,7 +290,7 @@ export default function CRMMasters() {
                     </div>
                   </div>
                 ))}
-                {m.tagsList.length === 0 && <p className={`text-xs ${textMuted} col-span-full text-center py-6`}>No tags yet — create one to start segmenting leads</p>}
+                {m.tagsList.length === 0 && <MasterEmpty icon={Tag} title="No tags yet" sub="Create color-coded tags to segment leads and run targeted WhatsApp / email campaigns." />}
               </div>
             </div>
 
@@ -377,7 +396,7 @@ export default function CRMMasters() {
         {activeTab === 'schooltypes' && (
           <div className={`${card} border rounded-md p-5`}>
             <div className="flex items-center justify-between mb-4 gap-2">
-              <h2 className={`text-lg font-medium ${textPri}`}>School Types ({stList.length})</h2>
+              <h2 className={`text-lg font-medium ${textPri} flex items-center gap-2`}>School Types <CountPill n={stList.length} /></h2>
               <div className="flex gap-2">
                 <Input value={newType} onChange={e => setNewType(e.target.value)}
                   onKeyDown={e => { if (e.key === 'Enter') addType(); }}
@@ -389,14 +408,14 @@ export default function CRMMasters() {
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
               {stList.map(t => (
-                <div key={t.type_id} className={`flex items-center justify-between ${card} border rounded-md p-2.5`} data-testid={`school-type-row-${t.type_id}`}>
+                <div key={t.type_id} className={chipCls} data-testid={`school-type-row-${t.type_id}`}>
                   <span className={`${textPri} text-sm`}>{t.name}</span>
                   <Button size="sm" variant="ghost" onClick={() => deleteType(t)} className="text-red-400 h-7 px-1.5" data-testid={`delete-school-type-${t.type_id}`}>
                     <Trash2 className="h-3 w-3" />
                   </Button>
                 </div>
               ))}
-              {stList.length === 0 && <p className={`text-xs ${textMuted} col-span-full text-center py-6`}>No school types yet — add one above (e.g. Cambridge)</p>}
+              {stList.length === 0 && <MasterEmpty icon={Building2} title="No school types yet" sub="Add a board or type above (e.g. Cambridge) — it'll appear in every school form's dropdown." />}
             </div>
           </div>
         )}
@@ -405,7 +424,7 @@ export default function CRMMasters() {
         {activeTab === 'products' && (
           <div className={`${card} border rounded-md p-5`}>
             <div className="flex items-center justify-between mb-4 gap-2">
-              <h2 className={`text-lg font-medium ${textPri}`}>Interested Products ({ipList.length})</h2>
+              <h2 className={`text-lg font-medium ${textPri} flex items-center gap-2`}>Interested Products <CountPill n={ipList.length} /></h2>
               <div className="flex gap-2">
                 <Input value={newProduct} onChange={e => setNewProduct(e.target.value)}
                   onKeyDown={e => { if (e.key === 'Enter') addProduct(); }}
@@ -418,14 +437,14 @@ export default function CRMMasters() {
             <p className={`text-xs ${textMuted} mb-3`}>Packages (from Package Master) are always the primary options on lead forms — these are the extra "Individual / Other" entries reps have typed in. Delete duplicates or typos to keep the dropdown clean.</p>
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
               {ipList.map(p => (
-                <div key={p.product_id} className={`flex items-center justify-between ${card} border rounded-md p-2.5`} data-testid={`interested-product-row-${p.product_id}`}>
+                <div key={p.product_id} className={chipCls} data-testid={`interested-product-row-${p.product_id}`}>
                   <span className={`${textPri} text-sm`}>{p.name}</span>
                   <Button size="sm" variant="ghost" onClick={() => deleteProduct(p)} className="text-red-400 h-7 px-1.5" data-testid={`delete-interested-product-${p.product_id}`}>
                     <Trash2 className="h-3 w-3" />
                   </Button>
                 </div>
               ))}
-              {ipList.length === 0 && <p className={`text-xs ${textMuted} col-span-full text-center py-6`}>No custom products yet — these auto-appear as reps pick "Individual / Other…" on lead forms.</p>}
+              {ipList.length === 0 && <MasterEmpty icon={Package} title="No custom products yet" sub={'These build up automatically as reps pick "Individual / Other…" on lead forms. Packages stay the primary options.'} />}
             </div>
           </div>
         )}

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { ChevronLeft } from 'lucide-react';
 import { Input } from '../ui/input';
 import { Button } from '../ui/button';
 import { Label } from '../ui/label';
@@ -37,18 +38,24 @@ export default function InterestedProductField({ value, onChange, label = 'Inter
     <div>
       <Label className={labelClass}>{label}</Label>
       {customMode ? (
-        <div className="flex gap-1.5">
-          <Input value={value || ''} onChange={e => onChange(e.target.value)} onBlur={persistCustom}
-            placeholder="Type product / package name" autoFocus className={inputCls} data-testid="ip-custom" />
-          <Button type="button" variant="outline" onClick={() => { setCustomMode(false); onChange(''); }}
-            className="border-[var(--border-color)] text-[var(--text-secondary)] whitespace-nowrap" title="Back to list">List</Button>
+        <div>
+          <div className="flex gap-1.5">
+            <Input value={value || ''} onChange={e => onChange(e.target.value)} onBlur={persistCustom}
+              placeholder="Type a one-off product name" autoFocus className={inputCls} data-testid="ip-custom" />
+            <Button type="button" variant="outline" onClick={() => { setCustomMode(false); onChange(''); }}
+              className="border-[var(--border-color)] text-[var(--text-secondary)] hover:text-[#e94560] hover:border-[#e94560]/40 px-2.5 shrink-0"
+              title="Back to package list" aria-label="Back to package list" data-testid="ip-back">
+              <ChevronLeft className="h-4 w-4" />
+            </Button>
+          </div>
+          <p className="text-[10px] text-[var(--text-muted)] mt-1">Saved to your product list for next time.</p>
         </div>
       ) : (
         <select value={value || ''} onChange={e => {
             if (e.target.value === '__custom__') { setCustomMode(true); onChange(''); }
             else onChange(e.target.value);
           }} className={selCls} data-testid="ip-select">
-          <option value="">Select…</option>
+          <option value="">Select a package…</option>
           {packagesList.length > 0 && (
             <optgroup label="Our Packages">
               {packagesList.map(p => <option key={p.package_id} value={pkgName(p)}>{pkgName(p)}</option>)}
