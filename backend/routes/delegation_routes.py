@@ -1091,3 +1091,90 @@ async def get_report(
         "by_employee": [{"name": k, **v} for k, v in by_emp.items()],
         "instances": items,
     }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PERSONAL DAY-PLAN BLOCKS  (private to each user)
+# ══════════════════════════════════════════════════════════════════════════════
+
+PLAN_BLOCK_FIELDS = ("date", "start_time", "end_time", "title", "note", "color", "linked_event_id")
+
+
+@router.get("/plan-blocks")
+async def list_plan_blocks(request: Request, date: Optional[str] = None,
+                           date_from: Optional[str] = None, date_to: Optional[str] = None):
+    user = await get_current_user(request)
+    actor = await _resolve_actor(user)
+    if not actor["emp_id"]:
+        return []
+    q = {"emp_id": actor["emp_id"]}
+    if date:
+        q["date"] = date
+    elif date_from or date_to:
+        q["date"] = {}
+        if date_from: q["date"]["$gte"] = date_from
+        if date_to:   q["date"]["$lte"] = date_to
+    return await db.del_plan_blocks.find(q, {"_id": 0}).sort("start_time", 1).to_list(500)
+
+
+@router.post("/plan-blocks")
+async def create_plan_block(request: Request):
+    user = await get_current_user(request)
+    actor = await _resolve_actor(user)
+    if not actor["emp_id"]:
+        raise HTTPException(400, "Your account is not linked to the team yet")
+    body = await request.json()
+    title = (body.get("title") or "").strip()
+    st, et = body.get("start_time") or "", body.get("end_time") or ""
+    if not title:
+        raise HTTPException(400, "Title is required")
+    if not body.get("date"):
+        raise HTTPException(400, "Date is required")
+    if st and et and et <= st:
+        raise HTTPException(400, "End time must be after start time")
+    doc = {
+        "block_id": gen_id("blk"), "emp_id": actor["emp_id"],
+        "date": body["date"], "start_time": st, "end_time": et,
+        "title": title, "note": body.get("note", ""),
+        "color": body.get("color", "#64748b"),
+        "linked_event_id": body.get("linked_event_id", ""),
+        "created_at": now_iso(), "updated_at": now_iso(),
+    }
+    await db.del_plan_blocks.insert_one(doc)
+    return await db.del_plan_blocks.find_one({"block_id": doc["block_id"]}, {"_id": 0})
+
+
+@router.patch("/plan-blocks/{block_id}")
+async def update_plan_block(block_id: str, request: Request):
+    user = await get_current_user(request)
+    actor = await _resolve_actor(user)
+    blk = await db.del_plan_blocks.find_one({"block_id": block_id}, {"_id": 0})
+    if not blk:
+        raise HTTPException(404, "Block not found")
+    if blk["emp_id"] != actor["emp_id"]:
+        raise HTTPException(403, "Not your plan block")
+    body = await request.json()
+    updates = {k: v for k, v in body.items() if k in PLAN_BLOCK_FIELDS}
+    st = updates.get("start_time", blk.get("start_time"))
+    et = updates.get("end_time", blk.get("end_time"))
+    if st and et and et <= st:
+        raise HTTPException(400, "End time must be after start time")
+    if "title" in updates and not (updates["title"] or "").strip():
+        raise HTTPException(400, "Title is required")
+    if updates:
+        updates["updated_at"] = now_iso()
+        await db.del_plan_blocks.update_one({"block_id": block_id}, {"$set": updates})
+    return await db.del_plan_blocks.find_one({"block_id": block_id}, {"_id": 0})
+
+
+@router.delete("/plan-blocks/{block_id}")
+async def delete_plan_block(block_id: str, request: Request):
+    user = await get_current_user(request)
+    actor = await _resolve_actor(user)
+    blk = await db.del_plan_blocks.find_one({"block_id": block_id}, {"_id": 0})
+    if not blk:
+        raise HTTPException(404, "Block not found")
+    if blk["emp_id"] != actor["emp_id"]:
+        raise HTTPException(403, "Not your plan block")
+    await db.del_plan_blocks.delete_one({"block_id": block_id})
+    return {"ok": True}
