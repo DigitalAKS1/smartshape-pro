@@ -1,10 +1,15 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import AdminLayout from '../../components/layouts/AdminLayout';
 import { useTheme } from '../../contexts/ThemeContext';
 import SchoolFormDialog from '../../components/crm/SchoolFormDialog';
-import { schools as schoolsApi, groups as groupsApi, designations as designationsApi } from '../../lib/api';
+import ContactFormDialog from '../../components/crm/ContactFormDialog';
+import {
+  schools as schoolsApi, groups as groupsApi, designations as designationsApi,
+  salesPersons as salesPersonsApi, contactRoles as contactRolesApi,
+  sources as sourcesApi, tags as tagsApi, contacts as contactsApi,
+} from '../../lib/api';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
@@ -83,9 +88,23 @@ export default function SchoolProfile() {
   const [editForm, setEditForm] = useState({});
   const [groupsList, setGroupsList] = useState([]);
   const [designationsList, setDesignationsList] = useState([]);
+  const [rolesList, setRolesList] = useState([]);
+  const [sourcesList, setSourcesList] = useState([]);
+  const [tagsList, setTagsList] = useState([]);
+  const [spList, setSpList] = useState([]);
+  const [schoolsList, setSchoolsList] = useState([]);
+  const [contactsList, setContactsList] = useState([]);
+  const contactFileRef = useRef(null);
   useEffect(() => {
-    groupsApi.getAll().then(r => setGroupsList(Array.isArray(r.data) ? r.data : [])).catch(() => {});
-    designationsApi.getAll().then(r => setDesignationsList(Array.isArray(r.data) ? r.data : [])).catch(() => {});
+    const grab = (api, set) => api.getAll().then(r => set(Array.isArray(r.data) ? r.data : [])).catch(() => {});
+    grab(groupsApi, setGroupsList);
+    grab(designationsApi, setDesignationsList);
+    grab(contactRolesApi, setRolesList);
+    grab(sourcesApi, setSourcesList);
+    grab(tagsApi, setTagsList);
+    grab(salesPersonsApi, setSpList);
+    grab(schoolsApi, setSchoolsList);
+    grab(contactsApi, setContactsList);
   }, []);
 
   if (loading) {
@@ -300,69 +319,48 @@ export default function SchoolProfile() {
         handleSaveSchool={handleSaveSchool}
       />
 
-      {/* Add / Edit Contact Dialog */}
-      <Dialog open={sp.contactOpen} onOpenChange={open => { sp.setContactOpen(open); if (!open) sp.setEditingContact(null); }}>
-        <DialogContent className={`${isDark ? 'bg-[var(--bg-card)] border-[var(--border-color)]' : 'bg-white border-[#e2e8f0]'} w-[calc(100vw-1.5rem)] sm:max-w-md rounded-2xl`}>
-          <DialogHeader>
-            <DialogTitle className={tk.t1}>{sp.editingContact ? 'Edit Contact' : 'Add Contact'}</DialogTitle>
-            <DialogDescription className={tk.tm}>
-              {sp.editingContact
-                ? `Editing ${sp.editingContact.name} · ${profile?.school?.school_name}`
-                : `New contact for ${profile?.school?.school_name}`}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-3 py-1">
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label className={`text-xs ${tk.tm} mb-1.5 block`}>Name *</Label>
-                <Input value={sp.contactForm.name}
-                  onChange={e => sp.setContactForm({ ...sp.contactForm, name: e.target.value })}
-                  className={`h-10 text-sm rounded-lg ${tk.input}`} placeholder="Full name" autoFocus />
-              </div>
-              <div>
-                <Label className={`text-xs ${tk.tm} mb-1.5 block`}>Phone *</Label>
-                <Input value={sp.contactForm.phone}
-                  onChange={e => sp.setContactForm({ ...sp.contactForm, phone: e.target.value })}
-                  className={`h-10 text-sm rounded-lg ${tk.input}`} placeholder="+91 98765..." />
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label className={`text-xs ${tk.tm} mb-1.5 block`}>Email</Label>
-                <Input value={sp.contactForm.email}
-                  onChange={e => sp.setContactForm({ ...sp.contactForm, email: e.target.value })}
-                  className={`h-10 text-sm rounded-lg ${tk.input}`} placeholder="email@school.edu" />
-              </div>
-              <div>
-                <Label className={`text-xs ${tk.tm} mb-1.5 block`}>Designation</Label>
-                <Input value={sp.contactForm.designation}
-                  onChange={e => sp.setContactForm({ ...sp.contactForm, designation: e.target.value })}
-                  className={`h-10 text-sm rounded-lg ${tk.input}`} placeholder="Principal, Admin..." />
-              </div>
-            </div>
-            <div>
-              <Label className={`text-xs ${tk.tm} mb-1.5 block`}>Notes</Label>
-              <Input value={sp.contactForm.notes}
-                onChange={e => sp.setContactForm({ ...sp.contactForm, notes: e.target.value })}
-                className={`h-10 text-sm rounded-lg ${tk.input}`} placeholder="Any additional info..." />
-            </div>
-          </div>
-          <DialogFooter className="flex-col sm:flex-row gap-2">
-            {sp.editingContact && (
-              <button
-                onClick={() => { sp.setContactOpen(false); navigate('/leads?tab=contacts'); }}
-                className={`text-xs ${tk.tm} hover:text-[#e94560] flex items-center gap-1 mr-auto transition-colors`}>
-                <ExternalLink className="h-3 w-3" /> Open in CRM
-              </button>
-            )}
-            <Button variant="ghost" onClick={() => { sp.setContactOpen(false); sp.setEditingContact(null); }} className={tk.tm}>Cancel</Button>
-            <Button onClick={sp.saveContact} disabled={sp.saving}
-              className="bg-[#e94560] hover:bg-[#f05c75] text-white rounded-lg px-5">
-              {sp.saving ? 'Saving...' : sp.editingContact ? 'Update Contact' : 'Add Contact'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* Add / Edit Contact Dialog — full CRM form (role, designation, source, assigned, birthday, tags) */}
+      <ContactFormDialog
+        contactDialogOpen={sp.contactOpen}
+        setContactDialogOpen={open => { sp.setContactOpen(open); if (!open) sp.setEditingContact(null); }}
+        editContact={sp.editingContact}
+        contactForm={sp.contactForm}
+        setContactForm={sp.setContactForm}
+        schoolsList={schoolsList}
+        rolesList={rolesList}
+        sourcesList={sourcesList}
+        spList={spList}
+        tagsList={tagsList}
+        designationsList={designationsList}
+        contactsList={contactsList}
+        saveContact={sp.saveContact}
+        /* convert-to-lead flow not used on this page — safe no-op defaults */
+        convertDialogOpen={false}
+        setConvertDialogOpen={() => {}}
+        convertContact={null}
+        convertForm={{}}
+        setConvertForm={() => {}}
+        convertAddNewSchool={false}
+        setConvertAddNewSchool={() => {}}
+        convertNewSchool={{}}
+        setConvertNewSchool={() => {}}
+        handleConvert={() => {}}
+        /* import flow not used on this page — safe no-op defaults */
+        contactImportOpen={false}
+        setContactImportOpen={() => {}}
+        contactFileRef={contactFileRef}
+        importFile={null}
+        setImportFile={() => {}}
+        importTags={[]}
+        setImportTags={() => {}}
+        importNotes={''}
+        setImportNotes={() => {}}
+        importing={false}
+        importResult={null}
+        handleContactImport={() => {}}
+        resetImportDialog={() => {}}
+        downloadSampleCsv={() => {}}
+      />
 
     </AdminLayout>
   );

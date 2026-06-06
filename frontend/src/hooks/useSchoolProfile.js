@@ -68,15 +68,27 @@ export default function useSchoolProfile(school_id) {
   function openEditContact(c) {
     setEditingContact(c);
     setContactForm({
-      name: c.name || '', phone: c.phone || '',
-      email: c.email || '', designation: c.designation || '', notes: c.notes || '',
+      name: c.name || '', phone: c.phone || '', email: c.email || '',
+      company: c.company || profile?.school?.school_name || '',
+      school_id: c.school_id || school_id || '',
+      contact_role_id: c.contact_role_id || '',
+      designation: c.designation || '',
+      source: c.source || '', source_id: c.source_id || '',
+      assigned_to: c.assigned_to || '',
+      notes: c.notes || '', birthday: c.birthday || '',
+      tag_ids: c.tag_ids || [],
     });
     setContactOpen(true);
   }
 
   function openAddContact() {
     setEditingContact(null);
-    setContactForm({ name: '', phone: '', email: '', designation: '', notes: '' });
+    setContactForm({
+      name: '', phone: '', email: '',
+      company: profile?.school?.school_name || '', school_id: school_id || '',
+      contact_role_id: '', designation: '', source: '', source_id: '',
+      assigned_to: '', notes: '', birthday: '', tag_ids: [],
+    });
     setContactOpen(true);
   }
 
