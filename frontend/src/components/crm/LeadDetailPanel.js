@@ -14,6 +14,7 @@ import { formatDate } from '../../lib/utils';
 import { dripSequences as dripSequencesApi } from '../../lib/api';
 import EmptyState, { EMPTY_STATES } from '../ui/EmptyState';
 import { useTheme } from '../../contexts/ThemeContext';
+import DemoChooserDialog from './DemoChooserDialog';
 
 const NOTE_TYPES = [
   { id: 'call', label: 'Call', icon: Phone },
@@ -47,6 +48,7 @@ export default function LeadDetailPanel({
   const [lostOpen, setLostOpen] = React.useState(false);
   const [lostReason, setLostReason] = React.useState('');
   const [lostNote, setLostNote] = React.useState('');
+  const [demoOpen, setDemoOpen] = React.useState(false);
 
   const card = isDark ? 'bg-[var(--bg-card)] border-[var(--border-color)]' : 'bg-white border-[var(--border-color)]';
   const inputCls = 'bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]';
@@ -68,6 +70,10 @@ export default function LeadDetailPanel({
   const handleStageClick = (stageId) => {
     if (stageId === 'lost' && detailLead.stage !== 'lost') {
       setLostReason(''); setLostNote(''); setLostOpen(true);
+      return;
+    }
+    if (stageId === 'demo' && detailLead.stage !== 'demo') {
+      setDemoOpen(true);
       return;
     }
     changeStage(detailLead.lead_id, stageId);
@@ -495,6 +501,13 @@ export default function LeadDetailPanel({
           </div>
         </DialogContent>
       </Dialog>
+
+      <DemoChooserDialog
+        open={demoOpen}
+        onOpenChange={setDemoOpen}
+        lead={detailLead}
+        onDone={(updated) => { setDetailLead(updated); fetchData(); }}
+      />
     </>
   );
 }
