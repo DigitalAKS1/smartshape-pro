@@ -76,12 +76,39 @@ export function useDelegationCalendar() {
     : addDays(c, view === 'week' ? 7 : 1));
   const goToday = () => setCursor(new Date());
 
+  const createBlock = useCallback(async (payload) => {
+    try { await delApi.planBlocks.create(payload); toast.success('Block added'); load(); return true; }
+    catch (e) { toast.error(e?.response?.data?.detail || 'Failed to add block'); return false; }
+  }, [load]);
+
+  const updateBlock = useCallback(async (id, payload) => {
+    try { await delApi.planBlocks.update(id, payload); toast.success('Block updated'); load(); return true; }
+    catch (e) { toast.error(e?.response?.data?.detail || 'Failed to update'); return false; }
+  }, [load]);
+
+  const deleteBlock = useCallback(async (id) => {
+    try { await delApi.planBlocks.delete(id); toast.success('Block removed'); load(); return true; }
+    catch (e) { toast.error(e?.response?.data?.detail || 'Failed to remove'); return false; }
+  }, [load]);
+
+  const scheduleItem = useCallback(async (ev, date, startHHMM) => {
+    const endHH = String(Math.min(23, parseInt(startHHMM.slice(0, 2), 10) + 1)).padStart(2, '0');
+    try {
+      await delApi.planBlocks.create({
+        date, start_time: startHHMM, end_time: `${endHH}:00`,
+        title: ev.title, color: ev.color, linked_event_id: ev.event_id,
+      });
+      toast.success('Added to your day'); load(); return true;
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Failed'); return false; }
+  }, [load]);
+
   return {
     view, setView, cursor, setCursor, range,
     subjectEmp, setSubjectEmp,
     hidden, toggleSource, ALL_SOURCES,
     events, visibleEvents, eventsByDate, loading, reload: load,
     goPrev, goNext, goToday,
+    createBlock, updateBlock, deleteBlock, scheduleItem,
     helpers: { iso, addDays, startOfMonth, endOfMonth, startOfWeek },
   };
 }
