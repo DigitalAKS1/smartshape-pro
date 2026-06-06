@@ -1,7 +1,10 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { toast } from 'sonner';
 import AdminLayout from '../../components/layouts/AdminLayout';
 import { useTheme } from '../../contexts/ThemeContext';
+import SchoolFormDialog from '../../components/crm/SchoolFormDialog';
+import { schools as schoolsApi, groups as groupsApi, designations as designationsApi } from '../../lib/api';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
@@ -75,6 +78,16 @@ export default function SchoolProfile() {
   const sp = useSchoolProfile(school_id);
   const { profile, loading, mounted } = sp;
 
+  // Edit-school dialog (opened from the "Edit →" button on this page)
+  const [editTarget, setEditTarget] = useState(null);
+  const [editForm, setEditForm] = useState({});
+  const [groupsList, setGroupsList] = useState([]);
+  const [designationsList, setDesignationsList] = useState([]);
+  useEffect(() => {
+    groupsApi.getAll().then(r => setGroupsList(Array.isArray(r.data) ? r.data : [])).catch(() => {});
+    designationsApi.getAll().then(r => setDesignationsList(Array.isArray(r.data) ? r.data : [])).catch(() => {});
+  }, []);
+
   if (loading) {
     return (
       <AdminLayout>
@@ -88,6 +101,31 @@ export default function SchoolProfile() {
 
   const { school, leads, contacts, quotations, visits, call_notes, meetings, dispatches, metrics } = profile;
   const rv = (delay = '') => `transition-all duration-500 ease-out ${delay} ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-3'}`;
+
+  // Open the Edit School modal in place, prefilled from the current school
+  const openEditSchool = () => {
+    setEditForm({
+      school_name: school.school_name || '', school_type: school.school_type || 'CBSE',
+      group_id: school.group_id || '', phone: school.phone || '', email: school.email || '',
+      alternate_contact: school.alternate_contact || '', city: school.city || '', state: school.state || '',
+      address: school.address || '', pincode: school.pincode || '',
+      primary_contact_name: school.primary_contact_name || '', designation: school.designation || '',
+      school_strength: school.school_strength || '', number_of_branches: school.number_of_branches ?? '',
+      annual_budget_range: school.annual_budget_range || '', existing_vendor: school.existing_vendor || '',
+      linkedin_url: school.linkedin_url || '', instagram_url: school.instagram_url || '', website: school.website || '',
+    });
+    setEditTarget(school);
+  };
+  const handleSaveSchool = async () => {
+    try {
+      await schoolsApi.update(school.school_id, editForm);
+      toast.success('School updated');
+      setEditTarget(null);
+      sp.reload();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Update failed');
+    }
+  };
 
   // Profile completeness — nudges reps to fill the fields that power scoring & segmentation
   const PROFILE_FIELDS = [
@@ -144,7 +182,7 @@ export default function SchoolProfile() {
               <div className={`lg:col-span-2 ${tk.card} border ${tk.border} rounded-2xl overflow-hidden`}>
                 <div className={`px-5 py-4 border-b ${tk.border} flex items-center justify-between`}>
                   <p className={`text-[10px] uppercase tracking-[0.18em] font-semibold ${tk.tm}`}>School Information</p>
-                  <button onClick={() => navigate(`/leads?school=${school.school_id}`)}
+                  <button onClick={openEditSchool}
                     className="text-[10px] text-[#e94560] hover:underline">Edit →</button>
                 </div>
                 {/* Profile completeness */}
@@ -159,7 +197,7 @@ export default function SchoolProfile() {
                   {missingFields.length > 0 && (
                     <p className={`text-[10px] ${tk.tm} mt-1.5`}>
                       Missing: {missingFields.map(f => f.label).join(', ')} —{' '}
-                      <button onClick={() => navigate(`/leads?school=${school.school_id}`)} className="text-[#e94560] hover:underline">add now</button>
+                      <button onClick={openEditSchool} className="text-[#e94560] hover:underline">add now</button>
                     </p>
                   )}
                 </div>
@@ -248,6 +286,19 @@ export default function SchoolProfile() {
           )}
         </div>
       </div>
+
+      {/* Edit School Dialog (opens in place from "Edit →") */}
+      <SchoolFormDialog
+        open={!!editTarget}
+        onOpenChange={(v) => { if (!v) setEditTarget(null); }}
+        editSchool={editTarget}
+        setEditSchool={setEditTarget}
+        editSchoolForm={editForm}
+        setEditSchoolForm={setEditForm}
+        groupsList={groupsList}
+        designationsList={designationsList}
+        handleSaveSchool={handleSaveSchool}
+      />
 
       {/* Add / Edit Contact Dialog */}
       <Dialog open={sp.contactOpen} onOpenChange={open => { sp.setContactOpen(open); if (!open) sp.setEditingContact(null); }}>

@@ -121,7 +121,7 @@ export default function useSchoolProfile(school_id) {
     : [];
 
   return {
-    profile, loading, mounted,
+    profile, loading, mounted, reload: loadProfile,
     activeTab, setActiveTab,
     expandedContact, setExpandedContact,
     stageFilter, setStageFilter,
