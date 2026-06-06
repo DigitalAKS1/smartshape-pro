@@ -297,7 +297,7 @@ export default function SchoolProfile() {
           )}
 
           {sp.activeTab === 'visits' && (
-            <SchoolVisitsSection visits={visits} meetings={meetings} tk={tk} />
+            <SchoolVisitsSection visits={visits} meetings={meetings} tk={tk} school={school} onDone={sp.reload} />
           )}
 
           {sp.activeTab === 'feed' && (

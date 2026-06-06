@@ -2,6 +2,7 @@ import React from 'react';
 import { Link } from 'react-router-dom';
 import { FileText, Eye, Send, Calendar } from 'lucide-react';
 import { Button } from '../ui/button';
+import PlanVisitButton from './PlanVisitButton';
 
 const QUOT_CLS = {
   draft:     'bg-slate-100 text-slate-600',
@@ -117,7 +118,7 @@ export function SchoolMarketingSection({ dispatches, tk }) {
 }
 
 // ── Visits & Meetings tab ──────────────────────────────────────────────────────
-export function SchoolVisitsSection({ visits, meetings, tk }) {
+export function SchoolVisitsSection({ visits, meetings, tk, school, onDone }) {
   const STATUS_CLS = {
     planned:    'bg-amber-50 text-amber-700',
     checked_in: 'bg-blue-50 text-blue-700',
@@ -131,6 +132,10 @@ export function SchoolVisitsSection({ visits, meetings, tk }) {
 
   return (
     <div className="sp-tab">
+      <div className="flex items-center justify-between mb-3">
+        <p className={`text-sm font-semibold ${tk.t1}`}>Visits & Meetings</p>
+        {school && <PlanVisitButton school={school} onDone={onDone} />}
+      </div>
       {items.length === 0 ? (
         <EmptyState icon={Calendar} label="No visits or meetings recorded for this school yet." />
       ) : (
