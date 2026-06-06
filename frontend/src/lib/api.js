@@ -698,6 +698,13 @@ export const delegation = {
     readAll: ()   => API.post('/delegation/notifications/read-all', {}),
   },
   calendar:   (p)  => API.get('/delegation/calendar', { params: p }),
+  agenda:     (p)  => API.get('/delegation/agenda', { params: p }),
+  planBlocks: {
+    list:   (p)    => API.get('/delegation/plan-blocks', { params: p }),
+    create: (d)    => API.post('/delegation/plan-blocks', d),
+    update: (id,d) => API.patch(`/delegation/plan-blocks/${id}`, d),
+    delete: (id)   => API.delete(`/delegation/plan-blocks/${id}`),
+  },
   dashboard:  (p)  => API.get('/delegation/dashboard', { params: p }),
   reports:    (p)  => API.get('/delegation/reports', { params: p }),
   myContext:  ()   => API.get('/delegation/my-context'),
