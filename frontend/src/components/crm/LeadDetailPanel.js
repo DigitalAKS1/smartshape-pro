@@ -48,6 +48,16 @@ export default function LeadDetailPanel({
   const [lostReason, setLostReason] = React.useState('');
   const [lostNote, setLostNote] = React.useState('');
 
+  const card = isDark ? 'bg-[var(--bg-card)] border-[var(--border-color)]' : 'bg-white border-[var(--border-color)]';
+  const inputCls = 'bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]';
+  const textPri = 'text-[var(--text-primary)]';
+  const textSec = 'text-[var(--text-secondary)]';
+  const textMuted = 'text-[var(--text-muted)]';
+  const hoverBg = isDark ? 'hover:bg-[var(--bg-hover)]' : 'hover:bg-[#f0f0f5]';
+  const dlgCls = isDark ? 'bg-[var(--bg-card)] border-[var(--border-color)] text-[var(--text-primary)]' : 'bg-white border-[var(--border-color)] text-[var(--text-primary)]';
+
+  if (!detailLead) return null;
+
   const OPEN_STAGES = ['new', 'contacted', 'demo', 'quoted', 'negotiation'];
   const fuOverdue = !!detailLead.next_followup_date &&
     new Date(detailLead.next_followup_date) < new Date(new Date().toDateString());
@@ -62,16 +72,6 @@ export default function LeadDetailPanel({
     }
     changeStage(detailLead.lead_id, stageId);
   };
-
-  const card = isDark ? 'bg-[var(--bg-card)] border-[var(--border-color)]' : 'bg-white border-[var(--border-color)]';
-  const inputCls = 'bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]';
-  const textPri = 'text-[var(--text-primary)]';
-  const textSec = 'text-[var(--text-secondary)]';
-  const textMuted = 'text-[var(--text-muted)]';
-  const hoverBg = isDark ? 'hover:bg-[var(--bg-hover)]' : 'hover:bg-[#f0f0f5]';
-  const dlgCls = isDark ? 'bg-[var(--bg-card)] border-[var(--border-color)] text-[var(--text-primary)]' : 'bg-white border-[var(--border-color)] text-[var(--text-primary)]';
-
-  if (!detailLead) return null;
 
   return (
     <>
