@@ -82,3 +82,87 @@ async def delete_template(template_id: str, request: Request):
     user = await get_current_user(request); require_admin(user)
     await db.cert_templates.update_one({"template_id": template_id}, {"$set": {"is_active": False}})
     return {"ok": True}
+
+
+# ── Batches + Attendees ───────────────────────────────────────────────────────
+
+class Attendee(BaseModel):
+    name: str
+    phone: Optional[str] = ""
+    email: Optional[str] = ""
+
+class BatchCreate(BaseModel):
+    title: str
+    template_id: str
+    source: str = "manual"            # manual | session
+    session_id: Optional[str] = None
+    shared_values: Dict[str, Any] = {}
+    channels: List[str] = ["whatsapp", "email"]
+    attendees: Optional[List[Attendee]] = None
+
+
+def _new_item(batch_id: str, name: str, phone: str, email: str) -> dict:
+    return {
+        "item_id": gen_id("citem"), "batch_id": batch_id,
+        "name": name, "phone": phone or "", "email": email or "",
+        "pdf_url": None, "gen_status": "pending", "gen_error": None,
+        "delivery": {
+            "whatsapp": {"status": "pending", "at": None, "error": None},
+            "email": {"status": "pending", "at": None, "error": None},
+        },
+        "created_at": now_iso(),
+    }
+
+@router.post("/batches")
+async def create_batch(body: BatchCreate, request: Request):
+    user = await get_current_user(request); require_admin(user)
+    bid = gen_id("cbatch")
+    # gather attendees
+    rows: List[dict] = []
+    if body.source == "session" and body.session_id:
+        regs = await db.session_registrations.find({"session_id": body.session_id}, {"_id": 0}).to_list(1000)
+        for r in regs:
+            rows.append(_new_item(bid, r.get("name") or r.get("principal_name") or "",
+                                  r.get("phone") or r.get("contact_phone") or "",
+                                  r.get("email") or r.get("customer_email") or ""))
+    else:
+        for a in (body.attendees or []):
+            rows.append(_new_item(bid, a.name, a.phone or "", a.email or ""))
+    rows = [r for r in rows if r["name"].strip()]
+    batch = {
+        "batch_id": bid, "title": body.title, "template_id": body.template_id,
+        "source": body.source, "session_id": body.session_id,
+        "shared_values": body.shared_values, "channels": body.channels,
+        "status": "draft",
+        "counts": {"total": len(rows), "generated": 0, "sent_whatsapp": 0, "sent_email": 0, "failed": 0},
+        "created_by": user.get("email"), "created_at": now_iso(),
+    }
+    await db.cert_batches.insert_one(batch)
+    if rows:
+        await db.cert_items.insert_many(rows)
+    return await db.cert_batches.find_one({"batch_id": bid}, {"_id": 0})
+
+@router.get("/batches")
+async def list_batches(request: Request):
+    await get_current_user(request)
+    return await db.cert_batches.find({}, {"_id": 0}).sort("created_at", -1).to_list(200)
+
+@router.get("/batches/{batch_id}")
+async def get_batch(batch_id: str, request: Request):
+    await get_current_user(request)
+    batch = await db.cert_batches.find_one({"batch_id": batch_id}, {"_id": 0})
+    if not batch:
+        raise HTTPException(404, "Batch not found")
+    items = await db.cert_items.find({"batch_id": batch_id}, {"_id": 0}).to_list(2000)
+    return {**batch, "items": items}
+
+@router.post("/batches/{batch_id}/attendees")
+async def add_attendees(batch_id: str, request: Request):
+    user = await get_current_user(request); require_admin(user)
+    body = await request.json()
+    rows = [_new_item(batch_id, a.get("name", ""), a.get("phone", ""), a.get("email", ""))
+            for a in body.get("attendees", []) if a.get("name", "").strip()]
+    if rows:
+        await db.cert_items.insert_many(rows)
+        await db.cert_batches.update_one({"batch_id": batch_id}, {"$inc": {"counts.total": len(rows)}})
+    return {"added": len(rows)}
