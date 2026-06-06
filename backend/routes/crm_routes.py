@@ -94,6 +94,35 @@ async def log_activity(user_email: str, action: str, entity_type: str, entity_id
         pass
 
 
+import os as _os
+DEMO_WA_DRY_RUN = _os.getenv("DEMO_WA_DRY_RUN", "0") == "1"
+
+async def _send_demo_wa(phone: str, message: str) -> bool:
+    """Direct WhatsApp send via the configured provider (mirrors dispatch auto-WA)."""
+    if not phone:
+        return False
+    if DEMO_WA_DRY_RUN:
+        import logging as _log
+        _log.getLogger("crm").info(f"[demo][dry] WA -> {phone}: {message[:60]}")
+        return True
+    wa = await db.settings.find_one({"type": "whatsapp"}, {"_id": 0})
+    if not wa or not wa.get("username"):
+        return False
+    import httpx as _httpx
+    try:
+        async with _httpx.AsyncClient(timeout=15) as client:
+            await client.post("https://app.messageautosender.com/message/new", data={
+                "username": wa["username"], "password": wa["password"],
+                "receiverMobileNo": phone, "message": message})
+        await db.whatsapp_logs.insert_one({
+            "log_id": f"wal_{uuid.uuid4().hex[:10]}", "phone": phone, "body": message,
+            "send_mode": "demo_link", "status": "sent", "sent_by": "system",
+            "sent_at": datetime.now(timezone.utc).isoformat()})
+        return True
+    except Exception:
+        return False
+
+
 def calc_lead_score(lead, school=None):
     score = 0
     if school and school.get("school_strength", 0) > 1000:
@@ -1470,6 +1499,7 @@ async def update_lead(lead_id: str, request: Request):
               "next_followup_date", "assigned_to", "assigned_name", "notes",
               "assignment_type", "likely_closure_date",
               "expected_value", "lost_reason", "lost_reason_note",
+              "demo_format", "demo_date", "demo_time", "demo_link", "demo_visit_plan_id",
               "referred_by_contact_id", "referral_reward_status"):
         if k in body:
             allowed[k] = body[k]
@@ -1687,6 +1717,68 @@ async def leads_needs_attention(request: Request):
             })
     out.sort(key=lambda x: x["deal_value"], reverse=True)
     return out
+
+
+@router.post("/leads/{lead_id}/schedule-demo")
+async def schedule_demo(lead_id: str, request: Request):
+    user = await get_current_user(request)
+    body = await request.json()
+    fmt = body.get("format")
+    if fmt not in ("physical", "online"):
+        raise HTTPException(status_code=400, detail="format must be 'physical' or 'online'")
+    lead = await db.leads.find_one({"lead_id": lead_id}, {"_id": 0})
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    demo_date = body.get("demo_date", "")
+    demo_time = body.get("demo_time", "")
+    update = {
+        "stage": "demo", "demo_format": fmt,
+        "demo_date": demo_date, "demo_time": demo_time,
+        "updated_at": now_iso, "last_activity_date": now_iso,
+    }
+
+    if fmt == "physical":
+        plan_id = f"vp_{uuid.uuid4().hex[:12]}"
+        await db.visit_plans.insert_one({
+            "plan_id": plan_id, "lead_id": lead_id,
+            "lead_name": lead.get("contact_name", ""),
+            "school_name": lead.get("company_name", ""),
+            "school_id": lead.get("school_id", ""),
+            "contact_person": lead.get("contact_name", ""),
+            "contact_phone": lead.get("contact_phone", ""),
+            "assigned_to": body.get("assigned_to") or lead.get("assigned_to", ""),
+            "assigned_name": lead.get("assigned_name", ""),
+            "visit_date": demo_date, "visit_time": demo_time,
+            "purpose": body.get("purpose") or "Demo / Workshop",
+            "planned_address": body.get("address", ""),
+            "status": "planned",
+            "created_by": user["email"], "created_at": now_iso,
+        })
+        update["demo_visit_plan_id"] = plan_id
+        await log_activity(user["email"], "schedule_demo_physical", "lead", lead_id,
+                           details=f"Physical workshop {demo_date} {demo_time}")
+    else:  # online
+        link = body.get("demo_link", "")
+        update["demo_link"] = link
+        contact_name = lead.get("contact_name", "Sir/Madam")
+        msg = (f"Dear {contact_name}, your SmartShape online workshop is scheduled for "
+               f"{demo_date} {demo_time}.\nJoin here: {link}")
+        sent = await _send_demo_wa(lead.get("contact_phone", ""), msg)
+        await log_activity(user["email"], "schedule_demo_online", "lead", lead_id,
+                           details=f"Online workshop {demo_date} {demo_time} | WA sent={sent}")
+
+    if lead.get("stage") != "demo":
+        hist = lead.get("pipeline_history", []) or []
+        hist.append({"from_stage": lead.get("stage"), "to_stage": "demo",
+                     "by_email": user["email"], "by_name": user["name"],
+                     "at": now_iso, "note": f"Demo scheduled ({fmt})"})
+        update["pipeline_history"] = hist
+
+    await db.leads.update_one({"lead_id": lead_id}, {"$set": update})
+    if lead.get("school_id"):
+        await touch_last_activity("school", lead["school_id"])
+    return await db.leads.find_one({"lead_id": lead_id}, {"_id": 0})
 
 
 @router.post("/leads/reassign")
