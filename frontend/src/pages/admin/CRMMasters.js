@@ -4,10 +4,10 @@ import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../../components/ui/dialog';
-import { Plus, Building2, Tag, UserCheck, Send, Briefcase, Edit2, Trash2, SlidersHorizontal } from 'lucide-react';
+import { Plus, Building2, Tag, UserCheck, Send, Briefcase, Edit2, Trash2, SlidersHorizontal, Package } from 'lucide-react';
 import { toast } from 'sonner';
 import { useCRMMasters } from '../../hooks/useCRMMasters';
-import { pipelineSettings, schoolTypes as schoolTypesApi } from '../../lib/api';
+import { pipelineSettings, schoolTypes as schoolTypesApi, interestedProducts as interestedProductsApi } from '../../lib/api';
 import { STAGES } from '../../lib/crmConstants';
 import MasterEntityTable from '../../components/crm/MasterEntityTable';
 
@@ -18,6 +18,7 @@ const TABS = [
   { id: 'designations', label: 'Designation Master',   icon: Briefcase, desc: 'Job designations for school contacts — CEO, Principal, Vice Principal, Coordinator, ...' },
   { id: 'tags',         label: 'Tag Master',           icon: Tag,       desc: 'Color-coded tags to segment leads and run targeted WhatsApp / email campaigns' },
   { id: 'schooltypes',  label: 'School Types',         icon: Building2, desc: 'Board / type options shown in school forms — CBSE, ICSE, IB, Cambridge, ...' },
+  { id: 'products',     label: 'Interested Products',  icon: Package,   desc: 'Individual / "Other" products captured on lead forms. Packages are the primary options; these accumulate from rep input — prune typos and one-offs here.' },
   { id: 'pipeline',     label: 'Pipeline Settings',    icon: SlidersHorizontal, desc: 'Win probability per stage, idle limits before a lead is "stuck", lost reasons, and the daily digest' },
 ];
 
@@ -66,6 +67,23 @@ export default function CRMMasters() {
   const deleteType = async (t) => {
     if (!window.confirm(`Delete school type "${t.name}"?`)) return;
     try { await schoolTypesApi.delete(t.type_id); loadTypes(); }
+    catch { toast.error('Delete failed'); }
+  };
+
+  // Interested products master (custom/individual entries; packages stay the primary options)
+  const [ipList, setIpList] = useState([]);
+  const [newProduct, setNewProduct] = useState('');
+  const loadProducts = () => interestedProductsApi.getAll().then(r => setIpList(Array.isArray(r.data) ? r.data : [])).catch(() => {});
+  useEffect(() => { loadProducts(); }, []);
+  const addProduct = async () => {
+    const name = newProduct.trim();
+    if (!name) return;
+    try { await interestedProductsApi.create({ name }); setNewProduct(''); loadProducts(); toast.success(`Added "${name}"`); }
+    catch (e) { toast.error(e?.response?.data?.detail || 'Failed'); }
+  };
+  const deleteProduct = async (p) => {
+    if (!window.confirm(`Delete interested product "${p.name}"?`)) return;
+    try { await interestedProductsApi.delete(p.product_id); loadProducts(); }
     catch { toast.error('Delete failed'); }
   };
 
@@ -360,6 +378,35 @@ export default function CRMMasters() {
                 </div>
               ))}
               {stList.length === 0 && <p className={`text-xs ${textMuted} col-span-full text-center py-6`}>No school types yet — add one above (e.g. Cambridge)</p>}
+            </div>
+          </div>
+        )}
+
+        {/* INTERESTED PRODUCTS */}
+        {activeTab === 'products' && (
+          <div className={`${card} border rounded-md p-5`}>
+            <div className="flex items-center justify-between mb-4 gap-2">
+              <h2 className={`text-lg font-medium ${textPri}`}>Interested Products ({ipList.length})</h2>
+              <div className="flex gap-2">
+                <Input value={newProduct} onChange={e => setNewProduct(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') addProduct(); }}
+                  placeholder="e.g. Smart Board" className={`${inputCls} h-9 text-sm w-44`} data-testid="new-interested-product-input" />
+                <Button onClick={addProduct} size="sm" className="bg-[#e94560] hover:bg-[#f05c75] text-white" data-testid="add-interested-product-btn">
+                  <Plus className="mr-1 h-3 w-3" /> Add
+                </Button>
+              </div>
+            </div>
+            <p className={`text-xs ${textMuted} mb-3`}>Packages (from Package Master) are always the primary options on lead forms — these are the extra "Individual / Other" entries reps have typed in. Delete duplicates or typos to keep the dropdown clean.</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+              {ipList.map(p => (
+                <div key={p.product_id} className={`flex items-center justify-between ${card} border rounded-md p-2.5`} data-testid={`interested-product-row-${p.product_id}`}>
+                  <span className={`${textPri} text-sm`}>{p.name}</span>
+                  <Button size="sm" variant="ghost" onClick={() => deleteProduct(p)} className="text-red-400 h-7 px-1.5" data-testid={`delete-interested-product-${p.product_id}`}>
+                    <Trash2 className="h-3 w-3" />
+                  </Button>
+                </div>
+              ))}
+              {ipList.length === 0 && <p className={`text-xs ${textMuted} col-span-full text-center py-6`}>No custom products yet — these auto-appear as reps pick "Individual / Other…" on lead forms.</p>}
             </div>
           </div>
         )}
