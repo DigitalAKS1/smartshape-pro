@@ -37,6 +37,7 @@ export default function SchoolContactsSection({
   contacts, isDark, tk,
   expandedContact, setExpandedContact,
   openAddContact, openEditContact,
+  onConvert,
 }) {
   const navigate = useNavigate();
 
@@ -115,6 +116,9 @@ export default function SchoolContactsSection({
                     className={`${tk.tm} h-8 w-8 p-0 hover:text-[#e94560]`}>
                     <Edit2 className="h-3.5 w-3.5" />
                   </Button>
+                  {onConvert && !c.converted_to_lead && (
+                    <button onClick={() => onConvert(c)} className="text-[var(--text-muted)] hover:text-[#e94560] h-8 px-2 text-xs" title="Convert to lead" data-testid={`convert-${c.contact_id}`}>↓</button>
+                  )}
                   <Button size="sm" variant="ghost"
                     onClick={() => setExpandedContact(expandedContact === c.contact_id ? null : c.contact_id)}
                     className={`${tk.tm} h-8 px-2.5 text-xs`}>

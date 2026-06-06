@@ -38,21 +38,26 @@ function fmt(d) {
   catch { return d; }
 }
 
-export default function SchoolLeadsSection({ leads, filteredLeads, stageFilter, setStageFilter, tk }) {
+export default function SchoolLeadsSection({ leads, filteredLeads, stageFilter, setStageFilter, tk, onCreate }) {
   return (
     <div className="sp-tab space-y-4">
-      {/* Stage chips */}
-      <div className="flex items-center gap-2 flex-wrap">
-        {['all', 'new', 'contacted', 'demo', 'quoted', 'negotiation', 'won', 'lost'].map(s => (
-          <button key={s} onClick={() => setStageFilter(s)}
-            className={`text-[11px] px-3 py-1 rounded-full font-semibold transition-all border capitalize ${
-              stageFilter === s
-                ? 'bg-[#e94560] text-white border-[#e94560]'
-                : `${tk.border} ${tk.tm} hover:border-[#e94560] hover:text-[#e94560]`
-            }`}>
-            {s === 'all' ? `All · ${leads.length}` : s}
-          </button>
-        ))}
+      {/* Stage chips + Create Lead button */}
+      <div className="flex items-center gap-2 flex-wrap justify-between">
+        <div className="flex items-center gap-2 flex-wrap">
+          {['all', 'new', 'contacted', 'demo', 'quoted', 'negotiation', 'won', 'lost'].map(s => (
+            <button key={s} onClick={() => setStageFilter(s)}
+              className={`text-[11px] px-3 py-1 rounded-full font-semibold transition-all border capitalize ${
+                stageFilter === s
+                  ? 'bg-[#e94560] text-white border-[#e94560]'
+                  : `${tk.border} ${tk.tm} hover:border-[#e94560] hover:text-[#e94560]`
+              }`}>
+              {s === 'all' ? `All · ${leads.length}` : s}
+            </button>
+          ))}
+        </div>
+        {onCreate && (
+          <Button onClick={onCreate} size="sm" className="bg-[#e94560] hover:bg-[#f05c75] text-white" data-testid="create-lead-on-profile">+ Create Lead</Button>
+        )}
       </div>
 
       {filteredLeads.length === 0 ? (

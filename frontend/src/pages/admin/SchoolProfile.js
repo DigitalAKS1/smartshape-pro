@@ -19,6 +19,8 @@ import useSchoolProfile from '../../hooks/useSchoolProfile';
 import SchoolProfileHeader from '../../components/school/SchoolProfileHeader';
 import SchoolContactsSection from '../../components/school/SchoolContactsSection';
 import SchoolLeadsSection from '../../components/school/SchoolLeadsSection';
+import SchoolLeadQuickCreate from '../../components/school/SchoolLeadQuickCreate';
+import ConvertContactDialog from '../../components/school/ConvertContactDialog';
 import {
   SchoolSalesSection, SchoolMarketingSection,
   SchoolVisitsSection, SchoolActivityFeed,
@@ -95,6 +97,8 @@ export default function SchoolProfile() {
   const [schoolsList, setSchoolsList] = useState([]);
   const [contactsList, setContactsList] = useState([]);
   const contactFileRef = useRef(null);
+  const [leadCreateOpen, setLeadCreateOpen] = useState(false);
+  const [convertTarget, setConvertTarget] = useState(null);
   useEffect(() => {
     const grab = (api, set) => api.getAll().then(r => set(Array.isArray(r.data) ? r.data : [])).catch(() => {});
     grab(groupsApi, setGroupsList);
@@ -278,14 +282,16 @@ export default function SchoolProfile() {
               expandedContact={sp.expandedContact}
               setExpandedContact={sp.setExpandedContact}
               openAddContact={sp.openAddContact}
-              openEditContact={sp.openEditContact} />
+              openEditContact={sp.openEditContact}
+              onConvert={(c) => setConvertTarget(c)} />
           )}
 
           {sp.activeTab === 'leads' && (
             <SchoolLeadsSection
               leads={leads} filteredLeads={sp.filteredLeads}
               stageFilter={sp.stageFilter} setStageFilter={sp.setStageFilter}
-              tk={tk} />
+              tk={tk}
+              onCreate={() => setLeadCreateOpen(true)} />
           )}
 
           {sp.activeTab === 'sales' && (
@@ -361,6 +367,11 @@ export default function SchoolProfile() {
         resetImportDialog={() => {}}
         downloadSampleCsv={() => {}}
       />
+
+      <SchoolLeadQuickCreate open={leadCreateOpen} onOpenChange={setLeadCreateOpen} school={school}
+        rolesList={rolesList} sourcesList={sourcesList} spList={spList} onDone={sp.reload} />
+      <ConvertContactDialog open={!!convertTarget} onOpenChange={(v) => { if (!v) setConvertTarget(null); }}
+        contact={convertTarget} spList={spList} onDone={sp.reload} />
 
     </AdminLayout>
   );
