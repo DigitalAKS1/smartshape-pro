@@ -15,8 +15,9 @@ import {
   DelegationOverviewTab, DelegationVisitsTab, DelegationReportsTab,
   DelegationCalendarTab, DelegationPersonDrawer,
 } from '../../components/delegation/DelegationTaskList';
+import DelegationCalendar from '../../components/delegation/calendar/DelegationCalendar';
 import {
-  LayoutGrid, ClipboardList, Calendar, Users, MapPin, BarChart2, Briefcase, Shield, UserCheck, User, CheckCircle2, Sun,
+  LayoutGrid, ClipboardList, Calendar, CalendarDays, Users, MapPin, BarChart2, Briefcase, Shield, UserCheck, User, CheckCircle2, Sun,
 } from 'lucide-react';
 
 const PINK = '#e94560';
@@ -24,7 +25,6 @@ const PINK = '#e94560';
 const VIEWS = [
   { id: 'overview', label: 'Overview',     icon: LayoutGrid    },
   { id: 'assign',   label: 'Assign Tasks', icon: ClipboardList },
-  { id: 'calendar', label: 'Calendar',     icon: Calendar      },
   { id: 'team',     label: 'Team',         icon: Users         },
   { id: 'visits',   label: 'Visit Tasks',  icon: MapPin        },
   { id: 'reports',  label: 'Reports',      icon: BarChart2     },
@@ -77,7 +77,7 @@ export default function DelegationApp() {
             const { Icon, label, desc } = ROLE_META[r];
             const active = s.activeRole === r;
             return (
-              <button key={r} onClick={() => { s.setActiveRole(r); s.setViewTab(r === 'delegatee' ? 'planner' : 'overview'); s.setAssignerFilter(''); }}
+              <button key={r} onClick={() => { s.setActiveRole(r); s.setViewTab(r === 'delegatee' ? 'planner' : 'calendar'); s.setAssignerFilter(''); }}
                 className={`border rounded-xl p-3 sm:p-4 text-center transition-all active:scale-[0.97]
                   ${active ? 'text-white shadow-lg' : `${card} ${textMuted} hover:border-[#e94560]/40`}`}
                 style={active ? { background: PINK, borderColor: PINK } : {}}>
@@ -95,6 +95,7 @@ export default function DelegationApp() {
         {/* Tab bar */}
         <div className={`${card} border rounded-xl p-1 flex gap-0.5 overflow-x-auto`}>
           {[
+            { id: 'calendar', label: 'Calendar', icon: CalendarDays },
             { id: 'planner', label: 'My Planner', icon: Sun },
             ...VIEWS,
             ...((s.activeRole === 'boss' || s.activeRole === 'delegator')
@@ -154,12 +155,9 @@ export default function DelegationApp() {
 
         {/* Calendar */}
         {s.viewTab === 'calendar' && (
-          <DelegationCalendarTab
-            calendarData={s.calendarData}
-            calYear={s.calYear} setCalYear={s.setCalYear}
-            calMonth={s.calMonth} setCalMonth={s.setCalMonth}
-            loadCalendar={s.loadCalendar}
-            TODAY={s.TODAY} {...sharedTheme}
+          <DelegationCalendar
+            onEventClick={() => {}}
+            card={card} textPri={textPri} textSec={textSec} textMuted={textMuted}
           />
         )}
 

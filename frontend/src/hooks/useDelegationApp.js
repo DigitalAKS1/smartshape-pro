@@ -19,7 +19,7 @@ export function useDelegationApp() {
 
   /* ── core state ── */
   const [activeRole, setActiveRole] = useState('boss');
-  const [viewTab,    setViewTab]    = useState('overview');
+  const [viewTab,    setViewTab]    = useState('calendar');
   const [departments, setDepts]     = useState([]);
   const [employees,  setEmps]       = useState([]);
   const [instances,  setInstances]  = useState([]);
