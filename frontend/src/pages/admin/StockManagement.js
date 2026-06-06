@@ -27,6 +27,22 @@ export default function StockManagement() {
   const textMuted = 'text-[var(--text-muted)]';
   const dlgCls    = 'bg-[var(--bg-card)] border-[var(--border-color)] text-[var(--text-primary)]';
 
+  // Resolve a product image for a movement row: the movement's own image_url
+  // (purchase receipts carry it) else the matching die's image.
+  const BACKEND = process.env.REACT_APP_BACKEND_URL || '';
+  const imgSrc = (u) => (u ? (u.startsWith('http') ? u : `${BACKEND}${u}`) : '');
+  const dieImg = React.useMemo(() => {
+    const map = {};
+    (diesList || []).forEach(d => { if (d.image_url) map[d.die_id] = d.image_url; });
+    return map;
+  }, [diesList]);
+  const rowImg = (m) => m.image_url || dieImg[m.die_id];
+  const Thumb = ({ url, size = 36 }) => (
+    url
+      ? <img src={imgSrc(url)} alt="" className="rounded object-cover border border-[var(--border-color)]" style={{ width: size, height: size }} />
+      : <div className="flex items-center justify-center rounded bg-[var(--bg-primary)] border border-[var(--border-color)]" style={{ width: size, height: size }}><Package className="h-4 w-4 text-[var(--text-muted)]" /></div>
+  );
+
   return (
     <AdminLayout>
       <div className="space-y-5">
@@ -86,7 +102,7 @@ export default function StockManagement() {
                 <div className="hidden md:block overflow-x-auto">
                   <table className="w-full text-sm" data-testid="movements-table">
                     <thead><tr className="bg-[var(--bg-primary)]">
-                      <th className={`text-left text-xs uppercase py-3 px-4 ${textMuted}`}>Die</th>
+                      <th className={`text-left text-xs uppercase py-3 px-4 ${textMuted}`}>Product</th>
                       <th className={`text-left text-xs uppercase py-3 px-4 ${textMuted}`}>Movement</th>
                       <th className={`text-left text-xs uppercase py-3 px-4 ${textMuted}`}>Qty</th>
                       <th className={`text-left text-xs uppercase py-3 px-4 ${textMuted}`}>Sales Person</th>
@@ -97,8 +113,13 @@ export default function StockManagement() {
                       {movements.map(m => (
                         <tr key={m.movement_id} className={`border-t border-[var(--border-color)] hover:bg-[var(--bg-hover)]`} data-testid={`movement-row-${m.movement_id}`}>
                           <td className="px-4 py-3">
-                            <p className="font-mono text-[#e94560] text-xs font-medium">{m.die_code}</p>
-                            <p className={`text-xs ${textMuted}`}>{m.die_name}</p>
+                            <div className="flex items-center gap-2.5">
+                              <Thumb url={rowImg(m)} />
+                              <div className="min-w-0">
+                                {m.die_code ? <p className="font-mono text-[#e94560] text-xs font-medium truncate">{m.die_code}</p> : null}
+                                <p className={`text-xs ${textMuted} truncate`}>{m.die_name}</p>
+                              </div>
+                            </div>
                           </td>
                           <td className="px-4 py-3"><span className={`text-xs font-medium ${MOVEMENT_COLORS[m.movement_type] || textSec}`}>{MOVEMENT_LABELS[m.movement_type] || m.movement_type}</span></td>
                           <td className={`px-4 py-3 font-mono font-bold ${textPri}`}>{m.quantity}</td>
@@ -114,11 +135,13 @@ export default function StockManagement() {
                 <div className="md:hidden divide-y divide-[var(--border-color)]">
                   {movements.map(m => (
                     <div key={m.movement_id} className="p-3 flex items-start gap-3">
-                      <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${m.movement_type === 'stock_in' || m.movement_type === 'returned_from_sales' ? 'bg-green-500/15' : 'bg-red-500/15'}`}>
-                        {m.movement_type === 'stock_in' || m.movement_type === 'returned_from_sales'
-                          ? <TrendingUp className="h-4 w-4 text-green-500" />
-                          : <TrendingDown className="h-4 w-4 text-red-400" />}
-                      </div>
+                      {rowImg(m)
+                        ? <Thumb url={rowImg(m)} size={36} />
+                        : <div className={`w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 ${m.movement_type === 'stock_in' || m.movement_type === 'returned_from_sales' || m.movement_type === 'purchase_in' ? 'bg-green-500/15' : 'bg-red-500/15'}`}>
+                            {m.movement_type === 'stock_in' || m.movement_type === 'returned_from_sales' || m.movement_type === 'purchase_in'
+                              ? <TrendingUp className="h-4 w-4 text-green-500" />
+                              : <TrendingDown className="h-4 w-4 text-red-400" />}
+                          </div>}
                       <div className="flex-1 min-w-0">
                         <p className={`text-sm font-medium ${textPri}`}>{m.die_code} — {m.die_name}</p>
                         <p className={`text-xs ${MOVEMENT_COLORS[m.movement_type] || textSec}`}>{MOVEMENT_LABELS[m.movement_type] || m.movement_type}</p>

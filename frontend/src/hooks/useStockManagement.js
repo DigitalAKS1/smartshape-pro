@@ -8,6 +8,7 @@ export const MOVEMENT_LABELS = {
   allocated_to_sales: 'Allocated',
   returned_from_sales: 'Returned',
   physical_adjustment: 'Adjustment',
+  purchase_in: 'Purchase In',
 };
 
 export const MOVEMENT_COLORS = {
@@ -16,6 +17,7 @@ export const MOVEMENT_COLORS = {
   allocated_to_sales: 'text-blue-400',
   returned_from_sales: 'text-purple-400',
   physical_adjustment: 'text-yellow-500',
+  purchase_in: 'text-emerald-500',
 };
 
 export function useStockManagement() {

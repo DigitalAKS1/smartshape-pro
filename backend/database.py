@@ -126,6 +126,23 @@ async def connect_db():
     await db.school_notifications.create_index([("school_id", 1), ("read", 1)], background=True)
     await db.customer_accounts.create_index("catalogue_token", background=True)
 
+    # ── Procurement ─────────────────────────────────────────────────────────
+    await db.vendors.create_index("name", background=True)
+    await db.vendors.create_index("is_active", background=True)
+    await db.vendor_items.create_index([("vendor_id", 1)], background=True)
+    await db.vendor_items.create_index([("item_ref.id", 1)], background=True)
+    await db.vendor_items.create_index(
+        [("vendor_id", 1), ("item_ref.source", 1), ("item_ref.id", 1)],
+        unique=True, background=True)
+    await db.purchase_items.create_index("name", background=True)
+    await db.requisitions.create_index([("status", 1), ("created_at", -1)], background=True)
+    await db.purchase_orders.create_index([("status", 1), ("created_at", -1)], background=True)
+    await db.purchase_orders.create_index("vendor_id", background=True)
+    await db.purchase_orders.create_index("requisition_id", background=True)
+    await db.goods_receipts.create_index("po_id", background=True)
+    await db.goods_receipts.create_index([("status", 1), ("created_at", -1)], background=True)
+    await db.procurement_stage_logs.create_index([("doc_type", 1), ("doc_id", 1), ("at", 1)], background=True)
+
     logging.info("Database indexes created/verified (%d collections indexed)", 30)
 
 

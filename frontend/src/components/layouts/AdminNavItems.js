@@ -3,7 +3,7 @@ import {
   Warehouse, ClipboardList, DollarSign, Users,
   Smartphone, Layers, IndianRupee, UserCog, Store, MapPin, Target,
   CalendarDays, Calendar, ShoppingCart, Upload, Activity,
-  Home, MoreHorizontal, Zap, Heart,
+  Home, MoreHorizontal, Zap, Heart, Truck,
 } from 'lucide-react';
 
 /**
@@ -46,6 +46,10 @@ export const MODULE_ROUTE_MAP = {
     { path: '/customer-engagement', icon: Heart, label: 'Customer Engagement' },
     { path: '/marketing', icon: Zap, label: 'Marketing & WhatsApp' },
   ],
+  procurement: [
+    { path: '/procurement', icon: ShoppingCart, label: 'Procurement' },
+    { path: '/procurement-masters', icon: Truck, label: 'Procurement Masters' },
+  ],
   delegation: { path: '/delegation', icon: ClipboardList, label: 'Delegation System' },
   flow_management: { path: '/flow-management', icon: Zap, label: 'Flow Management' },
   sales_portal: { path: '/sales', icon: Smartphone, label: 'Sales Portal' },
@@ -64,6 +68,7 @@ export const SIDEBAR_SECTIONS = [
   { label: null,                modules: ['dashboard'] },
   { label: 'Sales',             modules: ['quotations', 'leads', 'field_sales', 'sales_portal'] },
   { label: 'Store & Inventory', modules: ['inventory', 'stock_management', 'purchase_alerts', 'physical_count', 'package_master', 'store'] },
+  { label: 'Procurement',       modules: ['procurement'] },
   { label: 'Finance & HR',      modules: ['accounts', 'payroll', 'hr'] },
   { label: 'Reports',           modules: ['analytics'] },
   { label: 'Delegation',        modules: ['delegation'] },
@@ -73,7 +78,7 @@ export const SIDEBAR_SECTIONS = [
 
 export const TEAM_MODULES = {
   accounts: ['dashboard', 'quotations', 'accounts', 'payroll', 'analytics', 'delegation', 'flow_management'],
-  store:    ['dashboard', 'quotations', 'inventory', 'stock_management', 'purchase_alerts', 'physical_count', 'store', 'package_master', 'delegation', 'flow_management'],
+  store:    ['dashboard', 'quotations', 'inventory', 'stock_management', 'purchase_alerts', 'physical_count', 'store', 'package_master', 'procurement', 'delegation', 'flow_management'],
   sales:    ['dashboard', 'quotations', 'field_sales', 'sales_portal', 'leads', 'delegation', 'flow_management'],
 };
 
