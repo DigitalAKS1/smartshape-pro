@@ -61,12 +61,21 @@ export default function CRMMasters() {
   const addType = async () => {
     const name = newType.trim();
     if (!name) return;
-    try { await schoolTypesApi.create({ name }); setNewType(''); loadTypes(); toast.success(`Added "${name}"`); }
-    catch (e) { toast.error(e?.response?.data?.detail || 'Failed'); }
+    try {
+      // Use the POST response rather than an immediate refetch (which can read a
+      // stale Mongo secondary and miss the just-written row).
+      const r = await schoolTypesApi.create({ name });
+      setNewType('');
+      setStList(prev => {
+        const list = prev.some(t => t.type_id === r.data.type_id) ? prev : [...prev, r.data];
+        return list.slice().sort((a, b) => a.name.localeCompare(b.name));
+      });
+      toast.success(`Added "${name}"`);
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Failed'); }
   };
   const deleteType = async (t) => {
     if (!window.confirm(`Delete school type "${t.name}"?`)) return;
-    try { await schoolTypesApi.delete(t.type_id); loadTypes(); }
+    try { await schoolTypesApi.delete(t.type_id); setStList(prev => prev.filter(x => x.type_id !== t.type_id)); }
     catch { toast.error('Delete failed'); }
   };
 
@@ -78,12 +87,22 @@ export default function CRMMasters() {
   const addProduct = async () => {
     const name = newProduct.trim();
     if (!name) return;
-    try { await interestedProductsApi.create({ name }); setNewProduct(''); loadProducts(); toast.success(`Added "${name}"`); }
-    catch (e) { toast.error(e?.response?.data?.detail || 'Failed'); }
+    try {
+      // Use the POST response (authoritative; returns the existing doc on a
+      // case-insensitive dupe) instead of an immediate refetch, which can read
+      // a stale Mongo secondary and miss the just-written row.
+      const r = await interestedProductsApi.create({ name });
+      setNewProduct('');
+      setIpList(prev => {
+        const list = prev.some(p => p.product_id === r.data.product_id) ? prev : [...prev, r.data];
+        return list.slice().sort((a, b) => a.name.localeCompare(b.name));
+      });
+      toast.success(`Added "${name}"`);
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Failed'); }
   };
   const deleteProduct = async (p) => {
     if (!window.confirm(`Delete interested product "${p.name}"?`)) return;
-    try { await interestedProductsApi.delete(p.product_id); loadProducts(); }
+    try { await interestedProductsApi.delete(p.product_id); setIpList(prev => prev.filter(x => x.product_id !== p.product_id)); }
     catch { toast.error('Delete failed'); }
   };
 
