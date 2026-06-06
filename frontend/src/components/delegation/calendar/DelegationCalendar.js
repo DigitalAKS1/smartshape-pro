@@ -5,6 +5,7 @@ import CalendarMonth from './CalendarMonth';
 import AgendaList from './AgendaList';
 import CalendarDay from './CalendarDay';
 import DayPlanBlockDialog from './DayPlanBlockDialog';
+import EventActionDrawer from './EventActionDrawer';
 
 const PINK = '#e94560';
 const SOURCE_LABELS = {
@@ -19,6 +20,7 @@ const SOURCE_COLORS = {
 export default function DelegationCalendar({ onEventClick, card, textPri, textSec, textMuted, inputCls }) {
   const c = useDelegationCalendar();
   const [blockDialog, setBlockDialog] = React.useState(null);
+  const [selectedEvent, setSelectedEvent] = React.useState(null);
   const monthLabel = c.cursor.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
 
   const rangeDates = () => {
@@ -85,12 +87,12 @@ export default function DelegationCalendar({ onEventClick, card, textPri, textSe
       )}
       {!c.loading && c.view === 'week' && (
         <AgendaList dates={rangeDates()} eventsByDate={c.eventsByDate}
-          onEventClick={onEventClick} card={card} textPri={textPri} textSec={textSec} textMuted={textMuted} />
+          onEventClick={(e) => e.source === 'plan' ? setBlockDialog({ block: e }) : setSelectedEvent(e)} card={card} textPri={textPri} textSec={textSec} textMuted={textMuted} />
       )}
       {!c.loading && c.view === 'day' && (
         <CalendarDay
           date={c.range.from} events={c.eventsByDate[c.range.from] || []}
-          onEventClick={onEventClick}
+          onEventClick={(e) => setSelectedEvent(e)}
           onAddBlock={(start) => setBlockDialog({ start })}
           onEditBlock={(e) => setBlockDialog({ block: e })}
           onDropItem={(ev, start) => c.scheduleItem(ev, c.range.from, start)}
@@ -117,6 +119,13 @@ export default function DelegationCalendar({ onEventClick, card, textPri, textSe
           }}
           onDelete={async (id) => { if (await c.deleteBlock(id)) setBlockDialog(null); }}
           onClose={() => setBlockDialog(null)}
+          card={card} textPri={textPri} textSec={textSec} textMuted={textMuted} inputCls={inputCls} />
+      )}
+      {selectedEvent && (
+        <EventActionDrawer
+          event={selectedEvent}
+          onAction={c.runAction}
+          onClose={() => setSelectedEvent(null)}
           card={card} textPri={textPri} textSec={textSec} textMuted={textMuted} inputCls={inputCls} />
       )}
     </div>

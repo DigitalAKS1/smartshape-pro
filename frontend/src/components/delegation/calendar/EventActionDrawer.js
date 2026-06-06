@@ -1,0 +1,121 @@
+import React, { useState } from 'react';
+import { X, Check, RotateCcw, Calendar, ExternalLink, Video, ArrowRightLeft } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+
+const PINK = '#e94560';
+
+const ACTION_META = {
+  complete:       { label: 'Mark done',      Icon: Check,     color: '#10b981' },
+  verify:         { label: 'Verify',         Icon: Check,     color: '#3b82f6' },
+  reopen:         { label: 'Reopen',         Icon: RotateCcw, color: '#64748b' },
+  complete_stage: { label: 'Complete stage', Icon: Check,     color: '#10b981' },
+  checkin:        { label: 'Check in',       Icon: Check,     color: '#10b981' },
+  checkout:       { label: 'Check out',      Icon: Check,     color: '#06b6d4' },
+  set_status:     { label: 'Mark completed', Icon: Check,     color: '#10b981' },
+};
+
+export default function EventActionDrawer({ event, onAction, onClose, card, textPri, textSec, textMuted, inputCls }) {
+  const navigate = useNavigate();
+  const [rescheduleDate, setRescheduleDate] = useState(event?.date || '');
+  const [outcome, setOutcome] = useState('');
+  const [busy, setBusy] = useState(false);
+  if (!event) return null;
+
+  const acts = event.actions || [];
+  const has = (a) => acts.includes(a);
+  const meta = event.meta || {};
+
+  const fire = async (action, payload) => {
+    setBusy(true);
+    const ok = await onAction(event, action, payload);
+    setBusy(false);
+    if (ok) onClose();
+  };
+
+  const row = `w-full flex items-center justify-center gap-2 h-10 rounded-lg text-sm font-semibold`;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-stretch justify-end" onClick={onClose}>
+      <div className="absolute inset-0 bg-black/30 backdrop-blur-[2px]" />
+      <div className={`relative w-full max-w-md ${card} border-l border-[var(--border-color)] flex flex-col shadow-2xl`} onClick={e => e.stopPropagation()}>
+        <div className="flex items-start gap-3 px-5 py-4 border-b border-[var(--border-color)]">
+          <span className="w-1.5 h-10 rounded-full flex-shrink-0 mt-0.5" style={{ background: event.color }} />
+          <div className="flex-1 min-w-0">
+            <p className={`text-sm font-semibold ${textPri}`}>{event.title}</p>
+            <p className={`text-xs ${textMuted} mt-0.5`}>
+              {event.date}{event.start_time ? ` · ${event.start_time}` : ''} · <span className="capitalize">{(event.type || event.source || '').replace(/_/g, ' ')}</span>
+              {event.status ? ` · ${event.status}` : ''}
+            </p>
+          </div>
+          <button onClick={onClose} className={`p-1.5 rounded-lg hover:bg-[var(--bg-hover)] ${textSec}`}><X className="h-4 w-4" /></button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-5 space-y-3">
+          {(meta.delegator_name || meta.customer_name || meta.location) && (
+            <div className={`text-xs ${textSec} space-y-1`}>
+              {meta.delegator_name && <p>From: {meta.delegator_name}</p>}
+              {meta.customer_name && <p>Customer: {meta.customer_name}</p>}
+              {meta.location && <p>Location: {meta.location}</p>}
+            </div>
+          )}
+
+          {['complete','verify','reopen','complete_stage','checkin','checkout','set_status'].filter(has).map(a => {
+            const m = ACTION_META[a];
+            return (
+              <button key={a} disabled={busy} onClick={() => fire(a, {})}
+                className={`${row} text-white`} style={{ background: m.color }}>
+                <m.Icon className="h-4 w-4" /> {m.label}
+              </button>
+            );
+          })}
+
+          {has('join') && meta.meeting_link && (
+            <a href={meta.meeting_link} target="_blank" rel="noreferrer"
+              className={`${row} text-white`} style={{ background: '#6366f1' }}>
+              <Video className="h-4 w-4" /> Join
+            </a>
+          )}
+
+          {has('log_outcome') && (
+            <div className="space-y-1.5">
+              <input value={outcome} onChange={e => setOutcome(e.target.value)} placeholder="Outcome (optional)…"
+                className={`w-full h-9 px-2.5 text-sm rounded border border-[var(--border-color)] ${inputCls}`} />
+              <button disabled={busy} onClick={() => fire('log_outcome', { outcome })}
+                className={`${row} text-white`} style={{ background: '#10b981' }}>
+                <Check className="h-4 w-4" /> Log outcome &amp; done
+              </button>
+            </div>
+          )}
+
+          {has('reschedule') && (
+            <div className="space-y-1.5">
+              <label className={`text-[11px] uppercase tracking-wide font-semibold ${textMuted}`}>Reschedule to</label>
+              <div className="flex gap-2">
+                <input type="date" value={rescheduleDate} onChange={e => setRescheduleDate(e.target.value)}
+                  className={`flex-1 h-9 px-2.5 text-sm rounded border border-[var(--border-color)] ${inputCls}`} />
+                <button disabled={busy || !rescheduleDate} onClick={() => fire('reschedule', { date: rescheduleDate })}
+                  className="h-9 px-3 rounded-lg text-sm font-semibold border border-[var(--border-color)]" style={{ color: PINK }}>
+                  <Calendar className="h-4 w-4 inline" />
+                </button>
+              </div>
+            </div>
+          )}
+
+          {has('reassign') && (
+            <button onClick={() => navigate('/delegation')}
+              className={`${row} border border-[var(--border-color)] ${textSec}`}>
+              <ArrowRightLeft className="h-4 w-4" /> Reassign (in Delegation)
+            </button>
+          )}
+        </div>
+
+        <div className="px-5 py-4 border-t border-[var(--border-color)]">
+          <button onClick={() => navigate(event.link || '/delegation')}
+            className={`${row} border border-[var(--border-color)] ${textSec}`}>
+            <ExternalLink className="h-4 w-4" /> Open in module
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
