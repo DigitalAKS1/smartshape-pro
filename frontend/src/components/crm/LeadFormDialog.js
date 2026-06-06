@@ -6,6 +6,7 @@ import { Label } from '../ui/label';
 import { useTheme } from '../../contexts/ThemeContext';
 import useSchoolTypes from '../../hooks/useSchoolTypes';
 import { tags as tagsApi } from '../../lib/api';
+import InterestedProductField from './InterestedProductField';
 
 export default function LeadFormDialog({
   open, onOpenChange,
@@ -102,6 +103,8 @@ export default function LeadFormDialog({
               </select>
             </div>
           </div>
+
+          <InterestedProductField value={leadForm.interested_product} onChange={v => setLeadForm({...leadForm, interested_product: v})} />
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>

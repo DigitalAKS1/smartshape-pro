@@ -12,6 +12,7 @@ import {
   Upload, Download, FileText, CheckCircle, Building2,
   ExternalLink, AlertTriangle, ArrowRightCircle, X,
 } from 'lucide-react';
+import InterestedProductField from './InterestedProductField';
 
 export default function ContactFormDialog({
   // Contact create/edit dialog
@@ -247,7 +248,7 @@ export default function ContactFormDialog({
                 </div>
               </div>
 
-              <div><Label className={`${textSec} text-xs`}>Interested Product</Label><Input value={convertForm.interested_product} onChange={e => setConvertForm({...convertForm, interested_product: e.target.value})} className={inputCls} placeholder="e.g. Premium Package" /></div>
+              <InterestedProductField value={convertForm.interested_product} onChange={v => setConvertForm({...convertForm, interested_product: v})} />
 
               <div>
                 <Label className={`${textSec} text-xs`}>Assign To</Label>
