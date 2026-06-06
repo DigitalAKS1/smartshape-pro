@@ -4,7 +4,7 @@ import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Label } from '../ui/label';
 import { useTheme } from '../../contexts/ThemeContext';
-import { SCHOOL_TYPES } from '../../lib/crmConstants';
+import useSchoolTypes from '../../hooks/useSchoolTypes';
 import { tags as tagsApi } from '../../lib/api';
 
 export default function LeadFormDialog({
@@ -18,6 +18,7 @@ export default function LeadFormDialog({
   saveLead,
 }) {
   const { isDark } = useTheme();
+  const schoolTypeOptions = useSchoolTypes();
   const inputCls = 'bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]';
   const textPri = 'text-[var(--text-primary)]';
   const textSec = 'text-[var(--text-secondary)]';
@@ -43,7 +44,7 @@ export default function LeadFormDialog({
                   <Input value={newSchool.school_name} onChange={e => setNewSchool({...newSchool, school_name: e.target.value})} placeholder="School name *" className={`${inputCls} text-sm`} />
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     <select value={newSchool.school_type} onChange={e => setNewSchool({...newSchool, school_type: e.target.value})} className={`h-9 px-2 rounded text-sm ${inputCls}`}>
-                      {SCHOOL_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                      {schoolTypeOptions.map(t => <option key={t} value={t}>{t}</option>)}
                     </select>
                     <Input value={newSchool.city} onChange={e => setNewSchool({...newSchool, city: e.target.value})} placeholder="City" className={`${inputCls} text-sm`} />
                   </div>

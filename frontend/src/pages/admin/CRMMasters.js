@@ -7,7 +7,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { Plus, Building2, Tag, UserCheck, Send, Briefcase, Edit2, Trash2, SlidersHorizontal } from 'lucide-react';
 import { toast } from 'sonner';
 import { useCRMMasters } from '../../hooks/useCRMMasters';
-import { pipelineSettings } from '../../lib/api';
+import { pipelineSettings, schoolTypes as schoolTypesApi } from '../../lib/api';
 import { STAGES } from '../../lib/crmConstants';
 import MasterEntityTable from '../../components/crm/MasterEntityTable';
 
@@ -17,6 +17,7 @@ const TABS = [
   { id: 'roles',        label: 'Contact Roles',        icon: UserCheck, desc: 'Role / designation taxonomy for school contacts (Principal, Trustee, Director, ...)' },
   { id: 'designations', label: 'Designation Master',   icon: Briefcase, desc: 'Job designations for school contacts — CEO, Principal, Vice Principal, Coordinator, ...' },
   { id: 'tags',         label: 'Tag Master',           icon: Tag,       desc: 'Color-coded tags to segment leads and run targeted WhatsApp / email campaigns' },
+  { id: 'schooltypes',  label: 'School Types',         icon: Building2, desc: 'Board / type options shown in school forms — CBSE, ICSE, IB, Cambridge, ...' },
   { id: 'pipeline',     label: 'Pipeline Settings',    icon: SlidersHorizontal, desc: 'Win probability per stage, idle limits before a lead is "stuck", lost reasons, and the daily digest' },
 ];
 
@@ -49,6 +50,23 @@ export default function CRMMasters() {
     } catch (e) {
       toast.error(e?.response?.data?.detail || 'Save failed');
     } finally { setPipeSaving(false); }
+  };
+
+  // School types master
+  const [stList, setStList] = useState([]);
+  const [newType, setNewType] = useState('');
+  const loadTypes = () => schoolTypesApi.getAll().then(r => setStList(Array.isArray(r.data) ? r.data : [])).catch(() => {});
+  useEffect(() => { loadTypes(); }, []);
+  const addType = async () => {
+    const name = newType.trim();
+    if (!name) return;
+    try { await schoolTypesApi.create({ name }); setNewType(''); loadTypes(); toast.success(`Added "${name}"`); }
+    catch (e) { toast.error(e?.response?.data?.detail || 'Failed'); }
+  };
+  const deleteType = async (t) => {
+    if (!window.confirm(`Delete school type "${t.name}"?`)) return;
+    try { await schoolTypesApi.delete(t.type_id); loadTypes(); }
+    catch { toast.error('Delete failed'); }
   };
 
   if (m.loading) return (
@@ -315,6 +333,34 @@ export default function CRMMasters() {
                 </div>
               </>
             )}
+          </div>
+        )}
+
+        {/* SCHOOL TYPES */}
+        {activeTab === 'schooltypes' && (
+          <div className={`${card} border rounded-md p-5`}>
+            <div className="flex items-center justify-between mb-4 gap-2">
+              <h2 className={`text-lg font-medium ${textPri}`}>School Types ({stList.length})</h2>
+              <div className="flex gap-2">
+                <Input value={newType} onChange={e => setNewType(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') addType(); }}
+                  placeholder="e.g. Cambridge" className={`${inputCls} h-9 text-sm w-44`} data-testid="new-school-type-input" />
+                <Button onClick={addType} size="sm" className="bg-[#e94560] hover:bg-[#f05c75] text-white" data-testid="add-school-type-btn">
+                  <Plus className="mr-1 h-3 w-3" /> Add
+                </Button>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+              {stList.map(t => (
+                <div key={t.type_id} className={`flex items-center justify-between ${card} border rounded-md p-2.5`} data-testid={`school-type-row-${t.type_id}`}>
+                  <span className={`${textPri} text-sm`}>{t.name}</span>
+                  <Button size="sm" variant="ghost" onClick={() => deleteType(t)} className="text-red-400 h-7 px-1.5" data-testid={`delete-school-type-${t.type_id}`}>
+                    <Trash2 className="h-3 w-3" />
+                  </Button>
+                </div>
+              ))}
+              {stList.length === 0 && <p className={`text-xs ${textMuted} col-span-full text-center py-6`}>No school types yet — add one above (e.g. Cambridge)</p>}
+            </div>
           </div>
         )}
 

@@ -5,7 +5,8 @@ import { Input } from '../ui/input';
 import { Label } from '../ui/label';
 import { useTheme } from '../../contexts/ThemeContext';
 import { toast } from 'sonner';
-import { SCHOOL_TYPES, INDIAN_STATES, BUDGET_RANGES } from '../../lib/crmConstants';
+import { INDIAN_STATES, BUDGET_RANGES } from '../../lib/crmConstants';
+import useSchoolTypes from '../../hooks/useSchoolTypes';
 
 export default function SchoolFormDialog({
   open, onOpenChange,
@@ -15,6 +16,7 @@ export default function SchoolFormDialog({
   handleSaveSchool,
 }) {
   const { isDark } = useTheme();
+  const schoolTypeOptions = useSchoolTypes();
   const inputCls = 'bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]';
   const textPri = 'text-[var(--text-primary)]';
   const textSec = 'text-[var(--text-secondary)]';
@@ -62,8 +64,8 @@ export default function SchoolFormDialog({
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <Label className={`${textSec} text-xs`}>Type</Label>
-              <select value={editSchoolForm.school_type || 'CBSE'} onChange={e => setEditSchoolForm({...editSchoolForm, school_type: e.target.value})} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`}>
-                {SCHOOL_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+              <select value={editSchoolForm.school_type || 'CBSE'} onChange={e => setEditSchoolForm({...editSchoolForm, school_type: e.target.value})} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`} data-testid="school-type-select">
+                {schoolTypeOptions.map(t => <option key={t} value={t}>{t}</option>)}
               </select>
             </div>
             <div>

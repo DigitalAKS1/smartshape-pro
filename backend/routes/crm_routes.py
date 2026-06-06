@@ -372,6 +372,61 @@ async def update_pipeline_settings(request: Request):
     return await get_crm_settings()
 
 
+# ==================== SCHOOL TYPE MASTER ====================
+
+DEFAULT_SCHOOL_TYPES = ["CBSE", "ICSE", "IB", "Cambridge", "State Board", "Coaching", "College"]
+
+
+@router.get("/school-types")
+async def get_school_types(request: Request):
+    await get_current_user(request)
+    items = await db.school_types.find({}, {"_id": 0}).sort("name", 1).to_list(200)
+    if not items:
+        for s in DEFAULT_SCHOOL_TYPES:
+            await db.school_types.insert_one({
+                "type_id": f"st_{uuid.uuid4().hex[:8]}",
+                "name": s, "is_active": True,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            })
+        items = await db.school_types.find({}, {"_id": 0}).sort("name", 1).to_list(200)
+    return items
+
+
+@router.post("/school-types")
+async def create_school_type(request: Request):
+    await get_current_user(request)
+    body = await request.json()
+    name = (body.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name required")
+    existing = await db.school_types.find_one({"name": name}, {"_id": 0})
+    if existing:
+        return existing
+    type_id = f"st_{uuid.uuid4().hex[:8]}"
+    await db.school_types.insert_one({
+        "type_id": type_id, "name": name, "is_active": True,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    return await db.school_types.find_one({"type_id": type_id}, {"_id": 0})
+
+
+@router.put("/school-types/{type_id}")
+async def update_school_type(type_id: str, request: Request):
+    await get_current_user(request)
+    body = await request.json()
+    allowed = {k: body[k] for k in ("name", "is_active") if k in body}
+    if allowed:
+        await db.school_types.update_one({"type_id": type_id}, {"$set": allowed})
+    return await db.school_types.find_one({"type_id": type_id}, {"_id": 0})
+
+
+@router.delete("/school-types/{type_id}")
+async def delete_school_type(type_id: str, request: Request):
+    await get_current_user(request)
+    await db.school_types.delete_one({"type_id": type_id})
+    return {"message": "School type deleted"}
+
+
 # ==================== CONTACT ROLE MASTER ====================
 
 DEFAULT_CONTACT_ROLES = [

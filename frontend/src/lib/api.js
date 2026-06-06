@@ -375,6 +375,14 @@ export const pipelineSettings = {
   update: (data) => API.put('/pipeline-settings', data),
 };
 
+// School type master (CBSE, ICSE, Cambridge, ...)
+export const schoolTypes = {
+  getAll: () => API.get('/school-types'),
+  create: (data) => API.post('/school-types', data),
+  update: (id, data) => API.put(`/school-types/${id}`, data),
+  delete: (id) => API.delete(`/school-types/${id}`),
+};
+
 // Follow-ups
 export const followups = {
   getAll: (leadId) => API.get('/followups', { params: { lead_id: leadId } }),

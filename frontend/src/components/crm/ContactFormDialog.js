@@ -7,7 +7,7 @@ import { Label } from '../ui/label';
 import { useTheme } from '../../contexts/ThemeContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { toast } from 'sonner';
-import { SCHOOL_TYPES } from '../../lib/crmConstants';
+import useSchoolTypes from '../../hooks/useSchoolTypes';
 import {
   Upload, Download, FileText, CheckCircle, Building2,
   ExternalLink, AlertTriangle, ArrowRightCircle, X,
@@ -43,6 +43,7 @@ export default function ContactFormDialog({
   const navigate = useNavigate();
   const { user } = useAuth();
   const { isDark } = useTheme();
+  const schoolTypeOptions = useSchoolTypes();
 
   const inputCls = 'bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]';
   const textPri = 'text-[var(--text-primary)]';
@@ -214,7 +215,7 @@ export default function ContactFormDialog({
                     <Input value={convertNewSchool.school_name} onChange={e => setConvertNewSchool({...convertNewSchool, school_name: e.target.value})} placeholder="School name *" className={`${inputCls} text-sm`} data-testid="convert-new-school-name" />
                     <div className="grid grid-cols-2 gap-2">
                       <select value={convertNewSchool.school_type} onChange={e => setConvertNewSchool({...convertNewSchool, school_type: e.target.value})} className={`h-9 px-2 rounded text-sm ${inputCls}`}>
-                        {SCHOOL_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                        {schoolTypeOptions.map(t => <option key={t} value={t}>{t}</option>)}
                       </select>
                       <Input value={convertNewSchool.city} onChange={e => setConvertNewSchool({...convertNewSchool, city: e.target.value})} placeholder="City" className={`${inputCls} text-sm`} />
                     </div>
