@@ -783,6 +783,57 @@ async def crm_digest_loop():
             await asyncio.sleep(3600)
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# JOB 7 — Certificate Generation Pass (cert_loop)
+# ══════════════════════════════════════════════════════════════════════════════
+
+from cert_engine import render_certificate_pdf, sanitize_filename
+
+CERT_DRY_RUN = os.getenv("CERT_DRY_RUN", "0") == "1"
+_CERT_DIR = os.path.join(os.path.dirname(__file__), "uploads", "certificates")
+_PUBLIC_BASE = os.getenv("PUBLIC_BASE", "").rstrip("/")
+
+
+async def _generate_pending_certs():
+    batches = await db.cert_batches.find({"status": "generating"}, {"_id": 0}).to_list(100)
+    for batch in batches:
+        tpl = await db.cert_templates.find_one({"template_id": batch["template_id"]}, {"_id": 0})
+        if not tpl:
+            await db.cert_batches.update_one({"batch_id": batch["batch_id"]}, {"$set": {"status": "draft"}})
+            continue
+        bg_url = tpl.get("background_url", "")
+        bg_file = bg_url.split("/uploads/certificates/")[-1] if "/uploads/certificates/" in bg_url else bg_url
+        bg_path = os.path.join(_CERT_DIR, bg_file)
+        items = await db.cert_items.find(
+            {"batch_id": batch["batch_id"], "gen_status": "pending"}, {"_id": 0}).to_list(2000)
+        for it in items:
+            out_name = f"{it['item_id']}.pdf"
+            out_path = os.path.join(_CERT_DIR, out_name)
+            try:
+                render_certificate_pdf(bg_path, out_path, tpl.get("fields", []),
+                                       {"name": it["name"]}, batch.get("shared_values", {}))
+                await db.cert_items.update_one({"item_id": it["item_id"]}, {"$set": {
+                    "gen_status": "generated", "pdf_url": f"/uploads/certificates/{out_name}"}})
+                await db.cert_batches.update_one({"batch_id": batch["batch_id"]},
+                                                 {"$inc": {"counts.generated": 1}})
+            except Exception as e:
+                await db.cert_items.update_one({"item_id": it["item_id"]}, {"$set": {
+                    "gen_status": "failed", "gen_error": str(e)[:200]}})
+                await db.cert_batches.update_one({"batch_id": batch["batch_id"]},
+                                                 {"$inc": {"counts.failed": 1}})
+        await db.cert_batches.update_one({"batch_id": batch["batch_id"]}, {"$set": {"status": "ready"}})
+
+
+async def _deliver_pending_certs():
+    return  # implemented in Task 6
+
+
+async def run_cert_pass():
+    """One pass: generate pending certs, then deliver (delivery added in Task 6)."""
+    await _generate_pending_certs()
+    await _deliver_pending_certs()
+
+
 async def start_scheduler():
     """Start all background automation loops. Call once from FastAPI startup."""
     asyncio.create_task(email_sender_loop())

@@ -166,3 +166,20 @@ async def add_attendees(batch_id: str, request: Request):
         await db.cert_items.insert_many(rows)
         await db.cert_batches.update_one({"batch_id": batch_id}, {"$inc": {"counts.total": len(rows)}})
     return {"added": len(rows)}
+
+
+# ── Generation + debug runner ─────────────────────────────────────────────────
+
+@router.post("/batches/{batch_id}/generate")
+async def generate_batch(batch_id: str, request: Request):
+    user = await get_current_user(request); require_admin(user)
+    await db.cert_batches.update_one({"batch_id": batch_id}, {"$set": {"status": "generating"}})
+    return {"ok": True, "message": "Generation queued"}
+
+@router.post("/_run-loop")
+async def debug_run_loop(request: Request):
+    """Admin-only: run one pass of the cert generation+delivery loop synchronously (tests/manual)."""
+    user = await get_current_user(request); require_admin(user)
+    from scheduler import run_cert_pass
+    await run_cert_pass()
+    return {"ok": True}
