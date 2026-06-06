@@ -1178,3 +1178,104 @@ async def delete_plan_block(block_id: str, request: Request):
         raise HTTPException(403, "Not your plan block")
     await db.del_plan_blocks.delete_one({"block_id": block_id})
     return {"ok": True}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# UNIFIED AGENDA  (calendar aggregation across sources)
+# ══════════════════════════════════════════════════════════════════════════════
+
+AGENDA_COLORS = {
+    "delegation": "#e94560", "fms": "#8b5cf6", "visit": "#06b6d4",
+    "task": "#f59e0b", "followup": "#10b981", "workshop": "#6366f1", "plan": "#64748b",
+}
+
+
+def _ev(source, type_, title, date_, entity_id, link, *, start_time=None, end_time=None,
+        status=None, priority=None, actions=None, meta=None):
+    return {
+        "event_id": f"{source}_{entity_id}", "source": source, "type": type_,
+        "title": title or "(untitled)", "date": date_,
+        "start_time": start_time, "end_time": end_time,
+        "status": status, "priority": priority,
+        "entity_id": entity_id, "link": link, "color": AGENDA_COLORS.get(source, "#64748b"),
+        "actions": actions or [], "meta": meta or {},
+    }
+
+
+async def _resolve_subject(actor: dict, emp_id):
+    """Whose calendar to show. Self by default; a team member if boss or a delegation target."""
+    if not emp_id or emp_id == actor["emp_id"]:
+        own = await db.del_employees.find_one({"emp_id": actor["emp_id"]}, {"_id": 0}) if actor["emp_id"] else None
+        return own, True
+    target = await db.del_employees.find_one({"emp_id": emp_id}, {"_id": 0})
+    if not target:
+        raise HTTPException(404, "Employee not found")
+    if not actor["is_boss"]:
+        me = await db.del_employees.find_one({"emp_id": actor["emp_id"]}, {"_id": 0}) or {}
+        if emp_id not in (me.get("delegation_targets") or []):
+            raise HTTPException(403, "You can only view your own team members' calendars")
+    return target, False
+
+
+async def _subject_team(email: str):
+    if not email:
+        return None
+    u = await db.users.find_one({"email": email}, {"_id": 0, "role": 1})
+    role = (u or {}).get("role", "")
+    return {"admin": "admin", "accounts": "accounts", "store": "store"}.get(role, "sales" if role else None)
+
+
+async def _agenda_delegation(emp_id, dfrom, dto):
+    if not emp_id:
+        return []
+    rows = await db.del_task_instances.find(
+        {"emp_id": emp_id, "due_date": {"$gte": dfrom, "$lte": dto}}, {"_id": 0}
+    ).to_list(2000)
+    out = []
+    for r in rows:
+        acts = []
+        if r.get("status") == "pending":
+            acts = ["complete", "reschedule", "reassign"]
+        elif r.get("status") == "completed":
+            acts = ["verify", "reopen"]
+        out.append(_ev(
+            "delegation", "delegated" if r.get("delegator_id") else "my_task",
+            r.get("task_title"), r["due_date"], r["instance_id"], "/delegation",
+            status=r.get("status"), priority=r.get("priority"), actions=acts,
+            meta={"delegator_name": r.get("delegator_name", ""), "emp_name": r.get("emp_name", ""),
+                  "requires_image": r.get("requires_image", False)},
+        ))
+    return out
+
+
+@router.get("/agenda")
+async def get_agenda(request: Request):
+    from_ = request.query_params.get("from")
+    to_ = request.query_params.get("to")
+    emp_id = request.query_params.get("emp_id")
+    if not from_ or not to_:
+        raise HTTPException(400, "from and to (YYYY-MM-DD) are required")
+    try:
+        days = (date.fromisoformat(to_) - date.fromisoformat(from_)).days
+    except Exception:
+        raise HTTPException(400, "Invalid date format; use YYYY-MM-DD")
+    if days < 0 or days > 62:
+        raise HTTPException(400, "Range must be between 0 and 62 days")
+
+    user = await get_current_user(request)
+    actor = await _resolve_actor(user)
+    subject, is_self = await _resolve_subject(actor, emp_id)
+    if not subject:
+        return {"from": from_, "to": to_, "subject_emp_id": None, "events": []}
+
+    s_emp = subject["emp_id"]
+    s_email = subject.get("email", "")
+    s_team = await _subject_team(s_email)
+
+    events = []
+    events += await _agenda_delegation(s_emp, from_, to_)
+    # (further sources added in a later task)
+
+    return {"from": from_, "to": to_, "subject_emp_id": s_emp, "is_self": is_self,
+            "subject_team": s_team, "events": events}
+
