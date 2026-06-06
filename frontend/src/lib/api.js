@@ -399,6 +399,12 @@ export const followups = {
   update: (id, data) => API.put(`/followups/${id}`, data),
 };
 
+// Training / Workshop sessions
+export const training = {
+  sessions:      ()       => API.get('/training/sessions'),
+  updateSession: (id, d)  => API.put(`/training/sessions/${id}`, d),
+};
+
 // Tasks / Follow-ups
 export const tasks = {
   getAll: () => API.get('/tasks'),

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { delegation as delApi } from '../lib/api';
+import { delegation as delApi, fms as fmsApi, visitPlans as visitApi, tasks as tasksApi, followups as fuApi, training as trainingApi } from '../lib/api';
 import { toast } from 'sonner';
 
 /* ── date helpers (local, no deps) ─────────────────────────────────────── */
@@ -102,13 +102,43 @@ export function useDelegationCalendar() {
     } catch (e) { toast.error(e?.response?.data?.detail || 'Failed'); return false; }
   }, [load]);
 
+  const runAction = useCallback(async (ev, action, payload = {}) => {
+    const id = ev.entity_id;
+    try {
+      switch (`${ev.source}:${action}`) {
+        case 'delegation:complete': await delApi.instances.complete(id, { note: payload.note || '' }); break;
+        case 'delegation:verify':   await delApi.instances.verify(id); break;
+        case 'delegation:reopen':   await delApi.instances.reopen(id); break;
+        case 'delegation:reschedule': await delApi.instances.patch(id, { due_date: payload.date }); break;
+        case 'fms:complete_stage':  await fmsApi.completeStage(id, {}); break;
+        case 'visit:checkin':       await visitApi.checkIn(id, {}); break;
+        case 'visit:checkout':      await visitApi.checkOut(id, {}); break;
+        case 'visit:reschedule':    await visitApi.reschedule(id, { visit_date: payload.date }); break;
+        case 'task:complete':       await tasksApi.update(id, { status: 'done' }); break;
+        case 'task:reschedule':     await tasksApi.update(id, { due_date: payload.date }); break;
+        case 'followup:log_outcome':await fuApi.update(id, { status: 'done', outcome: payload.outcome || '' }); break;
+        case 'followup:reschedule': await fuApi.update(id, { followup_date: payload.date }); break;
+        case 'workshop:set_status': await trainingApi.updateSession(id, { status: payload.status || 'completed' }); break;
+        case 'plan:delete':         await delApi.planBlocks.delete(id); break;
+        default:
+          toast.error('Action not available'); return false;
+      }
+      toast.success('Done');
+      load();
+      return true;
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Action failed');
+      return false;
+    }
+  }, [load]);
+
   return {
     view, setView, cursor, setCursor, range,
     subjectEmp, setSubjectEmp,
     hidden, toggleSource, ALL_SOURCES,
     events, visibleEvents, eventsByDate, loading, reload: load,
     goPrev, goNext, goToday,
-    createBlock, updateBlock, deleteBlock, scheduleItem,
+    createBlock, updateBlock, deleteBlock, scheduleItem, runAction,
     helpers: { iso, addDays, startOfMonth, endOfMonth, startOfWeek },
   };
 }
