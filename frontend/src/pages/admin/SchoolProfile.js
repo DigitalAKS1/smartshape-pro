@@ -21,6 +21,7 @@ import SchoolContactsSection from '../../components/school/SchoolContactsSection
 import SchoolLeadsSection from '../../components/school/SchoolLeadsSection';
 import SchoolLeadQuickCreate from '../../components/school/SchoolLeadQuickCreate';
 import ConvertContactDialog from '../../components/school/ConvertContactDialog';
+import EnrollDripDialog from '../../components/school/EnrollDripDialog';
 import {
   SchoolSalesSection, SchoolMarketingSection,
   SchoolVisitsSection, SchoolActivityFeed,
@@ -98,6 +99,7 @@ export default function SchoolProfile() {
   const [contactsList, setContactsList] = useState([]);
   const contactFileRef = useRef(null);
   const [leadCreateOpen, setLeadCreateOpen] = useState(false);
+  const [enrollOpen, setEnrollOpen] = useState(false);
   const [convertTarget, setConvertTarget] = useState(null);
   useEffect(() => {
     const grab = (api, set) => api.getAll().then(r => set(Array.isArray(r.data) ? r.data : [])).catch(() => {});
@@ -291,7 +293,8 @@ export default function SchoolProfile() {
               leads={leads} filteredLeads={sp.filteredLeads}
               stageFilter={sp.stageFilter} setStageFilter={sp.setStageFilter}
               tk={tk}
-              onCreate={() => setLeadCreateOpen(true)} />
+              onCreate={() => setLeadCreateOpen(true)}
+              onEnroll={() => setEnrollOpen(true)} />
           )}
 
           {sp.activeTab === 'sales' && (
@@ -372,6 +375,7 @@ export default function SchoolProfile() {
         rolesList={rolesList} sourcesList={sourcesList} spList={spList} onDone={sp.reload} />
       <ConvertContactDialog open={!!convertTarget} onOpenChange={(v) => { if (!v) setConvertTarget(null); }}
         contact={convertTarget} spList={spList} onDone={sp.reload} />
+      <EnrollDripDialog open={enrollOpen} onOpenChange={setEnrollOpen} leads={leads} onDone={sp.reload} />
 
     </AdminLayout>
   );

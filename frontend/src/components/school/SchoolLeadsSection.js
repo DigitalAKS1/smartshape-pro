@@ -38,7 +38,7 @@ function fmt(d) {
   catch { return d; }
 }
 
-export default function SchoolLeadsSection({ leads, filteredLeads, stageFilter, setStageFilter, tk, onCreate }) {
+export default function SchoolLeadsSection({ leads, filteredLeads, stageFilter, setStageFilter, tk, onCreate, onEnroll }) {
   return (
     <div className="sp-tab space-y-4">
       {/* Stage chips + Create Lead button */}
@@ -55,9 +55,14 @@ export default function SchoolLeadsSection({ leads, filteredLeads, stageFilter, 
             </button>
           ))}
         </div>
-        {onCreate && (
-          <Button onClick={onCreate} size="sm" className="bg-[#e94560] hover:bg-[#f05c75] text-white" data-testid="create-lead-on-profile">+ Create Lead</Button>
-        )}
+        <div className="flex items-center gap-2">
+          {onEnroll && (
+            <Button onClick={onEnroll} size="sm" variant="outline" className="border-[var(--border-color)] text-[var(--text-secondary)]" data-testid="enroll-drip-btn">Enroll in Drip</Button>
+          )}
+          {onCreate && (
+            <Button onClick={onCreate} size="sm" className="bg-[#e94560] hover:bg-[#f05c75] text-white" data-testid="create-lead-on-profile">+ Create Lead</Button>
+          )}
+        </div>
       </div>
 
       {filteredLeads.length === 0 ? (

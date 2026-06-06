@@ -13,7 +13,7 @@ import RichMessageEditor from '../RichMessageEditor';
 import { dripSequences as dripApi, whatsApp as waApi } from '../../lib/api';
 import { mapSeq } from '../../lib/marketingUtils';
 
-const BLANK_FORM = { name: '', description: '', trigger: 'lead_created', filter_designation: '', steps: [{ message_template: '', delay_days: 0, attachment_id: null }] };
+const BLANK_FORM = { name: '', description: '', trigger: 'lead_created', filter_designation: '', steps: [{ message_type: 'whatsapp', message_template: '', delay_days: 0, attachment_id: null, material_type: 'brochure' }] };
 
 export default function DripsTab({ tk, drips, setDrips }) {
   const [expanded, setExpanded]     = useState(null);
@@ -39,7 +39,7 @@ export default function DripsTab({ tk, drips, setDrips }) {
 
   function addStep() {
     const nextDay = form.steps.length === 0 ? 0 : (parseInt(form.steps[form.steps.length - 1].delay_days) || 0) + 3;
-    setForm(p => ({ ...p, steps: [...p.steps, { message_template: '', delay_days: nextDay, attachment_id: null }] }));
+    setForm(p => ({ ...p, steps: [...p.steps, { message_type: 'whatsapp', message_template: '', delay_days: nextDay, attachment_id: null, material_type: 'brochure' }] }));
   }
 
   function removeStep(i) {
@@ -59,9 +59,11 @@ export default function DripsTab({ tk, drips, setDrips }) {
       trigger: d.trigger_raw || 'lead_created',
       filter_designation: d.filter_designation || '',
       steps: d.steps.map(s => ({
+        message_type: s.message_type || 'whatsapp',
         message_template: s.message_template || '',
         delay_days: s.delay_days,
         attachment_id: s.attachment_id || null,
+        material_type: s.material_type || 'brochure',
       })),
     });
     setEditingSeq(d);
@@ -132,15 +134,17 @@ export default function DripsTab({ tk, drips, setDrips }) {
         filter_designation: form.filter_designation.trim() || null,
         is_active: editingSeq ? editingSeq.active : true,
         steps: form.steps.map((s, i) => {
+          const isPhysical = s.message_type === 'physical_material';
           const plain = s.message_template
             ? s.message_template.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
             : '';
           return {
             step_number: i + 1,
             delay_days: parseInt(s.delay_days) || 0,
-            message_type: 'whatsapp',
-            message_template: s.message_template || `Step ${i + 1}`,
-            message_plain: plain,
+            message_type: s.message_type || 'whatsapp',
+            message_template: isPhysical ? '' : (s.message_template || `Step ${i + 1}`),
+            message_plain: isPhysical ? '' : plain,
+            ...(isPhysical ? { material_type: s.material_type || 'brochure' } : {}),
             ...(s.attachment_id ? { attachment_id: s.attachment_id } : {}),
           };
         }),
@@ -396,11 +400,38 @@ export default function DripsTab({ tk, drips, setDrips }) {
                         </button>
                       )}
                     </div>
+                    <div className={`px-3 py-2 border-t ${tk.bdr} flex items-center gap-2`}>
+                      <span className={`text-[11px] ${tk.tm} flex-shrink-0`}>Type:</span>
+                      <select
+                        value={s.message_type || 'whatsapp'}
+                        onChange={e => setForm(p => ({ ...p, steps: p.steps.map((ss, ii) => ii === i ? { ...ss, message_type: e.target.value } : ss) }))}
+                        className={`h-7 px-2 rounded text-xs ${tk.inp} border`}
+                        data-testid={`step-type-${i}`}>
+                        <option value="whatsapp">WhatsApp</option>
+                        <option value="email">Email</option>
+                        <option value="physical_material">Physical material</option>
+                      </select>
+                      {s.message_type === 'physical_material' && (
+                        <select
+                          value={s.material_type || 'brochure'}
+                          onChange={e => setForm(p => ({ ...p, steps: p.steps.map((ss, ii) => ii === i ? { ...ss, material_type: e.target.value } : ss) }))}
+                          className="h-9 px-2 rounded text-sm bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]"
+                          data-testid={`step-material-${i}`}>
+                          <option value="brochure">Brochure</option>
+                          <option value="sample">Sample</option>
+                          <option value="catalogue">Catalogue</option>
+                          <option value="kit">Kit</option>
+                          <option value="gift">Gift</option>
+                        </select>
+                      )}
+                    </div>
+                    {s.message_type !== 'physical_material' && (
                     <RichMessageEditor
                       value={s.message_template}
                       onChange={html => setForm(p => ({ ...p, steps: p.steps.map((ss, ii) => ii === i ? { ...ss, message_template: html } : ss) }))}
                       placeholder="Write your drip message — paste from ChatGPT, Claude, or type directly…"
                     />
+                    )}
                   </div>
                 ))}
               </div>
