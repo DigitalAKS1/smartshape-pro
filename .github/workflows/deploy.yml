@@ -3,7 +3,7 @@ name: Deploy to VPS
 # Auto-deploys backend + frontend to the production VPS on every push to main.
 # Can also be run manually from the Actions tab (workflow_dispatch).
 #
-# Only ONE secret is required: VPS_PASSWORD (the root SSH password).
+# Only ONE secret is required: VPS (the root SSH password).
 # Host / user / path are not sensitive and are set inline below, so the deploy
 # no longer depends on the old VPS_HOST / VPS_USER / DEPLOY_PATH secrets that
 # still point at the dead IP.
@@ -24,7 +24,7 @@ jobs:
         with:
           host: srv1667373.hstgr.cloud
           username: root
-          password: ${{ secrets.VPS_PASSWORD }}
+          password: ${{ secrets.VPS }}
           port: 22
           command_timeout: 25m          # a --no-cache build exceeds the 10m default
           script: |
