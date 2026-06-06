@@ -66,6 +66,26 @@ def _smtp_send(sender_email, app_password, sender_name, to_email, subject, body)
         smtp.sendmail(sender_email, [to_email], msg.as_string())
 
 
+def _smtp_send_attachment(sender_email, app_password, sender_name, to_email,
+                          subject, body, file_path, filename):
+    from email.mime.base import MIMEBase
+    from email import encoders
+    msg = MIMEMultipart()
+    msg["From"] = f"{sender_name} <{sender_email}>"
+    msg["To"] = to_email
+    msg["Subject"] = subject
+    msg.attach(MIMEText(body, "plain"))
+    with open(file_path, "rb") as fh:
+        part = MIMEBase("application", "pdf")
+        part.set_payload(fh.read())
+    encoders.encode_base64(part)
+    part.add_header("Content-Disposition", f'attachment; filename="{filename}"')
+    msg.attach(part)
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=30) as smtp:
+        smtp.login(sender_email, app_password)
+        smtp.sendmail(sender_email, [to_email], msg.as_string())
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # WA PROVIDER DISPATCH
 # ══════════════════════════════════════════════════════════════════════════════
@@ -825,7 +845,72 @@ async def _generate_pending_certs():
 
 
 async def _deliver_pending_certs():
-    return  # implemented in Task 6
+    batches = await db.cert_batches.find({"status": {"$in": ["sending", "ready"]}}, {"_id": 0}).to_list(100)
+    for batch in batches:
+        if batch.get("status") != "sending":
+            continue
+        channels = batch.get("channels", [])
+        items = await db.cert_items.find(
+            {"batch_id": batch["batch_id"], "gen_status": "generated"}, {"_id": 0}).to_list(2000)
+        for it in items:
+            for ch in channels:
+                d = (it.get("delivery") or {}).get(ch, {})
+                if d.get("status") == "sent":
+                    continue   # idempotent: never resend
+                ok, err = await _cert_send_one(ch, it, batch)
+                if ok is None:
+                    new_status = "skipped"
+                elif ok:
+                    new_status = "sent"
+                else:
+                    new_status = "failed"
+                await db.cert_items.update_one({"item_id": it["item_id"]},
+                    {"$set": {f"delivery.{ch}.status": new_status,
+                              f"delivery.{ch}.at": datetime.now(timezone.utc).isoformat(),
+                              f"delivery.{ch}.error": err}})
+                if new_status == "sent":
+                    field = "sent_whatsapp" if ch == "whatsapp" else "sent_email"
+                    await db.cert_batches.update_one({"batch_id": batch["batch_id"]},
+                                                     {"$inc": {f"counts.{field}": 1}})
+        await db.cert_batches.update_one({"batch_id": batch["batch_id"]}, {"$set": {"status": "done"}})
+
+
+async def _cert_send_one(channel: str, it: dict, batch: dict):
+    """Returns (ok, err): ok True=sent, False=failed, None=skipped (no contact)."""
+    fname = f"certificate_{sanitize_filename(it['name'])}.pdf"
+    pdf_url = it.get("pdf_url", "")
+    local_pdf = os.path.join(_CERT_DIR, pdf_url.split("/uploads/certificates/")[-1]) if pdf_url else ""
+    caption = f"Certificate — {batch.get('shared_values', {}).get('theme', '')}".strip()
+    if channel == "whatsapp":
+        if not it.get("phone"):
+            return None, "no_phone"
+        if CERT_DRY_RUN:
+            log.info(f"[cert][dry] WA doc -> {it['phone']}: {fname}")
+            return True, None
+        try:
+            full_url = f"{_PUBLIC_BASE}{pdf_url}" if _PUBLIC_BASE else pdf_url
+            await evolution.send_document(it["phone"], full_url, fname, caption)
+            return True, None
+        except Exception as e:
+            return False, str(e)[:200]
+    if channel == "email":
+        if not it.get("email") or "@" not in it["email"]:
+            return None, "no_email"
+        if CERT_DRY_RUN:
+            log.info(f"[cert][dry] EMAIL -> {it['email']}: {fname}")
+            return True, None
+        cfg = await _email_cfg()
+        if not cfg:
+            return False, "email_not_configured"
+        se, ap, sn = cfg
+        try:
+            await asyncio.to_thread(_smtp_send_attachment, se, ap, sn, it["email"],
+                                    "Your Certificate", "Please find your certificate attached.",
+                                    local_pdf, fname)
+            return True, None
+        except Exception as e:
+            return False, str(e)[:200]
+    return None, "unknown_channel"
 
 
 async def run_cert_pass():

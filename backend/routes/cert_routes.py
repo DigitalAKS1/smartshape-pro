@@ -176,6 +176,12 @@ async def generate_batch(batch_id: str, request: Request):
     await db.cert_batches.update_one({"batch_id": batch_id}, {"$set": {"status": "generating"}})
     return {"ok": True, "message": "Generation queued"}
 
+@router.post("/batches/{batch_id}/send")
+async def send_batch(batch_id: str, request: Request):
+    user = await get_current_user(request); require_admin(user)
+    await db.cert_batches.update_one({"batch_id": batch_id}, {"$set": {"status": "sending"}})
+    return {"ok": True, "message": "Delivery queued"}
+
 @router.post("/_run-loop")
 async def debug_run_loop(request: Request):
     """Admin-only: run one pass of the cert generation+delivery loop synchronously (tests/manual)."""
