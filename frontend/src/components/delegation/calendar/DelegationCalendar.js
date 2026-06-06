@@ -1,8 +1,10 @@
 import React from 'react';
-import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus } from 'lucide-react';
 import { useDelegationCalendar } from '../../../hooks/useDelegationCalendar';
 import CalendarMonth from './CalendarMonth';
 import AgendaList from './AgendaList';
+import CalendarDay from './CalendarDay';
+import DayPlanBlockDialog from './DayPlanBlockDialog';
 
 const PINK = '#e94560';
 const SOURCE_LABELS = {
@@ -14,8 +16,9 @@ const SOURCE_COLORS = {
   followup: '#10b981', workshop: '#6366f1', plan: '#64748b',
 };
 
-export default function DelegationCalendar({ onEventClick, card, textPri, textSec, textMuted }) {
+export default function DelegationCalendar({ onEventClick, card, textPri, textSec, textMuted, inputCls }) {
   const c = useDelegationCalendar();
+  const [blockDialog, setBlockDialog] = React.useState(null);
   const monthLabel = c.cursor.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
 
   const rangeDates = () => {
@@ -38,12 +41,20 @@ export default function DelegationCalendar({ onEventClick, card, textPri, textSe
               : new Date(c.range.from + 'T00:00:00').toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}
           </h2>
         </div>
-        <div className={`${card} border rounded-xl p-1 flex gap-0.5`}>
-          {['month', 'week', 'day'].map(v => (
-            <button key={v} onClick={() => c.setView(v)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium capitalize ${c.view === v ? 'text-white' : `${textSec} hover:bg-[var(--bg-hover)]`}`}
-              style={c.view === v ? { background: PINK } : {}}>{v}</button>
-          ))}
+        <div className="flex items-center gap-2">
+          <div className={`${card} border rounded-xl p-1 flex gap-0.5`}>
+            {['month', 'week', 'day'].map(v => (
+              <button key={v} onClick={() => c.setView(v)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium capitalize ${c.view === v ? 'text-white' : `${textSec} hover:bg-[var(--bg-hover)]`}`}
+                style={c.view === v ? { background: PINK } : {}}>{v}</button>
+            ))}
+          </div>
+          {c.view === 'day' && (
+            <button onClick={() => setBlockDialog({ start: '09:00' })}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-white" style={{ background: PINK }}>
+              <Plus className="h-3.5 w-3.5" /> Block
+            </button>
+          )}
         </div>
       </div>
 
@@ -72,13 +83,41 @@ export default function DelegationCalendar({ onEventClick, card, textPri, textSe
           onDayClick={(d) => { c.setCursor(d); c.setView('day'); }}
           helpers={c.helpers} card={card} textPri={textPri} textSec={textSec} textMuted={textMuted} />
       )}
-      {!c.loading && c.view !== 'month' && (
+      {!c.loading && c.view === 'week' && (
         <AgendaList dates={rangeDates()} eventsByDate={c.eventsByDate}
           onEventClick={onEventClick} card={card} textPri={textPri} textSec={textSec} textMuted={textMuted} />
+      )}
+      {!c.loading && c.view === 'day' && (
+        <CalendarDay
+          date={c.range.from} events={c.eventsByDate[c.range.from] || []}
+          onEventClick={onEventClick}
+          onAddBlock={(start) => setBlockDialog({ start })}
+          onEditBlock={(e) => setBlockDialog({ block: e })}
+          onDropItem={(ev, start) => c.scheduleItem(ev, c.range.from, start)}
+          onMoveBlock={(id, start) => {
+            const endHH = String(Math.min(23, parseInt(start.slice(0,2),10) + 1)).padStart(2,'0');
+            c.updateBlock(id, { start_time: start, end_time: `${endHH}:00` });
+          }}
+          card={card} textPri={textPri} textSec={textSec} textMuted={textMuted} />
       )}
 
       {c.view === 'month' && (
         <p className={`text-[11px] ${textMuted} text-center`}>Tip: click a day to open it.</p>
+      )}
+
+      {blockDialog && (
+        <DayPlanBlockDialog
+          block={blockDialog.block}
+          date={c.range.from}
+          onSave={async (payload) => {
+            const ok = blockDialog.block?.entity_id
+              ? await c.updateBlock(blockDialog.block.entity_id, payload)
+              : await c.createBlock({ ...payload, start_time: payload.start_time || blockDialog.start || '09:00' });
+            if (ok) setBlockDialog(null);
+          }}
+          onDelete={async (id) => { if (await c.deleteBlock(id)) setBlockDialog(null); }}
+          onClose={() => setBlockDialog(null)}
+          card={card} textPri={textPri} textSec={textSec} textMuted={textMuted} inputCls={inputCls} />
       )}
     </div>
   );

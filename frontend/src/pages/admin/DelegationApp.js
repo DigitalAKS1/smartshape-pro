@@ -157,7 +157,7 @@ export default function DelegationApp() {
         {s.viewTab === 'calendar' && (
           <DelegationCalendar
             onEventClick={() => {}}
-            card={card} textPri={textPri} textSec={textSec} textMuted={textMuted}
+            card={card} textPri={textPri} textSec={textSec} textMuted={textMuted} inputCls={inputCls}
           />
         )}
 
