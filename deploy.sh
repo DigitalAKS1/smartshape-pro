@@ -1,33 +1,35 @@
 #!/bin/bash
 # SmartShape — Production Deploy Script
-# Run on your Hostinger VPS after SSH login
-# Usage: bash deploy.sh
+# Run ON the Hostinger VPS:  bash deploy.sh
+#
+# Rebuilds ONLY backend + frontend via docker-compose.prod.yml.
+# Never runs `down` / `--remove-orphans` — the Mongo / WhatsApp / Tor containers
+# share this compose project and would otherwise be destroyed.
 
 set -e
 
-echo "==> Pulling latest code..."
-git pull origin main
+cd /var/www/smartshape
 
-echo "==> Stopping containers..."
-docker-compose down
+echo "==> Syncing code to origin/main..."
+git fetch origin main
+git reset --hard origin/main
 
-echo "==> Building fresh images..."
-docker-compose build --no-cache \
-  --build-arg REACT_APP_BACKEND_URL="${REACT_APP_BACKEND_URL:-https://app.smartshape.in}"
+echo "==> Building backend + frontend (no-cache)..."
+REACT_APP_BACKEND_URL="${REACT_APP_BACKEND_URL:-https://app.smartshape.in}" \
+  docker compose -f docker-compose.prod.yml build --no-cache backend frontend
 
-echo "==> Starting containers..."
-docker-compose up -d
+echo "==> Recreating containers..."
+REACT_APP_BACKEND_URL="${REACT_APP_BACKEND_URL:-https://app.smartshape.in}" \
+  docker compose -f docker-compose.prod.yml up -d backend frontend
 
-echo "==> Waiting for services to be healthy..."
-sleep 5
+echo "==> Waiting for startup..."
+sleep 12
+
+echo "==> Health check:"
+curl -sf http://localhost:8000/api/health && echo " Backend OK" || echo " Backend starting / check logs"
 
 echo "==> Container status:"
-docker-compose ps
-
-echo "==> Recent backend logs:"
-docker-compose logs --tail=20 backend
+docker compose -f docker-compose.prod.yml ps
 
 echo ""
-echo "✅  SmartShape deployed successfully!"
-echo "    Frontend: http://localhost:3000"
-echo "    Backend:  http://localhost:8000/docs"
+echo "Deployed. Live at https://app.smartshape.in"
