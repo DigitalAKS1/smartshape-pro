@@ -15,7 +15,8 @@ API.interceptors.response.use((res) => {
   if (method && ['post', 'put', 'delete', 'patch'].includes(method)) {
     const url = res.config?.url || '';
     let domain = 'all';
-    if (/\/(dies|packages|stock)/.test(url))       domain = 'inventory';
+    if (/\/(vendors|vendor-items|purchase-items|purchase-orders|requisitions|goods-receipts|qc-templates|procurement)/.test(url)) domain = 'procurement';
+    else if (/\/(dies|packages|stock)/.test(url))  domain = 'inventory';
     else if (/\/delegation/.test(url))             domain = 'delegation';
     else if (/\/(leads|contacts|schools)/.test(url)) domain = 'crm';
     else if (/\/quotations/.test(url))             domain = 'quotations';
@@ -356,6 +357,7 @@ export const leads = {
   forecast: () => API.get('/leads/forecast'),
   funnel: (params) => API.get('/leads/funnel', { params }),
   needsAttention: () => API.get('/leads/needs-attention'),
+  scheduleDemo: (id, data) => API.post(`/leads/${id}/schedule-demo`, data),
   autoAssign: (leadIds) => API.post('/leads/auto-assign', leadIds ? { lead_ids: leadIds } : {}),
   reassign: (data) => API.post('/leads/reassign', data),
   bulkAssign: (data) => API.post('/leads/bulk-assign', data),
@@ -775,6 +777,96 @@ export const notificationsApi = {
   markAllRead: () => API.put('/notifications/read-all'),
   markOneRead: (id) => API.put(`/notifications/${id}/read`),
 };
+
+// ── Procurement ────────────────────────────────────────────────────────────
+const uploadCfg = { headers: { 'Content-Type': 'multipart/form-data' } };
+const fileForm = (file) => { const fd = new FormData(); fd.append('file', file); return fd; };
+
+export const procurement = {
+  // Vendor Master
+  vendors: {
+    getAll: (includeInactive) => API.get('/vendors', { params: includeInactive ? { include_inactive: true } : {} }),
+    get: (id) => API.get(`/vendors/${id}`),
+    create: (data) => API.post('/vendors', data),
+    update: (id, data) => API.put(`/vendors/${id}`, data),
+    delete: (id) => API.delete(`/vendors/${id}`),
+    uploadLogo: (id, file) => API.post(`/vendors/${id}/upload-logo`, fileForm(file), uploadCfg),
+  },
+  // Purchase Item Master (raw materials / supplies)
+  purchaseItems: {
+    getAll: (includeInactive) => API.get('/purchase-items', { params: includeInactive ? { include_inactive: true } : {} }),
+    create: (data) => API.post('/purchase-items', data),
+    update: (id, data) => API.put(`/purchase-items/${id}`, data),
+    delete: (id) => API.delete(`/purchase-items/${id}`),
+    uploadImage: (id, file) => API.post(`/purchase-items/${id}/upload-image`, fileForm(file), uploadCfg),
+  },
+  // Unified item catalog (dies + purchase_items) for the image picker
+  itemCatalog: (params = {}) => API.get('/procurement/item-catalog', { params }),
+  // Vendor price list
+  vendorItems: {
+    getAll: (params = {}) => API.get('/vendor-items', { params }),
+    create: (data) => API.post('/vendor-items', data),
+    update: (id, data) => API.put(`/vendor-items/${id}`, data),
+    delete: (id) => API.delete(`/vendor-items/${id}`),
+  },
+  // QC checklist templates
+  qcTemplates: {
+    getAll: () => API.get('/qc-templates'),
+    create: (data) => API.post('/qc-templates', data),
+    update: (id, data) => API.put(`/qc-templates/${id}`, data),
+    delete: (id) => API.delete(`/qc-templates/${id}`),
+  },
+  // Requisitions (Path A: request -> approve -> PO)
+  requisitions: {
+    getAll: (status) => API.get('/requisitions', { params: status ? { status } : {} }),
+    get: (id) => API.get(`/requisitions/${id}`),
+    create: (data) => API.post('/requisitions', data),
+    update: (id, data) => API.put(`/requisitions/${id}`, data),
+    submit: (id) => API.post(`/requisitions/${id}/submit`),
+    approve: (id, remark) => API.post(`/requisitions/${id}/approve`, { remark }),
+    reject: (id, remark) => API.post(`/requisitions/${id}/reject`, { remark }),
+    convertToPo: (id, data) => API.post(`/requisitions/${id}/convert-to-po`, data),
+  },
+  // Purchase Orders (Path B: Direct Order Planning -> PO immediately)
+  purchaseOrders: {
+    getAll: (params = {}) => API.get('/purchase-orders', { params }),
+    get: (id) => API.get(`/purchase-orders/${id}`),
+    create: (data) => API.post('/purchase-orders', data),
+    update: (id, data) => API.put(`/purchase-orders/${id}`, data),
+    approve: (id) => API.post(`/purchase-orders/${id}/approve`),
+    send: (id) => API.post(`/purchase-orders/${id}/send`),
+    cancel: (id) => API.post(`/purchase-orders/${id}/cancel`),
+    pdfUrl: (id) => `${process.env.REACT_APP_BACKEND_URL}/api/purchase-orders/${id}/pdf`,
+    downloadPdf: (id, poNo) => downloadFile(`/purchase-orders/${id}/pdf`, `${poNo || 'PO'}.pdf`),
+    receive: (id) => API.post(`/purchase-orders/${id}/receive`),
+  },
+  // Goods Receipts (verification) + QC checklist
+  goodsReceipts: {
+    getAll: (params = {}) => API.get('/goods-receipts', { params }),
+    get: (id) => API.get(`/goods-receipts/${id}`),
+    update: (id, data) => API.put(`/goods-receipts/${id}`, data),
+    submitQc: (id, data) => API.post(`/goods-receipts/${id}/qc`, data),
+    createReturn: (id) => API.post(`/goods-receipts/${id}/create-return`),
+  },
+  // Vendor returns / debit notes
+  vendorReturns: {
+    getAll: (params = {}) => API.get('/vendor-returns', { params }),
+    downloadPdf: (id, retNo) => downloadFile(`/vendor-returns/${id}/pdf`, `${retNo || 'RETURN'}.pdf`),
+  },
+};
+
+// Authenticated file download helper (blob) — used for PO / return PDFs.
+// Routed through the axios instance so a 401 triggers the same refresh/redirect
+// flow as every other request (a raw fetch would bypass it).
+function downloadFile(path, filename) {
+  return API.get(path, { responseType: 'blob', params: { t: Date.now() } })
+    .then(res => {
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement('a');
+      a.href = url; a.download = filename; document.body.appendChild(a); a.click();
+      a.remove(); URL.revokeObjectURL(url);
+    });
+}
 
 // Web Push (PWA)
 export const pushApi = {
