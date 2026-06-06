@@ -1207,6 +1207,9 @@ async def _resolve_subject(actor: dict, emp_id):
     if not emp_id or emp_id == actor["emp_id"]:
         own = await db.del_employees.find_one({"emp_id": actor["emp_id"]}, {"_id": 0}) if actor["emp_id"] else None
         return own, True
+    # viewing someone else's calendar requires a linked account
+    if not actor["emp_id"]:
+        raise HTTPException(403, "Your account is not linked to the team")
     target = await db.del_employees.find_one({"emp_id": emp_id}, {"_id": 0})
     if not target:
         raise HTTPException(404, "Employee not found")
