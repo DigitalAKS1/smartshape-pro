@@ -1,60 +1,29 @@
-name: Deploy to VPS
+name: Deploy (handled on the VPS)
 
-# Auto-deploys backend + frontend to the production VPS on every push to main.
-# Can also be run manually from the Actions tab (workflow_dispatch).
+# IMPORTANT: GitHub-hosted runners CANNOT deploy this project over SSH.
+# Hostinger drops inbound SSH from GitHub's runner IP ranges upstream — confirmed
+# 2026-06-06: connection attempts never reach the VPS sshd (i/o timeout, no auth-log
+# entries), while the owner's IP connects fine. No secret/host change can fix that.
 #
-# Only ONE secret is required: VPS (the root SSH password).
-# Host / user / path are not sensitive and are set inline below, so the deploy
-# no longer depends on the old VPS_HOST / VPS_USER / DEPLOY_PATH secrets that
-# still point at the dead IP.
+# Deploys are handled ON the VPS by a systemd timer (ss-autodeploy.timer) that polls
+# origin/main every ~2 minutes and rebuilds backend + frontend when main changes
+# (script: /usr/local/bin/ss-autodeploy.sh, log: /var/log/ss-autodeploy.log).
+#
+# So: just push to main — it goes live automatically ~1-2 min later.
+# Manual deploy if ever needed: deploy-live.bat (local), or `bash deploy.sh` on the VPS.
+#
+# This workflow no longer attempts SSH (it would always time out). It only prints a
+# reminder when triggered manually, so pushes no longer show a red failing check.
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 jobs:
-  deploy:
+  info:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-
     steps:
-      - name: Deploy via SSH (password auth)
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: srv1667373.hstgr.cloud
-          username: root
-          password: ${{ secrets.VPS }}
-          port: 22
-          command_timeout: 25m          # a --no-cache build exceeds the 10m default
-          script: |
-            set -e
-            cd /var/www/smartshape
-
-            echo "=== Syncing code to origin/main ==="
-            git fetch origin main
-            git reset --hard origin/main
-
-            # NOTE: never use `down` or `--remove-orphans` here. docker-compose.prod.yml
-            # defines only backend + frontend; the Mongo / WhatsApp / Tor containers run
-            # in the same compose project and would be treated as orphans and DESTROYED.
-            echo "=== Building backend + frontend (no-cache) ==="
-            REACT_APP_BACKEND_URL=https://app.smartshape.in \
-              docker compose -f docker-compose.prod.yml build --no-cache backend frontend
-
-            echo "=== Recreating backend + frontend containers ==="
-            REACT_APP_BACKEND_URL=https://app.smartshape.in \
-              docker compose -f docker-compose.prod.yml up -d backend frontend
-
-            echo "=== Health check ==="
-            sleep 12
-            if curl -sf http://localhost:8000/api/health > /dev/null; then
-              echo "Backend OK"
-            else
-              echo "Backend health check FAILED — recent logs:"
-              docker compose -f docker-compose.prod.yml logs --tail 40 backend
-              exit 1
-            fi
-
-            docker compose -f docker-compose.prod.yml ps
-            echo "=== Deploy complete ==="
+      - name: How deploys work
+        run: |
+          echo "Deploys are automatic on the VPS via ss-autodeploy.timer (~2 min after push to main)."
+          echo "Watch:   ssh root@srv1667373.hstgr.cloud 'tail -f /var/log/ss-autodeploy.log'"
+          echo "Manual:  run deploy-live.bat, or on the VPS: bash deploy.sh"
