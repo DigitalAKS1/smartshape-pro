@@ -1,10 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../ui/dialog';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Label } from '../ui/label';
 import { toast } from 'sonner';
-import { leads as leadsApi } from '../../lib/api';
+import { leads as leadsApi, packages as packagesApi, interestedProducts as interestedProductsApi } from '../../lib/api';
 
 export default function SchoolLeadQuickCreate({ open, onOpenChange, school, rolesList = [], sourcesList = [], spList = [], onDone }) {
   const [saving, setSaving] = useState(false);
@@ -13,16 +13,40 @@ export default function SchoolLeadQuickCreate({ open, onOpenChange, school, role
     contact_role_id: '', designation: '', lead_type: 'warm', priority: 'medium',
     interested_product: '', assigned_to: '', source_id: '', source: '',
   });
+  // Interested Product: dropdown of our packages + custom entries (auto-grow)
+  const [packagesList, setPackagesList] = useState([]);
+  const [customProducts, setCustomProducts] = useState([]);
+  const [customMode, setCustomMode] = useState(false);
   const inputCls = 'bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]';
   const textSec = 'text-[var(--text-secondary)]';
+  const selCls = `w-full h-10 px-3 rounded-md text-sm ${inputCls}`;
+  const pkgName = (p) => p.display_name || p.name;
+
+  useEffect(() => {
+    if (!open) return;
+    packagesApi.getAll().then(r => setPackagesList((r.data || []).filter(p => p.is_active !== false))).catch(() => {});
+    interestedProductsApi.getAll().then(r => setCustomProducts(r.data || [])).catch(() => {});
+  }, [open]);
 
   const submit = async () => {
     if (!form.contact_name.trim() || !form.contact_phone.trim()) { toast.error('Contact name and phone required'); return; }
     setSaving(true);
     try {
       const sp = spList.find(s => s.email === form.assigned_to);
+      const product = (form.interested_product || '').trim();
+      // Auto-add a brand-new individual product to the master so it appears next time
+      if (customMode && product) {
+        const known = [
+          ...packagesList.map(p => pkgName(p)),
+          ...customProducts.map(c => c.name),
+        ].map(s => (s || '').toLowerCase());
+        if (!known.includes(product.toLowerCase())) {
+          try { await interestedProductsApi.create({ name: product }); } catch { /* non-blocking */ }
+        }
+      }
       await leadsApi.create({
         ...form,
+        interested_product: product,
         school_id: school.school_id,
         company_name: school.school_name,
         assigned_name: sp ? sp.name : '',
@@ -82,7 +106,37 @@ export default function SchoolLeadQuickCreate({ open, onOpenChange, school, role
               </select>
             </div>
           </div>
-          <div><Label className={`${textSec} text-xs`}>Interested Product</Label><Input value={form.interested_product} onChange={e => setForm({ ...form, interested_product: e.target.value })} className={inputCls} placeholder="e.g. Robotics kit" /></div>
+          <div>
+            <Label className={`${textSec} text-xs`}>Interested Product</Label>
+            {customMode ? (
+              <div className="flex gap-1.5">
+                <Input value={form.interested_product} onChange={e => setForm({ ...form, interested_product: e.target.value })}
+                  placeholder="Type product / package name" autoFocus className={inputCls} data-testid="ql-product-custom" />
+                <Button type="button" variant="outline" onClick={() => { setCustomMode(false); setForm({ ...form, interested_product: '' }); }}
+                  className="border-[var(--border-color)] text-[var(--text-secondary)] whitespace-nowrap" title="Back to list">List</Button>
+              </div>
+            ) : (
+              <select value={form.interested_product}
+                onChange={e => {
+                  if (e.target.value === '__custom__') { setCustomMode(true); setForm({ ...form, interested_product: '' }); }
+                  else setForm({ ...form, interested_product: e.target.value });
+                }}
+                className={selCls} data-testid="ql-product-select">
+                <option value="">Select…</option>
+                {packagesList.length > 0 && (
+                  <optgroup label="Our Packages">
+                    {packagesList.map(p => <option key={p.package_id} value={pkgName(p)}>{pkgName(p)}</option>)}
+                  </optgroup>
+                )}
+                {customProducts.length > 0 && (
+                  <optgroup label="Other / Individual">
+                    {customProducts.map(ip => <option key={ip.product_id} value={ip.name}>{ip.name}</option>)}
+                  </optgroup>
+                )}
+                <option value="__custom__">➕ Individual / Other…</option>
+              </select>
+            )}
+          </div>
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} className="border-[var(--border-color)] text-[var(--text-secondary)]">Cancel</Button>

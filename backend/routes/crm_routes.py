@@ -510,6 +510,42 @@ async def delete_school_type(type_id: str, request: Request):
     return {"message": "School type deleted"}
 
 
+# ==================== INTERESTED PRODUCT MASTER ====================
+# Custom/individual "interested product" entries that aren't formal packages.
+# Packages remain the primary UI options; these accumulate from rep input.
+
+@router.get("/interested-products")
+async def get_interested_products(request: Request):
+    await get_current_user(request)
+    return await db.interested_products.find({}, {"_id": 0}).sort("name", 1).to_list(300)
+
+
+@router.post("/interested-products")
+async def create_interested_product(request: Request):
+    user = await get_current_user(request)
+    body = await request.json()
+    name = (body.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name required")
+    existing = await db.interested_products.find_one(
+        {"name": {"$regex": f"^{re.escape(name)}$", "$options": "i"}}, {"_id": 0})
+    if existing:
+        return existing
+    product_id = f"ip_{uuid.uuid4().hex[:8]}"
+    await db.interested_products.insert_one({
+        "product_id": product_id, "name": name, "is_active": True,
+        "created_by": user["email"], "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    return await db.interested_products.find_one({"product_id": product_id}, {"_id": 0})
+
+
+@router.delete("/interested-products/{product_id}")
+async def delete_interested_product(product_id: str, request: Request):
+    await get_current_user(request)
+    await db.interested_products.delete_one({"product_id": product_id})
+    return {"message": "Interested product deleted"}
+
+
 # ==================== CONTACT ROLE MASTER ====================
 
 DEFAULT_CONTACT_ROLES = [

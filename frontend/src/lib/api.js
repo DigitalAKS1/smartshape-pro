@@ -385,6 +385,13 @@ export const schoolTypes = {
   delete: (id) => API.delete(`/school-types/${id}`),
 };
 
+// Interested-product master (custom/individual entries; packages are the primary options)
+export const interestedProducts = {
+  getAll: () => API.get('/interested-products'),
+  create: (data) => API.post('/interested-products', data),
+  delete: (id) => API.delete(`/interested-products/${id}`),
+};
+
 // Follow-ups
 export const followups = {
   getAll: (leadId) => API.get('/followups', { params: { lead_id: leadId } }),
