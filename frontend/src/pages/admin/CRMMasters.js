@@ -87,7 +87,7 @@ export default function CRMMasters() {
       setNewType('');
       setStList(prev => {
         const list = prev.some(t => t.type_id === r.data.type_id) ? prev : [...prev, r.data];
-        return list.slice().sort((a, b) => a.name.localeCompare(b.name));
+        return list.slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
       });
       toast.success(`Added "${name}"`);
     } catch (e) { toast.error(e?.response?.data?.detail || 'Failed'); }
@@ -114,7 +114,7 @@ export default function CRMMasters() {
       setNewProduct('');
       setIpList(prev => {
         const list = prev.some(p => p.product_id === r.data.product_id) ? prev : [...prev, r.data];
-        return list.slice().sort((a, b) => a.name.localeCompare(b.name));
+        return list.slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
       });
       toast.success(`Added "${name}"`);
     } catch (e) { toast.error(e?.response?.data?.detail || 'Failed'); }

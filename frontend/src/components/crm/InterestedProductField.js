@@ -19,6 +19,10 @@ export default function InterestedProductField({ value, onChange, label = 'Inter
   const selCls = `w-full h-10 px-3 rounded-md text-sm ${inputCls}`;
   const pkgName = (p) => p.display_name || p.name;
 
+  // Is the current value already represented by a package/custom option?
+  const known = [...packagesList.map(pkgName), ...customProducts.map(c => c.name)];
+  const valueUnlisted = value && value !== '__custom__' && !known.includes(value);
+
   const loadCustoms = () => interestedProductsApi.getAll().then(r => setCustomProducts(r.data || [])).catch(() => {});
   useEffect(() => {
     packagesApi.getAll().then(r => setPackagesList((r.data || []).filter(p => p.is_active !== false))).catch(() => {});
@@ -56,6 +60,11 @@ export default function InterestedProductField({ value, onChange, label = 'Inter
             else onChange(e.target.value);
           }} className={selCls} data-testid="ip-select">
           <option value="">Select a package…</option>
+          {valueUnlisted && (
+            <optgroup label="Current">
+              <option value={value}>{value}</option>
+            </optgroup>
+          )}
           {packagesList.length > 0 && (
             <optgroup label="Our Packages">
               {packagesList.map(p => <option key={p.package_id} value={pkgName(p)}>{pkgName(p)}</option>)}

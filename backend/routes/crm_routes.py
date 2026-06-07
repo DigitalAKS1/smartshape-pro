@@ -617,7 +617,7 @@ async def create_designation(request: Request):
     name = (body.get("name") or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="Name is required")
-    existing = await db.designations.find_one({"name": {"$regex": f"^{name}$", "$options": "i"}})
+    existing = await db.designations.find_one({"name": {"$regex": f"^{re.escape(name)}$", "$options": "i"}})
     if existing:
         raise HTTPException(status_code=409, detail="Designation already exists")
     did = f"des_{uuid.uuid4().hex[:8]}"

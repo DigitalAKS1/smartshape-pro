@@ -209,11 +209,16 @@ export default function useLeadsCRM() {
     } catch { setNotes([]); setLeadFollowups([]); setLeadEnrollments([]); setLeadVisits([]); }
   };
 
+  // Guards against double-submit (rapid clicks) creating duplicate leads/schools.
+  const submitBusyRef = useRef(false);
+
   const saveLead = async () => {
     if (!leadForm.contact_name || !leadForm.contact_phone) { toast.error('Contact name and phone required'); return; }
     if (!/^[0-9+\-\s]{7,15}$/.test(leadForm.contact_phone)) { toast.error('Phone looks invalid'); return; }
     if (leadForm.contact_email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(leadForm.contact_email)) { toast.error('Email looks invalid'); return; }
     if (!editLead && !addNewSchool && !leadForm.school_id) { toast.error('Select a school or add a new one'); return; }
+    if (submitBusyRef.current) return;
+    submitBusyRef.current = true;
     try {
       const payload = { ...leadForm };
       if (addNewSchool && newSchool.school_name) {
@@ -235,6 +240,7 @@ export default function useLeadsCRM() {
       setLeadDialogOpen(false);
       fetchData();
     } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
+    finally { submitBusyRef.current = false; }
   };
 
   const changeStage = async (leadId, newStage, extra = {}) => {
@@ -485,6 +491,8 @@ export default function useLeadsCRM() {
   };
 
   const handleConvert = async () => {
+    if (submitBusyRef.current) return;
+    submitBusyRef.current = true;
     try {
       const sp = spList.find(s => s.email === convertForm.assigned_to);
       const payload = { ...convertForm, assigned_name: sp?.name || user?.name || '' };
@@ -496,6 +504,7 @@ export default function useLeadsCRM() {
       toast.success(`${convertContact.name} converted to lead!`);
       setConvertDialogOpen(false); fetchData();
     } catch (err) { toast.error(err.response?.data?.detail || 'Failed to convert'); }
+    finally { submitBusyRef.current = false; }
   };
 
   const handleContactImport = async () => {

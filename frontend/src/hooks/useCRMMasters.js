@@ -173,6 +173,8 @@ export function useCRMMasters() {
   const sendCampaign = async () => {
     if (!campaignTag) { toast.error('Select a tag'); return; }
     if (!campaignTemplate) { toast.error('Select a WhatsApp template'); return; }
+    const tagName = tagsList.find(t => t.tag_id === campaignTag)?.name || 'this tag';
+    if (!window.confirm(`Send this WhatsApp template to ALL leads tagged "${tagName}" that have a phone number?\n\nThis sends real messages and cannot be undone.`)) return;
     setCampaignSending(true);
     try {
       const res = await broadcastApi.byTag({ tag_id: campaignTag, template_id: campaignTemplate });
