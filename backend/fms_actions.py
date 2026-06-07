@@ -41,25 +41,26 @@ def eval_condition(cond: Optional[Dict[str, Any]], flow: Dict[str, Any]) -> bool
 
 
 async def _claim_action(flow_id, stage_id, action_index, event, atype):
-    """Atomically claim an action via the UNIQUE (stage_id, action_index, event) index.
-    Returns a log_id if this caller won the claim, else None (already attempted).
-    Claiming BEFORE executing makes each action fire at most once even if execution
-    later fails (the SLA loop repeats on_overdue every 5 min — a failed costly action
-    like start_flow must not re-spawn)."""
-    log_id = _gen_id("falog")
+    """Atomically claim an action by inserting a log doc whose _id is the deterministic
+    key stage:action:event. The always-present unique _id index makes this a fire-once
+    guard with no dependency on a custom index being created. Returns the claim _id if
+    this caller won, else None (already attempted on an earlier pass). Claiming BEFORE
+    executing means a failed costly action (e.g. start_flow) never re-runs on the next
+    SLA pass."""
+    claim_id = f"{stage_id}:{action_index}:{event}"
     try:
         await db.fms_action_logs.insert_one({
-            "log_id": log_id, "flow_id": flow_id, "stage_id": stage_id,
+            "_id": claim_id, "log_id": _gen_id("falog"), "flow_id": flow_id, "stage_id": stage_id,
             "action_index": action_index, "event": event, "type": atype,
             "status": "firing", "result_ref": None, "error": None, "at": _now_iso(),
         })
-        return log_id
+        return claim_id
     except Exception:
-        return None  # duplicate key → already claimed/done by an earlier pass
+        return None  # duplicate _id → already claimed/done by an earlier pass
 
-async def _finish_action(log_id, status, result_ref=None, error=None):
+async def _finish_action(claim_id, status, result_ref=None, error=None):
     await db.fms_action_logs.update_one(
-        {"log_id": log_id},
+        {"_id": claim_id},
         {"$set": {"status": status, "result_ref": result_ref, "error": error, "at": _now_iso()}})
 
 
