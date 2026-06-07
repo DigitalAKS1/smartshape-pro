@@ -439,6 +439,21 @@ async def startup():
     await start_scheduler()
     logging.info("Marketing automation scheduler started (email + WA + drip + greetings)")
 
+    # SP5 — calendar reminders dispatcher (enqueues into the email/WA queues above)
+    if os.environ.get("REMINDERS_DISABLE_LOOP", "").strip() not in ("1", "true", "True"):
+        async def _reminders_loop():
+            from routes.delegation_routes import dispatch_due_reminders
+            while True:
+                try:
+                    await dispatch_due_reminders()
+                except Exception as e:
+                    logging.warning(f"[reminders] dispatch error: {e}")
+                await asyncio.sleep(180)
+        asyncio.create_task(_reminders_loop())
+        logging.info("Calendar reminders dispatcher started (every 3 min)")
+    else:
+        logging.info("Calendar reminders dispatcher DISABLED (REMINDERS_DISABLE_LOOP)")
+
 
 @app.on_event("shutdown")
 async def shutdown():

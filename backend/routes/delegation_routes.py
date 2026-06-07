@@ -1187,7 +1187,7 @@ async def delete_plan_block(block_id: str, request: Request):
 AGENDA_COLORS = {
     "delegation": "#e94560", "fms": "#8b5cf6", "visit": "#06b6d4",
     "task": "#f59e0b", "followup": "#10b981", "workshop": "#6366f1", "plan": "#64748b",
-    "event": "#0ea5e9",
+    "event": "#0ea5e9", "reminder": "#f97316",
 }
 
 
@@ -1397,6 +1397,7 @@ async def get_agenda(request: Request):
     events += await _agenda_followups(s_email, from_, to_)
     events += await _agenda_workshops(from_, to_)
     events += await _agenda_events(s_emp, s_email, from_, to_)
+    events += await _agenda_reminders(s_emp, s_email, from_, to_)
     if is_self:
         blocks = await db.del_plan_blocks.find(
             {"emp_id": s_emp, "date": {"$gte": from_, "$lte": to_}}, {"_id": 0}
@@ -1880,5 +1881,376 @@ async def _agenda_events(emp_id, email, dfrom, dto):
                   "meeting_link": r.get("meeting_link", ""),
                   "join_url": _event_join_url(r),
                   "collaborators": [c.get("name") or c.get("email") for c in r.get("collaborators", [])]}))
+    return out
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SP5 — REMINDERS & RECURRING OBLIGATIONS  (reminders)
+# ══════════════════════════════════════════════════════════════════════════════
+
+REMINDER_CATEGORIES = ("subscription", "loan", "insurance", "custom")
+REMINDER_RECURRENCE = ("once", "monthly", "yearly")
+REMINDER_EDITABLE = ("title", "category", "amount", "currency", "recurrence", "due_date",
+                     "due_time", "lead_offsets", "channels", "recipients", "shared", "notes", "status")
+
+
+def _clean_offsets(raw):
+    out = []
+    for o in (raw or []):
+        try:
+            v = int(o.get("value"))
+            u = o.get("unit")
+        except Exception:
+            continue
+        if v >= 0 and u in ("day", "hour"):
+            out.append({"value": v, "unit": u})
+    return out or [{"value": 1, "unit": "day"}]
+
+
+def _clean_channels(raw):
+    c = raw or {}
+    return {"email": bool(c.get("email", True)), "whatsapp": bool(c.get("whatsapp", True))}
+
+
+async def _default_recipient(actor, user):
+    emp = await db.del_employees.find_one({"emp_id": actor["emp_id"]},
+                                          {"_id": 0, "name": 1, "email": 1, "phone": 1, "mobile": 1}) or {}
+    return {"type": "user", "emp_id": actor["emp_id"], "name": emp.get("name") or actor.get("name") or "",
+            "email": emp.get("email") or user.get("email") or "",
+            "phone": emp.get("phone") or emp.get("mobile") or ""}
+
+
+async def _build_recipients(actor, user, body):
+    """Default to the creator; merge any provided recipients/assignees."""
+    recips, seen = [], set()
+    def _add(r):
+        key = (r.get("email") or "").lower() + "|" + (r.get("phone") or "")
+        if key.strip("|") and key not in seen:
+            seen.add(key); recips.append(r)
+    _add(await _default_recipient(actor, user))
+    for r in (body.get("recipients") or []):
+        if isinstance(r, dict) and (r.get("email") or r.get("phone")):
+            _add({"type": r.get("type") or "email", "emp_id": r.get("emp_id"),
+                  "name": r.get("name", ""), "email": (r.get("email") or "").strip(),
+                  "phone": (r.get("phone") or "").strip()})
+    for em in (body.get("recipient_emails") or []):
+        if em: _add({"type": "email", "name": "", "email": em.strip(), "phone": ""})
+    for ph in (body.get("recipient_phones") or []):
+        if ph: _add({"type": "phone", "name": "", "email": "", "phone": ph.strip()})
+    for eid in (body.get("assignee_emp_ids") or []):
+        e = await db.del_employees.find_one({"emp_id": eid},
+                                            {"_id": 0, "emp_id": 1, "name": 1, "email": 1, "phone": 1, "mobile": 1})
+        if e:
+            _add({"type": "user", "emp_id": e["emp_id"], "name": e.get("name", ""),
+                  "email": e.get("email", ""), "phone": e.get("phone") or e.get("mobile") or ""})
+    return recips
+
+
+def _validate_reminder_body(body):
+    if not (body.get("title") or "").strip():
+        raise HTTPException(400, "Title is required")
+    if not body.get("due_date"):
+        raise HTTPException(400, "Due date is required")
+    rec = body.get("recurrence") or "once"
+    if rec not in REMINDER_RECURRENCE:
+        raise HTTPException(400, f"recurrence must be one of {REMINDER_RECURRENCE}")
+    ch = _clean_channels(body.get("channels"))
+    if not (ch["email"] or ch["whatsapp"]):
+        raise HTTPException(400, "Select at least one channel")
+    return rec, ch
+
+
+async def _reminder_doc(actor, user, body):
+    rec, ch = _validate_reminder_body(body)
+    cat = body.get("category") or "custom"
+    if cat not in REMINDER_CATEGORIES:
+        cat = "custom"
+    amount = body.get("amount")
+    try:
+        amount = float(amount) if amount not in (None, "") else None
+    except Exception:
+        amount = None
+    return {
+        "reminder_id": gen_id("rem"), "title": body["title"].strip(), "category": cat,
+        "amount": amount, "currency": body.get("currency") or "INR",
+        "recurrence": rec, "due_date": body["due_date"], "due_time": body.get("due_time") or "09:00",
+        "lead_offsets": _clean_offsets(body.get("lead_offsets")), "channels": ch,
+        "recipients": await _build_recipients(actor, user, body),
+        "shared": bool(body.get("shared")), "notes": body.get("notes", ""),
+        "status": "active", "fired": [],
+        "created_by": user.get("email"), "created_by_emp_id": actor["emp_id"],
+        "created_at": now_iso(), "updated_at": now_iso(),
+    }
+
+
+@router.post("/reminders")
+async def create_reminder(request: Request):
+    user = await get_current_user(request)
+    actor = await _resolve_actor(user)
+    body = await request.json()
+    doc = await _reminder_doc(actor, user, body)
+    await db.reminders.insert_one(doc)
+    return await db.reminders.find_one({"reminder_id": doc["reminder_id"]}, {"_id": 0})
+
+
+@router.post("/reminders/bulk")
+async def create_reminders_bulk(request: Request):
+    user = await get_current_user(request)
+    actor = await _resolve_actor(user)
+    body = await request.json()
+    rows = body.get("rows") or []
+    created, errors = 0, []
+    for i, row in enumerate(rows):
+        try:
+            doc = await _reminder_doc(actor, user, row)
+            await db.reminders.insert_one(doc)
+            created += 1
+        except HTTPException as e:
+            errors.append({"row": i, "error": e.detail})
+        except Exception as e:
+            errors.append({"row": i, "error": str(e)[:200]})
+    return {"created": created, "errors": errors}
+
+
+@router.get("/reminders")
+async def list_reminders(request: Request):
+    user = await get_current_user(request)
+    actor = await _resolve_actor(user)
+    q = {"status": {"$ne": "done"},
+         "$or": [{"created_by_emp_id": actor["emp_id"]}, {"shared": True}]}
+    rows = await db.reminders.find(q, {"_id": 0}).to_list(2000)
+    rows.sort(key=lambda r: (r.get("due_date", ""), r.get("due_time", "")))
+    return {"reminders": rows}
+
+
+@router.patch("/reminders/{reminder_id}")
+async def update_reminder(reminder_id: str, request: Request):
+    user = await get_current_user(request)
+    actor = await _resolve_actor(user)
+    rem = await db.reminders.find_one({"reminder_id": reminder_id}, {"_id": 0})
+    if not rem:
+        raise HTTPException(404, "Reminder not found")
+    if rem["created_by_emp_id"] != actor["emp_id"] and not actor.get("is_boss"):
+        raise HTTPException(403, "Only the owner can edit this reminder")
+    body = await request.json()
+    updates = {k: v for k, v in body.items() if k in REMINDER_EDITABLE}
+    if "channels" in updates:
+        updates["channels"] = _clean_channels(updates["channels"])
+        if not (updates["channels"]["email"] or updates["channels"]["whatsapp"]):
+            raise HTTPException(400, "Select at least one channel")
+    if "lead_offsets" in updates:
+        updates["lead_offsets"] = _clean_offsets(updates["lead_offsets"])
+    if "recipients" in updates:
+        updates["recipients"] = await _build_recipients(actor, user, {"recipients": updates["recipients"]})
+    if "recurrence" in updates and updates["recurrence"] not in REMINDER_RECURRENCE:
+        raise HTTPException(400, "Invalid recurrence")
+    if updates:
+        updates["updated_at"] = now_iso()
+        if any(k in updates for k in ("due_date", "due_time", "recurrence", "lead_offsets")):
+            updates["fired"] = []   # schedule changed → allow re-fire
+        await db.reminders.update_one({"reminder_id": reminder_id}, {"$set": updates})
+    return await db.reminders.find_one({"reminder_id": reminder_id}, {"_id": 0})
+
+
+@router.post("/reminders/{reminder_id}/pause")
+async def pause_reminder(reminder_id: str, request: Request):
+    return await _set_reminder_status(reminder_id, request, "paused")
+
+
+@router.post("/reminders/{reminder_id}/resume")
+async def resume_reminder(reminder_id: str, request: Request):
+    return await _set_reminder_status(reminder_id, request, "active")
+
+
+async def _set_reminder_status(reminder_id, request, status):
+    user = await get_current_user(request)
+    actor = await _resolve_actor(user)
+    rem = await db.reminders.find_one({"reminder_id": reminder_id}, {"_id": 0})
+    if not rem:
+        raise HTTPException(404, "Reminder not found")
+    if rem["created_by_emp_id"] != actor["emp_id"] and not actor.get("is_boss"):
+        raise HTTPException(403, "Not your reminder")
+    await db.reminders.update_one({"reminder_id": reminder_id},
+                                  {"$set": {"status": status, "updated_at": now_iso()}})
+    return {"ok": True, "status": status}
+
+
+@router.delete("/reminders/{reminder_id}")
+async def delete_reminder(reminder_id: str, request: Request):
+    user = await get_current_user(request)
+    actor = await _resolve_actor(user)
+    rem = await db.reminders.find_one({"reminder_id": reminder_id}, {"_id": 0})
+    if not rem:
+        raise HTTPException(404, "Reminder not found")
+    if rem["created_by_emp_id"] != actor["emp_id"] and not actor.get("is_boss"):
+        raise HTTPException(403, "Not your reminder")
+    await db.reminders.update_one({"reminder_id": reminder_id},
+                                  {"$set": {"status": "done", "updated_at": now_iso()}})
+    return {"ok": True}
+
+
+# ── occurrence + dispatch ──────────────────────────────────────────────────────
+
+def _clamp_day(year, month, day):
+    import calendar as _cal
+    return min(day, _cal.monthrange(year, month)[1])
+
+
+def _reminder_occurrences(rem, around):
+    """Candidate occurrence dates near `around` (a date)."""
+    try:
+        anchor = date.fromisoformat(rem["due_date"])
+    except Exception:
+        return []
+    rec = rem.get("recurrence", "once")
+    if rec == "once":
+        return [anchor]
+    out = []
+    if rec == "monthly":
+        for delta in (-1, 0, 1):
+            y, m = around.year, around.month + delta
+            while m < 1:
+                m += 12; y -= 1
+            while m > 12:
+                m -= 12; y += 1
+            out.append(date(y, m, _clamp_day(y, m, anchor.day)))
+    elif rec == "yearly":
+        for dy in (-1, 0, 1):
+            y = around.year + dy
+            out.append(date(y, anchor.month, _clamp_day(y, anchor.month, anchor.day)))
+    return out
+
+
+def _offset_delta(o):
+    return timedelta(days=o["value"]) if o["unit"] == "day" else timedelta(hours=o["value"])
+
+
+def _fmt_offset(o):
+    return f"{o['value']} {o['unit']}{'s' if o['value'] != 1 else ''} before"
+
+
+def _reminder_body_text(rem, occ, offset):
+    amt = rem.get("amount")
+    amt_s = f" • {rem.get('currency','INR')} {amt:g}" if amt else ""
+    when = f"{occ.isoformat()} {rem.get('due_time','09:00')}"
+    return (f"⏰ Reminder: {rem['title']}\n"
+            f"{rem.get('category','custom').title()}{amt_s}\n"
+            f"Due {when} ({_fmt_offset(offset)})"
+            + (f"\n{rem['notes']}" if rem.get("notes") else ""))
+
+
+async def _enqueue_reminder(rem, occ, offset):
+    """Enqueue into the marketing delivery queues for every channel × recipient."""
+    ch = rem.get("channels", {})
+    text = _reminder_body_text(rem, occ, offset)
+    subject = f"Reminder: {rem['title']} — due {occ.isoformat()}"
+    n_email = n_wa = 0
+    for r in rem.get("recipients", []):
+        if ch.get("email") and (r.get("email") and "@" in r["email"]):
+            await db.email_scheduled.insert_one({
+                "scheduled_id": gen_id("esch"), "campaign_id": "reminder", "status": "pending",
+                "email": r["email"], "subject": subject, "message": text, "created_at": now_iso()})
+            n_email += 1
+        if ch.get("whatsapp") and r.get("phone"):
+            await db.whatsapp_scheduled.insert_one({
+                "scheduled_id": gen_id("wsch"), "campaign_id": "reminder", "status": "pending",
+                "phone": r["phone"], "message": text, "created_at": now_iso()})
+            n_wa += 1
+    return n_email, n_wa
+
+
+async def dispatch_due_reminders(now=None):
+    """One dispatch pass — enqueue any reminder whose lead-time has arrived. Idempotent."""
+    dry = os.environ.get("REMINDERS_DRY_RUN", "").strip() in ("1", "true", "True")
+    now = now or datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)  # Asia/Kolkata naive
+    if now.tzinfo:
+        now = now.replace(tzinfo=None)
+    today = now.date()
+    total_email = total_wa = 0
+    fired_log = []
+    cursor = db.reminders.find({"status": "active"}, {"_id": 0})
+    rows = await cursor.to_list(5000)
+    for rem in rows:
+        try:
+            hh, mm = (rem.get("due_time") or "09:00").split(":")[:2]
+            t_h, t_m = int(hh), int(mm)
+        except Exception:
+            t_h, t_m = 9, 0
+        fired = set(rem.get("fired", []))
+        new_fired = []
+        for occ in _reminder_occurrences(rem, today):
+            occ_dt = datetime(occ.year, occ.month, occ.day, t_h, t_m)
+            for off in rem.get("lead_offsets", []):
+                fire_dt = occ_dt - _offset_delta(off)
+                key = f"{occ.isoformat()}|{off['value']}{off['unit']}"
+                if key in fired:
+                    continue
+                if fire_dt <= now <= occ_dt + timedelta(days=1):
+                    if not dry:
+                        ne, nw = await _enqueue_reminder(rem, occ, off)
+                        total_email += ne; total_wa += nw
+                    new_fired.append(key)
+                    fired_log.append({"reminder_id": rem["reminder_id"],
+                                      "occurrence": occ.isoformat(), "offset": f"{off['value']}{off['unit']}"})
+        # advance / close
+        updates = {}
+        if new_fired:
+            keep = [k for k in (list(fired) + new_fired)]  # prune below
+            # keep only keys whose occurrence date is within the last 60 days
+            cutoff = today - timedelta(days=60)
+            keep = [k for k in keep if _key_date_ok(k, cutoff)]
+            updates["fired"] = keep
+        if rem.get("recurrence") == "once":
+            occ = date.fromisoformat(rem["due_date"])
+            occ_dt = datetime(occ.year, occ.month, occ.day, t_h, t_m)
+            all_keys = {f"{occ.isoformat()}|{o['value']}{o['unit']}" for o in rem.get("lead_offsets", [])}
+            if now > occ_dt and all_keys.issubset(fired.union(new_fired)):
+                updates["status"] = "done"
+        if updates and not dry:
+            updates["updated_at"] = now_iso()
+            await db.reminders.update_one({"reminder_id": rem["reminder_id"]}, {"$set": updates})
+    return {"enqueued_email": total_email, "enqueued_wa": total_wa, "fired": fired_log, "dry_run": dry}
+
+
+def _key_date_ok(key, cutoff):
+    try:
+        return date.fromisoformat(key.split("|")[0]) >= cutoff
+    except Exception:
+        return True
+
+
+@router.post("/reminders/run-due")
+async def run_due_reminders(request: Request):
+    """Admin-only manual dispatch pass (also the test hook)."""
+    user = await get_current_user(request)
+    actor = await _resolve_actor(user)
+    if not actor.get("is_boss") and (user.get("role") != "admin"):
+        raise HTTPException(403, "Admin only")
+    return await dispatch_due_reminders()
+
+
+async def _agenda_reminders(emp_id, email, dfrom, dto):
+    q = {"status": {"$ne": "done"},
+         "$or": [{"created_by_emp_id": emp_id}, {"shared": True}]}
+    rows = await db.reminders.find(q, {"_id": 0}).to_list(2000)
+    out = []
+    try:
+        d0, d1 = date.fromisoformat(dfrom), date.fromisoformat(dto)
+    except Exception:
+        return out
+    for r in rows:
+        # occurrences that fall in the window
+        seen = set()
+        for occ in _reminder_occurrences(r, d0) + _reminder_occurrences(r, d1):
+            if d0 <= occ <= d1 and occ.isoformat() not in seen:
+                seen.add(occ.isoformat())
+                out.append(_ev(
+                    "reminder", "reminder", r.get("title"), occ.isoformat(), r["reminder_id"], "/delegation",
+                    start_time=(r.get("due_time") or None),
+                    status=r.get("status"), actions=["edit", "pause"],
+                    meta={"category": r.get("category"), "amount": r.get("amount"),
+                          "currency": r.get("currency", "INR"), "recurrence": r.get("recurrence"),
+                          "channels": r.get("channels", {}), "shared": r.get("shared", False),
+                          "lead_offsets": r.get("lead_offsets", []), "notes": r.get("notes", "")}))
     return out
 
