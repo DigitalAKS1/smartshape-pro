@@ -69,6 +69,10 @@ export default function EventActionDrawer({ event, onAction, onEditEvent, onClos
                   <p className={`${textSec} mt-1`}>{meta.collaborators.join(', ')}</p>
                 </div>
               )}
+              <a href={`${process.env.REACT_APP_BACKEND_URL}/api/delegation/events/${event.entity_id}.ics`}
+                className={`${row} border border-[var(--border-color)] ${textSec}`}>
+                <Calendar className="h-4 w-4" /> Add to calendar (Google / Apple / Outlook)
+              </a>
               {meta.is_creator ? (
                 <>
                   {onEditEvent && (

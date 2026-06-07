@@ -2,7 +2,7 @@
 Delegation Management System — SmartShape Pro module
 Roles: boss (all rights) | delegator (assigns tasks) | delegatee (executes tasks)
 """
-from fastapi import APIRouter, Request, HTTPException, UploadFile, File
+from fastapi import APIRouter, Request, HTTPException, UploadFile, File, Response
 from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime, timezone, timedelta, date
@@ -1527,6 +1527,58 @@ async def respond_event(event_id: str, request: Request):
         {"event_id": event_id, "collaborators.email": user.get("email")},
         {"$set": {"collaborators.$.response": resp, "updated_at": now_iso()}})
     return await db.cal_events.find_one({"event_id": event_id}, {"_id": 0})
+
+
+def _ics_escape(s):
+    return (s or "").replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,").replace("\n", "\\n")
+
+
+def _ics_dt(date_str, time_str):
+    """Return (ics_value, is_all_day_date)."""
+    if not time_str:
+        return date_str.replace("-", ""), True
+    return f"{date_str.replace('-', '')}T{time_str.replace(':', '')}00", False
+
+
+@router.get("/events/{event_id}.ics")
+async def event_ics(event_id: str, request: Request):
+    """Single-event iCalendar file — 'Add to calendar' for Google/Apple/Outlook."""
+    user = await get_current_user(request)
+    actor = await _resolve_actor(user)
+    ev = await db.cal_events.find_one({"event_id": event_id}, {"_id": 0})
+    if not ev:
+        raise HTTPException(404, "Event not found")
+    email = (user.get("email") or "").lower()
+    allowed = ev.get("created_by") == user.get("email") or any(
+        (c.get("emp_id") and c["emp_id"] == actor["emp_id"]) or c.get("email", "").lower() == email
+        for c in ev.get("collaborators", []))
+    if not allowed:
+        raise HTTPException(403, "Not your event")
+
+    dtstart, is_date = _ics_dt(ev["date"], ev.get("start_time"))
+    dtend, _ = _ics_dt(ev["date"], ev.get("end_time") or ev.get("start_time"))
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//SmartShape Pro//Calendar//EN",
+             "CALSCALE:GREGORIAN", "METHOD:PUBLISH", "BEGIN:VEVENT",
+             f"UID:{ev['event_id']}@smartshape.in", f"DTSTAMP:{stamp}"]
+    if is_date:
+        lines += [f"DTSTART;VALUE=DATE:{dtstart}", f"DTEND;VALUE=DATE:{dtstart}"]
+    else:
+        lines += [f"DTSTART;TZID=Asia/Kolkata:{dtstart}", f"DTEND;TZID=Asia/Kolkata:{dtend}"]
+    lines.append(f"SUMMARY:{_ics_escape(ev.get('title'))}")
+    if ev.get("description"):
+        lines.append(f"DESCRIPTION:{_ics_escape(ev['description'])}")
+    if ev.get("location"):
+        lines.append(f"LOCATION:{_ics_escape(ev['location'])}")
+    if ev.get("created_by"):
+        lines.append(f"ORGANIZER;CN={_ics_escape(ev['created_by'])}:mailto:{ev['created_by']}")
+    for c in ev.get("collaborators", []):
+        if c.get("email"):
+            lines.append(f"ATTENDEE;CN={_ics_escape(c.get('name') or c['email'])}:mailto:{c['email']}")
+    lines += ["STATUS:CONFIRMED", "END:VEVENT", "END:VCALENDAR"]
+    body = "\r\n".join(lines) + "\r\n"
+    return Response(content=body, media_type="text/calendar",
+                    headers={"Content-Disposition": f'attachment; filename="event-{ev["event_id"]}.ics"'})
 
 
 async def _agenda_events(emp_id, email, dfrom, dto):
