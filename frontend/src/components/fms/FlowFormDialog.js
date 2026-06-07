@@ -1,12 +1,14 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   Plus, Check, X, Eye, CheckSquare, IndianRupee, Pencil, Trash2,
   ChevronUp, ChevronDown, Shield, Search, Building2, Zap, Layers,
+  Bolt, ChevronRight,
 } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Label } from '../ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../ui/dialog';
+import { certsApi } from '../../lib/api';
 
 const PINK = '#e94560';
 const PALETTE = ['#e94560','#8b5cf6','#10b981','#f59e0b','#3b82f6','#06b6d4','#f97316','#6366f1','#ec4899'];
@@ -32,6 +34,256 @@ function TatBadge({ status }) {
   );
 }
 
+/* ── Action Params sub-editors ─────────────────────────────────────────────── */
+const ACTION_EVENTS  = ['on_complete', 'on_overdue', 'on_reject'];
+const ACTION_TYPES   = ['send_message', 'start_flow', 'generate_certificate'];
+const ACTION_OPS     = ['==', '!=', '>', '>=', '<', '<='];
+
+function ActionParamsSendMessage({ params, onChange, textSec, textMuted, inputCls }) {
+  const p = params || {};
+  return (
+    <div className="space-y-2 mt-2">
+      <div className="grid grid-cols-2 gap-2">
+        <div>
+          <Label className={`${textSec} text-[10px]`}>To</Label>
+          <select value={p.to || 'customer'} onChange={e => onChange({ ...p, to: e.target.value })}
+            className={`w-full h-7 px-2 text-xs rounded-md border border-[var(--border-color)] ${inputCls} mt-0.5`}>
+            <option value="customer">Customer</option>
+            <option value="staff">Staff (Assignee)</option>
+          </select>
+        </div>
+        <div>
+          <Label className={`${textSec} text-[10px]`}>Channels</Label>
+          <div className="flex gap-2 mt-1.5">
+            {['whatsapp', 'email'].map(ch => (
+              <label key={ch} className="flex items-center gap-1 cursor-pointer">
+                <input type="checkbox"
+                  checked={Array.isArray(p.channels) ? p.channels.includes(ch) : ch === 'email'}
+                  onChange={e => {
+                    const prev = Array.isArray(p.channels) ? p.channels : ['email'];
+                    onChange({ ...p, channels: e.target.checked ? [...prev.filter(c => c !== ch), ch] : prev.filter(c => c !== ch) });
+                  }}
+                  className="w-3 h-3 accent-[#e94560]" />
+                <span className={`text-[10px] ${textSec}`}>{ch}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+      </div>
+      <div>
+        <Label className={`${textSec} text-[10px]`}>Message template</Label>
+        <textarea value={p.template || ''} onChange={e => onChange({ ...p, template: e.target.value })}
+          rows={2}
+          placeholder="Hi {customer_name}, your stage {stage} ({title}) ref {ref} is complete."
+          className={`w-full px-2 py-1.5 rounded-md border border-[var(--border-color)] text-xs resize-none focus:outline-none mt-0.5 ${inputCls}`} />
+        <p className={`text-[9px] ${textMuted} mt-0.5`}>Available: {'{customer_name}'} {'{stage}'} {'{title}'} {'{ref}'}</p>
+      </div>
+    </div>
+  );
+}
+
+function ActionParamsStartFlow({ params, onChange, fmsTemplates, textSec, textMuted, inputCls }) {
+  const p = params || {};
+  return (
+    <div className="space-y-2 mt-2">
+      <div>
+        <Label className={`${textSec} text-[10px]`}>Target FMS Template</Label>
+        <select value={p.template_id || ''} onChange={e => onChange({ ...p, template_id: e.target.value })}
+          className={`w-full h-7 px-2 text-xs rounded-md border border-[var(--border-color)] ${inputCls} mt-0.5`}>
+          <option value="">— select template —</option>
+          {(fmsTemplates || []).map(t => (
+            <option key={t.template_id} value={t.template_id}>{t.name}</option>
+          ))}
+        </select>
+      </div>
+      <div>
+        <Label className={`${textSec} text-[10px]`}>Title suffix (appended to parent flow title)</Label>
+        <Input value={p.title_suffix || ''} onChange={e => onChange({ ...p, title_suffix: e.target.value })}
+          className={`h-7 text-xs mt-0.5 ${inputCls}`} placeholder=" — Onboarding" />
+      </div>
+    </div>
+  );
+}
+
+function ActionParamsGenerateCert({ params, onChange, certTemplates, textSec, textMuted, inputCls }) {
+  const p = params || {};
+  const sv = p.shared_values || {};
+  return (
+    <div className="space-y-2 mt-2">
+      <div>
+        <Label className={`${textSec} text-[10px]`}>Certificate Template</Label>
+        <select value={p.cert_template_id || ''} onChange={e => onChange({ ...p, cert_template_id: e.target.value })}
+          className={`w-full h-7 px-2 text-xs rounded-md border border-[var(--border-color)] ${inputCls} mt-0.5`}>
+          <option value="">— select cert template —</option>
+          {(certTemplates || []).map(t => (
+            <option key={t.template_id} value={t.template_id}>{t.name}</option>
+          ))}
+        </select>
+      </div>
+      <div className="grid grid-cols-3 gap-2">
+        <div>
+          <Label className={`${textSec} text-[10px]`}>Date</Label>
+          <Input value={sv.date || ''} onChange={e => onChange({ ...p, shared_values: { ...sv, date: e.target.value } })}
+            className={`h-7 text-xs mt-0.5 ${inputCls}`} placeholder="2026-06-01" />
+        </div>
+        <div>
+          <Label className={`${textSec} text-[10px]`}>Theme</Label>
+          <Input value={sv.theme || ''} onChange={e => onChange({ ...p, shared_values: { ...sv, theme: e.target.value } })}
+            className={`h-7 text-xs mt-0.5 ${inputCls}`} placeholder="Onboarding" />
+        </div>
+        <div>
+          <Label className={`${textSec} text-[10px]`}>Expert</Label>
+          <Input value={sv.expert || ''} onChange={e => onChange({ ...p, shared_values: { ...sv, expert: e.target.value } })}
+            className={`h-7 text-xs mt-0.5 ${inputCls}`} placeholder="R.V." />
+        </div>
+      </div>
+      <div>
+        <Label className={`${textSec} text-[10px]`}>Delivery channels</Label>
+        <div className="flex gap-3 mt-1.5">
+          {['whatsapp', 'email'].map(ch => (
+            <label key={ch} className="flex items-center gap-1 cursor-pointer">
+              <input type="checkbox"
+                checked={Array.isArray(p.channels) ? p.channels.includes(ch) : ['email'].includes(ch)}
+                onChange={e => {
+                  const prev = Array.isArray(p.channels) ? p.channels : ['email'];
+                  onChange({ ...p, channels: e.target.checked ? [...prev.filter(c => c !== ch), ch] : prev.filter(c => c !== ch) });
+                }}
+                className="w-3 h-3 accent-[#e94560]" />
+              <span className={`text-[10px] ${textSec}`}>{ch}</span>
+            </label>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── Per-stage Actions editor ──────────────────────────────────────────────── */
+function StageActionsEditor({ stageIdx, actions, updateStage, certTemplates, fmsTemplates, textSec, textMuted, inputCls }) {
+  const acts = Array.isArray(actions) ? actions : [];
+
+  const updateAction = (aIdx, patch) => {
+    const next = acts.map((a, i) => i === aIdx ? { ...a, ...patch } : a);
+    updateStage(stageIdx, 'actions', next);
+  };
+
+  const updateActionParams = (aIdx, newParams) => {
+    const next = acts.map((a, i) => i === aIdx ? { ...a, params: newParams } : a);
+    updateStage(stageIdx, 'actions', next);
+  };
+
+  const updateActionCondition = (aIdx, condPatch) => {
+    const prev = acts[aIdx]?.condition || {};
+    const next = acts.map((a, i) => i === aIdx ? { ...a, condition: { ...prev, ...condPatch } } : a);
+    updateStage(stageIdx, 'actions', next);
+  };
+
+  const removeCondition = (aIdx) => {
+    const next = acts.map((a, i) => {
+      if (i !== aIdx) return a;
+      const { condition, ...rest } = a;
+      return rest;
+    });
+    updateStage(stageIdx, 'actions', next);
+  };
+
+  const addAction = () => {
+    updateStage(stageIdx, 'actions', [
+      ...acts,
+      { event: 'on_complete', type: 'send_message', params: { to: 'customer', channels: ['email'], template: '' } },
+    ]);
+  };
+
+  const removeAction = (aIdx) => {
+    updateStage(stageIdx, 'actions', acts.filter((_, i) => i !== aIdx));
+  };
+
+  return (
+    <div className="mt-3 space-y-2">
+      {acts.map((action, aIdx) => (
+        <div key={aIdx} className="rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] p-3 space-y-2">
+          {/* Action header row: event + type + remove */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="flex items-center gap-1">
+              <Bolt className="h-3 w-3 text-[#e94560] flex-shrink-0" />
+              <span className={`text-[10px] font-semibold ${textSec} uppercase tracking-wider`}>When</span>
+            </div>
+            <select value={action.event || 'on_complete'}
+              onChange={e => updateAction(aIdx, { event: e.target.value })}
+              className={`h-7 px-2 text-xs rounded-md border border-[var(--border-color)] ${inputCls}`}>
+              {ACTION_EVENTS.map(ev => (
+                <option key={ev} value={ev}>{ev.replace('on_', '')}</option>
+              ))}
+            </select>
+            <span className={`text-[10px] ${textMuted}`}>do</span>
+            <select value={action.type || 'send_message'}
+              onChange={e => updateAction(aIdx, { type: e.target.value, params: {} })}
+              className={`h-7 px-2 text-xs rounded-md border border-[var(--border-color)] ${inputCls}`}>
+              {ACTION_TYPES.map(t => (
+                <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>
+              ))}
+            </select>
+            <button onClick={() => removeAction(aIdx)}
+              className="ml-auto p-1 rounded hover:bg-red-500/10 text-red-400 flex-shrink-0">
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+
+          {/* Type-specific params */}
+          {action.type === 'send_message' && (
+            <ActionParamsSendMessage
+              params={action.params} onChange={np => updateActionParams(aIdx, np)}
+              textSec={textSec} textMuted={textMuted} inputCls={inputCls} />
+          )}
+          {action.type === 'start_flow' && (
+            <ActionParamsStartFlow
+              params={action.params} onChange={np => updateActionParams(aIdx, np)}
+              fmsTemplates={fmsTemplates} textSec={textSec} textMuted={textMuted} inputCls={inputCls} />
+          )}
+          {action.type === 'generate_certificate' && (
+            <ActionParamsGenerateCert
+              params={action.params} onChange={np => updateActionParams(aIdx, np)}
+              certTemplates={certTemplates} textSec={textSec} textMuted={textMuted} inputCls={inputCls} />
+          )}
+
+          {/* Optional condition row */}
+          {action.condition ? (
+            <div className="flex items-center gap-2 flex-wrap pt-1 border-t border-[var(--border-color)]">
+              <span className={`text-[10px] font-semibold ${textMuted} uppercase tracking-wider`}>If</span>
+              <Input value={action.condition.field || ''}
+                onChange={e => updateActionCondition(aIdx, { field: e.target.value })}
+                className={`h-6 w-24 text-xs ${inputCls}`} placeholder="field" />
+              <select value={action.condition.op || '=='}
+                onChange={e => updateActionCondition(aIdx, { op: e.target.value })}
+                className={`h-6 px-1 text-xs rounded-md border border-[var(--border-color)] ${inputCls}`}>
+                {ACTION_OPS.map(op => <option key={op} value={op}>{op}</option>)}
+              </select>
+              <Input value={action.condition.value || ''}
+                onChange={e => updateActionCondition(aIdx, { value: e.target.value })}
+                className={`h-6 w-24 text-xs ${inputCls}`} placeholder="value" />
+              <button onClick={() => removeCondition(aIdx)}
+                className={`text-[10px] ${textMuted} hover:text-red-400 ml-1`}>
+                remove if
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => updateActionCondition(aIdx, { field: '', op: '==', value: '' })}
+              className={`text-[10px] ${textMuted} hover:${textSec} underline underline-offset-2 mt-1`}>
+              + add condition
+            </button>
+          )}
+        </div>
+      ))}
+
+      <button onClick={addAction}
+        className={`flex items-center gap-1 text-[10px] font-medium ${textMuted} hover:text-[#e94560] transition-colors`}>
+        <Plus className="h-3 w-3" /> Add action
+      </button>
+    </div>
+  );
+}
+
 /* ── Templates Tab Content ─────────────────────────────────────────────────── */
 export function TemplatesTab({
   templates, editTmpl, setEditTmpl, tmplForm, setTmplForm,
@@ -40,6 +292,25 @@ export function TemplatesTab({
   setSelTmpl, setTab,
   card, textPri, textSec, textMuted, inputCls,
 }) {
+  const [openActionsIdx, setOpenActionsIdx] = useState(null);
+  const [certTemplates, setCertTemplates] = useState([]);
+
+  // Load cert templates once when first needed
+  const ensureCertTemplates = () => {
+    if (certTemplates.length === 0) {
+      certsApi.listTemplates().then(r => setCertTemplates(r.data || [])).catch(() => {});
+    }
+  };
+
+  const toggleActions = (idx) => {
+    if (openActionsIdx === idx) {
+      setOpenActionsIdx(null);
+    } else {
+      setOpenActionsIdx(idx);
+      ensureCertTemplates();
+    }
+  };
+
   return (
     <div className="space-y-4">
       {editTmpl ? (
@@ -84,40 +355,81 @@ export function TemplatesTab({
             </div>
             <div className="space-y-2">
               {tmplForm.stages.map((stage, idx) => (
-                <div key={idx} className={`flex items-center gap-2 p-3 rounded-xl border border-[var(--border-color)] bg-[var(--bg-primary)]`}>
-                  <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold text-white flex-shrink-0`}
-                    style={{ background: tmplForm.color }}>{idx + 1}</div>
-                  <Input value={stage.label} onChange={e => updateStage(idx, 'label', e.target.value)}
-                    className={`flex-1 h-8 text-xs ${inputCls}`} placeholder="Stage name" />
-                  <select value={stage.team} onChange={e => updateStage(idx, 'team', e.target.value)}
-                    className={`h-8 px-2 text-xs rounded-md border border-[var(--border-color)] ${inputCls} w-24`}>
-                    {TEAM_OPTIONS.map(t => <option key={t} value={t}>{t}</option>)}
-                  </select>
-                  <div className="flex items-center gap-1">
-                    <Input type="number" min={0.5} step={0.5} value={stage.tat_hours}
-                      onChange={e => updateStage(idx, 'tat_hours', parseFloat(e.target.value) || 1)}
-                      className={`h-8 w-16 text-xs text-center ${inputCls}`} />
-                    <span className={`text-[10px] ${textMuted}`}>h</span>
+                <div key={idx} className={`rounded-xl border border-[var(--border-color)] bg-[var(--bg-primary)] overflow-hidden`}>
+                  {/* Stage top row — identical layout to before */}
+                  <div className="flex items-center gap-2 p-3">
+                    <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold text-white flex-shrink-0`}
+                      style={{ background: tmplForm.color }}>{idx + 1}</div>
+                    <Input value={stage.label} onChange={e => updateStage(idx, 'label', e.target.value)}
+                      className={`flex-1 h-8 text-xs ${inputCls}`} placeholder="Stage name" />
+                    <select value={stage.team} onChange={e => updateStage(idx, 'team', e.target.value)}
+                      className={`h-8 px-2 text-xs rounded-md border border-[var(--border-color)] ${inputCls} w-24`}>
+                      {TEAM_OPTIONS.map(t => <option key={t} value={t}>{t}</option>)}
+                    </select>
+                    <div className="flex items-center gap-1">
+                      <Input type="number" min={0.5} step={0.5} value={stage.tat_hours}
+                        onChange={e => updateStage(idx, 'tat_hours', parseFloat(e.target.value) || 1)}
+                        className={`h-8 w-16 text-xs text-center ${inputCls}`} />
+                      <span className={`text-[10px] ${textMuted}`}>h</span>
+                    </div>
+                    <button onClick={() => updateStage(idx, 'needs_approval', !stage.needs_approval)}
+                      className={`h-8 px-2 rounded-lg text-xs font-medium border transition-colors flex items-center gap-1
+                        ${stage.needs_approval ? 'border-amber-500/40 bg-amber-500/10 text-amber-500' : `border-[var(--border-color)] ${textMuted}`}`}>
+                      <Shield className="h-3 w-3" />
+                      <span className="hidden sm:inline">Approval</span>
+                    </button>
+                    {/* Actions toggle */}
+                    <button
+                      onClick={() => toggleActions(idx)}
+                      title="Stage actions"
+                      className={`h-8 px-2 rounded-lg text-xs font-medium border transition-colors flex items-center gap-1
+                        ${(stage.actions || []).length > 0 ? 'border-[#e94560]/40 bg-[#e94560]/10 text-[#e94560]' : `border-[var(--border-color)] ${textMuted}`}
+                        ${openActionsIdx === idx ? 'ring-1 ring-[#e94560]/40' : ''}`}>
+                      <Bolt className="h-3 w-3" />
+                      <span className="hidden sm:inline">Actions</span>
+                      {(stage.actions || []).length > 0 && (
+                        <span className="text-[9px] font-bold px-1 rounded-full bg-[#e94560] text-white ml-0.5">
+                          {stage.actions.length}
+                        </span>
+                      )}
+                      <ChevronRight className={`h-3 w-3 transition-transform ${openActionsIdx === idx ? 'rotate-90' : ''}`} />
+                    </button>
+                    <div className="flex items-center gap-0.5">
+                      <button onClick={() => moveStage(idx, -1)} disabled={idx === 0}
+                        className={`p-1 rounded hover:bg-[var(--bg-hover)] ${textMuted} disabled:opacity-30`}>
+                        <ChevronUp className="h-3.5 w-3.5" />
+                      </button>
+                      <button onClick={() => moveStage(idx, 1)} disabled={idx === tmplForm.stages.length - 1}
+                        className={`p-1 rounded hover:bg-[var(--bg-hover)] ${textMuted} disabled:opacity-30`}>
+                        <ChevronDown className="h-3.5 w-3.5" />
+                      </button>
+                      <button onClick={() => removeStage(idx)} className="p-1 rounded hover:bg-red-500/10 text-red-400">
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
                   </div>
-                  <button onClick={() => updateStage(idx, 'needs_approval', !stage.needs_approval)}
-                    className={`h-8 px-2 rounded-lg text-xs font-medium border transition-colors flex items-center gap-1
-                      ${stage.needs_approval ? 'border-amber-500/40 bg-amber-500/10 text-amber-500' : `border-[var(--border-color)] ${textMuted}`}`}>
-                    <Shield className="h-3 w-3" />
-                    <span className="hidden sm:inline">Approval</span>
-                  </button>
-                  <div className="flex items-center gap-0.5">
-                    <button onClick={() => moveStage(idx, -1)} disabled={idx === 0}
-                      className={`p-1 rounded hover:bg-[var(--bg-hover)] ${textMuted} disabled:opacity-30`}>
-                      <ChevronUp className="h-3.5 w-3.5" />
-                    </button>
-                    <button onClick={() => moveStage(idx, 1)} disabled={idx === tmplForm.stages.length - 1}
-                      className={`p-1 rounded hover:bg-[var(--bg-hover)] ${textMuted} disabled:opacity-30`}>
-                      <ChevronDown className="h-3.5 w-3.5" />
-                    </button>
-                    <button onClick={() => removeStage(idx)} className="p-1 rounded hover:bg-red-500/10 text-red-400">
-                      <X className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
+
+                  {/* Collapsible actions section */}
+                  {openActionsIdx === idx && (
+                    <div className="px-3 pb-3 border-t border-[var(--border-color)] bg-[var(--bg-card)]">
+                      <div className="flex items-center gap-1.5 pt-2 mb-1">
+                        <Bolt className="h-3 w-3 text-[#e94560]" />
+                        <span className={`text-[10px] font-semibold ${textSec} uppercase tracking-wider`}>
+                          Stage Actions — fire when lifecycle events occur
+                        </span>
+                      </div>
+                      <StageActionsEditor
+                        stageIdx={idx}
+                        actions={stage.actions}
+                        updateStage={updateStage}
+                        certTemplates={certTemplates}
+                        fmsTemplates={templates}
+                        textSec={textSec}
+                        textMuted={textMuted}
+                        inputCls={inputCls}
+                      />
+                    </div>
+                  )}
                 </div>
               ))}
               <button onClick={addStage}
