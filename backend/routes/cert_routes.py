@@ -1,9 +1,10 @@
 """Certificate pipeline — generate personalized cert PDFs and deliver via WhatsApp/email."""
 from fastapi import APIRouter, Request, HTTPException, UploadFile, File
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone
-import uuid, os
+import uuid, os, tempfile
 
 from database import db
 from auth_utils import get_current_user
@@ -189,3 +190,25 @@ async def debug_run_loop(request: Request):
     from scheduler import run_cert_pass
     await run_cert_pass()
     return {"ok": True}
+
+
+# ── Preview ───────────────────────────────────────────────────────────────────
+
+@router.get("/items/{item_id}/preview")
+async def preview_item(item_id: str, request: Request):
+    await get_current_user(request)
+    it = await db.cert_items.find_one({"item_id": item_id}, {"_id": 0})
+    if not it:
+        raise HTTPException(404, "Item not found")
+    batch = await db.cert_batches.find_one({"batch_id": it["batch_id"]}, {"_id": 0}) or {}
+    tpl = await db.cert_templates.find_one({"template_id": batch.get("template_id")}, {"_id": 0})
+    if not tpl:
+        raise HTTPException(404, "Template not found")
+    from cert_engine import render_certificate_pdf
+    bg_url = tpl.get("background_url", "")
+    bg_file = bg_url.split("/uploads/certificates/")[-1] if "/uploads/certificates/" in bg_url else bg_url
+    bg_path = os.path.join(CERT_DIR, bg_file)
+    out_path = os.path.join(tempfile.gettempdir(), f"preview_{item_id}.pdf")
+    render_certificate_pdf(bg_path, out_path, tpl.get("fields", []),
+                           {"name": it["name"]}, batch.get("shared_values", {}))
+    return FileResponse(out_path, media_type="application/pdf", filename="preview.pdf")

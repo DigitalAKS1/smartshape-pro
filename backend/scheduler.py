@@ -919,6 +919,16 @@ async def run_cert_pass():
     await _deliver_pending_certs()
 
 
+async def cert_loop():
+    log.info("[scheduler] cert loop started (interval: 30s)")
+    while True:
+        try:
+            await run_cert_pass()
+        except Exception as exc:
+            log.error(f"[cert loop] {exc}")
+        await asyncio.sleep(30)
+
+
 async def start_scheduler():
     """Start all background automation loops. Call once from FastAPI startup."""
     asyncio.create_task(email_sender_loop())
@@ -927,4 +937,6 @@ async def start_scheduler():
     asyncio.create_task(greeting_loop())
     asyncio.create_task(fms_sla_loop())
     asyncio.create_task(crm_digest_loop())
-    log.info("[scheduler] all 6 background jobs running")
+    asyncio.create_task(cert_loop())
+    log.info("[scheduler] cert loop running")
+    log.info("[scheduler] all 7 background jobs running")
