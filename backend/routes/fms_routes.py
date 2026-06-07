@@ -320,6 +320,8 @@ class FlowCreate(BaseModel):
     lead_id: Optional[str] = None         # CRM lead link
     school_id: Optional[str] = None
     assigned_teams: Optional[Dict[str, str]] = {}
+    parent_flow_id: Optional[str] = None
+    spawn_depth: Optional[int] = 0
 
 @router.get("/flows")
 async def list_flows(request: Request, flow_type: Optional[str] = None,
@@ -374,6 +376,9 @@ async def create_flow(body: FlowCreate, request: Request):
         "status": "active",
         "created_by": user.get("email"), "created_at": now.isoformat(),
         "completed_at": None, "overall_score": None,
+        "parent_flow_id": body.parent_flow_id,
+        "spawned_flow_ids": [],
+        "spawn_depth": body.spawn_depth or 0,
     }
     await db.fms_flows.insert_one(flow_doc)
 
@@ -392,6 +397,7 @@ async def create_flow(body: FlowCreate, request: Request):
             "team": sd["team"], "tat_hours": sd["tat_hours"],
             "needs_approval": sd["needs_approval"],
             "customer_notify": sd.get("customer_notify", False),
+            "actions": sd.get("actions", []),
             "status": "waiting" if i > 0 else "active",
             # waiting → active → done / rejected
             "plan_start": plan_from.isoformat(),
