@@ -1,5 +1,5 @@
 import React from 'react';
-import { ChevronLeft, ChevronRight, Plus } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, Rss, Copy, RefreshCw } from 'lucide-react';
 import { useDelegationCalendar } from '../../../hooks/useDelegationCalendar';
 import CalendarMonth from './CalendarMonth';
 import AgendaList from './AgendaList';
@@ -24,7 +24,14 @@ export default function DelegationCalendar({ onEventClick, card, textPri, textSe
   const [blockDialog, setBlockDialog] = React.useState(null);
   const [selectedEvent, setSelectedEvent] = React.useState(null);
   const [quickAdd, setQuickAdd] = React.useState(null);   // {date, start} slot chooser
+  const [feed, setFeed] = React.useState(null);           // {url, webcal_url} subscribe link
+  const [feedOpen, setFeedOpen] = React.useState(false);
   const monthLabel = c.cursor.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+
+  const openFeed = async () => {
+    setFeedOpen(true);
+    if (!feed) setFeed(await c.getFeedLink());
+  };
 
   const rangeDates = () => {
     const out = []; let d = new Date(c.range.from + 'T00:00:00');
@@ -66,6 +73,12 @@ export default function DelegationCalendar({ onEventClick, card, textPri, textSe
             <button onClick={() => c.setEventDialog({ defaults: { date: c.range.from, start_time: '09:00' } })}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-white" style={{ background: SKY }}>
               <Plus className="h-3.5 w-3.5" /> Event
+            </button>
+          )}
+          {!c.subjectEmp && (
+            <button onClick={openFeed} title="Subscribe in your calendar app"
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-[var(--border-color)] ${textSec} hover:bg-[var(--bg-hover)]`}>
+              <Rss className="h-3.5 w-3.5" /> Subscribe
             </button>
           )}
           {c.view === 'day' && !c.subjectEmp && (
@@ -153,6 +166,7 @@ export default function DelegationCalendar({ onEventClick, card, textPri, textSe
           event={selectedEvent}
           onAction={c.runAction}
           onEditEvent={(ev) => c.setEventDialog({ event: ev })}
+          onSendInvites={c.sendInvites}
           onClose={() => setSelectedEvent(null)}
           card={card} textPri={textPri} textSec={textSec} textMuted={textMuted} inputCls={inputCls} />
       )}
@@ -173,6 +187,41 @@ export default function DelegationCalendar({ onEventClick, card, textPri, textSe
                 Shared event (collaborate)
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* subscribe-feed link */}
+      {feedOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setFeedOpen(false)}>
+          <div className={`${card} border rounded-2xl w-full max-w-md p-5`} onClick={e => e.stopPropagation()}>
+            <p className={`text-sm font-semibold ${textPri} mb-1`}>Subscribe in your calendar app</p>
+            <p className={`text-[11px] ${textMuted} mb-3`}>
+              Add this private link in Apple Calendar / Google Calendar / Outlook (File → New Calendar Subscription, or “From URL”). Your events stay in sync automatically. Keep this link private.
+            </p>
+            {!feed ? (
+              <p className={`text-xs ${textMuted}`}>Loading…</p>
+            ) : (
+              <div className="space-y-3">
+                <div className="flex gap-2">
+                  <input readOnly value={feed.webcal_url} onFocus={e => e.target.select()}
+                    className={`flex-1 h-9 px-2.5 text-xs rounded border border-[var(--border-color)] ${inputCls}`} />
+                  <button onClick={() => { navigator.clipboard?.writeText(feed.webcal_url); }}
+                    className="h-9 px-3 rounded-lg text-xs font-semibold border border-[var(--border-color)] flex items-center gap-1" style={{ color: SKY }}>
+                    <Copy className="h-3.5 w-3.5" /> Copy
+                  </button>
+                </div>
+                <div className="flex items-center justify-between">
+                  <a href={feed.webcal_url} className="text-xs font-semibold" style={{ color: SKY }}>Open in calendar app</a>
+                  <button onClick={async () => setFeed(await c.rotateFeedLink())}
+                    className={`text-[11px] flex items-center gap-1 ${textMuted} hover:${textSec}`}>
+                    <RefreshCw className="h-3 w-3" /> Rotate link
+                  </button>
+                </div>
+              </div>
+            )}
+            <button onClick={() => setFeedOpen(false)}
+              className={`${'w-full h-9 mt-4 rounded-lg text-sm font-semibold border border-[var(--border-color)]'} ${textSec}`}>Close</button>
           </div>
         </div>
       )}

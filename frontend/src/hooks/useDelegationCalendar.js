@@ -163,6 +163,28 @@ export function useDelegationCalendar() {
     catch (e) { toast.error(e?.response?.data?.detail || 'Failed to update event'); return false; }
   }, [load]);
 
+  // SP3 — manual ICS invites (send-safe: caller confirms recipients first)
+  const sendInvites = useCallback(async (id, kind = 'request') => {
+    try {
+      const r = await delApi.events.invite(id, kind);
+      const d = r?.data || r;
+      const n = (d.sent || []).length, sk = (d.skipped || []).length;
+      toast.success(d.dry_run
+        ? `Dry-run: would notify ${n}`
+        : `${kind === 'cancel' ? 'Cancellation sent to' : 'Invited'} ${n}${sk ? ` · skipped ${sk}` : ''}`);
+      load();
+      return d;
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Failed to send invites'); return null; }
+  }, [load]);
+  const getFeedLink    = useCallback(async () => {
+    try { const r = await delApi.calendarFeed();       return r?.data || r; }
+    catch (e) { toast.error('Could not load subscribe link'); return null; }
+  }, []);
+  const rotateFeedLink = useCallback(async () => {
+    try { const r = await delApi.rotateCalendarFeed(); toast.success('Subscribe link rotated'); return r?.data || r; }
+    catch (e) { toast.error('Could not rotate link'); return null; }
+  }, []);
+
   return {
     view, setView, cursor, setCursor, range,
     subjectEmp, setSubjectEmp,
@@ -172,6 +194,7 @@ export function useDelegationCalendar() {
     goPrev, goNext, goToday,
     createBlock, updateBlock, deleteBlock, scheduleItem, runAction,
     eventDialog, setEventDialog, createEvent, updateEvent,
+    sendInvites, getFeedLink, rotateFeedLink,
     helpers: { iso, addDays, startOfMonth, endOfMonth, startOfWeek },
   };
 }

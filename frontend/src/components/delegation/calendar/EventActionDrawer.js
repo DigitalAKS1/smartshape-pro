@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, Check, RotateCcw, Calendar, ExternalLink, Video, ArrowRightLeft } from 'lucide-react';
+import { X, Check, RotateCcw, Calendar, ExternalLink, Video, ArrowRightLeft, Send } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 const PINK = '#e94560';
@@ -14,7 +14,7 @@ const ACTION_META = {
   set_status:     { label: 'Mark completed', Icon: Check,     color: '#10b981' },
 };
 
-export default function EventActionDrawer({ event, onAction, onEditEvent, onClose, card, textPri, textSec, textMuted, inputCls }) {
+export default function EventActionDrawer({ event, onAction, onEditEvent, onSendInvites, onClose, card, textPri, textSec, textMuted, inputCls }) {
   const navigate = useNavigate();
   const [rescheduleDate, setRescheduleDate] = useState(event?.date || '');
   const [outcome, setOutcome] = useState('');
@@ -28,6 +28,31 @@ export default function EventActionDrawer({ event, onAction, onEditEvent, onClos
   const fire = async (action, payload) => {
     setBusy(true);
     const ok = await onAction(event, action, payload);
+    setBusy(false);
+    if (ok) onClose();
+  };
+
+  // SP3 — send-safe: confirm the recipient list before emailing real people
+  const sendInvites = async () => {
+    const people = (meta.collaborators || []).join('\n');
+    const verb = meta.invited ? 'an update' : 'invites';
+    if (!window.confirm(
+      `Email ${verb} for "${event.title}" to its collaborators?\n\n${people}\n\n` +
+      `(You are not emailed.)`)) return;
+    setBusy(true);
+    await onSendInvites?.(event.entity_id, 'request');
+    setBusy(false);
+    onClose();
+  };
+
+  // Cancel, optionally emailing a cancellation notice to collaborators
+  const cancelEvent = async () => {
+    if (!window.confirm('Cancel this event?')) return;
+    const notify = meta.invited && !!onSendInvites &&
+      window.confirm('Also email collaborators that it has been cancelled?');
+    setBusy(true);
+    const ok = await onAction(event, 'cancel', {});
+    if (ok && notify) await onSendInvites(event.entity_id, 'cancel');
     setBusy(false);
     if (ok) onClose();
   };
@@ -75,16 +100,27 @@ export default function EventActionDrawer({ event, onAction, onEditEvent, onClos
               </a>
               {meta.is_creator ? (
                 <>
+                  {onSendInvites && (meta.collaborators || []).length > 0 && (
+                    <button disabled={busy} onClick={sendInvites}
+                      className={`${row} text-white`} style={{ background: '#0ea5e9' }}>
+                      <Send className="h-4 w-4" /> {meta.invited ? 'Send update' : 'Send invites'}
+                    </button>
+                  )}
                   {onEditEvent && (
                     <button disabled={busy} onClick={() => { onEditEvent(event); onClose(); }}
                       className={`${row} text-white`} style={{ background: PINK }}>
                       <Calendar className="h-4 w-4" /> Edit event
                     </button>
                   )}
-                  <button disabled={busy} onClick={() => fire('cancel', {})}
+                  <button disabled={busy} onClick={cancelEvent}
                     className={`${row} border border-[var(--border-color)] text-red-400`}>
                     <X className="h-4 w-4" /> Cancel event
                   </button>
+                  {meta.invited && (
+                    <p className={`text-[11px] ${textMuted} text-center`}>
+                      Invites sent · update #{(meta.sequence ?? 0)}
+                    </p>
+                  )}
                 </>
               ) : (
                 <div className="flex gap-2">
