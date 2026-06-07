@@ -94,6 +94,13 @@ export default function EventActionDrawer({ event, onAction, onEditEvent, onSend
                   <p className={`${textSec} mt-1`}>{meta.collaborators.join(', ')}</p>
                 </div>
               )}
+              {meta.join_url && (
+                <a href={meta.join_url} target="_blank" rel="noreferrer"
+                  className={`${row} text-white`} style={{ background: '#6366f1' }}>
+                  <Video className="h-4 w-4" /> Join {meta.meeting_provider === 'zoom' ? 'Zoom'
+                    : meta.meeting_provider === 'meet' ? 'Google Meet' : 'meeting'}
+                </a>
+              )}
               <a href={`${process.env.REACT_APP_BACKEND_URL}/api/delegation/events/${event.entity_id}.ics`}
                 className={`${row} border border-[var(--border-color)] ${textSec}`}>
                 <Calendar className="h-4 w-4" /> Add to calendar (Google / Apple / Outlook)

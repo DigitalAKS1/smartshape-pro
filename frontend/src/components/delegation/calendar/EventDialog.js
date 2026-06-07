@@ -25,6 +25,8 @@ export default function EventDialog({
     all_day: event?.all_day || false,
     location: event?.meta?.location || '',
     description: event?.meta?.description || '',
+    meeting_provider: event?.meta?.meeting_provider || '',
+    meeting_link: event?.meta?.meeting_link || '',
     color: event?.color || SKY,
   });
   // edit mode: we only have collaborator display names from the agenda; collaborator
@@ -41,6 +43,8 @@ export default function EventDialog({
       start_time: form.all_day ? '' : form.start_time,
       end_time: form.all_day ? '' : form.end_time,
       all_day: form.all_day, location: form.location, description: form.description, color: form.color,
+      meeting_provider: form.meeting_provider,
+      meeting_link: form.meeting_provider ? form.meeting_link.trim() : '',
     };
     if (collab.emp_ids.length) payload.collaborator_emp_ids = collab.emp_ids;
     if (collab.emails.length) payload.collaborator_emails = collab.emails;
@@ -75,6 +79,26 @@ export default function EventDialog({
           )}
           <div><label className={lbl}>Location</label>
             <Input value={form.location} onChange={e => set('location', e.target.value)} placeholder="Optional" className={`h-9 text-sm ${inputCls}`} /></div>
+          <div className="grid grid-cols-2 gap-3">
+            <div><label className={lbl}>Meeting type</label>
+              <select value={form.meeting_provider} onChange={e => set('meeting_provider', e.target.value)} className={fld}>
+                <option value="">None</option>
+                <option value="zoom">Zoom</option>
+                <option value="meet">Google Meet</option>
+                <option value="other">Other</option>
+              </select>
+            </div>
+            {form.meeting_provider && (
+              <div><label className={lbl}>Meeting link</label>
+                <Input value={form.meeting_link} onChange={e => set('meeting_link', e.target.value)}
+                  placeholder="https://zoom.us/j/…" className={`h-9 text-sm ${inputCls}`} /></div>
+            )}
+          </div>
+          {form.meeting_provider && (
+            <p className={`text-[11px] ${textMuted}`}>
+              Attendees join via a branded SmartShape link; your raw meeting URL stays private.
+            </p>
+          )}
           <CollaboratorPicker value={collab} onChange={setCollab} teamOptions={teamOptions}
             textPri={textPri} textSec={textSec} textMuted={textMuted} inputCls={inputCls} />
           {editing && <p className={`text-[11px] ${textMuted}`}>Adding collaborators here appends/updates the list.</p>}

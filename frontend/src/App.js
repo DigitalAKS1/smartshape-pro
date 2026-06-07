@@ -67,6 +67,7 @@ import CataloguePage from './pages/CataloguePage';
 import CustomerPortal from './pages/CustomerPortal';
 import CustomerLogin from './pages/CustomerLogin';
 import GetApp from './pages/GetApp';
+import ZoomJoin from './pages/ZoomJoin';
 
 // School Portal
 import SchoolLogin from './pages/SchoolLogin';
@@ -148,6 +149,7 @@ function AppRouter() {
       <Route path="/school/login" element={<SchoolLogin />} />
       <Route path="/school" element={<SchoolDashboard />} />
       <Route path="/get-app" element={<GetApp />} />
+      <Route path="/zoom/:eventId" element={<ZoomJoin />} />
       
       {/* Protected Routes - Admin */}
       <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
