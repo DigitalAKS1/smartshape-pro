@@ -209,6 +209,8 @@ export const schools = {
   update: (id, data) => API.put(`/schools/${id}`, data),
   delete: (id) => API.delete(`/schools/${id}`),
   getProfile: (id) => API.get(`/schools/${id}/profile`),
+  assign: (id, data) => API.post(`/schools/${id}/assign`, data),
+  backfillOwners: () => API.post('/schools/backfill-owners'),
 };
 
 // Contacts

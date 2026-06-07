@@ -45,6 +45,11 @@ export default function SchoolProfileHeader({ school, metrics, tk, rv }) {
               </span>
             )}
             <AgingChip days={metrics.days_since_last_contact} />
+            {school.assigned_name && (
+              <span className="text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-[#e94560]/10 text-[#e94560] border border-[#e94560]/20">
+                Owner: {school.assigned_name}
+              </span>
+            )}
           </div>
           {(school.city || school.school_strength > 0 || school.estd_year) && (
             <div className={`flex items-center gap-4 mt-2.5 text-sm ${tk.tm} flex-wrap`}>

@@ -18,7 +18,7 @@ import { STAGES, SCHOOL_TYPES } from '../../lib/crmConstants';
 import LeadMobileCard from '../../components/crm/LeadMobileCard';
 import { FieldTooltip } from '../../components/ui/Tooltip';
 import EmptyState, { EMPTY_STATES } from '../../components/ui/EmptyState';
-import { leads as leadsApiObj, quotations as quotationsApi2, adminApi } from '../../lib/api';
+import { leads as leadsApiObj, quotations as quotationsApi2, adminApi, schools as schoolsApiObj } from '../../lib/api';
 
 import useLeadsCRM from '../../hooks/useLeadsCRM';
 import LeadDetailPanel from '../../components/crm/LeadDetailPanel';
@@ -53,6 +53,33 @@ export default function LeadsCRM() {
   };
 
   const getStageObj = (id) => STAGES.find(s => s.id === id) || STAGES[0];
+
+  // School ownership: admin assigns a school to a Sales Exec; backend cascades
+  // the owner onto all of that school's contacts + leads.
+  const assignSchoolOwner = async (sch, email) => {
+    if (email === (sch.assigned_to || '')) return;
+    const sp = crm.spList.find(s => s.email === email);
+    const name = sp?.name || '';
+    if (!window.confirm(`Assign "${sch.school_name}" to ${name || 'Unassigned'}?\n\nThis moves ALL of its leads & contacts to ${name || 'no owner'}.`)) return;
+    try {
+      const r = await schoolsApiObj.assign(sch.school_id, { assigned_to: email, assigned_name: name });
+      const c = r.data?.cascaded || {};
+      toast.success(`Owner ${name ? `set to ${name}` : 'cleared'} — moved ${c.leads ?? 0} leads, ${c.contacts ?? 0} contacts`);
+      crm.fetchData();
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Assign failed'); }
+  };
+  const renderOwnerControl = (sch) => (
+    crm.user?.role === 'admin' ? (
+      <select value={sch.assigned_to || ''} onClick={e => e.stopPropagation()} onChange={e => assignSchoolOwner(sch, e.target.value)}
+        className={`h-8 px-2 rounded text-xs bg-[var(--bg-primary)] border border-[var(--border-color)] ${textPri} max-w-[150px]`}
+        data-testid={`school-owner-${sch.school_id}`}>
+        <option value="">Unassigned</option>
+        {crm.spList.map(sp => <option key={sp.email} value={sp.email}>{sp.name}</option>)}
+      </select>
+    ) : (
+      <span className={textSec}>{sch.assigned_name || <span className="italic" style={{ color: '#c0ccd8' }}>Unassigned</span>}</span>
+    )
+  );
 
   if (crm.loading) return (
     <AppShell>
@@ -596,6 +623,10 @@ export default function LeadsCRM() {
                           {sch.linkedin_url && <a href={sch.linkedin_url.startsWith('http') ? sch.linkedin_url : `https://${sch.linkedin_url}`} target="_blank" rel="noopener noreferrer" className="text-[#0a66c2]" title="LinkedIn"><Linkedin className="h-3.5 w-3.5" /></a>}
                           {sch.instagram_url && <a href={sch.instagram_url.startsWith('http') ? sch.instagram_url : `https://instagram.com/${sch.instagram_url.replace('@','')}`} target="_blank" rel="noopener noreferrer" className="text-[#e1306c]" title="Instagram"><Instagram className="h-3.5 w-3.5" /></a>}
                         </div>
+                        <div className="mt-1.5 flex items-center gap-1.5">
+                          <span className={`text-[10px] ${textMuted}`}>Owner:</span>
+                          {renderOwnerControl(sch)}
+                        </div>
                       </div>
                       <div className="flex gap-1 flex-shrink-0">
                         <Button size="sm" variant="ghost" onClick={() => navigate(`/school-profile/${sch.school_id}`)} className={`${textSec} h-9 w-9 p-0`} title="View School Profile"><Eye className="h-3.5 w-3.5" /></Button>
@@ -618,6 +649,7 @@ export default function LeadsCRM() {
                       <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden md:table-cell`}>Contact</th>
                       <th className={`text-center text-xs uppercase py-3 px-3 ${textMuted} hidden lg:table-cell cursor-pointer select-none`} onClick={() => crm.toggleSort('school_strength')}>Strength{crm.sortIndicator('school_strength')}</th>
                       <th className={`text-center text-xs uppercase py-3 px-3 ${textMuted} hidden lg:table-cell`}>Profile</th>
+                      <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden md:table-cell`}>Owner</th>
                       <th className={`text-center text-xs uppercase py-3 px-3 ${textMuted}`}>Leads</th>
                       <th className={`text-right text-xs uppercase py-3 px-3 ${textMuted}`}>Actions</th>
                     </tr></thead>
@@ -652,6 +684,7 @@ export default function LeadsCRM() {
                             <td className="py-2.5 px-3 hidden lg:table-cell text-center" onClick={e => e.stopPropagation()}>
                               {completionBadge(crm.calcSchoolCompletion(sch), () => crm.openEditSchool(sch))}
                             </td>
+                            <td className="py-2.5 px-3 hidden md:table-cell" onClick={e => e.stopPropagation()}>{renderOwnerControl(sch)}</td>
                             <td className="py-2.5 px-3 text-center"><span className="bg-[#e94560]/20 text-[#e94560] px-2 py-0.5 rounded text-xs font-bold">{schLeads.length}</span></td>
                             <td className="py-2.5 px-3 text-right" onClick={e => e.stopPropagation()}>
                               <Button size="sm" variant="ghost" onClick={e => { e.stopPropagation(); crm.openEditSchool(sch); }} className={`${textSec} h-7`} data-testid={`edit-school-${sch.school_id}`}><Edit2 className="h-3 w-3" /></Button>
@@ -660,7 +693,7 @@ export default function LeadsCRM() {
                           </tr>
                         );
                       })}
-                      {schFiltered.length === 0 && <tr><td colSpan="8" className={`py-12 text-center ${textMuted}`}>No schools match your search</td></tr>}
+                      {schFiltered.length === 0 && <tr><td colSpan="9" className={`py-12 text-center ${textMuted}`}>No schools match your search</td></tr>}
                     </tbody>
                   </table>
                 </div>
