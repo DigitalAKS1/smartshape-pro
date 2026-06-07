@@ -54,12 +54,13 @@ export default function CalendarDay({
           <div key={h} className="flex border-b border-[var(--border-color)] last:border-0 min-h-[52px]"
             onDragOver={(e) => e.preventDefault()} onDrop={handleDrop(h)}>
             <div className={`w-16 flex-shrink-0 text-right pr-2 pt-1.5 text-[10px] ${textMuted} border-r border-[var(--border-color)]`}>{label(h)}</div>
-            <div className="flex-1 p-1.5 space-y-1 group relative">
+            <div className={`flex-1 p-1.5 space-y-1 group relative ${!readOnly ? 'cursor-pointer' : ''}`}
+              onClick={() => !readOnly && onAddBlock?.(hhmm(h))} title={!readOnly ? 'Click to add here' : undefined}>
               {eventsAtHour(h).map(e => {
                 const isBlock = e.source === 'plan';
                 return (
                   <div key={e.event_id} draggable={isBlock && !readOnly} onDragStart={isBlock && !readOnly ? dragStart({ kind: 'block', id: e.entity_id }) : undefined}
-                    onClick={() => isBlock ? onEditBlock?.(e) : onEventClick?.(e)}
+                    onClick={(ev) => { ev.stopPropagation(); isBlock ? onEditBlock?.(e) : onEventClick?.(e); }}
                     className={`rounded-lg px-2.5 py-1.5 text-xs cursor-pointer flex items-center gap-2 ${isBlock ? 'cursor-grab active:cursor-grabbing' : ''} ${isDone(e) ? 'opacity-50 line-through' : ''}`}
                     style={{ background: e.color + '1f', borderLeft: `3px solid ${e.color}` }}>
                     <span className={`font-mono text-[10px] ${textMuted}`}>{e.start_time}</span>
@@ -69,10 +70,9 @@ export default function CalendarDay({
                 );
               })}
               {!readOnly && (
-                <button onClick={() => onAddBlock?.(hhmm(h))}
-                  className={`absolute right-1.5 top-1.5 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded ${textMuted} hover:bg-[var(--bg-hover)]`} title="Add block">
+                <span className={`absolute right-1.5 top-1.5 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded ${textMuted}`} title="Add here">
                   <Plus className="h-3.5 w-3.5" />
-                </button>
+                </span>
               )}
             </div>
           </div>
