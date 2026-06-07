@@ -59,7 +59,8 @@ export default function EventActionDrawer({ event, onAction, onClose, card, text
             </div>
           )}
 
-          {['complete','verify','reopen','complete_stage','checkin','checkout','set_status'].filter(has).map(a => {
+          {/* check-in/out need device GPS → done via "Open in module" (visit page), not here */}
+          {['complete','verify','reopen','complete_stage','set_status'].filter(has).map(a => {
             const m = ACTION_META[a];
             return (
               <button key={a} disabled={busy} onClick={() => fire(a, {})}

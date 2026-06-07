@@ -132,7 +132,7 @@ export function useDelegationCalendar() {
         case 'fms:complete_stage':  await fmsApi.completeStage(id, {}); break;
         case 'visit:checkin':       await visitApi.checkIn(id, {}); break;
         case 'visit:checkout':      await visitApi.checkOut(id, {}); break;
-        case 'visit:reschedule':    await visitApi.reschedule(id, { visit_date: payload.date }); break;
+        case 'visit:reschedule':    await visitApi.reschedule(id, { new_date: payload.date }); break;
         case 'task:complete':       await tasksApi.update(id, { status: 'done' }); break;
         case 'task:reschedule':     await tasksApi.update(id, { due_date: payload.date }); break;
         case 'followup:log_outcome':await fuApi.update(id, { status: 'done', outcome: payload.outcome || '' }); break;
