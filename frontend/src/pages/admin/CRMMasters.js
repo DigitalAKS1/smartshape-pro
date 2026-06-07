@@ -164,12 +164,12 @@ export default function CRMMasters() {
           <p className={`${textSec} mt-1 text-sm`}>Manage the shared lists — groups, sources, roles, products, tags — that power every CRM dropdown and the lead pipeline.</p>
         </div>
 
-        {/* Tabs */}
-        <div className={`${card} border rounded-md p-1 flex gap-1`}>
+        {/* Tabs — single-line, content-sized, scrolls horizontally on overflow */}
+        <div className={`${card} border rounded-md p-1 flex gap-1 overflow-x-auto no-scrollbar`}>
           {TABS.map(t => (
             <button key={t.id} onClick={() => setActiveTab(t.id)} data-testid={`tab-${t.id}`}
-              className={`flex-1 flex items-center justify-center gap-1.5 px-4 py-2 rounded text-sm font-medium transition-all ${activeTab === t.id ? 'bg-[#e94560] text-white' : `${textSec} hover:bg-[var(--bg-hover)]`}`}>
-              <t.icon className="h-4 w-4" /> {t.label}
+              className={`flex-shrink-0 flex items-center justify-center gap-1.5 px-3.5 py-2 rounded text-sm font-medium whitespace-nowrap transition-all ${activeTab === t.id ? 'bg-[#e94560] text-white shadow-[var(--shadow-sm)]' : `${textSec} hover:bg-[var(--bg-hover)]`}`}>
+              <t.icon className="h-4 w-4 shrink-0" /> {t.label}
             </button>
           ))}
         </div>
