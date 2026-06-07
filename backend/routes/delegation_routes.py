@@ -6,7 +6,7 @@ from fastapi import APIRouter, Request, HTTPException, UploadFile, File, Respons
 from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime, timezone, timedelta, date
-import uuid, os, mimetypes
+import uuid, os, mimetypes, secrets
 
 from database import db
 from auth_utils import get_current_user
@@ -1540,6 +1540,68 @@ def _ics_dt(date_str, time_str):
     return f"{date_str.replace('-', '')}T{time_str.replace(':', '')}00", False
 
 
+# Module-level cache so _build_vevent can name the real sender as ORGANIZER without an
+# await; refreshed by _email_settings(). Falls back to created_by when empty.
+_ORG_EMAIL_CACHE = {"email": ""}
+
+
+async def _email_settings():
+    """Return enabled email settings dict, or None. Warms the ORGANIZER cache."""
+    s = await db.settings.find_one({"type": "email"}, {"_id": 0})
+    if s and s.get("sender_email"):
+        _ORG_EMAIL_CACHE["email"] = s.get("sender_email")
+    if not s or not s.get("enabled") or not s.get("sender_email") or not s.get("gmail_app_password"):
+        return None
+    return s
+
+
+def _ev_uid(ev):
+    return (ev.get("ext_sync") or {}).get("ics_uid") or f"{ev['event_id']}@smartshape.in"
+
+
+def _build_vevent(ev, *, method, sequence):
+    """VEVENT lines for an event under the given iCalendar METHOD."""
+    dtstart, is_date = _ics_dt(ev["date"], ev.get("start_time"))
+    dtend, _ = _ics_dt(ev["date"], ev.get("end_time") or ev.get("start_time"))
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    lines = ["BEGIN:VEVENT", f"UID:{_ev_uid(ev)}", f"DTSTAMP:{stamp}",
+             f"SEQUENCE:{int(sequence)}"]
+    if is_date:
+        lines += [f"DTSTART;VALUE=DATE:{dtstart}", f"DTEND;VALUE=DATE:{dtstart}"]
+    else:
+        lines += [f"DTSTART;TZID=Asia/Kolkata:{dtstart}", f"DTEND;TZID=Asia/Kolkata:{dtend}"]
+    lines.append(f"SUMMARY:{_ics_escape(ev.get('title'))}")
+    if ev.get("description"):
+        lines.append(f"DESCRIPTION:{_ics_escape(ev['description'])}")
+    if ev.get("location"):
+        lines.append(f"LOCATION:{_ics_escape(ev['location'])}")
+    # ORGANIZER = configured sender mailbox; CN = creator name (see SP3 spec §0).
+    org_email = _ORG_EMAIL_CACHE.get("email") or ev.get("created_by") or ""
+    if org_email:
+        cn = _ics_escape(ev.get("created_by") or org_email)
+        lines.append(f"ORGANIZER;CN={cn}:mailto:{org_email}")
+    for c in ev.get("collaborators", []):
+        if c.get("email"):
+            cn = _ics_escape(c.get("name") or c["email"])
+            if method == "REQUEST":
+                lines.append(f"ATTENDEE;CN={cn};ROLE=REQ-PARTICIPANT;"
+                             f"PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:{c['email']}")
+            else:
+                lines.append(f"ATTENDEE;CN={cn}:mailto:{c['email']}")
+    lines.append("STATUS:CANCELLED" if method == "CANCEL" else "STATUS:CONFIRMED")
+    lines.append("END:VEVENT")
+    return lines
+
+
+def _wrap_vcalendar(method, vevent_blocks):
+    out = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//SmartShape Pro//Calendar//EN",
+           "CALSCALE:GREGORIAN", f"METHOD:{method}"]
+    for block in vevent_blocks:
+        out += block
+    out.append("END:VCALENDAR")
+    return "\r\n".join(out) + "\r\n"
+
+
 @router.get("/events/{event_id}.ics")
 async def event_ics(event_id: str, request: Request):
     """Single-event iCalendar file — 'Add to calendar' for Google/Apple/Outlook."""
@@ -1554,31 +1616,169 @@ async def event_ics(event_id: str, request: Request):
         for c in ev.get("collaborators", []))
     if not allowed:
         raise HTTPException(403, "Not your event")
-
-    dtstart, is_date = _ics_dt(ev["date"], ev.get("start_time"))
-    dtend, _ = _ics_dt(ev["date"], ev.get("end_time") or ev.get("start_time"))
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//SmartShape Pro//Calendar//EN",
-             "CALSCALE:GREGORIAN", "METHOD:PUBLISH", "BEGIN:VEVENT",
-             f"UID:{ev['event_id']}@smartshape.in", f"DTSTAMP:{stamp}"]
-    if is_date:
-        lines += [f"DTSTART;VALUE=DATE:{dtstart}", f"DTEND;VALUE=DATE:{dtstart}"]
-    else:
-        lines += [f"DTSTART;TZID=Asia/Kolkata:{dtstart}", f"DTEND;TZID=Asia/Kolkata:{dtend}"]
-    lines.append(f"SUMMARY:{_ics_escape(ev.get('title'))}")
-    if ev.get("description"):
-        lines.append(f"DESCRIPTION:{_ics_escape(ev['description'])}")
-    if ev.get("location"):
-        lines.append(f"LOCATION:{_ics_escape(ev['location'])}")
-    if ev.get("created_by"):
-        lines.append(f"ORGANIZER;CN={_ics_escape(ev['created_by'])}:mailto:{ev['created_by']}")
-    for c in ev.get("collaborators", []):
-        if c.get("email"):
-            lines.append(f"ATTENDEE;CN={_ics_escape(c.get('name') or c['email'])}:mailto:{c['email']}")
-    lines += ["STATUS:CONFIRMED", "END:VEVENT", "END:VCALENDAR"]
-    body = "\r\n".join(lines) + "\r\n"
+    await _email_settings()  # warm ORGANIZER cache
+    body = _wrap_vcalendar("PUBLISH", [_build_vevent(ev, method="PUBLISH", sequence=0)])
     return Response(content=body, media_type="text/calendar",
                     headers={"Content-Disposition": f'attachment; filename="event-{ev["event_id"]}.ics"'})
+
+
+async def _send_invite(ev, *, method, sequence, recipients):
+    """Build + send the iCalendar invite. Honors DRY_RUN / TEST_TO guards.
+    Returns {dry_run, sent, ics}."""
+    ics = _wrap_vcalendar(method, [_build_vevent(ev, method=method, sequence=sequence)])
+    creator = ev.get("created_by") or ""
+    verb = "Cancelled" if method == "CANCEL" else "Invitation"
+    subject = f"{verb}: {ev.get('title') or 'Event'} — {ev.get('date')}"
+    when = ev.get("date") + ((" " + ev["start_time"]) if ev.get("start_time") else "")
+    plain = (f"{creator} has "
+             + ("cancelled" if method == "CANCEL" else "invited you to")
+             + f" the event \"{ev.get('title')}\".\n\n"
+             f"When: {when}\nWhere: {ev.get('location') or '-'}\n\n"
+             f"{ev.get('description') or ''}\n\n"
+             "Your calendar app should offer to add/update this automatically.")
+
+    test_to = os.environ.get("CALENDAR_INVITE_TEST_TO", "").strip()
+    if test_to:
+        recipients = [test_to]
+        subject = "[TEST] " + subject
+
+    if os.environ.get("CALENDAR_INVITE_DRY_RUN", "").strip() in ("1", "true", "True"):
+        return {"dry_run": True, "sent": recipients, "ics": ics}
+
+    settings = await _email_settings()
+    if not settings:
+        raise HTTPException(400, "Email not configured")
+    import smtplib
+    from email.mime.text import MIMEText
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.base import MIMEBase
+    from email import encoders
+    sender_email = settings["sender_email"]
+    sender_name = settings.get("sender_name", "SmartShape Pro")
+    msg = MIMEMultipart("mixed")
+    msg["From"] = f"{sender_name} <{sender_email}>"
+    msg["To"] = ", ".join(recipients)
+    msg["Subject"] = subject
+    alt = MIMEMultipart("alternative")
+    alt.attach(MIMEText(plain, "plain", "utf-8"))
+    cal = MIMEText(ics, "calendar", "utf-8")
+    cal.replace_header("Content-Type", f'text/calendar; method={method}; charset="UTF-8"')
+    alt.attach(cal)
+    msg.attach(alt)
+    att = MIMEBase("application", "ics")
+    att.set_payload(ics.encode("utf-8"))
+    encoders.encode_base64(att)
+    att.add_header("Content-Disposition", 'attachment; filename="invite.ics"')
+    msg.attach(att)
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
+        smtp.login(sender_email, settings["gmail_app_password"])
+        smtp.sendmail(sender_email, recipients, msg.as_string())
+    return {"dry_run": False, "sent": recipients, "ics": ics}
+
+
+@router.post("/events/{event_id}/invite")
+async def invite_event(event_id: str, request: Request):
+    user = await get_current_user(request)
+    ev = await db.cal_events.find_one({"event_id": event_id}, {"_id": 0})
+    if not ev:
+        raise HTTPException(404, "Event not found")
+    if ev["created_by"] != user.get("email"):
+        raise HTTPException(403, "Only the creator can send invites")
+    await _email_settings()  # warm ORGANIZER cache
+    body = await request.json()
+    kind = body.get("kind", "request")
+    if kind not in ("request", "cancel"):
+        raise HTTPException(400, "kind must be 'request' or 'cancel'")
+    ext = ev.get("ext_sync") or {}
+    prev_seq = ext.get("sequence")
+    if kind == "request":
+        method = "REQUEST"
+        sequence = 0 if prev_seq is None else int(prev_seq) + 1
+    else:
+        method = "CANCEL"
+        sequence = (int(prev_seq) + 1) if prev_seq is not None else 1
+    creator_email = (ev.get("created_by") or "").lower()
+    recipients, skipped = [], []
+    for c in ev.get("collaborators", []):
+        em = (c.get("email") or "").strip()
+        if not em:
+            skipped.append(c.get("name") or "(no email)")
+        elif em.lower() != creator_email:
+            recipients.append(em)
+    result = await _send_invite(ev, method=method, sequence=sequence, recipients=recipients)
+    await db.cal_events.update_one({"event_id": event_id}, {"$set": {"ext_sync": {
+        "ics_uid": _ev_uid(ev), "sequence": sequence, "last_method": method,
+        "invited_emails": recipients, "invited_at": now_iso()}, "updated_at": now_iso()}})
+    out = {"kind": kind, "method": method, "sequence": sequence,
+           "sent": result["sent"], "skipped": skipped, "dry_run": result["dry_run"]}
+    if result["dry_run"]:
+        out["ics_preview"] = result["ics"]  # only exposed under DRY_RUN
+    return out
+
+
+def _base_url():
+    return (os.environ.get("PUBLIC_BASE_URL") or os.environ.get("FRONTEND_URL")
+            or "https://app.smartshape.in").rstrip("/")
+
+
+async def _feed_token_for(actor, *, rotate=False):
+    emp = await db.del_employees.find_one({"emp_id": actor["emp_id"]},
+                                          {"_id": 0, "calendar_feed_token": 1})
+    tok = (emp or {}).get("calendar_feed_token")
+    if rotate or not tok:
+        tok = secrets.token_urlsafe(32)
+        await db.del_employees.update_one({"emp_id": actor["emp_id"]},
+                                          {"$set": {"calendar_feed_token": tok}})
+    return tok
+
+
+def _feed_links(tok):
+    url = f"{_base_url()}/api/delegation/calendar.ics?token={tok}"
+    webcal = url.split("://", 1)[1] if "://" in url else url
+    return {"url": url, "webcal_url": "webcal://" + webcal}
+
+
+@router.get("/calendar-feed")
+async def calendar_feed_link(request: Request):
+    user = await get_current_user(request)
+    actor = await _resolve_actor(user)
+    tok = await _feed_token_for(actor)
+    return _feed_links(tok)
+
+
+@router.post("/calendar-feed/rotate")
+async def calendar_feed_rotate(request: Request):
+    user = await get_current_user(request)
+    actor = await _resolve_actor(user)
+    tok = await _feed_token_for(actor, rotate=True)
+    return _feed_links(tok)
+
+
+@router.get("/calendar.ics")
+async def calendar_feed_public(token: str = ""):
+    """Public, token-gated subscribe feed (covers Apple). No auth."""
+    if not token:
+        raise HTTPException(404, "Not found")
+    emp = await db.del_employees.find_one({"calendar_feed_token": token},
+                                          {"_id": 0, "emp_id": 1, "email": 1})
+    if not emp:
+        raise HTTPException(404, "Not found")
+    await _email_settings()  # warm ORGANIZER cache
+    today = date.today()
+    dfrom = (today - timedelta(days=90)).isoformat()
+    dto = (today + timedelta(days=365)).isoformat()
+    q = {"status": "active", "date": {"$gte": dfrom, "$lte": dto},
+         "$or": [{"created_by_emp_id": emp["emp_id"]},
+                 {"collaborators.emp_id": emp["emp_id"]},
+                 {"collaborators.email": emp.get("email")}]}
+    rows = await db.cal_events.find(q, {"_id": 0}).to_list(2000)
+    blocks = [_build_vevent(r, method="PUBLISH",
+                            sequence=int((r.get("ext_sync") or {}).get("sequence", 0)))
+              for r in rows]
+    body = _wrap_vcalendar("PUBLISH", blocks)
+    return Response(content=body, media_type="text/calendar; charset=utf-8",
+                    headers={"Cache-Control": "max-age=3600",
+                             "Content-Disposition": 'inline; filename="smartshape.ics"'})
 
 
 async def _agenda_events(emp_id, email, dfrom, dto):
@@ -1594,6 +1794,7 @@ async def _agenda_events(emp_id, email, dfrom, dto):
             if (c.get("emp_id") and c["emp_id"] == emp_id) or (c.get("email", "").lower() == (email or "").lower()):
                 my_resp = c.get("response")
         acts = ["edit", "cancel"] if is_creator else ["respond", "open"]
+        ext = r.get("ext_sync") or {}
         out.append(_ev(
             "event", "event", r.get("title"), r["date"], r["event_id"], "/delegation",
             start_time=(r.get("start_time") or None), end_time=(r.get("end_time") or None),
@@ -1601,6 +1802,8 @@ async def _agenda_events(emp_id, email, dfrom, dto):
             meta={"created_by_name": r.get("created_by", ""), "is_creator": is_creator,
                   "my_response": my_resp, "location": r.get("location", ""),
                   "description": r.get("description", ""),
+                  "invited": ext.get("sequence") is not None,
+                  "sequence": ext.get("sequence"),
                   "collaborators": [c.get("name") or c.get("email") for c in r.get("collaborators", [])]}))
     return out
 
