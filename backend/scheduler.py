@@ -851,7 +851,8 @@ async def _generate_pending_certs():
                     "gen_status": "failed", "gen_error": str(e)[:200]}})
                 await db.cert_batches.update_one({"batch_id": batch["batch_id"]},
                                                  {"$inc": {"counts.failed": 1}})
-        await db.cert_batches.update_one({"batch_id": batch["batch_id"]}, {"$set": {"status": "ready"}})
+        final_status = "sending" if batch.get("origin_flow_id") else "ready"
+        await db.cert_batches.update_one({"batch_id": batch["batch_id"]}, {"$set": {"status": final_status}})
 
 
 async def _deliver_pending_certs():

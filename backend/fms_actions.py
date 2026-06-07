@@ -133,4 +133,37 @@ async def _exec_start_flow(action, flow, stage):
     return child["flow_id"]
 
 async def _exec_generate_certificate(action, flow, stage):
-    raise NotImplementedError("generate_certificate")  # implemented in Task 4
+    params = action.get("params", {})
+    cert_template_id = params.get("cert_template_id")
+    tpl = await db.cert_templates.find_one({"template_id": cert_template_id}, {"_id": 0})
+    if not tpl:
+        raise ValueError(f"cert template not found: {cert_template_id!r}")
+    bid = _gen_id("cbatch")
+    item = {
+        "item_id": _gen_id("citem"), "batch_id": bid,
+        "name": flow.get("customer_name", ""),
+        "phone": flow.get("customer_phone", "") or "",
+        "email": flow.get("customer_email", "") or "",
+        "pdf_url": None, "gen_status": "pending", "gen_error": None,
+        "delivery": {
+            "whatsapp": {"status": "pending", "at": None, "error": None},
+            "email":    {"status": "pending", "at": None, "error": None},
+        },
+        "created_at": _now_iso(),
+    }
+    batch = {
+        "batch_id": bid,
+        "title": f"Cert: {flow.get('title', '')}",
+        "template_id": cert_template_id,
+        "source": "manual", "session_id": None,
+        "shared_values": params.get("shared_values", {}),
+        "channels": params.get("channels", ["whatsapp", "email"]),
+        "status": "generating",
+        "counts": {"total": 1, "generated": 0, "sent_whatsapp": 0, "sent_email": 0, "failed": 0},
+        "created_by": flow.get("created_by", "fms-action"),
+        "created_at": _now_iso(),
+        "origin_flow_id": flow["flow_id"],
+    }
+    await db.cert_batches.insert_one(batch)
+    await db.cert_items.insert_one(item)
+    return bid
