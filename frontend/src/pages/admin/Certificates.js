@@ -2,7 +2,9 @@ import React, { useState, useEffect } from 'react';
 import AdminLayout from '../../components/layouts/AdminLayout';
 import { useCertificates } from '../../hooks/useCertificates';
 import TemplateDesigner from '../../components/certs/TemplateDesigner';
-import { Award, Layers, ClipboardList, RefreshCw, Trash2, ChevronDown, ChevronUp } from 'lucide-react';
+import BatchCreator from '../../components/certs/BatchCreator';
+import BatchDetail from '../../components/certs/BatchDetail';
+import { Award, Layers, ClipboardList, RefreshCw, Trash2, ChevronDown, ChevronUp, Plus, Calendar, ChevronRight } from 'lucide-react';
 import { certsApi } from '../../lib/api';
 import { toast } from 'sonner';
 
@@ -18,6 +20,10 @@ export default function Certificates() {
   const [showDesigner, setShowDesigner] = useState(false);
   const [deletingId, setDeletingId]     = useState(null);
 
+  /* ── Batches tab state ── */
+  const [showCreator, setShowCreator]     = useState(false);
+  const [selectedBatchId, setSelectedBatchId] = useState(null);
+
   const card      = 'bg-[var(--bg-card)] border-[var(--border-color)]';
   const textPri   = 'text-[var(--text-primary)]';
   const textSec   = 'text-[var(--text-secondary)]';
@@ -28,6 +34,14 @@ export default function Certificates() {
     s.loadBatches();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /* load selected batch whenever selectedBatchId changes */
+  useEffect(() => {
+    if (selectedBatchId) {
+      s.loadBatch(selectedBatchId);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedBatchId]);
 
   const handleRefresh = () => {
     if (tab === 'templates') s.loadTemplates();
@@ -178,18 +192,105 @@ export default function Certificates() {
           </div>
         )}
 
-        {/* ── Batches tab — placeholder (BatchCreator/Detail are Task 10) ── */}
+        {/* ── Batches tab ── */}
         {tab === 'batches' && (
-          <div className={`${card} border rounded-xl p-8 text-center`}>
-            <ClipboardList className="h-10 w-10 mx-auto mb-3" style={{ color: PINK }} />
-            <p className={`${textPri} font-medium mb-1`}>Certificate Batches</p>
-            <p className={`${textMuted} text-sm`}>
-              {s.loading
-                ? 'Loading…'
-                : s.batches.length > 0
-                  ? `${s.batches.length} batch${s.batches.length !== 1 ? 'es' : ''} — batch UI coming in Task 10`
-                  : 'No batches yet — batch creator coming in Task 10'}
-            </p>
+          <div className="space-y-4">
+
+            {/* ── Batch detail view ── */}
+            {selectedBatchId && s.currentBatch ? (
+              <BatchDetail
+                batch={s.currentBatch}
+                loadBatch={s.loadBatch}
+                generate={s.generate}
+                send={s.send}
+                onBack={() => {
+                  setSelectedBatchId(null);
+                  s.loadBatches();
+                }}
+              />
+            ) : (
+              <>
+                {/* Header row */}
+                <div className="flex items-center justify-between gap-3">
+                  <p className={`text-sm font-medium ${textPri}`}>
+                    {s.loading
+                      ? 'Loading…'
+                      : s.batches.length > 0
+                        ? `${s.batches.length} batch${s.batches.length !== 1 ? 'es' : ''}`
+                        : 'No batches yet'}
+                  </p>
+                  <button
+                    onClick={() => setShowCreator(v => !v)}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium text-white"
+                    style={{ background: PINK }}
+                  >
+                    {showCreator ? (
+                      <><ChevronUp className="h-4 w-4" />Hide</>
+                    ) : (
+                      <><Plus className="h-4 w-4" />New Batch</>
+                    )}
+                  </button>
+                </div>
+
+                {/* BatchCreator panel */}
+                {showCreator && (
+                  <BatchCreator
+                    templates={s.templates}
+                    onCreated={(newBatch) => {
+                      setShowCreator(false);
+                      s.loadBatches();
+                      if (newBatch?.batch_id) {
+                        setSelectedBatchId(newBatch.batch_id);
+                      }
+                    }}
+                    onCancel={() => setShowCreator(false)}
+                  />
+                )}
+
+                {/* Batch list */}
+                {s.batches.length > 0 ? (
+                  <div className="space-y-2">
+                    {s.batches.map(b => (
+                      <button
+                        key={b.batch_id}
+                        type="button"
+                        onClick={() => {
+                          setShowCreator(false);
+                          setSelectedBatchId(b.batch_id);
+                        }}
+                        className={`w-full text-left ${card} border rounded-xl px-4 py-3 hover:bg-[var(--bg-hover)] transition-colors flex items-center gap-3`}
+                      >
+                        <div className="p-2 rounded-lg flex-shrink-0" style={{ background: PINK + '18' }}>
+                          <ClipboardList className="h-4 w-4" style={{ color: PINK }} />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className={`font-medium text-sm ${textPri} truncate`}>{b.title}</p>
+                          <div className={`flex items-center gap-3 text-xs ${textMuted} mt-0.5`}>
+                            {b.shared_values?.date && (
+                              <span className="flex items-center gap-1">
+                                <Calendar className="h-3 w-3" />
+                                {b.shared_values.date}
+                              </span>
+                            )}
+                            <span>{b.counts?.total ?? 0} attendees</span>
+                            <span className="capitalize">{b.status}</span>
+                          </div>
+                        </div>
+                        <ChevronRight className={`h-4 w-4 flex-shrink-0 ${textMuted}`} />
+                      </button>
+                    ))}
+                  </div>
+                ) : !showCreator ? (
+                  <div className={`${card} border rounded-xl p-8 text-center border-dashed`}>
+                    <ClipboardList className="h-10 w-10 mx-auto mb-3" style={{ color: PINK }} />
+                    <p className={`${textPri} font-medium mb-1`}>No batches yet</p>
+                    <p className={`${textMuted} text-sm`}>
+                      Click "New Batch" to generate and send certificates to a group.
+                    </p>
+                  </div>
+                ) : null}
+              </>
+            )}
           </div>
         )}
 
