@@ -14,7 +14,7 @@ const ACTION_META = {
   set_status:     { label: 'Mark completed', Icon: Check,     color: '#10b981' },
 };
 
-export default function EventActionDrawer({ event, onAction, onEditEvent, onSendInvites, onClose, card, textPri, textSec, textMuted, inputCls }) {
+export default function EventActionDrawer({ event, onAction, onEditEvent, onSendInvites, onManageReminder, onClose, card, textPri, textSec, textMuted, inputCls }) {
   const navigate = useNavigate();
   const [rescheduleDate, setRescheduleDate] = useState(event?.date || '');
   const [outcome, setOutcome] = useState('');
@@ -143,6 +143,28 @@ export default function EventActionDrawer({ event, onAction, onEditEvent, onSend
               )}
               {meta.my_response && meta.my_response !== 'pending' && (
                 <p className={`text-[11px] ${textMuted}`}>Your response: {meta.my_response}</p>
+              )}
+            </div>
+          )}
+
+          {/* ── reminder ── */}
+          {event.source === 'reminder' && (
+            <div className="space-y-2">
+              <div className={`text-xs ${textSec} space-y-1`}>
+                <p>Category: <span className="capitalize">{meta.category || 'custom'}</span></p>
+                {meta.amount ? <p>Amount: ₹{meta.amount}</p> : null}
+                <p>Repeats: <span className="capitalize">{meta.recurrence}</span></p>
+                <p>Notify: {[meta.channels?.email && 'Email', meta.channels?.whatsapp && 'WhatsApp'].filter(Boolean).join(' + ') || '—'}</p>
+                {Array.isArray(meta.lead_offsets) && meta.lead_offsets.length > 0 && (
+                  <p>Reminds: {meta.lead_offsets.map(o => `${o.value} ${o.unit}${o.value !== 1 ? 's' : ''} before`).join(', ')}</p>
+                )}
+                {meta.notes && <p className={textMuted}>{meta.notes}</p>}
+              </div>
+              {onManageReminder && (
+                <button onClick={() => { onManageReminder(); onClose(); }}
+                  className={`${row} text-white`} style={{ background: '#f97316' }}>
+                  <Calendar className="h-4 w-4" /> Manage in Reminders
+                </button>
               )}
             </div>
           )}

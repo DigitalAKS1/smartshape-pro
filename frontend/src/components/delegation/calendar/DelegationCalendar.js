@@ -1,5 +1,5 @@
 import React from 'react';
-import { ChevronLeft, ChevronRight, Plus, Copy, RefreshCw, Settings, Video } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, Copy, RefreshCw, Settings, Video, Bell } from 'lucide-react';
 import { useDelegationCalendar } from '../../../hooks/useDelegationCalendar';
 import CalendarMonth from './CalendarMonth';
 import AgendaList from './AgendaList';
@@ -7,16 +7,17 @@ import CalendarDay from './CalendarDay';
 import DayPlanBlockDialog from './DayPlanBlockDialog';
 import EventActionDrawer from './EventActionDrawer';
 import EventDialog from './EventDialog';
+import RemindersPanel from './RemindersPanel';
 
 const PINK = '#e94560';
 const SKY = '#0ea5e9';
 const SOURCE_LABELS = {
   delegation: 'Tasks', fms: 'FMS', visit: 'Visits', task: 'CRM', followup: 'Calls',
-  workshop: 'Workshops', plan: 'My Plan',
+  workshop: 'Workshops', plan: 'My Plan', reminder: 'Reminders',
 };
 const SOURCE_COLORS = {
   delegation: '#e94560', fms: '#8b5cf6', visit: '#06b6d4', task: '#f59e0b',
-  followup: '#10b981', workshop: '#6366f1', plan: '#64748b',
+  followup: '#10b981', workshop: '#6366f1', plan: '#64748b', reminder: '#f97316',
 };
 
 export default function DelegationCalendar({ onEventClick, card, textPri, textSec, textMuted, inputCls }) {
@@ -28,6 +29,7 @@ export default function DelegationCalendar({ onEventClick, card, textPri, textSe
   const [mForm, setMForm] = React.useState({ provider: '', link: '' });   // default meeting
   const [feedUrls, setFeedUrls] = React.useState(null);                   // {url, webcal_url}
   const [savingM, setSavingM] = React.useState(false);
+  const [remindersOpen, setRemindersOpen] = React.useState(false);
   const monthLabel = c.cursor.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
 
   const openSettings = async () => {
@@ -77,6 +79,12 @@ export default function DelegationCalendar({ onEventClick, card, textPri, textSe
             <button onClick={() => c.setEventDialog({ defaults: { date: c.range.from, start_time: '09:00' } })}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-white" style={{ background: SKY }}>
               <Plus className="h-3.5 w-3.5" /> Event
+            </button>
+          )}
+          {!c.subjectEmp && (
+            <button onClick={() => setRemindersOpen(true)} title="Reminders"
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-[var(--border-color)] ${textSec} hover:bg-[var(--bg-hover)]`}>
+              <Bell className="h-3.5 w-3.5" /> Reminders
             </button>
           )}
           {!c.subjectEmp && (
@@ -171,6 +179,7 @@ export default function DelegationCalendar({ onEventClick, card, textPri, textSe
           onAction={c.runAction}
           onEditEvent={(ev) => c.setEventDialog({ event: ev })}
           onSendInvites={c.sendInvites}
+          onManageReminder={() => setRemindersOpen(true)}
           onClose={() => setSelectedEvent(null)}
           card={card} textPri={textPri} textSec={textSec} textMuted={textMuted} inputCls={inputCls} />
       )}
@@ -193,6 +202,11 @@ export default function DelegationCalendar({ onEventClick, card, textPri, textSe
             </div>
           </div>
         </div>
+      )}
+
+      {remindersOpen && (
+        <RemindersPanel onClose={() => { setRemindersOpen(false); c.reload(); }}
+          card={card} textPri={textPri} textSec={textSec} textMuted={textMuted} inputCls={inputCls} />
       )}
 
       {/* calendar settings: default meeting link + subscribe feed */}

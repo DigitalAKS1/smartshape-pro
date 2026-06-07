@@ -12,7 +12,7 @@ const endOfMonth   = (d) => new Date(d.getFullYear(), d.getMonth() + 1, 0);
 const startOfWeek  = (d) => { const x = new Date(d); x.setDate(x.getDate() - x.getDay()); return x; };
 const addDays      = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
 
-const ALL_SOURCES = ['delegation', 'fms', 'visit', 'task', 'followup', 'workshop', 'plan'];
+const ALL_SOURCES = ['delegation', 'fms', 'visit', 'task', 'followup', 'workshop', 'plan', 'reminder'];
 
 export function useDelegationCalendar() {
   const [view, setView]     = useState('month');           // month | week | day
