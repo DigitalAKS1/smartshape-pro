@@ -1783,6 +1783,31 @@ async def calendar_feed_rotate(request: Request):
     return _feed_links(tok)
 
 
+@router.get("/calendar-settings")
+async def get_calendar_settings(request: Request):
+    """Per-user calendar prefs: default meeting link (reused on new events) + feed link."""
+    user = await get_current_user(request)
+    actor = await _resolve_actor(user)
+    emp = await db.del_employees.find_one(
+        {"emp_id": actor["emp_id"]},
+        {"_id": 0, "default_meeting_provider": 1, "default_meeting_link": 1, "calendar_feed_token": 1})
+    tok = (emp or {}).get("calendar_feed_token") or await _feed_token_for(actor)
+    return {"default_meeting_provider": (emp or {}).get("default_meeting_provider", ""),
+            "default_meeting_link": (emp or {}).get("default_meeting_link", ""),
+            **_feed_links(tok)}
+
+
+@router.put("/calendar-settings")
+async def put_calendar_settings(request: Request):
+    user = await get_current_user(request)
+    actor = await _resolve_actor(user)
+    body = await request.json()
+    upd = {"default_meeting_provider": (body.get("default_meeting_provider") or "").strip(),
+           "default_meeting_link": (body.get("default_meeting_link") or "").strip()}
+    await db.del_employees.update_one({"emp_id": actor["emp_id"]}, {"$set": upd})
+    return {"ok": True, **upd}
+
+
 @router.get("/calendar.ics")
 async def calendar_feed_public(token: str = ""):
     """Public, token-gated subscribe feed (covers Apple). No auth."""

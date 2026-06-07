@@ -185,6 +185,25 @@ export function useDelegationCalendar() {
     catch (e) { toast.error('Could not rotate link'); return null; }
   }, []);
 
+  // Per-user calendar settings (default meeting link reused on new events) + feed link
+  const [calSettings, setCalSettings] = useState(null);
+  const getCalSettings = useCallback(async () => {
+    try { const r = await delApi.calendarSettings(); const d = r?.data || r; setCalSettings(d); return d; }
+    catch (e) { toast.error('Could not load calendar settings'); return null; }
+  }, []);
+  const saveCalSettings = useCallback(async (payload) => {
+    try {
+      const r = await delApi.saveCalendarSettings(payload); const d = r?.data || r;
+      setCalSettings(s => ({ ...(s || {}), ...d }));
+      toast.success('Saved'); return true;
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Could not save'); return false; }
+  }, []);
+  useEffect(() => { getCalSettings(); }, [getCalSettings]);
+  const meetingDefaults = {
+    provider: calSettings?.default_meeting_provider || '',
+    link: calSettings?.default_meeting_link || '',
+  };
+
   return {
     view, setView, cursor, setCursor, range,
     subjectEmp, setSubjectEmp,
@@ -195,6 +214,7 @@ export function useDelegationCalendar() {
     createBlock, updateBlock, deleteBlock, scheduleItem, runAction,
     eventDialog, setEventDialog, createEvent, updateEvent,
     sendInvites, getFeedLink, rotateFeedLink,
+    calSettings, getCalSettings, saveCalSettings, meetingDefaults,
     helpers: { iso, addDays, startOfMonth, endOfMonth, startOfWeek },
   };
 }

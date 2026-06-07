@@ -13,7 +13,7 @@ const SKY = '#0ea5e9';
  * onSave(payload, editId|null) → hook createEvent/updateEvent.
  */
 export default function EventDialog({
-  event, defaults, teamOptions = [], onSave, onClose,
+  event, defaults, meetingDefaults = {}, teamOptions = [], onSave, onClose,
   card, textPri, textSec, textMuted, inputCls,
 }) {
   const editing = !!event?.entity_id;
@@ -25,8 +25,8 @@ export default function EventDialog({
     all_day: event?.all_day || false,
     location: event?.meta?.location || '',
     description: event?.meta?.description || '',
-    meeting_provider: event?.meta?.meeting_provider || '',
-    meeting_link: event?.meta?.meeting_link || '',
+    meeting_provider: event?.meta?.meeting_provider || (editing ? '' : meetingDefaults.provider) || '',
+    meeting_link: event?.meta?.meeting_link || (editing ? '' : meetingDefaults.link) || '',
     color: event?.color || SKY,
   });
   // edit mode: we only have collaborator display names from the agenda; collaborator

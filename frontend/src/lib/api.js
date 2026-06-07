@@ -723,6 +723,8 @@ export const delegation = {
   },
   calendarFeed:       ()  => API.get('/delegation/calendar-feed'),
   rotateCalendarFeed: ()  => API.post('/delegation/calendar-feed/rotate', {}),
+  calendarSettings:     () => API.get('/delegation/calendar-settings'),
+  saveCalendarSettings: (d) => API.put('/delegation/calendar-settings', d),
   dashboard:  (p)  => API.get('/delegation/dashboard', { params: p }),
   reports:    (p)  => API.get('/delegation/reports', { params: p }),
   myContext:  ()   => API.get('/delegation/my-context'),

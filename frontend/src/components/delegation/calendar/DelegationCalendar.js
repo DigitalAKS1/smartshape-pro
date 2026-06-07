@@ -1,5 +1,5 @@
 import React from 'react';
-import { ChevronLeft, ChevronRight, Plus, Rss, Copy, RefreshCw } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, Copy, RefreshCw, Settings, Video } from 'lucide-react';
 import { useDelegationCalendar } from '../../../hooks/useDelegationCalendar';
 import CalendarMonth from './CalendarMonth';
 import AgendaList from './AgendaList';
@@ -24,13 +24,17 @@ export default function DelegationCalendar({ onEventClick, card, textPri, textSe
   const [blockDialog, setBlockDialog] = React.useState(null);
   const [selectedEvent, setSelectedEvent] = React.useState(null);
   const [quickAdd, setQuickAdd] = React.useState(null);   // {date, start} slot chooser
-  const [feed, setFeed] = React.useState(null);           // {url, webcal_url} subscribe link
-  const [feedOpen, setFeedOpen] = React.useState(false);
+  const [settingsOpen, setSettingsOpen] = React.useState(false);
+  const [mForm, setMForm] = React.useState({ provider: '', link: '' });   // default meeting
+  const [feedUrls, setFeedUrls] = React.useState(null);                   // {url, webcal_url}
+  const [savingM, setSavingM] = React.useState(false);
   const monthLabel = c.cursor.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
 
-  const openFeed = async () => {
-    setFeedOpen(true);
-    if (!feed) setFeed(await c.getFeedLink());
+  const openSettings = async () => {
+    const s = c.calSettings || await c.getCalSettings();
+    setMForm({ provider: s?.default_meeting_provider || '', link: s?.default_meeting_link || '' });
+    setFeedUrls(s ? { url: s.url, webcal_url: s.webcal_url } : await c.getFeedLink());
+    setSettingsOpen(true);
   };
 
   const rangeDates = () => {
@@ -76,9 +80,9 @@ export default function DelegationCalendar({ onEventClick, card, textPri, textSe
             </button>
           )}
           {!c.subjectEmp && (
-            <button onClick={openFeed} title="Subscribe in your calendar app"
+            <button onClick={openSettings} title="Calendar settings"
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-[var(--border-color)] ${textSec} hover:bg-[var(--bg-hover)]`}>
-              <Rss className="h-3.5 w-3.5" /> Subscribe
+              <Settings className="h-3.5 w-3.5" /> Settings
             </button>
           )}
           {c.view === 'day' && !c.subjectEmp && (
@@ -191,37 +195,76 @@ export default function DelegationCalendar({ onEventClick, card, textPri, textSe
         </div>
       )}
 
-      {/* subscribe-feed link */}
-      {feedOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setFeedOpen(false)}>
-          <div className={`${card} border rounded-2xl w-full max-w-md p-5`} onClick={e => e.stopPropagation()}>
-            <p className={`text-sm font-semibold ${textPri} mb-1`}>Subscribe in your calendar app</p>
-            <p className={`text-[11px] ${textMuted} mb-3`}>
-              Add this private link in Apple Calendar / Google Calendar / Outlook (File → New Calendar Subscription, or “From URL”). Your events stay in sync automatically. Keep this link private.
-            </p>
-            {!feed ? (
-              <p className={`text-xs ${textMuted}`}>Loading…</p>
-            ) : (
-              <div className="space-y-3">
-                <div className="flex gap-2">
-                  <input readOnly value={feed.webcal_url} onFocus={e => e.target.select()}
-                    className={`flex-1 h-9 px-2.5 text-xs rounded border border-[var(--border-color)] ${inputCls}`} />
-                  <button onClick={() => { navigator.clipboard?.writeText(feed.webcal_url); }}
-                    className="h-9 px-3 rounded-lg text-xs font-semibold border border-[var(--border-color)] flex items-center gap-1" style={{ color: SKY }}>
-                    <Copy className="h-3.5 w-3.5" /> Copy
-                  </button>
-                </div>
-                <div className="flex items-center justify-between">
-                  <a href={feed.webcal_url} className="text-xs font-semibold" style={{ color: SKY }}>Open in calendar app</a>
-                  <button onClick={async () => setFeed(await c.rotateFeedLink())}
-                    className={`text-[11px] flex items-center gap-1 ${textMuted} hover:${textSec}`}>
-                    <RefreshCw className="h-3 w-3" /> Rotate link
-                  </button>
-                </div>
+      {/* calendar settings: default meeting link + subscribe feed */}
+      {settingsOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setSettingsOpen(false)}>
+          <div className={`${card} border rounded-2xl w-full max-w-md max-h-[90vh] overflow-y-auto p-5`} onClick={e => e.stopPropagation()}>
+            <p className={`text-base font-semibold ${textPri} mb-4`}>Calendar settings</p>
+
+            {/* default meeting link */}
+            <div className="space-y-2 mb-5">
+              <p className={`text-[11px] font-semibold uppercase tracking-wide ${textMuted} flex items-center gap-1.5`}>
+                <Video className="h-3.5 w-3.5" /> Default meeting link
+              </p>
+              <p className={`text-[11px] ${textMuted}`}>
+                New events pre-fill with this. Paste your personal Zoom/Meet room so you don’t re-enter it each time.
+              </p>
+              <div className="grid grid-cols-2 gap-2">
+                <select value={mForm.provider} onChange={e => setMForm(f => ({ ...f, provider: e.target.value }))}
+                  className={`h-9 px-2.5 rounded text-sm border border-[var(--border-color)] ${inputCls}`}>
+                  <option value="">None</option>
+                  <option value="zoom">Zoom</option>
+                  <option value="meet">Google Meet</option>
+                  <option value="other">Other</option>
+                </select>
+                <input value={mForm.link} onChange={e => setMForm(f => ({ ...f, link: e.target.value }))}
+                  placeholder="https://zoom.us/j/…" disabled={!mForm.provider}
+                  className={`h-9 px-2.5 rounded text-sm border border-[var(--border-color)] ${inputCls} disabled:opacity-50`} />
               </div>
-            )}
-            <button onClick={() => setFeedOpen(false)}
-              className={`${'w-full h-9 mt-4 rounded-lg text-sm font-semibold border border-[var(--border-color)]'} ${textSec}`}>Close</button>
+              <button disabled={savingM} onClick={async () => {
+                  setSavingM(true);
+                  await c.saveCalSettings({ default_meeting_provider: mForm.provider,
+                    default_meeting_link: mForm.provider ? mForm.link.trim() : '' });
+                  setSavingM(false);
+                }}
+                className="h-9 px-4 rounded-lg text-sm font-semibold text-white" style={{ background: SKY }}>
+                Save meeting link
+              </button>
+            </div>
+
+            <div className="h-px bg-[var(--border-color)] my-4" />
+
+            {/* subscribe feed */}
+            <div className="space-y-2">
+              <p className={`text-[11px] font-semibold uppercase tracking-wide ${textMuted}`}>Subscribe in your calendar app</p>
+              <p className={`text-[11px] ${textMuted}`}>
+                Add this private link in Apple/Google/Outlook (“New Calendar Subscription” / “From URL”). Keep it private.
+              </p>
+              {!feedUrls ? (
+                <p className={`text-xs ${textMuted}`}>Loading…</p>
+              ) : (
+                <>
+                  <div className="flex gap-2">
+                    <input readOnly value={feedUrls.webcal_url} onFocus={e => e.target.select()}
+                      className={`flex-1 h-9 px-2.5 text-xs rounded border border-[var(--border-color)] ${inputCls}`} />
+                    <button onClick={() => navigator.clipboard?.writeText(feedUrls.webcal_url)}
+                      className="h-9 px-3 rounded-lg text-xs font-semibold border border-[var(--border-color)] flex items-center gap-1" style={{ color: SKY }}>
+                      <Copy className="h-3.5 w-3.5" /> Copy
+                    </button>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <a href={feedUrls.webcal_url} className="text-xs font-semibold" style={{ color: SKY }}>Open in calendar app</a>
+                    <button onClick={async () => setFeedUrls(await c.rotateFeedLink())}
+                      className={`text-[11px] flex items-center gap-1 ${textMuted}`}>
+                      <RefreshCw className="h-3 w-3" /> Rotate link
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+
+            <button onClick={() => setSettingsOpen(false)}
+              className={`w-full h-9 mt-5 rounded-lg text-sm font-semibold border border-[var(--border-color)] ${textSec}`}>Close</button>
           </div>
         </div>
       )}
@@ -230,6 +273,7 @@ export default function DelegationCalendar({ onEventClick, card, textPri, textSe
         <EventDialog
           event={c.eventDialog.event}
           defaults={c.eventDialog.defaults}
+          meetingDefaults={c.meetingDefaults}
           teamOptions={c.teamOptions}
           onSave={async (payload, editId) => {
             const ok = editId ? await c.updateEvent(editId, payload) : await c.createEvent(payload);
