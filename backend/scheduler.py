@@ -854,9 +854,14 @@ async def _deliver_pending_certs():
             {"batch_id": batch["batch_id"], "gen_status": "generated"}, {"_id": 0}).to_list(2000)
         for it in items:
             for ch in channels:
-                d = (it.get("delivery") or {}).get(ch, {})
-                if d.get("status") == "sent":
-                    continue   # idempotent: never resend
+                # Atomic claim: only one concurrent pass (background loop vs a manual
+                # run) can move this channel pending/failed -> sending, so a certificate
+                # is sent (and counted) exactly once even under overlapping passes.
+                claim = await db.cert_items.update_one(
+                    {"item_id": it["item_id"], f"delivery.{ch}.status": {"$in": ["pending", "failed"]}},
+                    {"$set": {f"delivery.{ch}.status": "sending"}})
+                if claim.modified_count != 1:
+                    continue   # already sent/skipped, or claimed by another pass
                 ok, err = await _cert_send_one(ch, it, batch)
                 if ok is None:
                     new_status = "skipped"
