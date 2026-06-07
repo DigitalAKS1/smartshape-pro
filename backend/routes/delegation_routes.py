@@ -1187,6 +1187,7 @@ async def delete_plan_block(block_id: str, request: Request):
 AGENDA_COLORS = {
     "delegation": "#e94560", "fms": "#8b5cf6", "visit": "#06b6d4",
     "task": "#f59e0b", "followup": "#10b981", "workshop": "#6366f1", "plan": "#64748b",
+    "event": "#0ea5e9",
 }
 
 
@@ -1395,6 +1396,7 @@ async def get_agenda(request: Request):
     events += await _agenda_crm_tasks(s_email, from_, to_)
     events += await _agenda_followups(s_email, from_, to_)
     events += await _agenda_workshops(from_, to_)
+    events += await _agenda_events(s_emp, s_email, from_, to_)
     if is_self:
         blocks = await db.del_plan_blocks.find(
             {"emp_id": s_emp, "date": {"$gte": from_, "$lte": to_}}, {"_id": 0}
@@ -1409,4 +1411,144 @@ async def get_agenda(request: Request):
 
     return {"from": from_, "to": to_, "subject_emp_id": s_emp, "is_self": is_self,
             "subject_team": s_team, "events": events}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# COLLABORATIVE CALENDAR EVENTS  (cal_events)
+# ══════════════════════════════════════════════════════════════════════════════
+
+EVENT_EDITABLE = ("title", "description", "location", "color", "date", "start_time", "end_time", "all_day")
+
+
+async def _build_collaborators(creator_email, creator_emp_id, creator_name, emp_ids, emails):
+    collab, seen = [], set()
+    if creator_email:
+        collab.append({"type": "user", "emp_id": creator_emp_id, "email": creator_email,
+                       "name": creator_name or "", "response": "accepted"})
+        seen.add(creator_email.lower())
+    for eid in (emp_ids or []):
+        e = await db.del_employees.find_one({"emp_id": eid}, {"_id": 0, "emp_id": 1, "name": 1, "email": 1})
+        if e and (e.get("email", "").lower() not in seen):
+            collab.append({"type": "user", "emp_id": e["emp_id"], "email": e.get("email", ""),
+                           "name": e.get("name", ""), "response": "pending"})
+            if e.get("email"):
+                seen.add(e["email"].lower())
+    for em in (emails or []):
+        em = (em or "").strip()
+        if em and em.lower() not in seen:
+            collab.append({"type": "email", "emp_id": None, "email": em, "name": "", "response": "pending"})
+            seen.add(em.lower())
+    return collab
+
+
+@router.post("/events")
+async def create_event(request: Request):
+    user = await get_current_user(request)
+    actor = await _resolve_actor(user)
+    body = await request.json()
+    title = (body.get("title") or "").strip()
+    if not title:
+        raise HTTPException(400, "Title is required")
+    if not body.get("date"):
+        raise HTTPException(400, "Date is required")
+    st, et = body.get("start_time") or "", body.get("end_time") or ""
+    if st and et and et <= st:
+        raise HTTPException(400, "End time must be after start time")
+    collab = await _build_collaborators(user.get("email"), actor["emp_id"], actor["name"],
+                                        body.get("collaborator_emp_ids"), body.get("collaborator_emails"))
+    doc = {
+        "event_id": gen_id("evt"), "title": title, "description": body.get("description", ""),
+        "location": body.get("location", ""), "color": body.get("color", "#0ea5e9"),
+        "date": body["date"], "start_time": st, "end_time": et, "all_day": bool(body.get("all_day")),
+        "created_by": user.get("email"), "created_by_emp_id": actor["emp_id"],
+        "collaborators": collab, "linked_event_id": body.get("linked_event_id", ""),
+        "status": "active", "ext_sync": {}, "created_at": now_iso(), "updated_at": now_iso(),
+    }
+    await db.cal_events.insert_one(doc)
+    return await db.cal_events.find_one({"event_id": doc["event_id"]}, {"_id": 0})
+
+
+@router.patch("/events/{event_id}")
+async def update_event(event_id: str, request: Request):
+    user = await get_current_user(request)
+    ev = await db.cal_events.find_one({"event_id": event_id}, {"_id": 0})
+    if not ev:
+        raise HTTPException(404, "Event not found")
+    if ev["created_by"] != user.get("email"):
+        raise HTTPException(403, "Only the creator can edit this event")
+    body = await request.json()
+    updates = {k: v for k, v in body.items() if k in EVENT_EDITABLE}
+    st = updates.get("start_time", ev.get("start_time"))
+    et = updates.get("end_time", ev.get("end_time"))
+    if st and et and et <= st:
+        raise HTTPException(400, "End time must be after start time")
+    if "title" in updates and not (updates["title"] or "").strip():
+        raise HTTPException(400, "Title is required")
+    if "collaborator_emp_ids" in body or "collaborator_emails" in body:
+        updates["collaborators"] = await _build_collaborators(
+            ev["created_by"], ev["created_by_emp_id"], "",
+            body.get("collaborator_emp_ids"), body.get("collaborator_emails"))
+    if updates:
+        updates["updated_at"] = now_iso()
+        await db.cal_events.update_one({"event_id": event_id}, {"$set": updates})
+    return await db.cal_events.find_one({"event_id": event_id}, {"_id": 0})
+
+
+@router.delete("/events/{event_id}")
+async def cancel_event(event_id: str, request: Request):
+    user = await get_current_user(request)
+    ev = await db.cal_events.find_one({"event_id": event_id}, {"_id": 0})
+    if not ev:
+        raise HTTPException(404, "Event not found")
+    if ev["created_by"] != user.get("email"):
+        raise HTTPException(403, "Only the creator can cancel this event")
+    await db.cal_events.update_one({"event_id": event_id},
+                                   {"$set": {"status": "cancelled", "updated_at": now_iso()}})
+    return {"ok": True}
+
+
+@router.post("/events/{event_id}/respond")
+async def respond_event(event_id: str, request: Request):
+    user = await get_current_user(request)
+    actor = await _resolve_actor(user)
+    body = await request.json()
+    resp = body.get("response")
+    if resp not in ("accepted", "declined"):
+        raise HTTPException(400, "response must be 'accepted' or 'declined'")
+    ev = await db.cal_events.find_one({"event_id": event_id}, {"_id": 0})
+    if not ev:
+        raise HTTPException(404, "Event not found")
+    email = (user.get("email") or "").lower()
+    matched = any((c.get("emp_id") and c["emp_id"] == actor["emp_id"]) or
+                  (c.get("email", "").lower() == email) for c in ev.get("collaborators", []))
+    if not matched:
+        raise HTTPException(403, "You are not a collaborator on this event")
+    await db.cal_events.update_one(
+        {"event_id": event_id, "collaborators.email": user.get("email")},
+        {"$set": {"collaborators.$.response": resp, "updated_at": now_iso()}})
+    return await db.cal_events.find_one({"event_id": event_id}, {"_id": 0})
+
+
+async def _agenda_events(emp_id, email, dfrom, dto):
+    q = {"status": "active", "date": {"$gte": dfrom, "$lte": dto},
+         "$or": [{"created_by_emp_id": emp_id}, {"collaborators.emp_id": emp_id},
+                 {"collaborators.email": email}]}
+    rows = await db.cal_events.find(q, {"_id": 0}).to_list(2000)
+    out = []
+    for r in rows:
+        is_creator = (r.get("created_by_emp_id") == emp_id) or (r.get("created_by") == email)
+        my_resp = None
+        for c in r.get("collaborators", []):
+            if (c.get("emp_id") and c["emp_id"] == emp_id) or (c.get("email", "").lower() == (email or "").lower()):
+                my_resp = c.get("response")
+        acts = ["edit", "cancel"] if is_creator else ["respond", "open"]
+        out.append(_ev(
+            "event", "event", r.get("title"), r["date"], r["event_id"], "/delegation",
+            start_time=(r.get("start_time") or None), end_time=(r.get("end_time") or None),
+            status=r.get("status"), actions=acts,
+            meta={"created_by_name": r.get("created_by", ""), "is_creator": is_creator,
+                  "my_response": my_resp, "location": r.get("location", ""),
+                  "description": r.get("description", ""),
+                  "collaborators": [c.get("name") or c.get("email") for c in r.get("collaborators", [])]}))
+    return out
 
