@@ -204,10 +204,11 @@ async def preview_item(item_id: str, request: Request):
     tpl = await db.cert_templates.find_one({"template_id": batch.get("template_id")}, {"_id": 0})
     if not tpl:
         raise HTTPException(404, "Template not found")
-    from cert_engine import render_certificate_pdf
-    bg_url = tpl.get("background_url", "")
-    bg_file = bg_url.split("/uploads/certificates/")[-1] if "/uploads/certificates/" in bg_url else bg_url
-    bg_path = os.path.join(CERT_DIR, bg_file)
+    from cert_engine import render_certificate_pdf, safe_bg_path
+    try:
+        bg_path = safe_bg_path(CERT_DIR, tpl.get("background_url", ""))
+    except ValueError:
+        raise HTTPException(400, "Invalid background path")
     out_path = os.path.join(tempfile.gettempdir(), f"preview_{item_id}.pdf")
     render_certificate_pdf(bg_path, out_path, tpl.get("fields", []),
                            {"name": it["name"]}, batch.get("shared_values", {}))

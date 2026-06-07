@@ -23,6 +23,15 @@ def _load_font(size: int) -> ImageFont.FreeTypeFont:
     return ImageFont.load_default()
 
 
+def safe_bg_path(cert_dir: str, bg_url: str) -> str:
+    """Map a stored background_url to a local path UNDER cert_dir, rejecting traversal."""
+    bg_file = bg_url.split("/uploads/certificates/")[-1] if "/uploads/certificates/" in bg_url else bg_url
+    path = os.path.join(cert_dir, bg_file)
+    if not os.path.realpath(path).startswith(os.path.realpath(cert_dir) + os.sep):
+        raise ValueError("background path escapes certificate directory")
+    return path
+
+
 def resolve_field_value(key: str, item: Dict[str, Any], shared: Dict[str, Any]) -> str:
     if key == "name":
         return str(item.get("name", "") or "")

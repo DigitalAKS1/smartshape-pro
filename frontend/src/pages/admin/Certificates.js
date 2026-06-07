@@ -139,7 +139,7 @@ export default function Certificates() {
             {s.templates.length > 0 ? (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 {s.templates.map(tpl => (
-                  <div key={tpl._id || tpl.id} className={`${card} border rounded-xl overflow-hidden`}>
+                  <div key={tpl.template_id} className={`${card} border rounded-xl overflow-hidden`}>
                     {/* Background preview */}
                     {tpl.background_url ? (
                       <img
@@ -170,8 +170,8 @@ export default function Certificates() {
                           )}
                         </div>
                         <button
-                          onClick={() => handleDeleteTemplate(tpl._id || tpl.id, tpl.name)}
-                          disabled={deletingId === (tpl._id || tpl.id)}
+                          onClick={() => handleDeleteTemplate(tpl.template_id, tpl.name)}
+                          disabled={deletingId === (tpl.template_id)}
                           className="p-1.5 rounded-lg text-red-500 hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors disabled:opacity-40"
                           title="Delete template"
                         >

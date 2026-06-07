@@ -821,12 +821,22 @@ async def _generate_pending_certs():
         if not tpl:
             await db.cert_batches.update_one({"batch_id": batch["batch_id"]}, {"$set": {"status": "draft"}})
             continue
-        bg_url = tpl.get("background_url", "")
-        bg_file = bg_url.split("/uploads/certificates/")[-1] if "/uploads/certificates/" in bg_url else bg_url
-        bg_path = os.path.join(_CERT_DIR, bg_file)
+        try:
+            from cert_engine import safe_bg_path
+            bg_path = safe_bg_path(_CERT_DIR, tpl.get("background_url", ""))
+        except ValueError:
+            await db.cert_batches.update_one({"batch_id": batch["batch_id"]}, {"$set": {"status": "draft"}})
+            continue
         items = await db.cert_items.find(
             {"batch_id": batch["batch_id"], "gen_status": "pending"}, {"_id": 0}).to_list(2000)
         for it in items:
+            # Atomic claim so overlapping passes (background loop vs manual run) don't
+            # double-render or double-count this item.
+            claim = await db.cert_items.update_one(
+                {"item_id": it["item_id"], "gen_status": "pending"},
+                {"$set": {"gen_status": "generating"}})
+            if claim.modified_count != 1:
+                continue
             out_name = f"{it['item_id']}.pdf"
             out_path = os.path.join(_CERT_DIR, out_name)
             try:
@@ -877,6 +887,9 @@ async def _deliver_pending_certs():
                     field = "sent_whatsapp" if ch == "whatsapp" else "sent_email"
                     await db.cert_batches.update_one({"batch_id": batch["batch_id"]},
                                                      {"$inc": {f"counts.{field}": 1}})
+                elif new_status == "failed":
+                    await db.cert_batches.update_one({"batch_id": batch["batch_id"]},
+                                                     {"$inc": {"counts.failed": 1}})
         await db.cert_batches.update_one({"batch_id": batch["batch_id"]}, {"$set": {"status": "done"}})
 
 
