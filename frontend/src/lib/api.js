@@ -23,6 +23,7 @@ API.interceptors.response.use((res) => {
     else if (/\/visit-plans/.test(url))            domain = 'visits';
     else if (/\/settings/.test(url))               domain = 'settings';
     else if (/\/(tasks|actions)/.test(url))        domain = 'today';
+    else if (/\/certs/.test(url))                  domain = 'certs';
     emitChange(domain);
   }
   return res;
@@ -652,6 +653,22 @@ export const fms = {
     update: (id,d) => API.put(`/fms/templates/${id}`, d),
     delete: (id)   => API.delete(`/fms/templates/${id}`),
   },
+};
+
+// Certificates Pipeline
+export const certsApi = {
+  listTemplates:    ()              => API.get('/certs/templates'),
+  uploadBackground: (formData)      => API.post('/certs/templates/background', formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
+  createTemplate:   (body)          => API.post('/certs/templates', body),
+  updateTemplate:   (id, body)      => API.put(`/certs/templates/${id}`, body),
+  deleteTemplate:   (id)            => API.delete(`/certs/templates/${id}`),
+  listBatches:      ()              => API.get('/certs/batches'),
+  getBatch:         (id)            => API.get(`/certs/batches/${id}`),
+  createBatch:      (body)          => API.post('/certs/batches', body),
+  addAttendees:     (id, attendees) => API.post(`/certs/batches/${id}/attendees`, { attendees }),
+  generate:         (id)            => API.post(`/certs/batches/${id}/generate`, {}),
+  send:             (id)            => API.post(`/certs/batches/${id}/send`, {}),
+  previewUrl:       (itemId)        => `${API.defaults.baseURL}/certs/items/${itemId}/preview`,
 };
 
 // Delegation System
