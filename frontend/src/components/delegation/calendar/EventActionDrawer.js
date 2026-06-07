@@ -14,7 +14,7 @@ const ACTION_META = {
   set_status:     { label: 'Mark completed', Icon: Check,     color: '#10b981' },
 };
 
-export default function EventActionDrawer({ event, onAction, onClose, card, textPri, textSec, textMuted, inputCls }) {
+export default function EventActionDrawer({ event, onAction, onEditEvent, onClose, card, textPri, textSec, textMuted, inputCls }) {
   const navigate = useNavigate();
   const [rescheduleDate, setRescheduleDate] = useState(event?.date || '');
   const [outcome, setOutcome] = useState('');
@@ -56,6 +56,47 @@ export default function EventActionDrawer({ event, onAction, onClose, card, text
               {meta.delegator_name && <p>From: {meta.delegator_name}</p>}
               {meta.customer_name && <p>Customer: {meta.customer_name}</p>}
               {meta.location && <p>Location: {meta.location}</p>}
+            </div>
+          )}
+
+          {/* ── collaborative event ── */}
+          {event.source === 'event' && (
+            <div className="space-y-3">
+              {meta.description && <p className={`text-xs ${textSec}`}>{meta.description}</p>}
+              {Array.isArray(meta.collaborators) && meta.collaborators.length > 0 && (
+                <div className={`text-xs ${textMuted}`}>
+                  <span className="font-semibold uppercase tracking-wide text-[10px]">Collaborators</span>
+                  <p className={`${textSec} mt-1`}>{meta.collaborators.join(', ')}</p>
+                </div>
+              )}
+              {meta.is_creator ? (
+                <>
+                  {onEditEvent && (
+                    <button disabled={busy} onClick={() => { onEditEvent(event); onClose(); }}
+                      className={`${row} text-white`} style={{ background: PINK }}>
+                      <Calendar className="h-4 w-4" /> Edit event
+                    </button>
+                  )}
+                  <button disabled={busy} onClick={() => fire('cancel', {})}
+                    className={`${row} border border-[var(--border-color)] text-red-400`}>
+                    <X className="h-4 w-4" /> Cancel event
+                  </button>
+                </>
+              ) : (
+                <div className="flex gap-2">
+                  <button disabled={busy} onClick={() => fire('respond', { response: 'accepted' })}
+                    className={`${row} text-white`} style={{ background: '#10b981' }}>
+                    <Check className="h-4 w-4" /> Accept
+                  </button>
+                  <button disabled={busy} onClick={() => fire('respond', { response: 'declined' })}
+                    className={`${row} border border-[var(--border-color)] ${textSec}`}>
+                    <X className="h-4 w-4" /> Decline
+                  </button>
+                </div>
+              )}
+              {meta.my_response && meta.my_response !== 'pending' && (
+                <p className={`text-[11px] ${textMuted}`}>Your response: {meta.my_response}</p>
+              )}
             </div>
           )}
 

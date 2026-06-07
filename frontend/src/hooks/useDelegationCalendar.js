@@ -139,6 +139,8 @@ export function useDelegationCalendar() {
         case 'followup:reschedule': await fuApi.update(id, { followup_date: payload.date }); break;
         case 'workshop:set_status': await trainingApi.updateSession(id, { status: payload.status || 'completed' }); break;
         case 'plan:delete':         await delApi.planBlocks.delete(id); break;
+        case 'event:cancel':        await delApi.events.delete(id); break;
+        case 'event:respond':       await delApi.events.respond(id, { response: payload.response }); break;
         default:
           toast.error('Action not available'); return false;
       }
@@ -151,6 +153,16 @@ export function useDelegationCalendar() {
     }
   }, [load]);
 
+  const [eventDialog, setEventDialog] = useState(null);   // {event?} for create/edit, or null
+  const createEvent = useCallback(async (payload) => {
+    try { await delApi.events.create(payload); toast.success('Event created'); load(); return true; }
+    catch (e) { toast.error(e?.response?.data?.detail || 'Failed to create event'); return false; }
+  }, [load]);
+  const updateEvent = useCallback(async (id, payload) => {
+    try { await delApi.events.update(id, payload); toast.success('Event updated'); load(); return true; }
+    catch (e) { toast.error(e?.response?.data?.detail || 'Failed to update event'); return false; }
+  }, [load]);
+
   return {
     view, setView, cursor, setCursor, range,
     subjectEmp, setSubjectEmp,
@@ -159,6 +171,7 @@ export function useDelegationCalendar() {
     events, visibleEvents, eventsByDate, loading, reload: load,
     goPrev, goNext, goToday,
     createBlock, updateBlock, deleteBlock, scheduleItem, runAction,
+    eventDialog, setEventDialog, createEvent, updateEvent,
     helpers: { iso, addDays, startOfMonth, endOfMonth, startOfWeek },
   };
 }

@@ -711,6 +711,12 @@ export const delegation = {
     update: (id,d) => API.patch(`/delegation/plan-blocks/${id}`, d),
     delete: (id)   => API.delete(`/delegation/plan-blocks/${id}`),
   },
+  events: {
+    create:  (d)    => API.post('/delegation/events', d),
+    update:  (id,d) => API.patch(`/delegation/events/${id}`, d),
+    delete:  (id)   => API.delete(`/delegation/events/${id}`),
+    respond: (id,d) => API.post(`/delegation/events/${id}/respond`, d),
+  },
   dashboard:  (p)  => API.get('/delegation/dashboard', { params: p }),
   reports:    (p)  => API.get('/delegation/reports', { params: p }),
   myContext:  ()   => API.get('/delegation/my-context'),

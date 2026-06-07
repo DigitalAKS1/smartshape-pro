@@ -6,8 +6,10 @@ import AgendaList from './AgendaList';
 import CalendarDay from './CalendarDay';
 import DayPlanBlockDialog from './DayPlanBlockDialog';
 import EventActionDrawer from './EventActionDrawer';
+import EventDialog from './EventDialog';
 
 const PINK = '#e94560';
+const SKY = '#0ea5e9';
 const SOURCE_LABELS = {
   delegation: 'Tasks', fms: 'FMS', visit: 'Visits', task: 'CRM', followup: 'Calls',
   workshop: 'Workshops', plan: 'My Plan',
@@ -21,6 +23,7 @@ export default function DelegationCalendar({ onEventClick, card, textPri, textSe
   const c = useDelegationCalendar();
   const [blockDialog, setBlockDialog] = React.useState(null);
   const [selectedEvent, setSelectedEvent] = React.useState(null);
+  const [quickAdd, setQuickAdd] = React.useState(null);   // {date, start} slot chooser
   const monthLabel = c.cursor.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
 
   const rangeDates = () => {
@@ -59,6 +62,12 @@ export default function DelegationCalendar({ onEventClick, card, textPri, textSe
                 style={c.view === v ? { background: PINK } : {}}>{v}</button>
             ))}
           </div>
+          {!c.subjectEmp && (
+            <button onClick={() => c.setEventDialog({ defaults: { date: c.range.from, start_time: '09:00' } })}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-white" style={{ background: SKY }}>
+              <Plus className="h-3.5 w-3.5" /> Event
+            </button>
+          )}
           {c.view === 'day' && !c.subjectEmp && (
             <button onClick={() => setBlockDialog({ start: '09:00' })}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-white" style={{ background: PINK }}>
@@ -109,7 +118,7 @@ export default function DelegationCalendar({ onEventClick, card, textPri, textSe
           <CalendarDay
             date={c.range.from} events={c.eventsByDate[c.range.from] || []}
             onEventClick={(e) => setSelectedEvent(e)}
-            onAddBlock={(start) => setBlockDialog({ start })}
+            onAddBlock={(start) => setQuickAdd({ date: c.range.from, start })}
             onEditBlock={(e) => setBlockDialog({ block: e })}
             onDropItem={(ev, start) => c.scheduleItem(ev, c.range.from, start)}
             onMoveBlock={(id, start) => {
@@ -143,7 +152,41 @@ export default function DelegationCalendar({ onEventClick, card, textPri, textSe
         <EventActionDrawer
           event={selectedEvent}
           onAction={c.runAction}
+          onEditEvent={(ev) => c.setEventDialog({ event: ev })}
           onClose={() => setSelectedEvent(null)}
+          card={card} textPri={textPri} textSec={textSec} textMuted={textMuted} inputCls={inputCls} />
+      )}
+
+      {/* slot chooser: block or event */}
+      {quickAdd && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setQuickAdd(null)}>
+          <div className={`${card} border rounded-2xl w-full max-w-xs p-4`} onClick={e => e.stopPropagation()}>
+            <p className={`text-sm font-semibold ${textPri} mb-1`}>Add at {quickAdd.start}</p>
+            <p className={`text-[11px] ${textMuted} mb-3`}>{quickAdd.date}</p>
+            <div className="space-y-2">
+              <button onClick={() => { setBlockDialog({ start: quickAdd.start }); setQuickAdd(null); }}
+                className="w-full h-10 rounded-lg text-sm font-semibold text-white" style={{ background: PINK }}>
+                Personal block
+              </button>
+              <button onClick={() => { c.setEventDialog({ defaults: { date: quickAdd.date, start_time: quickAdd.start } }); setQuickAdd(null); }}
+                className="w-full h-10 rounded-lg text-sm font-semibold text-white" style={{ background: SKY }}>
+                Shared event (collaborate)
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {c.eventDialog && (
+        <EventDialog
+          event={c.eventDialog.event}
+          defaults={c.eventDialog.defaults}
+          teamOptions={c.teamOptions}
+          onSave={async (payload, editId) => {
+            const ok = editId ? await c.updateEvent(editId, payload) : await c.createEvent(payload);
+            if (ok) c.setEventDialog(null);
+          }}
+          onClose={() => c.setEventDialog(null)}
           card={card} textPri={textPri} textSec={textSec} textMuted={textMuted} inputCls={inputCls} />
       )}
     </div>
