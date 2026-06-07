@@ -205,9 +205,11 @@ export default function LeadsCRM() {
             {crm.selectedLeadIds.size > 0 && (
               <div className="flex items-center gap-2 flex-wrap" data-testid="bulk-actions-bar">
                 <span className={`text-xs ${textSec}`}>{crm.selectedLeadIds.size} selected</span>
-                <Button size="sm" onClick={() => { crm.setReassignBulkIds(Array.from(crm.selectedLeadIds)); crm.setReassignLead(null); crm.setReassignOpen(true); }} className="bg-[#e94560] hover:bg-[#f05c75] text-white h-8" data-testid="bulk-reassign-btn">
-                  <UserCog className="mr-1 h-3 w-3" /> Reassign
-                </Button>
+                {crm.user?.role === 'admin' && (
+                  <Button size="sm" onClick={() => { crm.setReassignBulkIds(Array.from(crm.selectedLeadIds)); crm.setReassignLead(null); crm.setReassignOpen(true); }} className="bg-[#e94560] hover:bg-[#f05c75] text-white h-8" data-testid="bulk-reassign-btn">
+                    <UserCog className="mr-1 h-3 w-3" /> Reassign
+                  </Button>
+                )}
                 <select defaultValue="" className={`h-8 px-2 rounded text-xs ${inputCls} cursor-pointer`}
                   onChange={async e => {
                     const tagId = e.target.value;
@@ -534,8 +536,10 @@ export default function LeadsCRM() {
                         </div>
                       )}
                       <div className="flex gap-1 mt-2 pt-2 border-t border-[var(--border-color)]">
-                        <button type="button" onClick={(e) => { e.stopPropagation(); crm.setReassignLead(lead); crm.setReassignBulkIds(null); crm.setReassignOpen(true); }} className="text-[10px] text-[#e94560] hover:underline" data-testid={`reassign-${lead.lead_id}`}>Reassign</button>
-                        <span className={textMuted}>•</span>
+                        {crm.user?.role === 'admin' && (<>
+                          <button type="button" onClick={(e) => { e.stopPropagation(); crm.setReassignLead(lead); crm.setReassignBulkIds(null); crm.setReassignOpen(true); }} className="text-[10px] text-[#e94560] hover:underline" data-testid={`reassign-${lead.lead_id}`}>Reassign</button>
+                          <span className={textMuted}>•</span>
+                        </>)}
                         <button type="button" onClick={(e) => { e.stopPropagation(); crm.openWaForLead(lead); }} className="text-[10px] text-green-500 hover:underline">WhatsApp</button>
                       </div>
                     </div>
@@ -953,6 +957,7 @@ export default function LeadsCRM() {
           setReassignLead={crm.setReassignLead}
           setReassignBulkIds={crm.setReassignBulkIds}
           setReassignOpen={crm.setReassignOpen}
+          isAdmin={crm.user?.role === 'admin'}
           fetchData={crm.fetchData}
         />
 

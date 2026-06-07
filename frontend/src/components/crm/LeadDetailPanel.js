@@ -41,6 +41,7 @@ export default function LeadDetailPanel({
   openCreateTask,
   openWaForLead,
   setReassignLead, setReassignBulkIds, setReassignOpen,
+  isAdmin,
   fetchData,
 }) {
   const navigate = useNavigate();
@@ -92,7 +93,7 @@ export default function LeadDetailPanel({
               </div>
               <div className="flex gap-1">
                 <Button size="sm" variant="ghost" onClick={() => openWaForLead(detailLead)} className="text-green-500" data-testid="lead-wa-btn"><MessageSquare className="h-4 w-4" /></Button>
-                <Button size="sm" variant="ghost" onClick={() => { setReassignLead(detailLead); setReassignBulkIds(null); setReassignOpen(true); }} className="text-[#e94560]" data-testid="lead-reassign-btn"><UserCog className="h-4 w-4" /></Button>
+                {isAdmin && <Button size="sm" variant="ghost" onClick={() => { setReassignLead(detailLead); setReassignBulkIds(null); setReassignOpen(true); }} className="text-[#e94560]" data-testid="lead-reassign-btn"><UserCog className="h-4 w-4" /></Button>}
                 <Button size="sm" variant="ghost" onClick={() => { openEditLead(detailLead); setDetailLead(null); }} className={textSec}><Edit2 className="h-4 w-4" /></Button>
                 <Button size="sm" variant="ghost" onClick={() => openCreateTask(detailLead)} className={textSec}><Calendar className="h-4 w-4" /></Button>
               </div>
