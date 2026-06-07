@@ -149,8 +149,10 @@ async def connect_db():
     await db.cert_items.create_index([("batch_id", 1), ("gen_status", 1)], background=True)
 
     # ── FMS action logs ───────────────────────────────────────────────────────
+    # UNIQUE: the dispatcher claims an action by inserting here before executing,
+    # so a duplicate key = "already attempted" → fire-at-most-once even on failure.
     await db.fms_action_logs.create_index(
-        [("stage_id", 1), ("action_index", 1), ("event", 1)], background=True)
+        [("stage_id", 1), ("action_index", 1), ("event", 1)], unique=True, background=True)
 
     logging.info("Database indexes created/verified (%d collections indexed)", 30)
 

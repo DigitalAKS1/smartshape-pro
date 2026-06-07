@@ -40,17 +40,27 @@ def eval_condition(cond: Optional[Dict[str, Any]], flow: Dict[str, Any]) -> bool
         return _OPS[op](left, right)
 
 
-async def _action_already_fired(stage_id: str, action_index: int, event: str) -> bool:
-    return bool(await db.fms_action_logs.find_one(
-        {"stage_id": stage_id, "action_index": action_index, "event": event,
-         "status": {"$in": ["fired", "skipped_condition"]}}))
+async def _claim_action(flow_id, stage_id, action_index, event, atype):
+    """Atomically claim an action via the UNIQUE (stage_id, action_index, event) index.
+    Returns a log_id if this caller won the claim, else None (already attempted).
+    Claiming BEFORE executing makes each action fire at most once even if execution
+    later fails (the SLA loop repeats on_overdue every 5 min — a failed costly action
+    like start_flow must not re-spawn)."""
+    log_id = _gen_id("falog")
+    try:
+        await db.fms_action_logs.insert_one({
+            "log_id": log_id, "flow_id": flow_id, "stage_id": stage_id,
+            "action_index": action_index, "event": event, "type": atype,
+            "status": "firing", "result_ref": None, "error": None, "at": _now_iso(),
+        })
+        return log_id
+    except Exception:
+        return None  # duplicate key → already claimed/done by an earlier pass
 
-async def _log_action(flow_id, stage_id, action_index, event, atype, status, result_ref=None, error=None):
-    await db.fms_action_logs.insert_one({
-        "log_id": _gen_id("falog"), "flow_id": flow_id, "stage_id": stage_id,
-        "action_index": action_index, "event": event, "type": atype,
-        "status": status, "result_ref": result_ref, "error": error, "at": _now_iso(),
-    })
+async def _finish_action(log_id, status, result_ref=None, error=None):
+    await db.fms_action_logs.update_one(
+        {"log_id": log_id},
+        {"$set": {"status": status, "result_ref": result_ref, "error": error, "at": _now_iso()}})
 
 
 def _render(tpl: str, flow: dict, stage: dict) -> str:
@@ -74,10 +84,13 @@ async def _exec_send_message(action, flow, stage):
         phone = u.get("phone") or emp.get("phone") or ""
         email = stage.get("assigned_to", "")
     notif_id = _gen_id("fanotif")
+    results = []
     if "whatsapp" in channels and phone:
-        await _fms_send_wa(phone, text)
+        ok, _ = await _fms_send_wa(phone, text); results.append(ok)
     if "email" in channels and email and "@" in email:
-        await _fms_send_email(email, "Update", text)
+        ok, _ = await _fms_send_email(email, "Update", text); results.append(ok)
+    if results and not any(results):
+        raise ValueError("all message channels failed")
     return notif_id
 
 
@@ -96,19 +109,17 @@ async def run_stage_actions(flow: dict, stage: dict, event: str):
     for idx, action in enumerate(stage.get("actions", []) or []):
         if action.get("event") != event:
             continue
-        if await _action_already_fired(stage["stage_id"], idx, event):
-            continue
+        log_id = await _claim_action(flow["flow_id"], stage["stage_id"], idx, event, action.get("type"))
+        if not log_id:
+            continue  # already attempted on an earlier pass — never re-run
         if not eval_condition(action.get("condition"), flow):
-            await _log_action(flow["flow_id"], stage["stage_id"], idx, event,
-                              action.get("type"), "skipped_condition")
+            await _finish_action(log_id, "skipped_condition")
             continue
         try:
             ref = await _execute_action(action, flow, stage)
-            await _log_action(flow["flow_id"], stage["stage_id"], idx, event,
-                              action.get("type"), "fired", result_ref=ref)
+            await _finish_action(log_id, "fired", result_ref=ref)
         except Exception as e:
-            await _log_action(flow["flow_id"], stage["stage_id"], idx, event,
-                              action.get("type"), "failed", error=str(e)[:200])
+            await _finish_action(log_id, "failed", error=str(e)[:200])
 
 
 MAX_SPAWN_DEPTH = 5
