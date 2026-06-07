@@ -1417,7 +1417,8 @@ async def get_agenda(request: Request):
 # COLLABORATIVE CALENDAR EVENTS  (cal_events)
 # ══════════════════════════════════════════════════════════════════════════════
 
-EVENT_EDITABLE = ("title", "description", "location", "color", "date", "start_time", "end_time", "all_day")
+EVENT_EDITABLE = ("title", "description", "location", "color", "date", "start_time", "end_time",
+                  "all_day", "meeting_provider", "meeting_link")
 
 
 async def _build_collaborators(creator_email, creator_emp_id, creator_name, emp_ids, emails):
@@ -1460,6 +1461,8 @@ async def create_event(request: Request):
         "event_id": gen_id("evt"), "title": title, "description": body.get("description", ""),
         "location": body.get("location", ""), "color": body.get("color", "#0ea5e9"),
         "date": body["date"], "start_time": st, "end_time": et, "all_day": bool(body.get("all_day")),
+        "meeting_provider": (body.get("meeting_provider") or "").strip(),
+        "meeting_link": (body.get("meeting_link") or "").strip(),
         "created_by": user.get("email"), "created_by_emp_id": actor["emp_id"],
         "collaborators": collab, "linked_event_id": body.get("linked_event_id", ""),
         "status": "active", "ext_sync": {}, "created_at": now_iso(), "updated_at": now_iso(),
@@ -1559,6 +1562,17 @@ def _ev_uid(ev):
     return (ev.get("ext_sync") or {}).get("ics_uid") or f"{ev['event_id']}@smartshape.in"
 
 
+def _meeting_label(provider):
+    return {"zoom": "Zoom", "meet": "Google Meet", "other": "Meeting"}.get(provider or "", "Meeting")
+
+
+def _event_join_url(ev):
+    """Branded in-app join link (Z1 redirects to the meeting; Z2 will embed it)."""
+    if not (ev.get("meeting_link") or "").strip():
+        return ""
+    return f"{_base_url()}/zoom/{ev['event_id']}"
+
+
 def _build_vevent(ev, *, method, sequence):
     """VEVENT lines for an event under the given iCalendar METHOD."""
     dtstart, is_date = _ics_dt(ev["date"], ev.get("start_time"))
@@ -1571,10 +1585,21 @@ def _build_vevent(ev, *, method, sequence):
     else:
         lines += [f"DTSTART;TZID=Asia/Kolkata:{dtstart}", f"DTEND;TZID=Asia/Kolkata:{dtend}"]
     lines.append(f"SUMMARY:{_ics_escape(ev.get('title'))}")
+    join_url = _event_join_url(ev)
+    desc_parts = []
+    if join_url:
+        desc_parts.append(f"Join {_meeting_label(ev.get('meeting_provider'))}: {join_url}")
     if ev.get("description"):
-        lines.append(f"DESCRIPTION:{_ics_escape(ev['description'])}")
+        desc_parts.append(ev["description"])
+    if desc_parts:
+        lines.append(f"DESCRIPTION:{_ics_escape(chr(10).join(desc_parts))}")
     if ev.get("location"):
         lines.append(f"LOCATION:{_ics_escape(ev['location'])}")
+    if join_url:
+        label = _meeting_label(ev.get("meeting_provider"))
+        lines.append(f"URL:{join_url}")
+        lines.append(f'CONFERENCE;VALUE=URI;FEATURE=VIDEO;LABEL="{label}":{join_url}')
+        lines.append(f"X-GOOGLE-CONFERENCE:{join_url}")
     # ORGANIZER = configured sender mailbox; CN = creator name (see SP3 spec §0).
     org_email = _ORG_EMAIL_CACHE.get("email") or ev.get("created_by") or ""
     if org_email:
@@ -1630,10 +1655,14 @@ async def _send_invite(ev, *, method, sequence, recipients):
     verb = "Cancelled" if method == "CANCEL" else "Invitation"
     subject = f"{verb}: {ev.get('title') or 'Event'} — {ev.get('date')}"
     when = ev.get("date") + ((" " + ev["start_time"]) if ev.get("start_time") else "")
+    join_url = _event_join_url(ev)
+    join_line = (f"Join {_meeting_label(ev.get('meeting_provider'))}: {join_url}\n\n"
+                 if (join_url and method != "CANCEL") else "")
     plain = (f"{creator} has "
              + ("cancelled" if method == "CANCEL" else "invited you to")
              + f" the event \"{ev.get('title')}\".\n\n"
              f"When: {when}\nWhere: {ev.get('location') or '-'}\n\n"
+             f"{join_line}"
              f"{ev.get('description') or ''}\n\n"
              "Your calendar app should offer to add/update this automatically.")
 
@@ -1781,6 +1810,24 @@ async def calendar_feed_public(token: str = ""):
                              "Content-Disposition": 'inline; filename="smartshape.ics"'})
 
 
+@router.get("/zoom/{event_id}/resolve")
+async def zoom_resolve(event_id: str):
+    """Public — the branded /zoom/{id} join page reads this to redirect (Z1) or embed (Z2).
+    The event_id in the invite link is the bearer secret; we expose only meeting fields."""
+    ev = await db.cal_events.find_one({"event_id": event_id}, {"_id": 0})
+    if not ev:
+        raise HTTPException(404, "Meeting not found")
+    return {
+        "event_id": event_id,
+        "title": ev.get("title", ""),
+        "date": ev.get("date", ""),
+        "start_time": ev.get("start_time", ""),
+        "status": ev.get("status", "active"),
+        "meeting_provider": ev.get("meeting_provider", ""),
+        "meeting_link": ev.get("meeting_link", "") if ev.get("status") == "active" else "",
+    }
+
+
 async def _agenda_events(emp_id, email, dfrom, dto):
     q = {"status": "active", "date": {"$gte": dfrom, "$lte": dto},
          "$or": [{"created_by_emp_id": emp_id}, {"collaborators.emp_id": emp_id},
@@ -1804,6 +1851,9 @@ async def _agenda_events(emp_id, email, dfrom, dto):
                   "description": r.get("description", ""),
                   "invited": ext.get("sequence") is not None,
                   "sequence": ext.get("sequence"),
+                  "meeting_provider": r.get("meeting_provider", ""),
+                  "meeting_link": r.get("meeting_link", ""),
+                  "join_url": _event_join_url(r),
                   "collaborators": [c.get("name") or c.get("email") for c in r.get("collaborators", [])]}))
     return out
 
