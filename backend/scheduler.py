@@ -672,6 +672,9 @@ async def run_fms_sla_check():
             if mgr:
                 mgr_r = await _resolve_recipient(mgr)
                 await _fms_notify(flow, stage, "manager_breach", channels, templates, mgr_r)
+            if stage.get("actions"):
+                from fms_actions import run_stage_actions
+                await run_stage_actions(flow, stage, "on_overdue")
         # escalate
         elif rem <= cfg["notify_escalate_pct"]:
             await _fms_notify(flow, stage, "staff_escalate", channels, templates, recipient)
