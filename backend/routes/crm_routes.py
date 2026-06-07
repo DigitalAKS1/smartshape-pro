@@ -963,6 +963,32 @@ async def backfill_school_owners(request: Request):
     return {"assigned": assigned, "skipped": skipped, "scanned": len(schools)}
 
 
+@router.post("/schools/bulk-assign")
+async def bulk_assign_schools(request: Request):
+    """Assign many schools to one Sales Executive at once, cascading each. Admin only."""
+    user = await get_current_user(request)
+    if get_team(user) != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    body = await request.json()
+    school_ids = body.get("school_ids") or []
+    assigned_to = (body.get("assigned_to") or "").strip()
+    assigned_name = (body.get("assigned_name") or "").strip()
+    if not school_ids:
+        raise HTTPException(status_code=400, detail="school_ids required")
+    total = {"schools": 0, "contacts": 0, "leads": 0}
+    for sid in school_ids:
+        sch = await db.schools.find_one({"school_id": sid}, {"_id": 0, "school_id": 1})
+        if not sch:
+            continue
+        c = await _assign_school_cascade(sid, assigned_to, assigned_name, user)
+        total["schools"] += 1
+        total["contacts"] += c["contacts"]
+        total["leads"] += c["leads"]
+    await log_activity(user["email"], "bulk_assign_schools", "school", ",".join(school_ids[:20]),
+                       details=f"-> {assigned_name or 'Unassigned'} ({total['schools']} schools, {total['leads']} leads, {total['contacts']} contacts)")
+    return {"cascaded": total}
+
+
 @router.put("/schools/{school_id}/restore")
 async def restore_school(school_id: str, request: Request):
     user = await get_current_user(request)

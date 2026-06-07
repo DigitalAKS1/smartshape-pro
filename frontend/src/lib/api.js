@@ -210,6 +210,7 @@ export const schools = {
   delete: (id) => API.delete(`/schools/${id}`),
   getProfile: (id) => API.get(`/schools/${id}/profile`),
   assign: (id, data) => API.post(`/schools/${id}/assign`, data),
+  bulkAssign: (data) => API.post('/schools/bulk-assign', data),
   backfillOwners: () => API.post('/schools/backfill-owners'),
 };
 

@@ -81,6 +81,26 @@ export default function LeadsCRM() {
     )
   );
 
+  // Bulk school assignment (admin): select many schools, assign all to one Sales Exec.
+  const [selectedSchoolIds, setSelectedSchoolIds] = React.useState(new Set());
+  const toggleSchoolSelect = (id) => setSelectedSchoolIds(prev => {
+    const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n;
+  });
+  const bulkAssignSchools = async (email, e) => {
+    if (e) e.target.value = '';
+    if (!email || selectedSchoolIds.size === 0) return;
+    const sp = crm.spList.find(s => s.email === email);
+    const name = sp?.name || '';
+    if (!window.confirm(`Assign ${selectedSchoolIds.size} school(s) to ${name}?\n\nThis moves ALL their leads & contacts to ${name}.`)) return;
+    try {
+      const r = await schoolsApiObj.bulkAssign({ school_ids: Array.from(selectedSchoolIds), assigned_to: email, assigned_name: name });
+      const c = r.data?.cascaded || {};
+      toast.success(`${c.schools ?? 0} school(s) → ${name} — moved ${c.leads ?? 0} leads, ${c.contacts ?? 0} contacts`);
+      setSelectedSchoolIds(new Set());
+      crm.fetchData();
+    } catch (err) { toast.error(err?.response?.data?.detail || 'Bulk assign failed'); }
+  };
+
   if (crm.loading) return (
     <AppShell>
       <div className="flex items-center justify-center h-96">
@@ -602,12 +622,25 @@ export default function LeadsCRM() {
           schFiltered = crm.sortData(schFiltered, crm.sortConfig.key, crm.sortConfig.dir);
           return (
             <div className="space-y-3">
+              {crm.user?.role === 'admin' && selectedSchoolIds.size > 0 && (
+                <div className={`${card} border rounded-md p-2.5 flex items-center gap-2 flex-wrap`} data-testid="school-bulk-bar">
+                  <span className={`text-xs font-medium ${textPri}`}>{selectedSchoolIds.size} school(s) selected</span>
+                  <select defaultValue="" onChange={e => bulkAssignSchools(e.target.value, e)}
+                    className={`h-8 px-2 rounded text-xs bg-[var(--bg-primary)] border border-[var(--border-color)] ${textPri}`}
+                    data-testid="school-bulk-assign-select">
+                    <option value="">Assign owner to…</option>
+                    {crm.spList.map(sp => <option key={sp.email} value={sp.email}>{sp.name}</option>)}
+                  </select>
+                  <Button size="sm" variant="outline" onClick={() => setSelectedSchoolIds(new Set())} className={`border-[var(--border-color)] ${textSec} h-8`}>Clear</Button>
+                </div>
+              )}
               {/* Mobile: school cards */}
               <div className="sm:hidden space-y-2" data-testid="schools-list-mobile">
                 {schFiltered.map(sch => {
                   const schLeads = crm.leadsList.filter(l => l.school_id === sch.school_id);
                   return (
                     <div key={sch.school_id} className={`${card} border rounded-md p-3 flex items-start justify-between gap-2`} data-testid={`school-card-${sch.school_id}`}>
+                      {crm.user?.role === 'admin' && <input type="checkbox" className="accent-[#e94560] mt-1 flex-shrink-0" checked={selectedSchoolIds.has(sch.school_id)} onChange={() => toggleSchoolSelect(sch.school_id)} />}
                       <div className="flex-1 min-w-0">
                         <p className={`${textPri} font-medium text-sm truncate`}>{sch.school_name}</p>
                         <p className={`text-xs ${textMuted}`}>{sch.school_type}{sch.city ? ` • ${sch.city}` : ''}</p>
@@ -643,6 +676,7 @@ export default function LeadsCRM() {
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm" data-testid="schools-table">
                     <thead><tr className="bg-[var(--bg-primary)]">
+                      {crm.user?.role === 'admin' && <th className="py-3 px-3 w-8"><input type="checkbox" className="accent-[#e94560]" onChange={e => setSelectedSchoolIds(e.target.checked ? new Set(schFiltered.map(s => s.school_id)) : new Set())} checked={schFiltered.length > 0 && schFiltered.every(s => selectedSchoolIds.has(s.school_id))} data-testid="school-select-all" /></th>}
                       <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} cursor-pointer select-none`} onClick={() => crm.toggleSort('school_name')}>School{crm.sortIndicator('school_name')}</th>
                       <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden sm:table-cell cursor-pointer select-none`} onClick={() => crm.toggleSort('school_type')}>Type{crm.sortIndicator('school_type')}</th>
                       <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden md:table-cell cursor-pointer select-none`} onClick={() => crm.toggleSort('city')}>City{crm.sortIndicator('city')}</th>
@@ -658,6 +692,7 @@ export default function LeadsCRM() {
                         const schLeads = crm.leadsList.filter(l => l.school_id === sch.school_id);
                         return (
                           <tr key={sch.school_id} className="border-t border-[var(--border-color)] hover:bg-[var(--bg-hover)] cursor-pointer" onClick={() => navigate(`/school-profile/${sch.school_id}`)} data-testid={`school-row-${sch.school_id}`}>
+                            {crm.user?.role === 'admin' && <td className="py-2.5 px-3" onClick={e => e.stopPropagation()}><input type="checkbox" className="accent-[#e94560]" checked={selectedSchoolIds.has(sch.school_id)} onChange={() => toggleSchoolSelect(sch.school_id)} data-testid={`select-school-${sch.school_id}`} /></td>}
                             <td className="py-2.5 px-3">
                               <p className={`${textPri} font-medium hover:text-[#e94560] transition-colors`}>{sch.school_name}</p>
                               <div className="flex items-center gap-2 mt-0.5 flex-wrap">
@@ -693,7 +728,7 @@ export default function LeadsCRM() {
                           </tr>
                         );
                       })}
-                      {schFiltered.length === 0 && <tr><td colSpan="9" className={`py-12 text-center ${textMuted}`}>No schools match your search</td></tr>}
+                      {schFiltered.length === 0 && <tr><td colSpan={crm.user?.role === 'admin' ? 10 : 9} className={`py-12 text-center ${textMuted}`}>No schools match your search</td></tr>}
                     </tbody>
                   </table>
                 </div>
