@@ -354,9 +354,11 @@ async def get_flow_action_logs(flow_id: str, request: Request):
     await get_current_user(request)
     return await db.fms_action_logs.find({"flow_id": flow_id}, {"_id": 0}).sort("at", 1).to_list(500)
 
-@router.post("/flows")
-async def create_flow(body: FlowCreate, request: Request):
-    user = await get_current_user(request)
+async def _create_flow_core(body: FlowCreate, user_email: str) -> dict:
+    """Core flow-creation logic, callable without an HTTP request.
+    Returns the raw flow doc with a 'stages' key (same shape as get_flow but
+    unmasked). The HTTP route calls get_flow() for the masked response; internal
+    callers (e.g. create_child_flow) use this directly."""
     cfg = await get_fms_settings()
 
     # Resolve stage definitions: custom template → flow_type → default
@@ -379,7 +381,7 @@ async def create_flow(body: FlowCreate, request: Request):
         "assigned_teams": body.assigned_teams,
         "current_stage_key": stage_defs[0]["key"] if stage_defs else "",
         "status": "active",
-        "created_by": user.get("email"), "created_at": now.isoformat(),
+        "created_by": user_email, "created_at": now.isoformat(),
         "completed_at": None, "overall_score": None,
         "parent_flow_id": body.parent_flow_id,
         "spawned_flow_ids": [],
@@ -388,6 +390,7 @@ async def create_flow(body: FlowCreate, request: Request):
     await db.fms_flows.insert_one(flow_doc)
 
     # Build stage documents with calculated plan times
+    user_dict = {"email": user_email}
     stage_docs = []
     plan_from = now
     for i, sd in enumerate(stage_defs):
@@ -423,12 +426,38 @@ async def create_flow(body: FlowCreate, request: Request):
         await db.fms_stages.insert_many(stage_docs)
 
     for sd in stage_docs:
-        await _log_stage(flow_id, sd, "created", user, to_status=sd["status"])
+        await _log_stage(flow_id, sd, "created", user_dict, to_status=sd["status"])
 
     # Create delegation task for first stage
     await _create_delegation_task_for_stage(stage_docs[0], body.title, flow_id)
 
-    return await get_flow(flow_id, request)
+    return {**flow_doc, "stages": stage_docs}
+
+
+@router.post("/flows")
+async def create_flow(body: FlowCreate, request: Request):
+    user = await get_current_user(request)
+    result = await _create_flow_core(body, user.get("email"))
+    return await get_flow(result["flow_id"], request)
+
+
+async def create_child_flow(template_id: str, title: str, carry: dict,
+                            parent_flow_id: str, spawn_depth: int,
+                            created_by: str) -> dict:
+    """Create a child flow without an HTTP request. Used by the start_flow action executor."""
+    body = FlowCreate(
+        flow_type="order",
+        template_id=template_id,
+        title=title,
+        customer_name=carry.get("customer_name", ""),
+        customer_phone=carry.get("customer_phone", ""),
+        customer_email=carry.get("customer_email", ""),
+        reference_id=carry.get("reference_id"),
+        amount=carry.get("amount", 0) or 0,
+        parent_flow_id=parent_flow_id,
+        spawn_depth=spawn_depth,
+    )
+    return await _create_flow_core(body, created_by)
 
 async def _create_delegation_task_for_stage(stage: dict, flow_title: str, flow_id: str):
     """Auto-create a delegation task when a stage becomes active."""

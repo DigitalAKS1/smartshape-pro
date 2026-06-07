@@ -111,8 +111,26 @@ async def run_stage_actions(flow: dict, stage: dict, event: str):
                               action.get("type"), "failed", error=str(e)[:200])
 
 
+MAX_SPAWN_DEPTH = 5
+
 async def _exec_start_flow(action, flow, stage):
-    raise NotImplementedError("start_flow")           # implemented in Task 3
+    if (flow.get("spawn_depth", 0) or 0) >= MAX_SPAWN_DEPTH:
+        raise ValueError("max spawn depth reached")
+    params = action.get("params", {})
+    carry_fields = params.get("carry", ["customer_name", "customer_phone", "customer_email", "reference_id", "amount"])
+    carry = {f: flow.get(f) for f in carry_fields}
+    title = f"{flow.get('title', '')}{params.get('title_suffix', '')}"
+    from routes.fms_routes import create_child_flow
+    child = await create_child_flow(
+        params["template_id"], title, carry,
+        flow["flow_id"], (flow.get("spawn_depth", 0) or 0) + 1,
+        flow.get("created_by", "fms-action"),
+    )
+    await db.fms_flows.update_one(
+        {"flow_id": flow["flow_id"]},
+        {"$push": {"spawned_flow_ids": child["flow_id"]}},
+    )
+    return child["flow_id"]
 
 async def _exec_generate_certificate(action, flow, stage):
     raise NotImplementedError("generate_certificate")  # implemented in Task 4
