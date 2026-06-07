@@ -51,3 +51,68 @@ async def _log_action(flow_id, stage_id, action_index, event, atype, status, res
         "action_index": action_index, "event": event, "type": atype,
         "status": status, "result_ref": result_ref, "error": error, "at": _now_iso(),
     })
+
+
+def _render(tpl: str, flow: dict, stage: dict) -> str:
+    from routes.fms_routes import render_template
+    return render_template(tpl, customer_name=flow.get("customer_name", ""),
+                           title=flow.get("title", ""), ref=flow.get("reference_id") or flow.get("flow_id", ""),
+                           stage=stage.get("label", ""))
+
+
+async def _exec_send_message(action, flow, stage):
+    params = action.get("params", {})
+    text = _render(params.get("template", ""), flow, stage)
+    channels = params.get("channels", ["whatsapp", "email"])
+    from scheduler import _fms_send_wa, _fms_send_email   # local import avoids cycle
+    to = params.get("to", "customer")
+    phone = flow.get("customer_phone", "") if to == "customer" else ""
+    email = flow.get("customer_email", "") if to == "customer" else ""
+    if to == "staff":
+        emp = await db.del_employees.find_one({"email": stage.get("assigned_to", "")}, {"_id": 0}) or {}
+        u = await db.users.find_one({"email": stage.get("assigned_to", "")}, {"_id": 0}) or {}
+        phone = u.get("phone") or emp.get("phone") or ""
+        email = stage.get("assigned_to", "")
+    notif_id = _gen_id("fanotif")
+    if "whatsapp" in channels and phone:
+        await _fms_send_wa(phone, text)
+    if "email" in channels and email and "@" in email:
+        await _fms_send_email(email, "Update", text)
+    return notif_id
+
+
+async def _execute_action(action, flow, stage):
+    atype = action.get("type")
+    if atype == "send_message":
+        return await _exec_send_message(action, flow, stage)
+    if atype == "start_flow":
+        return await _exec_start_flow(action, flow, stage)       # Task 3
+    if atype == "generate_certificate":
+        return await _exec_generate_certificate(action, flow, stage)  # Task 4
+    raise ValueError(f"unknown action type: {atype}")
+
+
+async def run_stage_actions(flow: dict, stage: dict, event: str):
+    for idx, action in enumerate(stage.get("actions", []) or []):
+        if action.get("event") != event:
+            continue
+        if await _action_already_fired(stage["stage_id"], idx, event):
+            continue
+        if not eval_condition(action.get("condition"), flow):
+            await _log_action(flow["flow_id"], stage["stage_id"], idx, event,
+                              action.get("type"), "skipped_condition")
+            continue
+        try:
+            ref = await _execute_action(action, flow, stage)
+            await _log_action(flow["flow_id"], stage["stage_id"], idx, event,
+                              action.get("type"), "fired", result_ref=ref)
+        except Exception as e:
+            await _log_action(flow["flow_id"], stage["stage_id"], idx, event,
+                              action.get("type"), "failed", error=str(e)[:200])
+
+
+async def _exec_start_flow(action, flow, stage):
+    raise NotImplementedError("start_flow")           # implemented in Task 3
+
+async def _exec_generate_certificate(action, flow, stage):
+    raise NotImplementedError("generate_certificate")  # implemented in Task 4

@@ -349,6 +349,11 @@ async def get_flow_logs(flow_id: str, request: Request):
         {"flow_id": flow_id}, {"_id": 0}
     ).sort("at", 1).to_list(500)
 
+@router.get("/flows/{flow_id}/action-logs")
+async def get_flow_action_logs(flow_id: str, request: Request):
+    await get_current_user(request)
+    return await db.fms_action_logs.find({"flow_id": flow_id}, {"_id": 0}).sort("at", 1).to_list(500)
+
 @router.post("/flows")
 async def create_flow(body: FlowCreate, request: Request):
     user = await get_current_user(request)
@@ -540,6 +545,8 @@ async def complete_stage(stage_id: str, request: Request):
     flow = await db.fms_flows.find_one({"flow_id": stage["flow_id"]}, {"_id": 0})
     if flow:
         await _maybe_notify_customer(flow, {**stage, **update})
+        from fms_actions import run_stage_actions
+        await run_stage_actions(flow, {**stage, **update}, "on_complete")
 
     # Otherwise advance to next stage
     await _advance_flow(stage["flow_id"], stage["order"], now, cfg)
@@ -560,6 +567,8 @@ async def approve_stage(stage_id: str, request: Request):
     flow = await db.fms_flows.find_one({"flow_id": stage["flow_id"]}, {"_id": 0})
     if flow:
         await _maybe_notify_customer(flow, stage)
+        from fms_actions import run_stage_actions
+        await run_stage_actions(flow, stage, "on_complete")
     await _advance_flow(stage["flow_id"], stage["order"], now_utc(), cfg)
     return {"message": "Approved and flow advanced"}
 
@@ -584,6 +593,10 @@ async def reject_stage(stage_id: str, request: Request):
     await _log_stage(stage["flow_id"], stage, "rejected", user,
                      note=body.get("reason", ""), from_status=stage["status"],
                      to_status="rejected")
+    flow = await db.fms_flows.find_one({"flow_id": stage["flow_id"]}, {"_id": 0})
+    if flow:
+        from fms_actions import run_stage_actions
+        await run_stage_actions(flow, stage, "on_reject")
 
     # Create a fresh redo stage at the same order so the flow can proceed.
     now = now_utc()
