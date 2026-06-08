@@ -82,7 +82,9 @@ export function ReceivingTab() {
       <div className={`${card} border rounded-md p-5`}>
         <h2 className={`text-lg font-medium ${textPri} mb-3`}>Goods Receipts ({grns.length})</h2>
         <div className="space-y-2">
-          {grns.map(grn => (
+          {(() => {
+            const sortedGrns = [...grns].sort((a, b) => String(b.received_date || b.created_at || '').localeCompare(String(a.received_date || a.created_at || '')));
+            return sortedGrns.map(grn => (
             <div key={grn.grn_id} className={`${card} border rounded-md p-3 flex items-center justify-between flex-wrap gap-2 cursor-pointer hover:bg-[var(--bg-hover)]`} onClick={() => openGrn(grn)} data-testid={`grn-row-${grn.grn_id}`}>
               <div className="flex items-center gap-3">
                 <span className={`${textPri} font-medium`}>{grn.grn_no}</span>
@@ -91,7 +93,8 @@ export function ReceivingTab() {
               </div>
               <span className={`text-xs ${textSec}`}>{grn.status === 'pending_qc' ? 'Open QC →' : 'View'}</span>
             </div>
-          ))}
+          ));
+          })()}
           {grns.length === 0 && <p className={`text-sm ${textMuted} text-center py-6`}>No goods receipts yet.</p>}
         </div>
       </div>

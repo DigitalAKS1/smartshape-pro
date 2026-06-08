@@ -47,6 +47,21 @@ function Badge({ map, value }) {
   return <span className={`text-[10px] px-2 py-0.5 rounded font-medium ${map[value] || 'bg-gray-500/15 text-gray-300'}`}>{(value || '').replace('_', ' ')}</span>;
 }
 
+function useSorted(rows, initialKey) {
+  const [sort, setSort] = React.useState({ key: initialKey, dir: 'desc' });
+  const sorted = React.useMemo(() => {
+    const r = [...(rows || [])];
+    r.sort((a, b) => {
+      const av = a[sort.key] ?? '', bv = b[sort.key] ?? '';
+      const cmp = (typeof av === 'number' && typeof bv === 'number') ? av - bv : String(av).localeCompare(String(bv));
+      return sort.dir === 'asc' ? cmp : -cmp;
+    });
+    return r;
+  }, [rows, sort]);
+  const toggle = (key) => setSort(s => ({ key, dir: s.key === key && s.dir === 'asc' ? 'desc' : 'asc' }));
+  return { sorted, sort, toggle };
+}
+
 export default function Procurement() {
   const [tab, setTab] = useState('dashboard');
   const [vendors, setVendors] = useState([]);
@@ -366,6 +381,8 @@ function PurchaseOrdersTab({ vendors }) {
   const load = useCallback(() => { procurement.purchaseOrders.getAll().then(r => setList(r.data || [])).catch(() => {}); }, []);
   useEffect(() => { load(); }, [load]);
 
+  const { sorted: sortedPos, sort, toggle } = useSorted(list, 'created_at');
+
   const openNew = () => { setVendorId(''); setTerms(''); setExpected(''); setLines([]); setFormOpen(true); };
   const addPicked = (picked) => setLines(prev => [...prev, ...picked]);
 
@@ -427,20 +444,26 @@ function PurchaseOrdersTab({ vendors }) {
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead><tr className="bg-[var(--bg-primary)]">
-            {['PO No', 'Vendor', 'Items', 'Total', 'Status', ''].map(h => <th key={h} className={`text-left text-xs uppercase py-2.5 px-3 ${textMuted}`}>{h}</th>)}
+            {[['po_no', 'PO No'], ['vendor_name', 'Vendor'], [null, 'Items'], ['grand_total', 'Total'], ['status', 'Status'], ['created_at', 'Date']].map(([key, label]) => (
+              <th key={label} onClick={() => key && toggle(key)} className={`text-left text-xs uppercase py-2.5 px-3 ${textMuted} ${key ? 'cursor-pointer select-none' : ''}`}>
+                {label}{key && sort.key === key ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : ''}
+              </th>
+            ))}
+            <th className={`text-left text-xs uppercase py-2.5 px-3 ${textMuted}`}></th>
           </tr></thead>
           <tbody>
-            {list.map(po => (
+            {sortedPos.map(po => (
               <tr key={po.po_id} className="border-t border-[var(--border-color)] hover:bg-[var(--bg-hover)] cursor-pointer" onClick={() => setDetail(po)} data-testid={`po-row-${po.po_id}`}>
                 <td className={`py-2.5 px-3 ${textPri} font-medium`}>{po.po_no}</td>
                 <td className={`py-2.5 px-3 ${textSec}`}>{po.vendor_name}</td>
                 <td className={`py-2.5 px-3 ${textSec}`}>{po.lines?.length || 0}</td>
                 <td className={`py-2.5 px-3 ${textPri}`}>{inr(po.grand_total)}</td>
                 <td className="py-2.5 px-3"><Badge map={PO_STATUS} value={po.status} /></td>
+                <td className={`py-2.5 px-3 ${textMuted} text-xs`}>{(po.created_at || '').slice(0, 10)}</td>
                 <td className="py-2.5 px-3 text-right"><ArrowRight className="h-4 w-4 inline text-[var(--text-muted)]" /></td>
               </tr>
             ))}
-            {list.length === 0 && <tr><td colSpan={6} className={`py-10 text-center ${textMuted}`}>No purchase orders yet.</td></tr>}
+            {list.length === 0 && <tr><td colSpan={7} className={`py-10 text-center ${textMuted}`}>No purchase orders yet.</td></tr>}
           </tbody>
         </table>
       </div>
