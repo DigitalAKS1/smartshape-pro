@@ -1376,7 +1376,12 @@ async def record_challan_return(challan_id: str, request: Request):
     if c.get("status") == "closed":
         raise HTTPException(status_code=400, detail="Challan already closed")
     body = await request.json()
-    add = {int(l["index"]): float(l.get("returned_qty", 0) or 0) for l in body.get("lines", [])}
+    add = {}
+    for l in body.get("lines", []):
+        try:
+            add[int(l["index"])] = float(l.get("returned_qty", 0) or 0)
+        except (KeyError, ValueError, TypeError):
+            continue  # ignore malformed line entries rather than 500
     lines = c.get("lines", [])
     for idx, qty in add.items():
         if 0 <= idx < len(lines):
