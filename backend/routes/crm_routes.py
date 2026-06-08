@@ -762,6 +762,13 @@ async def _owned_school_ids(email: str) -> list:
     return [s["school_id"] async for s in cur]
 
 
+async def _sales_lead_scope(email: str) -> list:
+    """$or clauses making a sales user's lead view = assigned + under owned schools.
+    Mirrors GET /leads so deal analytics agree with the pipeline a rep can see."""
+    owned = await _owned_school_ids(email)
+    return [{"assigned_to": email}, {"school_id": {"$in": owned}}]
+
+
 async def _assign_school_cascade(school_id: str, assigned_to: str, assigned_name: str, actor: dict) -> dict:
     """Set a school's owner and cascade that owner onto ALL its contacts and leads."""
     now_iso = datetime.now(timezone.utc).isoformat()
@@ -1861,7 +1868,7 @@ async def leads_forecast(request: Request):
     team = get_team(user)
     if team in ("accounts", "store"):
         return {"total_value": 0, "total_weighted": 0, "by_stage": {}, "by_rep": {}}
-    query = {} if team == "admin" else {"assigned_to": user["email"]}
+    query = {} if team == "admin" else {"$or": await _sales_lead_scope(user["email"])}
     query["stage"] = {"$in": OPEN_STAGES}
     leads = await db.leads.find(query, {"_id": 0}).to_list(10000)
     settings = await get_crm_settings()
@@ -1903,7 +1910,7 @@ async def leads_funnel(request: Request,
     team = get_team(user)
     if team in ("accounts", "store"):
         return {"stages": [], "won": {"count": 0, "value": 0}, "lost": {"count": 0}, "lost_reasons": {}}
-    query = {} if team == "admin" else {"assigned_to": user["email"]}
+    query = {} if team == "admin" else {"$or": await _sales_lead_scope(user["email"])}
     if rep and team == "admin":
         query["assigned_to"] = rep
     if source:
@@ -1959,7 +1966,7 @@ async def leads_needs_attention(request: Request):
         return []
     query = {"stage": {"$in": OPEN_STAGES}}
     if team != "admin":
-        query["assigned_to"] = user["email"]
+        query["$or"] = await _sales_lead_scope(user["email"])
     leads = await db.leads.find(query, {"_id": 0}).to_list(20000)
     lead_ids = [l["lead_id"] for l in leads]
     now = datetime.now(timezone.utc)
