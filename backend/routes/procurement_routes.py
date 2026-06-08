@@ -402,6 +402,31 @@ async def procurement_summary(request: Request):
     }
 
 
+@router.get("/procurement/po-report")
+async def po_report(request: Request, only_open: bool = True):
+    """Per-line ordered/received/balance across purchase orders."""
+    await get_current_user(request)
+    query = {}
+    if only_open:
+        query["status"] = {"$in": ["approved", "sent", "partially_received"]}
+    rows = []
+    async for po in db.purchase_orders.find(query, {"_id": 0}):
+        for l in po.get("lines", []):
+            ordered = float(l.get("qty", 0) or 0)
+            received = float(l.get("received_qty", 0) or 0)
+            rows.append({
+                "po_id": po["po_id"], "po_no": po.get("po_no"),
+                "vendor_name": po.get("vendor_name"), "status": po.get("status"),
+                "expected_date": po.get("expected_date"),
+                "item_ref": l.get("item_ref"), "name": l.get("name"), "code": l.get("code", ""),
+                "uom": l.get("uom", "pcs"),
+                "ordered_qty": ordered, "received_qty": received,
+                "balance_qty": round2(ordered - received),
+            })
+    rows.sort(key=lambda r: (r.get("expected_date") or "9999", r.get("po_no") or ""))
+    return rows
+
+
 # ==================== VENDOR PRICE LIST (vendor_items) ====================
 
 class VendorItemIn(BaseModel):
