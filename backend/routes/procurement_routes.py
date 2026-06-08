@@ -1224,6 +1224,45 @@ async def list_vendor_returns(request: Request, vendor_id: Optional[str] = None)
     return await db.vendor_returns.find(query, {"_id": 0}).sort("created_at", -1).to_list(2000)
 
 
+_OPEN_ORDER_STATUSES = ("pending", "confirmed")
+_DEAD_ITEM_STATUSES = ("cancelled", "released", "delivered")
+
+
+@router.get("/procurement/demand")
+async def sales_order_demand(request: Request, shortfall_only: bool = False):
+    """Required quantities from open sales orders vs available stock."""
+    await get_current_user(request)
+    open_ids = [o["order_id"] async for o in db.orders.find(
+        {"order_status": {"$in": list(_OPEN_ORDER_STATUSES)}}, {"_id": 0, "order_id": 1})]
+    required = {}
+    if open_ids:
+        async for it in db.order_items.find(
+                {"order_id": {"$in": open_ids}}, {"_id": 0, "die_id": 1, "quantity": 1, "status": 1}):
+            if it.get("status") in _DEAD_ITEM_STATUSES:
+                continue
+            did = it.get("die_id")
+            if did:
+                required[did] = required.get(did, 0) + float(it.get("quantity", 0) or 0)
+    rows = []
+    for did, req_qty in required.items():
+        d = await db.dies.find_one({"die_id": did}, {"_id": 0}) or {}
+        phys = float(d.get("stock_qty", 0) or 0)
+        reserved = float(d.get("reserved_qty", 0) or 0)
+        avail = phys - reserved
+        shortfall = max(0.0, round2(req_qty - avail))
+        if shortfall_only and shortfall <= 0:
+            continue
+        rows.append({
+            "die_id": did, "item_ref": {"source": "die", "id": did},
+            "name": d.get("name", did), "code": d.get("code", ""), "image_url": d.get("image_url"),
+            "uom": "pcs", "gst_pct": d.get("gst_pct", 0), "default_rate": d.get("purchase_rate", 0) or 0,
+            "required_qty": round2(req_qty), "physical_qty": phys, "reserved_qty": reserved,
+            "available_qty": round2(avail), "shortfall_qty": shortfall,
+        })
+    rows.sort(key=lambda r: -r["shortfall_qty"])
+    return rows
+
+
 @router.get("/vendor-returns/{return_id}/pdf")
 async def vendor_return_pdf(return_id: str, request: Request):
     await get_current_user(request)
