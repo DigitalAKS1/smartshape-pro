@@ -386,3 +386,70 @@ def generate_packing_list_pdf(po: dict, vendor: dict, company: dict) -> bytes:
     el.append(Paragraph("Received in good condition (sign): ____________________", S['Cl']))
     doc.build(el)
     return buf.getvalue()
+
+
+def generate_challan_pdf(challan: dict, company: dict) -> bytes:
+    """Price-free returnable/delivery challan: code, item, qty, uom, returned."""
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import mm
+    from reportlab.lib import colors
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.enums import TA_RIGHT
+
+    NAVY = colors.Color(0.102, 0.102, 0.180)
+    GRAY = colors.Color(0.42, 0.42, 0.50)
+    BORDER = colors.Color(0.80, 0.80, 0.86)
+    WHITE = colors.white
+    FONT, FONTB = _register_fonts()
+    S = getSampleStyleSheet()
+
+    def ps(name, **kw):
+        if name not in S:
+            S.add(ParagraphStyle(name=name, **kw))
+    ps('Co', fontSize=14, leading=17, fontName=FONTB, textColor=NAVY)
+    ps('Sub', fontSize=7.5, leading=10, fontName=FONT, textColor=GRAY)
+    ps('Title', fontSize=18, leading=21, fontName=FONTB, textColor=NAVY, alignment=TA_RIGHT)
+    ps('Meta', fontSize=8.5, leading=11, fontName=FONT, textColor=NAVY, alignment=TA_RIGHT)
+    ps('Hc', fontSize=8, leading=10, fontName=FONTB, textColor=WHITE)
+    ps('Cl', fontSize=8.5, leading=11, fontName=FONT, textColor=NAVY)
+
+    titles = {"returnable_out": "RETURNABLE CHALLAN (OUT)",
+              "returnable_in": "RETURNABLE CHALLAN (IN)",
+              "vendor_return_delivery": "DELIVERY CHALLAN - RETURN"}
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=14 * mm, rightMargin=14 * mm,
+                            topMargin=12 * mm, bottomMargin=12 * mm)
+    el = [
+        Table([[
+            [Paragraph(company.get("name", "SmartShape") or "SmartShape", S['Co']),
+             Paragraph(company.get("address", "") or "", S['Sub'])],
+            [Paragraph(titles.get(challan.get("type"), "CHALLAN"), S['Title']),
+             Paragraph(challan.get("challan_no", ""), S['Meta']),
+             Paragraph("Party: " + (challan.get("party_name", "") or ""), S['Meta']),
+             Paragraph("Date: " + (challan.get("challan_date", "") or ""), S['Meta'])],
+        ]], colWidths=[100 * mm, 82 * mm]),
+        Spacer(1, 8),
+    ]
+    rows = [[Paragraph(h, S['Hc']) for h in ["#", "Code", "Item", "Qty", "UOM", "Returned"]]]
+    for i, l in enumerate(challan.get("lines", []), 1):
+        rows.append([
+            Paragraph(str(i), S['Cl']), Paragraph(str(l.get("code", "") or "-"), S['Cl']),
+            Paragraph(str(l.get("name", "")), S['Cl']), Paragraph(f"{l.get('qty', 0):g}", S['Cl']),
+            Paragraph(str(l.get("uom", "")), S['Cl']), Paragraph(f"{l.get('returned_qty', 0):g}", S['Cl']),
+        ])
+    tbl = Table(rows, colWidths=[10 * mm, 30 * mm, 80 * mm, 20 * mm, 20 * mm, 22 * mm], repeatRows=1)
+    tbl.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), NAVY),
+        ('GRID', (0, 0), (-1, -1), 0.4, BORDER),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [WHITE, colors.Color(0.975, 0.975, 0.99)]),
+        ('TOPPADDING', (0, 0), (-1, -1), 4), ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+    ]))
+    el.append(tbl)
+    el.append(Spacer(1, 14))
+    if challan.get("notes"):
+        el.append(Paragraph("Notes: " + challan["notes"], S['Cl']))
+    el.append(Spacer(1, 10))
+    el.append(Paragraph("Sender: ______________   Receiver: ______________", S['Cl']))
+    doc.build(el)
+    return buf.getvalue()

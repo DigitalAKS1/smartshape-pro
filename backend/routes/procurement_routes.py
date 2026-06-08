@@ -1391,3 +1391,45 @@ async def record_challan_return(challan_id: str, request: Request):
         {"$set": {"lines": lines, "status": status, "updated_at": _now()},
          "$push": {"timeline": _timeline_entry("return_recorded", user["email"])}})
     return await db.challans.find_one({"challan_id": challan_id}, {"_id": 0})
+
+
+@router.get("/challans/{challan_id}/pdf")
+async def challan_pdf(challan_id: str, request: Request):
+    await get_current_user(request)
+    c = await db.challans.find_one({"challan_id": challan_id}, {"_id": 0})
+    if not c:
+        raise HTTPException(status_code=404, detail="Challan not found")
+    company = await db.settings.find_one({"type": "company"}, {"_id": 0}) or {}
+    from routes.procurement_pdf import generate_challan_pdf
+    from fastapi.responses import StreamingResponse
+    import io as _io
+    pdf = generate_challan_pdf(c, company)
+    return StreamingResponse(_io.BytesIO(pdf), media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{c.get("challan_no", "challan")}.pdf"'})
+
+
+@router.post("/vendor-returns/{return_id}/challan")
+async def challan_from_vendor_return(return_id: str, request: Request):
+    """Create a delivery challan for the rejected goods of a vendor return."""
+    user = await get_current_user(request)
+    require_teams(user, "admin", "store")
+    ret = await db.vendor_returns.find_one({"return_id": return_id}, {"_id": 0})
+    if not ret:
+        raise HTTPException(status_code=404, detail="Return not found")
+    raw_lines = [{"item_ref": l.get("item_ref"), "name": l.get("name"), "qty": l.get("qty", 0)}
+                 for l in ret.get("lines", [])]
+    cid = _new_id("chal")
+    cno = await next_number("challan", "DC")
+    doc = {
+        "challan_id": cid, "challan_no": cno, "type": "vendor_return_delivery",
+        "direction": "outbound", "party_type": "vendor",
+        "vendor_id": ret.get("vendor_id"), "party_name": ret.get("vendor_name", ""),
+        "ref_type": "vendor_return", "ref_id": return_id,
+        "challan_date": _now()[:10], "expected_return_date": None,
+        "notes": f"Return goods for {ret.get('return_no')} (GRN {ret.get('grn_no')})",
+        "lines": await _build_challan_lines(raw_lines),
+        "status": "open", "timeline": [_timeline_entry("created", user["email"])],
+        "created_by": user["email"], "created_at": _now(), "updated_at": _now(),
+    }
+    await db.challans.insert_one(doc)
+    return await db.challans.find_one({"challan_id": cid}, {"_id": 0})
