@@ -902,6 +902,14 @@ export const procurement = {
     getAll: (params = {}) => API.get('/vendor-returns', { params }),
     downloadPdf: (id, retNo) => downloadFile(`/vendor-returns/${id}/pdf`, `${retNo || 'RETURN'}.pdf`),
   },
+  challans: {
+    getAll: (params = {}) => API.get('/challans', { params }),
+    get: (id) => API.get(`/challans/${id}`),
+    create: (data) => API.post('/challans', data),
+    recordReturn: (id, lines) => API.post(`/challans/${id}/record-return`, { lines }),
+    fromVendorReturn: (returnId) => API.post(`/vendor-returns/${returnId}/challan`),
+    downloadPdf: (id, no) => downloadFile(`/challans/${id}/pdf`, `${no || 'challan'}.pdf`),
+  },
 };
 
 // Authenticated file download helper (blob) — used for PO / return PDFs.

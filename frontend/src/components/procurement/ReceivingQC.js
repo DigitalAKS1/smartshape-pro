@@ -240,6 +240,7 @@ export function ReturnsTab() {
                 <td className={`py-2.5 px-3 ${textPri}`}>{inr(r.grand_total)}</td>
                 <td className="py-2.5 px-3 text-right">
                   <Button size="sm" variant="ghost" onClick={() => procurement.vendorReturns.downloadPdf(r.return_id, r.return_no).catch(() => toast.error('Download failed'))} className={`${textSec} h-7`}><Download className="h-3.5 w-3.5" /></Button>
+                  <Button size="sm" variant="ghost" onClick={() => procurement.challans.fromVendorReturn(r.return_id).then(res => { toast.success(`Challan ${res.data?.challan_no} created`); if (res.data?.challan_id) procurement.challans.downloadPdf(res.data.challan_id, res.data.challan_no); }).catch(() => toast.error('Failed'))} className={`${textSec} h-7`} title="Create delivery challan"><RotateCcw className="h-3.5 w-3.5" /></Button>
                 </td>
               </tr>
             ))}

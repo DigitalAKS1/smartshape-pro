@@ -14,6 +14,7 @@ import { procurement } from '../../lib/api';
 import ItemPicker from '../../components/procurement/ItemPicker';
 import DemandPanel from '../../components/procurement/DemandPanel';
 import { ReceivingTab, ReturnsTab } from '../../components/procurement/ReceivingQC';
+import ChallansTab from '../../components/procurement/ChallansTab';
 
 const BACKEND = process.env.REACT_APP_BACKEND_URL || '';
 const imgSrc = (u) => (u ? (u.startsWith('http') ? u : `${BACKEND}${u}`) : '');
@@ -78,7 +79,7 @@ export default function Procurement() {
         </div>
 
         <div className={`${card} border rounded-md p-1 flex gap-1 flex-wrap`}>
-          {[['dashboard', 'Dashboard', LayoutDashboard], ['requisitions', 'Requisitions', FileText], ['orders', 'Purchase Orders', ShoppingCart], ['receiving', 'Receiving & QC', PackageCheck], ['returns', 'Returns', RotateCcw]].map(([id, label, Icon]) => (
+          {[['dashboard', 'Dashboard', LayoutDashboard], ['requisitions', 'Requisitions', FileText], ['orders', 'Purchase Orders', ShoppingCart], ['receiving', 'Receiving & QC', PackageCheck], ['returns', 'Returns', RotateCcw], ['challans', 'Challans', RotateCcw]].map(([id, label, Icon]) => (
             <button key={id} onClick={() => setTab(id)} data-testid={`ptab-${id}`}
               className={`flex-1 flex items-center justify-center gap-1.5 px-4 py-2 rounded text-sm font-medium transition-all ${tab === id ? 'bg-[#e94560] text-white' : `${textSec} hover:bg-[var(--bg-hover)]`}`}>
               <Icon className="h-4 w-4" /> {label}
@@ -91,6 +92,7 @@ export default function Procurement() {
         {tab === 'orders' && <PurchaseOrdersTab vendors={vendors} />}
         {tab === 'receiving' && <ReceivingTab />}
         {tab === 'returns' && <ReturnsTab />}
+        {tab === 'challans' && <ChallansTab />}
       </div>
     </AdminLayout>
   );
