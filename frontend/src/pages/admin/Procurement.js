@@ -219,6 +219,7 @@ function RequisitionsTab({ vendors }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [notes, setNotes] = useState('');
   const [lines, setLines] = useState([]);
+  const [editingId, setEditingId] = useState(null);
   const [convertFor, setConvertFor] = useState(null); // requisition being converted
   const [convVendor, setConvVendor] = useState('');
   const [convTerms, setConvTerms] = useState('');
@@ -226,17 +227,29 @@ function RequisitionsTab({ vendors }) {
   const load = useCallback(() => { procurement.requisitions.getAll().then(r => setList(r.data || [])).catch(() => {}); }, []);
   useEffect(() => { load(); }, [load]);
 
-  const openNew = () => { setNotes(''); setLines([]); setFormOpen(true); };
+  const openNew = () => { setEditingId(null); setNotes(''); setLines([]); setFormOpen(true); };
+  const openEdit = (req) => {
+    setEditingId(req.requisition_id);
+    setNotes(req.notes || '');
+    setLines((req.lines || []).map(l => ({
+      item_ref: l.item_ref, name: l.name, code: l.code, image_url: l.image_url,
+      uom: l.uom, qty: l.qty, default_rate: l.est_rate,
+    })));
+    setFormOpen(true);
+  };
   const addPicked = (picked) => setLines(prev => [...prev, ...picked]);
 
   const save = async () => {
     if (lines.length === 0) { toast.error('Add at least one item'); return; }
+    const payload = {
+      notes,
+      lines: lines.map(l => ({ item_ref: l.item_ref, qty: Number(l.qty) || 1, uom: l.uom, name: l.name, code: l.code, est_rate: l.default_rate })),
+    };
     try {
-      await procurement.requisitions.create({
-        notes,
-        lines: lines.map(l => ({ item_ref: l.item_ref, qty: Number(l.qty) || 1, uom: l.uom, name: l.name, est_rate: l.default_rate })),
-      });
-      toast.success('Requisition created'); setFormOpen(false); load();
+      if (editingId) await procurement.requisitions.update(editingId, payload);
+      else await procurement.requisitions.create(payload);
+      toast.success(editingId ? 'Requisition updated' : 'Requisition created');
+      setFormOpen(false); load();
     } catch (e) { toast.error(e?.response?.data?.detail || 'Save failed'); }
   };
 
@@ -269,6 +282,8 @@ function RequisitionsTab({ vendors }) {
                 <span className={`text-xs ${textMuted}`}>{req.lines?.length || 0} items · {req.requested_by}</span>
               </div>
               <div className="flex items-center gap-1.5">
+                {(req.status === 'draft' || req.status === 'rejected') &&
+                  <Button size="sm" variant="outline" onClick={() => openEdit(req)} className="border-[var(--border-color)] text-[var(--text-secondary)] h-7" data-testid={`edit-req-${req.requisition_id}`}>Edit</Button>}
                 {req.status === 'draft' && <Button size="sm" variant="outline" onClick={() => act(() => procurement.requisitions.submit(req.requisition_id), 'Submitted')} className="border-[var(--border-color)] text-[var(--text-secondary)] h-7"><Send className="h-3 w-3 mr-1" />Submit</Button>}
                 {req.status === 'submitted' && <>
                   <Button size="sm" onClick={() => act(() => procurement.requisitions.approve(req.requisition_id), 'Approved')} className="bg-green-600 hover:bg-green-700 text-white h-7"><Check className="h-3 w-3 mr-1" />Approve</Button>
@@ -288,7 +303,7 @@ function RequisitionsTab({ vendors }) {
       {/* New requisition dialog */}
       <Dialog open={formOpen} onOpenChange={setFormOpen}>
         <DialogContent className={`${dlgCls} w-[calc(100vw-1rem)] sm:max-w-lg max-h-[88dvh] overflow-y-auto`}>
-          <DialogHeader><DialogTitle className={textPri}>New Requisition</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle className={textPri}>{editingId ? 'Edit Requisition' : 'New Requisition'}</DialogTitle></DialogHeader>
           <div className="space-y-3 py-2">
             <div><Label className={`${textSec} text-xs`}>Notes</Label><Input value={notes} onChange={e => setNotes(e.target.value)} className={inputCls} placeholder="Why is this needed?" /></div>
             <div className="flex items-center justify-between">
@@ -342,6 +357,11 @@ function PurchaseOrdersTab({ vendors }) {
   const [lines, setLines] = useState([]);
   const [detail, setDetail] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [editPo, setEditPo] = useState(null);
+  const [editLines, setEditLines] = useState([]);
+  const [editTerms, setEditTerms] = useState('');
+  const [editExpected, setEditExpected] = useState('');
+  const [editPickerOpen, setEditPickerOpen] = useState(false);
 
   const load = useCallback(() => { procurement.purchaseOrders.getAll().then(r => setList(r.data || [])).catch(() => {}); }, []);
   useEffect(() => { load(); }, [load]);
@@ -371,6 +391,29 @@ function PurchaseOrdersTab({ vendors }) {
   };
 
   const act = async (fn, okMsg) => { try { await fn(); toast.success(okMsg); load(); if (detail) { const d = await procurement.purchaseOrders.get(detail.po_id); setDetail(d.data); } } catch (e) { toast.error(e?.response?.data?.detail || 'Action failed'); } };
+
+  const openEdit = (po) => {
+    setEditPo(po);
+    setEditTerms(po.terms || '');
+    setEditExpected(po.expected_date ? String(po.expected_date).slice(0, 10) : '');
+    setEditLines((po.lines || []).map(l => ({
+      item_ref: l.item_ref, name: l.name, code: l.code, image_url: l.image_url,
+      uom: l.uom, gst_pct: l.gst_pct, qty: l.qty, rate: l.rate, default_rate: l.rate,
+    })));
+  };
+  const saveEdit = async () => {
+    if (editLines.length === 0) { toast.error('Add at least one item'); return; }
+    try {
+      await procurement.purchaseOrders.update(editPo.po_id, {
+        terms: editTerms, expected_date: editExpected || null,
+        lines: editLines.map(l => ({ item_ref: l.item_ref, qty: Number(l.qty) || 1, rate: Number(l.rate ?? l.default_rate) || 0, gst_pct: l.gst_pct, uom: l.uom, name: l.name, code: l.code })),
+      });
+      toast.success('Purchase order updated');
+      setEditPo(null);
+      const d = await procurement.purchaseOrders.get(detail.po_id); setDetail(d.data);
+      load();
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Update failed'); }
+  };
 
   return (
     <div className={`${card} border rounded-md p-5`}>
@@ -483,6 +526,7 @@ function PurchaseOrdersTab({ vendors }) {
               </div>
               <DialogFooter className="flex-wrap gap-2">
                 <Button variant="outline" onClick={() => procurement.purchaseOrders.downloadPdf(detail.po_id, detail.po_no).catch(() => toast.error('Download failed'))} className="border-[var(--border-color)] text-[var(--text-secondary)]" data-testid="po-pdf"><Download className="h-3.5 w-3.5 mr-1" />PDF</Button>
+                {detail.status === 'draft' && <Button variant="outline" onClick={() => openEdit(detail)} className="border-[var(--border-color)] text-[var(--text-secondary)]" data-testid="po-edit">Edit</Button>}
                 {detail.status === 'draft' && <Button onClick={() => act(() => procurement.purchaseOrders.approve(detail.po_id), 'PO approved')} className="bg-green-600 hover:bg-green-700 text-white"><Check className="h-3.5 w-3.5 mr-1" />Approve</Button>}
                 {detail.status === 'approved' && <Button onClick={() => act(() => procurement.purchaseOrders.send(detail.po_id), 'Marked sent')} className="bg-indigo-600 hover:bg-indigo-700 text-white"><Send className="h-3.5 w-3.5 mr-1" />Mark Sent</Button>}
                 {detail.status === 'partially_received' && <Button onClick={() => act(() => procurement.purchaseOrders.close(detail.po_id), 'PO closed')} className="bg-gray-600 hover:bg-gray-700 text-white"><Check className="h-3.5 w-3.5 mr-1" />Close (settle remainder)</Button>}
@@ -493,6 +537,27 @@ function PurchaseOrdersTab({ vendors }) {
         </DialogContent>
       </Dialog>
 
+      <Dialog open={!!editPo} onOpenChange={(o) => { if (!o) setEditPo(null); }}>
+        <DialogContent className={`${dlgCls} w-[calc(100vw-1rem)] sm:max-w-2xl max-h-[90dvh] overflow-y-auto`}>
+          <DialogHeader><DialogTitle className={textPri}>Edit PO {editPo?.po_no}</DialogTitle></DialogHeader>
+          <div className="space-y-3 py-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div><Label className={`${textSec} text-xs`}>Expected Date</Label><Input type="date" value={editExpected} onChange={e => setEditExpected(e.target.value)} className={inputCls} /></div>
+              <div><Label className={`${textSec} text-xs`}>Terms</Label><Input value={editTerms} onChange={e => setEditTerms(e.target.value)} className={inputCls} /></div>
+            </div>
+            <div className="flex items-center justify-between">
+              <Label className={`${textSec} text-xs`}>Items</Label>
+              <Button size="sm" variant="outline" onClick={() => setEditPickerOpen(true)} className="border-[var(--border-color)] text-[var(--text-secondary)] h-7"><Plus className="h-3 w-3 mr-1" />Add Items</Button>
+            </div>
+            <LineRows lines={editLines} setLines={setEditLines} withRate />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditPo(null)} className="border-[var(--border-color)] text-[var(--text-secondary)]">Cancel</Button>
+            <Button onClick={saveEdit} className="bg-[#e94560] hover:bg-[#f05c75] text-white">Save Changes</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <ItemPicker open={editPickerOpen} onClose={() => setEditPickerOpen(false)} onConfirm={(p) => setEditLines(prev => [...prev, ...p])} />
       <ItemPicker open={pickerOpen} onClose={() => setPickerOpen(false)} onConfirm={addPicked} />
     </div>
   );
