@@ -962,6 +962,7 @@ async def create_goods_receipt(po_id: str, request: Request):
         "grn_id": grn_id, "grn_no": grn_no, "po_id": po_id, "po_no": po.get("po_no"),
         "vendor_id": po.get("vendor_id"), "vendor_name": po.get("vendor_name"),
         "status": "pending_qc", "lines": lines, "received_by": user["email"],
+        "received_date": _now()[:10],
         "timeline": [_timeline_entry("created", user["email"])],
         "created_at": _now(), "updated_at": _now(),
     }
@@ -1002,6 +1003,9 @@ async def update_goods_receipt(grn_id: str, request: Request):
     if g.get("status") == "qc_done":
         raise HTTPException(status_code=400, detail="QC already completed for this receipt")
     body = await request.json()
+    set_extra = {}
+    if "received_date" in body:
+        set_extra["received_date"] = body["received_date"]
     incoming = {l.get("po_line_index"): l for l in body.get("lines", [])}
     new_lines = []
     for l in g["lines"]:
@@ -1012,7 +1016,7 @@ async def update_goods_receipt(grn_id: str, request: Request):
             "remark": upd.get("remark", l.get("remark", "")),
         })
     await db.goods_receipts.update_one({"grn_id": grn_id},
-                                       {"$set": {"lines": new_lines, "updated_at": _now()}})
+                                       {"$set": {"lines": new_lines, "updated_at": _now(), **set_extra}})
     return await db.goods_receipts.find_one({"grn_id": grn_id}, {"_id": 0})
 
 
