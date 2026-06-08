@@ -886,6 +886,7 @@ export const procurement = {
     close: (id) => API.post(`/purchase-orders/${id}/close`),
     pdfUrl: (id) => `${process.env.REACT_APP_BACKEND_URL}/api/purchase-orders/${id}/pdf`,
     downloadPdf: (id, poNo) => downloadFile(`/purchase-orders/${id}/pdf`, `${poNo || 'PO'}.pdf`),
+    downloadPackingList: (id, poNo) => downloadFile(`/purchase-orders/${id}/packing-list-pdf`, `${poNo || 'PO'}-packing-list.pdf`),
     receive: (id) => API.post(`/purchase-orders/${id}/receive`),
   },
   // Goods Receipts (verification) + QC checklist

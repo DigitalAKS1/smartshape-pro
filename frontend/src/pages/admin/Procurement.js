@@ -579,6 +579,7 @@ function PurchaseOrdersTab({ vendors }) {
               </div>
               <DialogFooter className="flex-wrap gap-2">
                 <Button variant="outline" onClick={() => procurement.purchaseOrders.downloadPdf(detail.po_id, detail.po_no).catch(() => toast.error('Download failed'))} className="border-[var(--border-color)] text-[var(--text-secondary)]" data-testid="po-pdf"><Download className="h-3.5 w-3.5 mr-1" />PDF</Button>
+                <Button variant="outline" onClick={() => procurement.purchaseOrders.downloadPackingList(detail.po_id, detail.po_no).catch(() => toast.error('Download failed'))} className="border-[var(--border-color)] text-[var(--text-secondary)]"><Download className="h-3.5 w-3.5 mr-1" />Packing List</Button>
                 {detail.status === 'draft' && <Button variant="outline" onClick={() => openEdit(detail)} className="border-[var(--border-color)] text-[var(--text-secondary)]" data-testid="po-edit">Edit</Button>}
                 {detail.status === 'draft' && <Button onClick={() => act(() => procurement.purchaseOrders.approve(detail.po_id), 'PO approved')} className="bg-green-600 hover:bg-green-700 text-white"><Check className="h-3.5 w-3.5 mr-1" />Approve</Button>}
                 {detail.status === 'approved' && <Button onClick={() => act(() => procurement.purchaseOrders.send(detail.po_id), 'Marked sent')} className="bg-indigo-600 hover:bg-indigo-700 text-white"><Send className="h-3.5 w-3.5 mr-1" />Mark Sent</Button>}
