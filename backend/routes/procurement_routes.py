@@ -205,6 +205,7 @@ async def upload_vendor_logo(vendor_id: str, request: Request, file: UploadFile 
 
 class PurchaseItemIn(BaseModel):
     name: str
+    code: Optional[str] = ""
     category: Optional[str] = ""
     uom: Optional[str] = "pcs"
     hsn: Optional[str] = ""
