@@ -87,7 +87,7 @@ export function ReceivingTab() {
               <div className="flex items-center gap-3">
                 <span className={`${textPri} font-medium`}>{grn.grn_no}</span>
                 <Pill map={GRN_STATUS} value={grn.status} />
-                <span className={`text-xs ${textMuted}`}>{grn.po_no} · {grn.vendor_name}</span>
+                <span className={`text-xs ${textMuted}`}>{grn.po_no} · {grn.vendor_name} · {grn.received_date || ''}</span>
               </div>
               <span className={`text-xs ${textSec}`}>{grn.status === 'pending_qc' ? 'Open QC →' : 'View'}</span>
             </div>
@@ -107,6 +107,8 @@ function QCDialog({ grn, onClose, onChanged }) {
   const [saving, setSaving] = useState(false);
   const done = grn?.status === 'qc_done';
   const hasReturns = (grn?.lines || []).some(l => l.qc_status === 'return');
+  const [recvDate, setRecvDate] = useState('');
+  useEffect(() => { setRecvDate(grn?.received_date || ''); }, [grn]);
 
   useEffect(() => {
     setLines((grn?.lines || []).map(l => ({
@@ -121,6 +123,9 @@ function QCDialog({ grn, onClose, onChanged }) {
   const submit = async () => {
     setSaving(true);
     try {
+      if (!done && recvDate && recvDate !== grn.received_date) {
+        await procurement.goodsReceipts.update(grn.grn_id, { received_date: recvDate, lines: [] });
+      }
       const r = await procurement.goodsReceipts.submitQc(grn.grn_id, {
         lines: lines.map(l => ({ po_line_index: l.po_line_index, qc_status: l.qc_status, received_qty: Number(l.received_qty) || 0, remark: l.remark })),
       });
@@ -156,6 +161,12 @@ function QCDialog({ grn, onClose, onChanged }) {
                 <span className={`text-xs font-normal ${textMuted}`}>{grn.po_no} · {grn.vendor_name}</span>
               </DialogTitle>
             </DialogHeader>
+
+            <div className="flex items-center gap-2 mb-2">
+              <span className={`text-xs ${textMuted}`}>Receiving date</span>
+              {done ? <span className={`text-sm ${textSec}`}>{recvDate || '—'}</span> :
+                <Input type="date" value={recvDate} onChange={e => setRecvDate(e.target.value)} className={`${inputCls} h-8 w-44 text-sm`} />}
+            </div>
 
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
