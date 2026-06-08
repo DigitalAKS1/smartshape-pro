@@ -91,8 +91,8 @@ function LineRows({ lines, setLines, withRate }) {
         <div key={i} className={`flex items-center gap-2 ${card} border rounded-md p-2`} data-testid={`line-${i}`}>
           <Thumb url={l.image_url} />
           <div className="min-w-0 flex-1">
-            <p className={`${textPri} text-sm font-medium truncate`}>{l.name}</p>
-            <p className={`${textMuted} text-[11px]`}>{l.item_ref?.source === 'die' ? 'Product' : 'Material'} · {l.uom || 'pcs'}{l.gst_pct ? ` · GST ${l.gst_pct}%` : ''}</p>
+            <p className={`${textPri} text-sm font-medium truncate`}>{l.name}{l.code ? <span className="ml-2 text-[11px] font-mono text-[#e94560]">{l.code}</span> : null}</p>
+            <p className={`${textMuted} text-[11px]`}>{l.item_ref?.source === 'die' ? 'Product' : 'Material'} · {l.uom || 'pcs'}{l.gst_pct ? ` · GST ${l.gst_pct}%` : ''}{(l.stock_qty != null) ? ` · Phys ${l.stock_qty}/Avail ${l.available_qty ?? l.stock_qty}` : ''}</p>
           </div>
           <div>
             <span className={`text-[10px] ${textMuted} block`}>Qty</span>
@@ -496,12 +496,13 @@ function PurchaseOrdersTab({ vendors }) {
                 <p className={`text-sm ${textSec}`}>Vendor: <span className={textPri}>{detail.vendor_name}</span>{detail.expected_date ? ` · Expected ${String(detail.expected_date).slice(0, 10)}` : ''}</p>
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
-                    <thead><tr className="bg-[var(--bg-primary)]">{['', 'Item', 'HSN', 'Qty', 'Recv', 'Rate', 'Taxable', detail.tax_mode === 'intra' ? 'CGST' : 'IGST', detail.tax_mode === 'intra' ? 'SGST' : '', 'Total'].filter(Boolean).map((h, hi) => <th key={`${h}-${hi}`} className={`text-left text-[11px] uppercase py-2 px-2 ${textMuted}`}>{h}</th>)}</tr></thead>
+                    <thead><tr className="bg-[var(--bg-primary)]">{['', 'Item', 'Code', 'HSN', 'Qty', 'Recv', 'Rate', 'Taxable', detail.tax_mode === 'intra' ? 'CGST' : 'IGST', detail.tax_mode === 'intra' ? 'SGST' : '', 'Total'].filter(Boolean).map((h, hi) => <th key={`${h}-${hi}`} className={`text-left text-[11px] uppercase py-2 px-2 ${textMuted}`}>{h}</th>)}</tr></thead>
                     <tbody>
                       {detail.lines.map((l, i) => (
                         <tr key={i} className="border-t border-[var(--border-color)]">
                           <td className="py-2 px-2"><Thumb url={l.image_url} size={32} /></td>
                           <td className={`py-2 px-2 ${textPri}`}>{l.name}</td>
+                          <td className={`py-2 px-2 ${textMuted} font-mono text-xs`}>{l.code || '—'}</td>
                           <td className={`py-2 px-2 ${textMuted} font-mono text-xs`}>{l.hsn || '—'}</td>
                           <td className={`py-2 px-2 ${textSec}`}>{l.qty} {l.uom}</td>
                           <td className={`py-2 px-2 ${(l.received_qty || 0) >= l.qty ? 'text-emerald-400' : 'text-amber-400'}`}>{l.received_qty || 0}</td>

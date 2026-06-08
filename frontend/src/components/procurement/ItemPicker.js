@@ -62,9 +62,10 @@ export default function ItemPicker({ open, onClose, onConfirm }) {
     const lines = Object.values(picked)
       .filter(({ qty }) => Number(qty) > 0)
       .map(({ row, qty }) => ({
-        item_ref: row.item_ref, name: row.name, image_url: row.image_url,
+        item_ref: row.item_ref, name: row.name, code: row.code, image_url: row.image_url,
         uom: row.uom, hsn: row.hsn, gst_pct: row.gst_pct,
-        default_rate: row.default_rate, qty: Number(qty),
+        default_rate: row.default_rate, stock_qty: row.stock_qty, available_qty: row.available_qty,
+        qty: Number(qty),
       }));
     onConfirm(lines);
     onClose();
@@ -115,7 +116,9 @@ export default function ItemPicker({ open, onClose, onConfirm }) {
                       <Thumb url={row.image_url} />
                       <div className="min-w-0 flex-1">
                         <p className={`${textPri} text-sm font-medium truncate`}>{row.name}</p>
+                        {row.code ? <p className="text-[11px] font-mono text-[#e94560] truncate">{row.code}</p> : null}
                         <p className={`${textMuted} text-[11px]`}>{row.source === 'die' ? 'Product' : 'Material'} · {row.uom}</p>
+                        <p className={`${textMuted} text-[11px]`}>Phys {row.stock_qty ?? 0} · Avail {row.available_qty ?? row.stock_qty ?? 0}</p>
                         {row.default_rate ? <p className={`${textSec} text-[11px]`}>₹{Number(row.default_rate).toLocaleString('en-IN')}</p> : null}
                       </div>
                     </div>
