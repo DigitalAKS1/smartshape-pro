@@ -1294,3 +1294,72 @@ async def vendor_return_pdf(return_id: str, request: Request):
     return StreamingResponse(
         _io.BytesIO(pdf_bytes), media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{ret.get("return_no", "RETURN")}.pdf"'})
+
+
+# ==================== RETURNABLE CHALLANS ====================
+
+_CHALLAN_TYPES = ("returnable_out", "returnable_in", "vendor_return_delivery")
+
+
+async def _build_challan_lines(raw_lines):
+    out = []
+    for raw in raw_lines or []:
+        ref = raw.get("item_ref") or {}
+        disp = await _item_display(ref)
+        out.append({
+            "item_ref": ref, "name": raw.get("name") or disp.get("name"),
+            "code": raw.get("code") or disp.get("code") or "",
+            "uom": raw.get("uom") or disp.get("uom") or "pcs",
+            "qty": float(raw.get("qty") or 0), "returned_qty": 0.0,
+        })
+    return out
+
+
+@router.get("/challans")
+async def list_challans(request: Request, type: Optional[str] = None, status: Optional[str] = None):
+    await get_current_user(request)
+    query = {}
+    if type:
+        query["type"] = type
+    if status:
+        query["status"] = status
+    return await db.challans.find(query, {"_id": 0}).sort("created_at", -1).to_list(2000)
+
+
+@router.get("/challans/{challan_id}")
+async def get_challan(challan_id: str, request: Request):
+    await get_current_user(request)
+    c = await db.challans.find_one({"challan_id": challan_id}, {"_id": 0})
+    if not c:
+        raise HTTPException(status_code=404, detail="Challan not found")
+    return c
+
+
+@router.post("/challans")
+async def create_challan(request: Request):
+    user = await get_current_user(request)
+    require_teams(user, "admin", "store")
+    body = await request.json()
+    ctype = body.get("type")
+    if ctype not in _CHALLAN_TYPES:
+        raise HTTPException(status_code=400, detail="invalid challan type")
+    if not body.get("lines"):
+        raise HTTPException(status_code=400, detail="At least one line is required")
+    cid = _new_id("chal")
+    cno = await next_number("challan", "DC")
+    doc = {
+        "challan_id": cid, "challan_no": cno, "type": ctype,
+        "direction": body.get("direction", "outbound"),
+        "party_type": body.get("party_type", "vendor"),
+        "vendor_id": body.get("vendor_id"), "party_name": body.get("party_name", ""),
+        "ref_type": body.get("ref_type"), "ref_id": body.get("ref_id"),
+        "challan_date": body.get("challan_date") or _now()[:10],
+        "expected_return_date": body.get("expected_return_date"),
+        "notes": body.get("notes", ""),
+        "lines": await _build_challan_lines(body.get("lines", [])),
+        "status": "open",
+        "timeline": [_timeline_entry("created", user["email"])],
+        "created_by": user["email"], "created_at": _now(), "updated_at": _now(),
+    }
+    await db.challans.insert_one(doc)
+    return await db.challans.find_one({"challan_id": cid}, {"_id": 0})

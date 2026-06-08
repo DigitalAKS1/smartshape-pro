@@ -142,6 +142,7 @@ async def connect_db():
     await db.goods_receipts.create_index("po_id", background=True)
     await db.goods_receipts.create_index([("status", 1), ("created_at", -1)], background=True)
     await db.procurement_stage_logs.create_index([("doc_type", 1), ("doc_id", 1), ("at", 1)], background=True)
+    await db.challans.create_index([("type", 1), ("status", 1), ("created_at", -1)], background=True)
 
     logging.info("Database indexes created/verified (%d collections indexed)", 30)
 
