@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, Plus, Pause, Play, Pencil, Trash2, Upload, Download } from 'lucide-react';
+import { X, Plus, Pause, Play, Pencil, Trash2, Upload, Download, Search } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { useReminders } from '../../../hooks/useReminders';
 import ReminderDialog from './ReminderDialog';
@@ -61,6 +61,8 @@ export default function RemindersPanel({ onClose, card, textPri, textSec, textMu
   const r = useReminders();
   const [dialog, setDialog] = useState(null);   // {reminder?} | null
   const [importPreview, setImportPreview] = useState(null);  // parsed rows
+  const [query, setQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');   // all | active | paused
 
   const onFile = async (e) => {
     const file = e.target.files?.[0];
@@ -94,6 +96,14 @@ export default function RemindersPanel({ onClose, card, textPri, textSec, textMu
 
   const fmtNext = (rem) => `${rem.next_occurrence || rem.due_date}${rem.due_time ? ' ' + rem.due_time : ''}`;
   const chanStr = (c) => [c?.email && 'Email', c?.whatsapp && 'WhatsApp'].filter(Boolean).join(' + ') || '—';
+
+  const q = query.trim().toLowerCase();
+  const shown = r.reminders.filter(rem => {
+    if (statusFilter === 'active' && rem.status === 'paused') return false;
+    if (statusFilter === 'paused' && rem.status !== 'paused') return false;
+    if (q && !`${rem.title} ${rem.category} ${rem.notes || ''}`.toLowerCase().includes(q)) return false;
+    return true;
+  });
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
@@ -131,9 +141,27 @@ export default function RemindersPanel({ onClose, card, textPri, textSec, textMu
               </button>
             </div>
           ) : (
-            <div className="space-y-2">
-              {r.reminders.map(rem => (
-                <div key={rem.reminder_id} className={`border border-[var(--border-color)] rounded-xl p-3 flex items-center gap-3 ${rem.status === 'paused' ? 'opacity-60' : ''}`}>
+            <>
+              <div className="flex items-center gap-2 mb-3">
+                <div className="relative flex-1">
+                  <Search className={`absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 ${textMuted}`} />
+                  <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search reminders…"
+                    aria-label="Search reminders"
+                    className={`w-full h-8 pl-8 pr-2.5 rounded-lg text-xs border border-[var(--border-color)] ${inputCls}`} />
+                </div>
+                <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} aria-label="Filter by status"
+                  className={`h-8 px-2 rounded-lg text-xs border border-[var(--border-color)] ${inputCls}`}>
+                  <option value="all">All ({r.reminders.length})</option>
+                  <option value="active">Active</option>
+                  <option value="paused">Paused</option>
+                </select>
+              </div>
+              {shown.length === 0 ? (
+                <p className={`text-center text-xs ${textMuted} py-8`}>No reminders match your search.</p>
+              ) : (
+                <div className="space-y-2">
+                  {shown.map(rem => (
+                    <div key={rem.reminder_id} className={`border border-[var(--border-color)] rounded-xl p-3 flex items-center gap-3 ${rem.status === 'paused' ? 'opacity-60' : ''}`}>
                   <span className="w-1.5 h-9 rounded-full flex-shrink-0" style={{ background: ORANGE }} />
                   <div className="flex-1 min-w-0">
                     <p className={`text-sm font-semibold ${textPri} truncate`}>{rem.title}
@@ -150,9 +178,11 @@ export default function RemindersPanel({ onClose, card, textPri, textSec, textMu
                   </button>
                   <button onClick={() => setDialog({ reminder: rem })} className={`p-1.5 rounded ${textMuted} hover:bg-[var(--bg-hover)]`} title="Edit"><Pencil className="h-4 w-4" /></button>
                   <button onClick={() => window.confirm('Delete this reminder?') && r.remove(rem.reminder_id)} className={`p-1.5 rounded ${textMuted} hover:text-red-400`} title="Delete"><Trash2 className="h-4 w-4" /></button>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
+              )}
+            </>
           )}
         </div>
       </div>
