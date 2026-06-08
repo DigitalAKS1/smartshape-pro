@@ -51,9 +51,9 @@ export default function DelegationCalendar({ onEventClick, card, textPri, textSe
       <style>{`@keyframes calReveal{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}} .cal-reveal{animation:calReveal .2s ease both}`}</style>
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-1.5">
-          <button onClick={c.goPrev} className={`p-2 rounded-lg hover:bg-[var(--bg-hover)] ${textSec}`}><ChevronLeft className="h-4 w-4" /></button>
-          <button onClick={c.goToday} className={`px-3 py-1.5 rounded-lg text-xs font-medium border border-[var(--border-color)] ${textSec} hover:bg-[var(--bg-hover)]`}>Today</button>
-          <button onClick={c.goNext} className={`p-2 rounded-lg hover:bg-[var(--bg-hover)] ${textSec}`}><ChevronRight className="h-4 w-4" /></button>
+          <button onClick={c.goPrev} aria-label="Previous period" className={`p-2 rounded-lg cursor-pointer transition-colors duration-200 hover:bg-[var(--bg-hover)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#e94560]/60 ${textSec}`}><ChevronLeft className="h-4 w-4" /></button>
+          <button onClick={c.goToday} className={`px-3 py-1.5 rounded-lg text-xs font-medium border border-[var(--border-color)] cursor-pointer transition-colors duration-200 ${textSec} hover:bg-[var(--bg-hover)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#e94560]/60`}>Today</button>
+          <button onClick={c.goNext} aria-label="Next period" className={`p-2 rounded-lg cursor-pointer transition-colors duration-200 hover:bg-[var(--bg-hover)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#e94560]/60 ${textSec}`}><ChevronRight className="h-4 w-4" /></button>
           <h2 className={`text-base font-bold tracking-tight ${textPri} ml-2`}>
             {c.view === 'month' ? monthLabel
               : c.view === 'week' ? `Week of ${c.range.from}`

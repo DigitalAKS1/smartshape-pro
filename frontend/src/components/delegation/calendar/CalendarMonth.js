@@ -26,8 +26,8 @@ export default function CalendarMonth({
           const evs = eventsByDate[ds] || [];
           const sources = [...new Set(evs.map(e => e.source))];
           return (
-            <button key={i} onClick={() => onDayClick?.(d)}
-              className={`min-h-[84px] border-b border-r border-[var(--border-color)] p-1.5 text-left align-top hover:bg-[var(--bg-hover)] transition-colors ${inMonth ? '' : 'opacity-40'}`}>
+            <button key={i} onClick={() => onDayClick?.(d)} aria-label={`${ds}${evs.length ? `, ${evs.length} item${evs.length > 1 ? 's' : ''}` : ''}`}
+              className={`min-h-[84px] border-b border-r border-[var(--border-color)] p-1.5 text-left align-top cursor-pointer hover:bg-[var(--bg-hover)] transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#e94560]/60 ${inMonth ? '' : 'opacity-40'}`}>
               <div className="flex items-center justify-between">
                 <span className={`text-xs font-semibold ${isToday ? 'text-white rounded-full w-5 h-5 flex items-center justify-center' : textSec}`}
                   style={isToday ? { background: '#e94560' } : {}}>{d.getDate()}</span>

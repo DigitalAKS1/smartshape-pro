@@ -72,7 +72,7 @@ export default function EventActionDrawer({ event, onAction, onEditEvent, onSend
               {event.status ? ` · ${event.status}` : ''}
             </p>
           </div>
-          <button onClick={onClose} className={`p-1.5 rounded-lg hover:bg-[var(--bg-hover)] ${textSec}`}><X className="h-4 w-4" /></button>
+          <button onClick={onClose} aria-label="Close" className={`p-1.5 rounded-lg cursor-pointer transition-colors duration-200 hover:bg-[var(--bg-hover)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#e94560]/60 ${textSec}`}><X className="h-4 w-4" /></button>
         </div>
 
         <div className="flex-1 overflow-y-auto p-5 space-y-3">
