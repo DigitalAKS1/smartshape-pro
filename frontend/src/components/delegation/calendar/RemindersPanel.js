@@ -49,7 +49,8 @@ function rowsToReminders(csvRows) {
       amount: g('amount') ? Number(g('amount')) : null,
       recurrence: g('recurrence') || 'monthly', due_date: g('due_date'), due_time: g('due_time') || '09:00',
       lead_offsets: offsets.length ? offsets : [{ value: 1, unit: 'day' }],
-      channels: { email: chans.includes('email'), whatsapp: chans.includes('whatsapp') },
+      channels: chans ? { email: chans.includes('email'), whatsapp: chans.includes('whatsapp') }
+                      : { email: true, whatsapp: true },   // default both when column blank/absent
       recipient_emails: g('recipient_emails').split(';').map(x => x.trim()).filter(Boolean),
       recipient_phones: g('recipient_phones').split(';').map(x => x.trim()).filter(Boolean),
       shared: ['true', '1', 'yes'].includes(g('shared').toLowerCase()), notes: g('notes'),
@@ -89,7 +90,7 @@ export default function RemindersPanel({ onClose, card, textPri, textSec, textMu
     URL.revokeObjectURL(url);
   };
   const confirmImport = async () => {
-    const valid = importPreview.filter(x => x.title && x.due_date);
+    const valid = importPreview.filter(x => x.title && x.due_date && (x.channels.email || x.channels.whatsapp));
     if (valid.length) await r.bulk(valid);
     setImportPreview(null);
   };
@@ -204,7 +205,7 @@ export default function RemindersPanel({ onClose, card, textPri, textSec, textMu
             <p className={`text-sm font-semibold ${textPri} mb-2`}>Import preview — {importPreview.length} rows</p>
             <div className="space-y-1 mb-3 max-h-[50vh] overflow-y-auto">
               {importPreview.map((x, i) => {
-                const ok = x.title && x.due_date;
+                const ok = x.title && x.due_date && (x.channels.email || x.channels.whatsapp);
                 return (
                   <div key={i} className={`text-[11px] px-2 py-1 rounded ${ok ? textSec : 'text-red-400'}`}>
                     {ok ? '✓' : '✗'} {x.title || '(no title)'} — {x.recurrence} {x.due_date || '(no date)'} · {chanStr(x.channels)}

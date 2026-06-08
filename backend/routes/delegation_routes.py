@@ -6,7 +6,7 @@ from fastapi import APIRouter, Request, HTTPException, UploadFile, File, Respons
 from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime, timezone, timedelta, date
-import uuid, os, mimetypes, secrets
+import uuid, os, mimetypes, secrets, logging
 
 from database import db
 from auth_utils import get_current_user
@@ -2042,8 +2042,15 @@ async def update_reminder(reminder_id: str, request: Request):
             raise HTTPException(400, "Select at least one channel")
     if "lead_offsets" in updates:
         updates["lead_offsets"] = _clean_offsets(updates["lead_offsets"])
-    if "recipients" in updates:
-        updates["recipients"] = await _build_recipients(actor, user, {"recipients": updates["recipients"]})
+    # Recipients: the edit dialog sends recipient_emails/recipient_phones (not the stored
+    # `recipients` array), so rebuild from whatever was provided — otherwise external
+    # email/phone recipients can never be edited or removed via the UI.
+    if any(k in body for k in ("recipients", "recipient_emails", "recipient_phones")):
+        updates["recipients"] = await _build_recipients(actor, user, {
+            "recipients": body.get("recipients") or [],
+            "recipient_emails": body.get("recipient_emails") or [],
+            "recipient_phones": body.get("recipient_phones") or [],
+        })
     if "recurrence" in updates and updates["recurrence"] not in REMINDER_RECURRENCE:
         raise HTTPException(400, "Invalid recurrence")
     if updates:
@@ -2193,43 +2200,47 @@ async def dispatch_due_reminders(now=None):
     rows = await cursor.to_list(5000)
     for rem in rows:
         try:
-            hh, mm = (rem.get("due_time") or "09:00").split(":")[:2]
-            t_h, t_m = int(hh), int(mm)
-        except Exception:
-            t_h, t_m = 9, 0
-        fired = set(rem.get("fired", []))
-        new_fired = []
-        for occ in _reminder_occurrences(rem, today):
-            occ_dt = datetime(occ.year, occ.month, occ.day, t_h, t_m)
-            for off in rem.get("lead_offsets", []):
-                fire_dt = occ_dt - _offset_delta(off)
-                key = f"{occ.isoformat()}|{off['value']}{off['unit']}"
-                if key in fired:
-                    continue
-                if fire_dt <= now <= occ_dt + timedelta(days=1):
-                    if not dry:
-                        ne, nw, ni = await _enqueue_reminder(rem, occ, off)
-                        total_email += ne; total_wa += nw; total_inapp += ni
-                    new_fired.append(key)
-                    fired_log.append({"reminder_id": rem["reminder_id"],
-                                      "occurrence": occ.isoformat(), "offset": f"{off['value']}{off['unit']}"})
-        # advance / close
-        updates = {}
-        if new_fired:
-            keep = [k for k in (list(fired) + new_fired)]  # prune below
-            # keep only keys whose occurrence date is within the last 60 days
-            cutoff = today - timedelta(days=60)
-            keep = [k for k in keep if _key_date_ok(k, cutoff)]
-            updates["fired"] = keep
-        if rem.get("recurrence") == "once":
-            occ = date.fromisoformat(rem["due_date"])
-            occ_dt = datetime(occ.year, occ.month, occ.day, t_h, t_m)
-            all_keys = {f"{occ.isoformat()}|{o['value']}{o['unit']}" for o in rem.get("lead_offsets", [])}
-            if now > occ_dt and all_keys.issubset(fired.union(new_fired)):
-                updates["status"] = "done"
-        if updates and not dry:
-            updates["updated_at"] = now_iso()
-            await db.reminders.update_one({"reminder_id": rem["reminder_id"]}, {"$set": updates})
+            try:
+                hh, mm = (rem.get("due_time") or "09:00").split(":")[:2]
+                t_h, t_m = int(hh), int(mm)
+            except Exception:
+                t_h, t_m = 9, 0
+            fired = set(rem.get("fired", []))
+            new_fired = []
+            for occ in _reminder_occurrences(rem, today):
+                occ_dt = datetime(occ.year, occ.month, occ.day, t_h, t_m)
+                for off in rem.get("lead_offsets", []):
+                    fire_dt = occ_dt - _offset_delta(off)
+                    key = f"{occ.isoformat()}|{off['value']}{off['unit']}"
+                    if key in fired:
+                        continue
+                    if fire_dt <= now <= occ_dt + timedelta(days=1):
+                        if not dry:
+                            ne, nw, ni = await _enqueue_reminder(rem, occ, off)
+                            total_email += ne; total_wa += nw; total_inapp += ni
+                        new_fired.append(key)
+                        fired_log.append({"reminder_id": rem["reminder_id"],
+                                          "occurrence": occ.isoformat(), "offset": f"{off['value']}{off['unit']}"})
+            # advance / close
+            updates = {}
+            if new_fired:
+                keep = [k for k in (list(fired) + new_fired)]  # prune below
+                # keep only keys whose occurrence date is within the last 60 days
+                cutoff = today - timedelta(days=60)
+                keep = [k for k in keep if _key_date_ok(k, cutoff)]
+                updates["fired"] = keep
+            if rem.get("recurrence") == "once":
+                occ = date.fromisoformat(rem["due_date"])
+                occ_dt = datetime(occ.year, occ.month, occ.day, t_h, t_m)
+                all_keys = {f"{occ.isoformat()}|{o['value']}{o['unit']}" for o in rem.get("lead_offsets", [])}
+                if now > occ_dt and all_keys.issubset(fired.union(new_fired)):
+                    updates["status"] = "done"
+            if updates and not dry:
+                updates["updated_at"] = now_iso()
+                await db.reminders.update_one({"reminder_id": rem["reminder_id"]}, {"$set": updates})
+        except Exception as exc:
+            logging.warning(f"[reminders] skipping {rem.get('reminder_id')}: {exc}")
+            continue
     return {"enqueued_email": total_email, "enqueued_wa": total_wa,
             "enqueued_inapp": total_inapp, "fired": fired_log, "dry_run": dry}
 
