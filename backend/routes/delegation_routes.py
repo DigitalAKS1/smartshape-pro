@@ -1489,9 +1489,18 @@ async def update_event(event_id: str, request: Request):
     if "title" in updates and not (updates["title"] or "").strip():
         raise HTTPException(400, "Title is required")
     if "collaborator_emp_ids" in body or "collaborator_emails" in body:
-        updates["collaborators"] = await _build_collaborators(
+        fresh = await _build_collaborators(
             ev["created_by"], ev["created_by_emp_id"], "",
             body.get("collaborator_emp_ids"), body.get("collaborator_emails"))
+        # Preserve existing Accept/Decline responses for collaborators who carry over —
+        # rebuilding from scratch would reset everyone to "pending".
+        prev_resp = {c["email"].lower(): c.get("response")
+                     for c in ev.get("collaborators", []) if c.get("email")}
+        for c in fresh:
+            r = prev_resp.get((c.get("email") or "").lower())
+            if r:
+                c["response"] = r
+        updates["collaborators"] = fresh
     if updates:
         updates["updated_at"] = now_iso()
         await db.cal_events.update_one({"event_id": event_id}, {"$set": updates})
@@ -1523,13 +1532,18 @@ async def respond_event(event_id: str, request: Request):
     if not ev:
         raise HTTPException(404, "Event not found")
     email = (user.get("email") or "").lower()
-    matched = any((c.get("emp_id") and c["emp_id"] == actor["emp_id"]) or
-                  (c.get("email", "").lower() == email) for c in ev.get("collaborators", []))
-    if not matched:
+    collabs = ev.get("collaborators", [])
+    # Match + update by ARRAY INDEX (case-insensitive). The old positional `$` update used
+    # the raw login email, so an RSVP from Alice@X.com (stored) vs alice@x.com (login)
+    # matched zero array elements and silently no-op'd.
+    idx = next((i for i, c in enumerate(collabs)
+                if (c.get("emp_id") and c["emp_id"] == actor["emp_id"])
+                or (c.get("email", "").lower() == email)), None)
+    if idx is None:
         raise HTTPException(403, "You are not a collaborator on this event")
     await db.cal_events.update_one(
-        {"event_id": event_id, "collaborators.email": user.get("email")},
-        {"$set": {"collaborators.$.response": resp, "updated_at": now_iso()}})
+        {"event_id": event_id},
+        {"$set": {f"collaborators.{idx}.response": resp, "updated_at": now_iso()}})
     return await db.cal_events.find_one({"event_id": event_id}, {"_id": 0})
 
 
@@ -1574,6 +1588,32 @@ def _event_join_url(ev):
     return f"{_base_url()}/zoom/{ev['event_id']}"
 
 
+def _ics_param(s):
+    """Sanitize + double-quote an iCalendar parameter value (e.g. CN). RFC 5545 §3.1
+    requires PARAM-VALUEs containing space/`:`/`;`/`,` to be DQUOTE-enclosed."""
+    s = (s or "").replace("\\", "").replace('"', "").replace("\r", " ").replace("\n", " ")
+    return f'"{s}"'
+
+
+def _ics_fold(line):
+    """RFC 5545 §3.1 content-line folding at 75 octets (UTF-8 safe). Apple Calendar
+    silently drops VEVENTs containing unfolded long lines."""
+    b = line.encode("utf-8")
+    if len(b) <= 75:
+        return line
+    out, pos, first = [], 0, True
+    while pos < len(b):
+        n = 75 if first else 74
+        chunk = b[pos:pos + n]
+        # don't split a multibyte char: back off trailing continuation bytes
+        while len(chunk) > 1 and (chunk[-1] & 0xC0) == 0x80:
+            chunk = chunk[:-1]
+        out.append(chunk.decode("utf-8", errors="ignore"))
+        pos += len(chunk)
+        first = False
+    return "\r\n ".join(out)
+
+
 def _build_vevent(ev, *, method, sequence):
     """VEVENT lines for an event under the given iCalendar METHOD."""
     dtstart, is_date = _ics_dt(ev["date"], ev.get("start_time"))
@@ -1582,7 +1622,9 @@ def _build_vevent(ev, *, method, sequence):
     lines = ["BEGIN:VEVENT", f"UID:{_ev_uid(ev)}", f"DTSTAMP:{stamp}",
              f"SEQUENCE:{int(sequence)}"]
     if is_date:
-        lines += [f"DTSTART;VALUE=DATE:{dtstart}", f"DTEND;VALUE=DATE:{dtstart}"]
+        # DATE-typed DTEND is EXCLUSIVE (RFC 5545 §3.6.1) → must be the day after.
+        end_date = (date.fromisoformat(ev["date"]) + timedelta(days=1)).strftime("%Y%m%d")
+        lines += [f"DTSTART;VALUE=DATE:{dtstart}", f"DTEND;VALUE=DATE:{end_date}"]
     else:
         lines += [f"DTSTART;TZID=Asia/Kolkata:{dtstart}", f"DTEND;TZID=Asia/Kolkata:{dtend}"]
     lines.append(f"SUMMARY:{_ics_escape(ev.get('title'))}")
@@ -1604,11 +1646,11 @@ def _build_vevent(ev, *, method, sequence):
     # ORGANIZER = configured sender mailbox; CN = creator name (see SP3 spec §0).
     org_email = _ORG_EMAIL_CACHE.get("email") or ev.get("created_by") or ""
     if org_email:
-        cn = _ics_escape(ev.get("created_by") or org_email)
+        cn = _ics_param(ev.get("created_by") or org_email)
         lines.append(f"ORGANIZER;CN={cn}:mailto:{org_email}")
     for c in ev.get("collaborators", []):
         if c.get("email"):
-            cn = _ics_escape(c.get("name") or c["email"])
+            cn = _ics_param(c.get("name") or c["email"])
             if method == "REQUEST":
                 lines.append(f"ATTENDEE;CN={cn};ROLE=REQ-PARTICIPANT;"
                              f"PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:{c['email']}")
@@ -1625,7 +1667,7 @@ def _wrap_vcalendar(method, vevent_blocks):
     for block in vevent_blocks:
         out += block
     out.append("END:VCALENDAR")
-    return "\r\n".join(out) + "\r\n"
+    return "\r\n".join(_ics_fold(line) for line in out) + "\r\n"
 
 
 @router.get("/events/{event_id}.ics")
@@ -1736,9 +1778,14 @@ async def invite_event(event_id: str, request: Request):
         elif em.lower() != creator_email:
             recipients.append(em)
     result = await _send_invite(ev, method=method, sequence=sequence, recipients=recipients)
-    await db.cal_events.update_one({"event_id": event_id}, {"$set": {"ext_sync": {
-        "ics_uid": _ev_uid(ev), "sequence": sequence, "last_method": method,
-        "invited_emails": recipients, "invited_at": now_iso()}, "updated_at": now_iso()}})
+    # When the prod CALENDAR_INVITE_TEST_TO guard is redirecting to a safe inbox, the real
+    # collaborators never received anything — so DON'T advance ext_sync. Otherwise the first
+    # true send (after the guard is removed) would carry SEQUENCE>0 as an "update" to an event
+    # the recipient's calendar has never seen. DRY_RUN (automated tests, no TEST_TO) still persists.
+    if not os.environ.get("CALENDAR_INVITE_TEST_TO", "").strip():
+        await db.cal_events.update_one({"event_id": event_id}, {"$set": {"ext_sync": {
+            "ics_uid": _ev_uid(ev), "sequence": sequence, "last_method": method,
+            "invited_emails": result["sent"], "invited_at": now_iso()}, "updated_at": now_iso()}})
     out = {"kind": kind, "method": method, "sequence": sequence,
            "sent": result["sent"], "skipped": skipped, "dry_run": result["dry_run"]}
     if result["dry_run"]:
