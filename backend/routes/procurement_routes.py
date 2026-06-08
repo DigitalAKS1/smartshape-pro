@@ -307,6 +307,8 @@ async def item_catalog(request: Request, q: Optional[str] = None, source: Option
                 "gst_pct": d.get("gst_pct", 0),
                 "default_rate": d.get("purchase_rate", 0) or 0,
                 "stock_qty": d.get("stock_qty", 0),
+                "reserved_qty": d.get("reserved_qty", 0),
+                "available_qty": (d.get("stock_qty", 0) or 0) - (d.get("reserved_qty", 0) or 0),
             })
 
     if source in (None, "purchase_item"):
@@ -324,6 +326,8 @@ async def item_catalog(request: Request, q: Optional[str] = None, source: Option
                 "gst_pct": it.get("gst_pct", 0),
                 "default_rate": it.get("default_rate", 0) or 0,
                 "stock_qty": it.get("stock_qty", 0),
+                "reserved_qty": 0,
+                "available_qty": it.get("stock_qty", 0) or 0,
             })
 
     if q:
@@ -584,9 +588,10 @@ async def _price_po_line(vendor_id: str, tax_mode: str, raw: dict) -> dict:
     gst_pct = float(gst_pct or 0)
     uom = raw.get("uom") or vp.get("uom") or disp.get("uom") or "pcs"
     name = raw.get("name") or vp.get("name") or disp.get("name")
+    code = raw.get("code") or vp.get("code") or disp.get("code") or ""
     gst = compute_gst_line(qty, rate, gst_pct, tax_mode)
     return {
-        "item_ref": ref, "name": name, "image_url": disp.get("image_url"),
+        "item_ref": ref, "name": name, "code": code, "image_url": disp.get("image_url"),
         "hsn": hsn, "qty": qty, "uom": uom, "rate": round2(rate), "gst_pct": gst_pct,
         **gst,
     }
@@ -627,6 +632,7 @@ async def _build_req_lines(raw_lines: List[dict]) -> List[dict]:
         out.append({
             "item_ref": ref,
             "name": raw.get("name") or disp.get("name"),
+            "code": raw.get("code") or disp.get("code") or "",
             "image_url": disp.get("image_url"),
             "qty": float(raw.get("qty") or 0),
             "uom": raw.get("uom") or disp.get("uom") or "pcs",
@@ -944,6 +950,7 @@ async def create_goods_receipt(po_id: str, request: Request):
             continue  # this line is already fully received on an earlier GRN
         lines.append({
             "po_line_index": i, "item_ref": l["item_ref"], "name": l["name"],
+            "code": l.get("code", ""),
             "image_url": l.get("image_url"), "ordered_qty": ordered,
             "outstanding_qty": outstanding, "received_qty": outstanding,
             "rate": l.get("rate", 0),
