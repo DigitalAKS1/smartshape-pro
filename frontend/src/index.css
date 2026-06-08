@@ -44,7 +44,7 @@
 
   --text-primary:  #0f172a;
   --text-secondary:#475569;
-  --text-muted:    #94a3b8;
+  --text-muted:    #5e6a7a;
 
   --accent:        #e94560;
   --accent-hover:  #d63050;
@@ -69,7 +69,7 @@
 
   --text-primary:  #f1f5f9;
   --text-secondary:#94a3b8;
-  --text-muted:    #4b5568;
+  --text-muted:    #8a93a8;
 
   --accent:        #e94560;
   --accent-hover:  #f05c75;
@@ -95,7 +95,7 @@
     --secondary:           214 32% 91%;
     --secondary-foreground:222 47% 7%;
     --muted:               214 32% 91%;
-    --muted-foreground:    215 16% 47%;
+    --muted-foreground:    215 18% 40%;
     --accent:              351 78% 60%;
     --accent-foreground:   0 0% 100%;
     --destructive:         0 84% 60%;
