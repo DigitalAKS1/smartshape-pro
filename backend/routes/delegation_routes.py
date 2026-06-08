@@ -2019,7 +2019,9 @@ async def list_reminders(request: Request):
     q = {"status": {"$ne": "done"},
          "$or": [{"created_by_emp_id": actor["emp_id"]}, {"shared": True}]}
     rows = await db.reminders.find(q, {"_id": 0}).to_list(2000)
-    rows.sort(key=lambda r: (r.get("due_date", ""), r.get("due_time", "")))
+    for r in rows:
+        r["next_occurrence"] = _next_occurrence(r)
+    rows.sort(key=lambda r: (r.get("next_occurrence") or r.get("due_date", ""), r.get("due_time", "")))
     return {"reminders": rows}
 
 
@@ -2119,6 +2121,17 @@ def _reminder_occurrences(rem, around):
             y = around.year + dy
             out.append(date(y, anchor.month, _clamp_day(y, anchor.month, anchor.day)))
     return out
+
+
+def _next_occurrence(rem, from_date=None):
+    """ISO date of the next occurrence on/after from_date (today by default)."""
+    from_date = from_date or date.today()
+    if rem.get("recurrence") == "once":
+        return rem.get("due_date")
+    occs = sorted(_reminder_occurrences(rem, from_date))
+    future = [o for o in occs if o >= from_date]
+    pick = future[0] if future else (occs[-1] if occs else None)
+    return pick.isoformat() if pick else rem.get("due_date")
 
 
 def _offset_delta(o):

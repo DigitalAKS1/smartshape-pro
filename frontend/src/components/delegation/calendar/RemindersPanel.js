@@ -92,7 +92,7 @@ export default function RemindersPanel({ onClose, card, textPri, textSec, textMu
     setImportPreview(null);
   };
 
-  const fmtNext = (rem) => `${rem.due_date}${rem.due_time ? ' ' + rem.due_time : ''}`;
+  const fmtNext = (rem) => `${rem.next_occurrence || rem.due_date}${rem.due_time ? ' ' + rem.due_time : ''}`;
   const chanStr = (c) => [c?.email && 'Email', c?.whatsapp && 'WhatsApp'].filter(Boolean).join(' + ') || '—';
 
   return (
