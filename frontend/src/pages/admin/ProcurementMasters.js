@@ -40,7 +40,7 @@ const EMPTY_VENDOR = {
   address: '', city: '', state: '', state_code: '', payment_terms: '', is_active: true,
 };
 const EMPTY_ITEM = {
-  name: '', category: '', uom: 'pcs', hsn: '', gst_pct: 0, default_rate: 0, min_level: 0, stock_qty: 0, is_active: true,
+  name: '', code: '', category: '', uom: 'pcs', hsn: '', gst_pct: 0, default_rate: 0, min_level: 0, stock_qty: 0, is_active: true,
 };
 
 export default function ProcurementMasters() {
@@ -214,6 +214,7 @@ export default function ProcurementMasters() {
   const itemColumns = [
     { key: 'image_url', label: '', render: (it) => <Thumb url={it.image_url} /> },
     { key: 'name', label: 'Item', primary: true },
+    { key: 'code', label: 'Code', mono: true },
     { key: 'category', label: 'Category', hidden: 'sm' },
     { key: 'uom', label: 'UOM', hidden: 'md' },
     { key: 'hsn', label: 'HSN', hidden: 'md', mono: true },
@@ -407,6 +408,7 @@ export default function ProcurementMasters() {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div><Label className={`${textSec} text-xs`}>Item Name *</Label><Input value={itemForm.name} onChange={e => setItemForm({ ...itemForm, name: e.target.value })} className={inputCls} placeholder="e.g. Corrugated Box 12x8" data-testid="pitem-name-input" /></div>
                 <div><Label className={`${textSec} text-xs`}>Category</Label><Input value={itemForm.category} onChange={e => setItemForm({ ...itemForm, category: e.target.value })} className={inputCls} placeholder="Packaging / Raw material" /></div>
+                <div><Label className={`${textSec} text-xs`}>Code</Label><Input value={itemForm.code} onChange={e => setItemForm({ ...itemForm, code: e.target.value })} className={inputCls} placeholder="PKG-01" /></div>
                 <div><Label className={`${textSec} text-xs`}>UOM</Label><Input value={itemForm.uom} onChange={e => setItemForm({ ...itemForm, uom: e.target.value })} className={inputCls} placeholder="pcs / kg / box" /></div>
                 <div><Label className={`${textSec} text-xs`}>HSN</Label><Input value={itemForm.hsn} onChange={e => setItemForm({ ...itemForm, hsn: e.target.value })} className={inputCls} /></div>
                 <div><Label className={`${textSec} text-xs`}>GST %</Label><Input type="number" value={itemForm.gst_pct} onChange={e => setItemForm({ ...itemForm, gst_pct: e.target.value })} className={inputCls} /></div>
