@@ -2157,7 +2157,8 @@ async def _enqueue_reminder(rem, occ, offset):
     ch = rem.get("channels", {})
     text = _reminder_body_text(rem, occ, offset)
     subject = f"Reminder: {rem['title']} — due {occ.isoformat()}"
-    n_email = n_wa = 0
+    n_email = n_wa = n_inapp = 0
+    seen_emp = set()
     for r in rem.get("recipients", []):
         if ch.get("email") and (r.get("email") and "@" in r["email"]):
             await db.email_scheduled.insert_one({
@@ -2169,7 +2170,14 @@ async def _enqueue_reminder(rem, occ, offset):
                 "scheduled_id": gen_id("wsch"), "campaign_id": "reminder", "status": "pending",
                 "phone": r["phone"], "message": text, "created_at": now_iso()})
             n_wa += 1
-    return n_email, n_wa
+        # in-app: always notify internal user recipients so a reminder is never silently
+        # missed even when email/WhatsApp aren't configured (free, zero-config channel).
+        emp_id = r.get("emp_id")
+        if r.get("type") == "user" and emp_id and emp_id not in seen_emp:
+            seen_emp.add(emp_id)
+            await _notify(emp_id, "reminder", subject, text)
+            n_inapp += 1
+    return n_email, n_wa, n_inapp
 
 
 async def dispatch_due_reminders(now=None):
@@ -2179,7 +2187,7 @@ async def dispatch_due_reminders(now=None):
     if now.tzinfo:
         now = now.replace(tzinfo=None)
     today = now.date()
-    total_email = total_wa = 0
+    total_email = total_wa = total_inapp = 0
     fired_log = []
     cursor = db.reminders.find({"status": "active"}, {"_id": 0})
     rows = await cursor.to_list(5000)
@@ -2200,8 +2208,8 @@ async def dispatch_due_reminders(now=None):
                     continue
                 if fire_dt <= now <= occ_dt + timedelta(days=1):
                     if not dry:
-                        ne, nw = await _enqueue_reminder(rem, occ, off)
-                        total_email += ne; total_wa += nw
+                        ne, nw, ni = await _enqueue_reminder(rem, occ, off)
+                        total_email += ne; total_wa += nw; total_inapp += ni
                     new_fired.append(key)
                     fired_log.append({"reminder_id": rem["reminder_id"],
                                       "occurrence": occ.isoformat(), "offset": f"{off['value']}{off['unit']}"})
@@ -2222,7 +2230,8 @@ async def dispatch_due_reminders(now=None):
         if updates and not dry:
             updates["updated_at"] = now_iso()
             await db.reminders.update_one({"reminder_id": rem["reminder_id"]}, {"$set": updates})
-    return {"enqueued_email": total_email, "enqueued_wa": total_wa, "fired": fired_log, "dry_run": dry}
+    return {"enqueued_email": total_email, "enqueued_wa": total_wa,
+            "enqueued_inapp": total_inapp, "fired": fired_log, "dry_run": dry}
 
 
 def _key_date_ok(key, cutoff):

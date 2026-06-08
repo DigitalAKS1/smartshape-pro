@@ -1363,3 +1363,31 @@ async def create_challan(request: Request):
     }
     await db.challans.insert_one(doc)
     return await db.challans.find_one({"challan_id": cid}, {"_id": 0})
+
+
+@router.post("/challans/{challan_id}/record-return")
+async def record_challan_return(challan_id: str, request: Request):
+    """Add returned quantities per line; set status open/partially_returned/closed."""
+    user = await get_current_user(request)
+    require_teams(user, "admin", "store")
+    c = await db.challans.find_one({"challan_id": challan_id}, {"_id": 0})
+    if not c:
+        raise HTTPException(status_code=404, detail="Challan not found")
+    if c.get("status") == "closed":
+        raise HTTPException(status_code=400, detail="Challan already closed")
+    body = await request.json()
+    add = {int(l["index"]): float(l.get("returned_qty", 0) or 0) for l in body.get("lines", [])}
+    lines = c.get("lines", [])
+    for idx, qty in add.items():
+        if 0 <= idx < len(lines):
+            prev = float(lines[idx].get("returned_qty", 0) or 0)
+            cap = float(lines[idx].get("qty", 0) or 0)
+            lines[idx]["returned_qty"] = round2(min(cap, prev + qty))
+    fully = all(float(l.get("returned_qty", 0) or 0) >= float(l.get("qty", 0) or 0) for l in lines)
+    any_ret = any(float(l.get("returned_qty", 0) or 0) > 0 for l in lines)
+    status = "closed" if fully else ("partially_returned" if any_ret else "open")
+    await db.challans.update_one(
+        {"challan_id": challan_id},
+        {"$set": {"lines": lines, "status": status, "updated_at": _now()},
+         "$push": {"timeline": _timeline_entry("return_recorded", user["email"])}})
+    return await db.challans.find_one({"challan_id": challan_id}, {"_id": 0})
