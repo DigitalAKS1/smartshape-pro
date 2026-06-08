@@ -531,20 +531,22 @@ async def delete_qc_template(template_id: str, request: Request):
 # ==================== ITEM RESOLUTION HELPERS ====================
 
 async def _item_display(item_ref: dict) -> dict:
-    """Resolve name/image/hsn/gst/uom/default_rate for a {source,id} ref."""
+    """Resolve name/image/hsn/gst/uom/default_rate/code for a {source,id} ref."""
     ref = item_ref or {}
     src, _id = ref.get("source"), ref.get("id")
     if src == "die":
         d = await db.dies.find_one({"die_id": _id}, {"_id": 0}) or {}
-        return {"name": d.get("name", _id), "image_url": d.get("image_url"),
+        return {"name": d.get("name", _id), "code": d.get("code", ""),
+                "image_url": d.get("image_url"),
                 "hsn": d.get("hsn", ""), "gst_pct": d.get("gst_pct", 0),
                 "uom": "pcs", "default_rate": d.get("purchase_rate", 0) or 0}
     if src == "purchase_item":
         it = await db.purchase_items.find_one({"purchase_item_id": _id}, {"_id": 0}) or {}
-        return {"name": it.get("name", _id), "image_url": it.get("image_url"),
+        return {"name": it.get("name", _id), "code": it.get("code", ""),
+                "image_url": it.get("image_url"),
                 "hsn": it.get("hsn", ""), "gst_pct": it.get("gst_pct", 0),
                 "uom": it.get("uom", "pcs"), "default_rate": it.get("default_rate", 0) or 0}
-    return {"name": str(_id), "image_url": None, "hsn": "", "gst_pct": 0,
+    return {"name": str(_id), "code": "", "image_url": None, "hsn": "", "gst_pct": 0,
             "uom": "pcs", "default_rate": 0}
 
 
