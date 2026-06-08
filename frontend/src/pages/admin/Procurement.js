@@ -144,6 +144,8 @@ function KpiCard({ icon: Icon, label, value, sub, tone = 'text-[#e94560]', onCli
 function DashboardTab({ onJump }) {
   const [s, setS] = useState(null);
   useEffect(() => { procurement.summary().then(r => setS(r.data)).catch(() => setS(null)); }, []);
+  const [report, setReport] = useState([]);
+  useEffect(() => { procurement.poReport().then(r => setReport(r.data || [])).catch(() => {}); }, []);
 
   if (!s) return <div className="flex items-center justify-center h-48"><div className="animate-spin rounded-full h-10 w-10 border-4 border-[#e94560] border-t-transparent" /></div>;
 
@@ -221,6 +223,30 @@ function DashboardTab({ onJump }) {
             ))}
             {(s.recent_pos || []).length === 0 && <p className={`text-xs ${textMuted} text-center py-3`}>No purchase orders yet.</p>}
           </div>
+        </div>
+      </div>
+
+      <div className={`${card} border rounded-md p-4`}>
+        <h3 className={`text-sm font-medium ${textPri} mb-3`}>Open PO balances ({report.length} lines)</h3>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead><tr className="bg-[var(--bg-primary)]">{['PO', 'Vendor', 'Item', 'Code', 'Ordered', 'Received', 'Balance', 'Status'].map(h => <th key={h} className={`text-left text-[11px] uppercase py-2 px-2 ${textMuted}`}>{h}</th>)}</tr></thead>
+            <tbody>
+              {report.map((r, i) => (
+                <tr key={i} className="border-t border-[var(--border-color)]">
+                  <td className={`py-2 px-2 ${textPri}`}>{r.po_no}</td>
+                  <td className={`py-2 px-2 ${textSec}`}>{r.vendor_name}</td>
+                  <td className={`py-2 px-2 ${textSec}`}>{r.name}</td>
+                  <td className={`py-2 px-2 ${textMuted} font-mono text-xs`}>{r.code || '—'}</td>
+                  <td className={`py-2 px-2 ${textSec}`}>{r.ordered_qty}</td>
+                  <td className={`py-2 px-2 ${textSec}`}>{r.received_qty}</td>
+                  <td className={`py-2 px-2 font-medium ${r.balance_qty > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>{r.balance_qty}</td>
+                  <td className="py-2 px-2"><Badge map={PO_STATUS} value={r.status} /></td>
+                </tr>
+              ))}
+              {report.length === 0 && <tr><td colSpan={8} className={`py-6 text-center ${textMuted}`}>No open PO balances.</td></tr>}
+            </tbody>
+          </table>
         </div>
       </div>
     </div>

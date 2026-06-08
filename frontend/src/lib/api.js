@@ -847,6 +847,7 @@ export const procurement = {
   itemCatalog: (params = {}) => API.get('/procurement/item-catalog', { params }),
   // Dashboard KPIs
   summary: () => API.get('/procurement/summary'),
+  poReport: (onlyOpen = true) => API.get('/procurement/po-report', { params: { only_open: onlyOpen } }),
   // Vendor price list
   vendorItems: {
     getAll: (params = {}) => API.get('/vendor-items', { params }),
