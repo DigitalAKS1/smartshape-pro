@@ -12,6 +12,7 @@ import {
 import { toast } from 'sonner';
 import { procurement } from '../../lib/api';
 import ItemPicker from '../../components/procurement/ItemPicker';
+import DemandPanel from '../../components/procurement/DemandPanel';
 import { ReceivingTab, ReturnsTab } from '../../components/procurement/ReceivingQC';
 
 const BACKEND = process.env.REACT_APP_BACKEND_URL || '';
@@ -392,6 +393,7 @@ function PurchaseOrdersTab({ vendors }) {
   const [list, setList] = useState([]);
   const [formOpen, setFormOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [demandOpen, setDemandOpen] = useState(false);
   const [vendorId, setVendorId] = useState('');
   const [terms, setTerms] = useState('');
   const [expected, setExpected] = useState('');
@@ -513,6 +515,7 @@ function PurchaseOrdersTab({ vendors }) {
             <div className="flex items-center justify-between">
               <Label className={`${textSec} text-xs`}>Items</Label>
               <Button size="sm" variant="outline" onClick={() => setPickerOpen(true)} className="border-[var(--border-color)] text-[var(--text-secondary)] h-7" data-testid="po-add-items"><Plus className="h-3 w-3 mr-1" />Add Items</Button>
+              <Button size="sm" variant="outline" onClick={() => setDemandOpen(true)} className="border-[var(--border-color)] text-[var(--text-secondary)] h-7 ml-2">From Sales Orders</Button>
             </div>
             <LineRows lines={lines} setLines={setLines} withRate />
             {lines.length > 0 && (
@@ -609,6 +612,7 @@ function PurchaseOrdersTab({ vendors }) {
       </Dialog>
       <ItemPicker open={editPickerOpen} onClose={() => setEditPickerOpen(false)} onConfirm={(p) => setEditLines(prev => [...prev, ...p])} />
       <ItemPicker open={pickerOpen} onClose={() => setPickerOpen(false)} onConfirm={addPicked} />
+      <DemandPanel open={demandOpen} onClose={() => setDemandOpen(false)} onAdd={(line) => setLines(prev => [...prev, line])} />
     </div>
   );
 }
