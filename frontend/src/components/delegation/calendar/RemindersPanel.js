@@ -116,11 +116,19 @@ export default function RemindersPanel({ onClose, card, textPri, textSec, textMu
 
         <div className="flex-1 overflow-y-auto p-5">
           {r.loading ? (
-            <p className={`text-sm ${textMuted}`}>Loading…</p>
+            <div className="flex items-center justify-center py-12">
+              <div className="animate-spin rounded-full h-7 w-7 border-4 border-[#f97316] border-t-transparent" />
+            </div>
           ) : r.reminders.length === 0 ? (
             <div className="text-center py-12">
-              <p className={`text-sm ${textSec}`}>No reminders yet.</p>
-              <p className={`text-[11px] ${textMuted} mt-1`}>Add subscriptions, loan EMIs or insurance premiums — get pinged on WhatsApp + email before they're due.</p>
+              <div className="mx-auto mb-3 w-12 h-12 rounded-full flex items-center justify-center" style={{ background: ORANGE + '1f' }}>
+                <Plus className="h-6 w-6" style={{ color: ORANGE }} />
+              </div>
+              <p className={`text-sm font-semibold ${textPri}`}>No reminders yet</p>
+              <p className={`text-[11px] ${textMuted} mt-1 max-w-xs mx-auto`}>Add subscriptions, loan EMIs or insurance premiums — get pinged on WhatsApp + email before they're due.</p>
+              <button onClick={() => setDialog({})} className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold text-white" style={{ background: ORANGE }}>
+                <Plus className="h-3.5 w-3.5" /> Add your first reminder
+              </button>
             </div>
           ) : (
             <div className="space-y-2">
@@ -154,6 +162,7 @@ export default function RemindersPanel({ onClose, card, textPri, textSec, textMu
           onSave={async (payload, editId) => {
             const ok = editId ? await r.update(editId, payload) : await r.create(payload);
             if (ok) setDialog(null);
+            return ok;
           }}
           onClose={() => setDialog(null)}
           card={card} textPri={textPri} textSec={textSec} textMuted={textMuted} inputCls={inputCls} />

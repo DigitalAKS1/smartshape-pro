@@ -27,9 +27,11 @@ export default function ReminderDialog({ reminder, onSave, onClose, card, textPr
   const addOffset = () => setF(s => ({ ...s, lead_offsets: [...s.lead_offsets, { value: 2, unit: 'hour' }] }));
   const rmOffset = (i) => setF(s => ({ ...s, lead_offsets: s.lead_offsets.filter((_, j) => j !== i) }));
 
+  const [busy, setBusy] = useState(false);
   const valid = f.title.trim() && f.due_date && (f.channels.email || f.channels.whatsapp);
 
-  const submit = () => {
+  const submit = async () => {
+    if (busy) return;
     const payload = {
       title: f.title.trim(), category: f.category,
       amount: f.amount === '' ? null : Number(f.amount),
@@ -38,7 +40,9 @@ export default function ReminderDialog({ reminder, onSave, onClose, card, textPr
       recipient_emails: f.recipient_emails.split(',').map(x => x.trim()).filter(Boolean),
       recipient_phones: f.recipient_phones.split(',').map(x => x.trim()).filter(Boolean),
     };
-    onSave(payload, editing ? reminder.reminder_id : null);
+    setBusy(true);
+    const ok = await onSave(payload, editing ? reminder.reminder_id : null);
+    if (!ok) setBusy(false);   // on success the dialog unmounts
   };
 
   const lbl = `block text-[11px] font-semibold uppercase tracking-wide mb-1 ${textMuted}`;
@@ -52,25 +56,25 @@ export default function ReminderDialog({ reminder, onSave, onClose, card, textPr
           <button onClick={onClose} className={`p-1.5 rounded-lg hover:bg-[var(--bg-hover)] ${textSec}`}><X className="h-4 w-4" /></button>
         </div>
         <div className="p-5 space-y-3">
-          <div><label className={lbl}>Title</label>
-            <input value={f.title} onChange={e => set('title', e.target.value)} placeholder="e.g. LIC premium, AWS subscription" className={fld} /></div>
+          <div><label htmlFor="rem-title" className={lbl}>Title</label>
+            <input id="rem-title" value={f.title} onChange={e => set('title', e.target.value)} placeholder="e.g. LIC premium, AWS subscription" className={fld} /></div>
           <div className="grid grid-cols-2 gap-3">
-            <div><label className={lbl}>Category</label>
-              <select value={f.category} onChange={e => set('category', e.target.value)} className={fld}>
+            <div><label htmlFor="rem-category" className={lbl}>Category</label>
+              <select id="rem-category" value={f.category} onChange={e => set('category', e.target.value)} className={fld}>
                 {CATEGORIES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
               </select></div>
-            <div><label className={lbl}>Amount (₹)</label>
-              <input type="number" value={f.amount} onChange={e => set('amount', e.target.value)} placeholder="optional" className={fld} /></div>
+            <div><label htmlFor="rem-amount" className={lbl}>Amount (₹)</label>
+              <input id="rem-amount" type="number" value={f.amount} onChange={e => set('amount', e.target.value)} placeholder="optional" className={fld} /></div>
           </div>
           <div className="grid grid-cols-3 gap-3">
-            <div><label className={lbl}>Repeats</label>
-              <select value={f.recurrence} onChange={e => set('recurrence', e.target.value)} className={fld}>
+            <div><label htmlFor="rem-recurrence" className={lbl}>Repeats</label>
+              <select id="rem-recurrence" value={f.recurrence} onChange={e => set('recurrence', e.target.value)} className={fld}>
                 {RECUR.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
               </select></div>
-            <div><label className={lbl}>Due date</label>
-              <input type="date" value={f.due_date} onChange={e => set('due_date', e.target.value)} className={fld} /></div>
-            <div><label className={lbl}>Time</label>
-              <input type="time" value={f.due_time} onChange={e => set('due_time', e.target.value)} className={fld} /></div>
+            <div><label htmlFor="rem-date" className={lbl}>Due date</label>
+              <input id="rem-date" type="date" value={f.due_date} onChange={e => set('due_date', e.target.value)} className={fld} /></div>
+            <div><label htmlFor="rem-time" className={lbl}>Time</label>
+              <input id="rem-time" type="time" value={f.due_time} onChange={e => set('due_time', e.target.value)} className={fld} /></div>
           </div>
 
           <div>
@@ -104,21 +108,21 @@ export default function ReminderDialog({ reminder, onSave, onClose, card, textPr
             </div>
           </div>
 
-          <div><label className={lbl}>Also notify emails (comma-separated)</label>
-            <input value={f.recipient_emails} onChange={e => set('recipient_emails', e.target.value)} placeholder="optional — you are always included" className={fld} /></div>
-          <div><label className={lbl}>Also notify WhatsApp numbers (comma-separated)</label>
-            <input value={f.recipient_phones} onChange={e => set('recipient_phones', e.target.value)} placeholder="optional" className={fld} /></div>
+          <div><label htmlFor="rem-emails" className={lbl}>Also notify emails (comma-separated)</label>
+            <input id="rem-emails" value={f.recipient_emails} onChange={e => set('recipient_emails', e.target.value)} placeholder="optional — you are always included" className={fld} /></div>
+          <div><label htmlFor="rem-phones" className={lbl}>Also notify WhatsApp numbers (comma-separated)</label>
+            <input id="rem-phones" value={f.recipient_phones} onChange={e => set('recipient_phones', e.target.value)} placeholder="optional" className={fld} /></div>
 
           <label className={`flex items-center gap-2 text-sm ${textSec}`}>
             <input type="checkbox" checked={f.shared} onChange={e => set('shared', e.target.checked)} /> Share with the admin team
           </label>
-          <div><label className={lbl}>Notes</label>
-            <input value={f.notes} onChange={e => set('notes', e.target.value)} className={fld} /></div>
+          <div><label htmlFor="rem-notes" className={lbl}>Notes</label>
+            <input id="rem-notes" value={f.notes} onChange={e => set('notes', e.target.value)} className={fld} /></div>
         </div>
         <div className="flex justify-end gap-2 px-5 py-4 border-t border-[var(--border-color)]">
           <button onClick={onClose} className={`h-9 px-4 rounded-lg text-sm font-semibold border border-[var(--border-color)] ${textSec}`}>Cancel</button>
-          <button onClick={submit} disabled={!valid} className="h-9 px-4 rounded-lg text-sm font-semibold text-white disabled:opacity-50" style={{ background: ORANGE }}>
-            {editing ? 'Save' : 'Create'}
+          <button onClick={submit} disabled={!valid || busy} className="h-9 px-4 rounded-lg text-sm font-semibold text-white disabled:opacity-50" style={{ background: ORANGE }}>
+            {busy ? (editing ? 'Saving…' : 'Creating…') : (editing ? 'Save' : 'Create')}
           </button>
         </div>
       </div>
