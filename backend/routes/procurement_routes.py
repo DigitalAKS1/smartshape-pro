@@ -947,6 +947,22 @@ async def purchase_order_pdf(po_id: str, request: Request):
         headers={"Content-Disposition": f'attachment; filename="{po.get("po_no", "PO")}.pdf"'})
 
 
+@router.get("/purchase-orders/{po_id}/packing-list-pdf")
+async def purchase_order_packing_list(po_id: str, request: Request):
+    await get_current_user(request)
+    po = await db.purchase_orders.find_one({"po_id": po_id}, {"_id": 0})
+    if not po:
+        raise HTTPException(status_code=404, detail="Purchase order not found")
+    vendor = await db.vendors.find_one({"vendor_id": po.get("vendor_id")}, {"_id": 0}) or {}
+    company = await db.settings.find_one({"type": "company"}, {"_id": 0}) or {}
+    from routes.procurement_pdf import generate_packing_list_pdf
+    from fastapi.responses import StreamingResponse
+    import io as _io
+    pdf = generate_packing_list_pdf(po, vendor, company)
+    return StreamingResponse(_io.BytesIO(pdf), media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{po.get("po_no", "PO")}-packing-list.pdf"'})
+
+
 # ==================== GOODS RECEIPT / VERIFICATION ====================
 
 @router.post("/purchase-orders/{po_id}/receive")
