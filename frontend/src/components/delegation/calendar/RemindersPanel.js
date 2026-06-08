@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { X, Plus, Pause, Play, Pencil, Trash2, Upload, Download } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import { useReminders } from '../../../hooks/useReminders';
 import ReminderDialog from './ReminderDialog';
 
@@ -33,6 +34,8 @@ function parseCSV(text) {
 
 function rowsToReminders(csvRows) {
   if (!csvRows.length) return [];
+  // coerce every cell to a string (Excel yields numbers/dates)
+  csvRows = csvRows.map(row => row.map(c => (c == null ? '' : String(c))));
   const header = csvRows[0].map(h => h.trim().toLowerCase());
   return csvRows.slice(1).filter(r => r.some(c => c.trim())).map(cells => {
     const g = (k) => (cells[header.indexOf(k)] || '').trim();
@@ -62,8 +65,19 @@ export default function RemindersPanel({ onClose, card, textPri, textSec, textMu
   const onFile = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const text = await file.text();
-    setImportPreview(rowsToReminders(parseCSV(text)));
+    try {
+      let aoa;
+      if (/\.(xlsx|xls)$/i.test(file.name)) {
+        const wb = XLSX.read(await file.arrayBuffer(), { cellDates: true });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        aoa = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '' });
+      } else {
+        aoa = parseCSV(await file.text());
+      }
+      setImportPreview(rowsToReminders(aoa));
+    } catch (err) {
+      setImportPreview([]);
+    }
     e.target.value = '';
   };
   const downloadTemplate = () => {
@@ -92,8 +106,8 @@ export default function RemindersPanel({ onClose, card, textPri, textSec, textMu
           <div className="flex items-center gap-2">
             <button onClick={downloadTemplate} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-[var(--border-color)] ${textSec}`}><Download className="h-3.5 w-3.5" /> Template</button>
             <label className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-[var(--border-color)] ${textSec} cursor-pointer`}>
-              <Upload className="h-3.5 w-3.5" /> Import CSV
-              <input type="file" accept=".csv,text/csv" onChange={onFile} className="hidden" />
+              <Upload className="h-3.5 w-3.5" /> Import CSV / Excel
+              <input type="file" accept=".csv,text/csv,.xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" onChange={onFile} className="hidden" />
             </label>
             <button onClick={() => setDialog({})} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-white" style={{ background: ORANGE }}><Plus className="h-3.5 w-3.5" /> New</button>
             <button onClick={onClose} className={`p-1.5 rounded-lg hover:bg-[var(--bg-hover)] ${textSec}`}><X className="h-4 w-4" /></button>
@@ -159,7 +173,7 @@ export default function RemindersPanel({ onClose, card, textPri, textSec, textMu
                 );
               })}
             </div>
-            <p className={`text-[11px] ${textMuted} mb-3`}>Only rows with a title and due date will be imported. (Export Excel as CSV to import.)</p>
+            <p className={`text-[11px] ${textMuted} mb-3`}>Only rows with a title and due date will be imported. CSV and Excel (.xlsx) both supported.</p>
             <div className="flex justify-end gap-2">
               <button onClick={() => setImportPreview(null)} className={`h-9 px-4 rounded-lg text-sm font-semibold border border-[var(--border-color)] ${textSec}`}>Cancel</button>
               <button onClick={confirmImport} className="h-9 px-4 rounded-lg text-sm font-semibold text-white" style={{ background: ORANGE }}>Import {importPreview.filter(x => x.title && x.due_date).length}</button>
