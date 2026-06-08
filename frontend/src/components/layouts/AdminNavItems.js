@@ -3,7 +3,7 @@ import {
   Warehouse, ClipboardList, DollarSign, Users,
   Smartphone, Layers, IndianRupee, UserCog, Store, MapPin, Target,
   CalendarDays, Calendar, ShoppingCart, Upload, Activity,
-  Home, MoreHorizontal, Zap, Heart, Truck,
+  Home, MoreHorizontal, Zap, Heart, Truck, Award,
 } from 'lucide-react';
 
 /**
@@ -52,6 +52,7 @@ export const MODULE_ROUTE_MAP = {
   ],
   delegation: { path: '/delegation', icon: ClipboardList, label: 'Delegation System' },
   flow_management: { path: '/flow-management', icon: Zap, label: 'Flow Management' },
+  certificates:    { path: '/certificates',    icon: Award, label: 'Certificates' },
   sales_portal: { path: '/sales', icon: Smartphone, label: 'Sales Portal' },
   user_management: [
     { path: '/user-management', icon: Users, label: 'User Management' },
@@ -73,6 +74,7 @@ export const SIDEBAR_SECTIONS = [
   { label: 'Reports',           modules: ['analytics'] },
   { label: 'Delegation',        modules: ['delegation'] },
   { label: 'Flow Management',   modules: ['flow_management'] },
+  { label: 'Certificates',      modules: ['certificates'] },
   { label: 'Administration',    modules: ['user_management', 'settings'] },
 ];
 

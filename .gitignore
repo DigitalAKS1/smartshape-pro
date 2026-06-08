@@ -118,3 +118,6 @@ frontend/node_modules/.cache/default-development/0.pack
 frontend/node_modules/.cache/default-development/3.pack
 frontend/node_modules/.cache/default-development/3.pack
 frontend/node_modules/.cache/default-development/6.pack
+
+# Uploaded files — generated at runtime, not committed
+backend/uploads/

@@ -45,6 +45,7 @@ from routes.push_routes import router as push_router
 from routes.delegation_routes import router as delegation_router
 from routes.fms_routes import router as fms_router
 from routes.procurement_routes import router as procurement_router
+from routes.cert_routes import router as cert_router
 from scheduler import start_scheduler
 
 # ── App instance ───────────────────────────────────────────────────────────────
@@ -91,11 +92,16 @@ app.include_router(push_router, prefix="/api")
 app.include_router(delegation_router, prefix="/api")
 app.include_router(fms_router, prefix="/api")
 app.include_router(procurement_router, prefix="/api")
+app.include_router(cert_router, prefix="/api")
 
 # ── Static files — uploaded WhatsApp attachments served publicly ───────────────
 _WA_UPLOADS = os.path.join(os.path.dirname(__file__), "uploads", "whatsapp")
 os.makedirs(_WA_UPLOADS, exist_ok=True)
 app.mount("/uploads/whatsapp", StaticFiles(directory=_WA_UPLOADS), name="wa_uploads")
+
+_CERT_UPLOADS = os.path.join(os.path.dirname(__file__), "uploads", "certificates")
+os.makedirs(_CERT_UPLOADS, exist_ok=True)
+app.mount("/uploads/certificates", StaticFiles(directory=_CERT_UPLOADS), name="cert_uploads")
 
 
 @app.get("/api/health")

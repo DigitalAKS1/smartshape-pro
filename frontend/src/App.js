@@ -50,6 +50,7 @@ import SchoolProfile from './pages/admin/SchoolProfile';
 import MarketingHub from './pages/admin/MarketingHub';
 import DelegationApp from './pages/admin/DelegationApp';
 import FlowManagement from './pages/admin/FlowManagement';
+import Certificates from './pages/admin/Certificates';
 
 // Sales pages
 import SalesHome from './pages/sales/SalesHome';
@@ -191,6 +192,7 @@ function AppRouter() {
       <Route path="/marketing" element={<ProtectedRoute><MarketingHub /></ProtectedRoute>} />
       <Route path="/delegation" element={<ProtectedRoute><DelegationApp /></ProtectedRoute>} />
       <Route path="/flow-management" element={<ProtectedRoute><FlowManagement /></ProtectedRoute>} />
+      <Route path="/certificates" element={<ProtectedRoute><Certificates /></ProtectedRoute>} />
       
       {/* Protected Routes - Sales */}
       <Route path="/sales" element={<ProtectedRoute><SalesHome /></ProtectedRoute>} />
