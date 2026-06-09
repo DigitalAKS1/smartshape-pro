@@ -1229,25 +1229,36 @@ async def _subject_team(email: str):
     return {"admin": "admin", "accounts": "accounts", "store": "store"}.get(role, "sales" if role else None)
 
 
-async def _agenda_delegation(emp_id, dfrom, dto):
+async def _agenda_delegation(emp_id, dfrom, dto, include_assigned_out=False):
     if not emp_id:
         return []
-    rows = await db.del_task_instances.find(
-        {"emp_id": emp_id, "due_date": {"$gte": dfrom, "$lte": dto}}, {"_id": 0}
-    ).to_list(2000)
+    date_q = {"due_date": {"$gte": dfrom, "$lte": dto}}
+    if include_assigned_out:
+        # On their OWN calendar a delegator/boss also sees tasks they assigned out,
+        # so "what I assigned" is visible without drilling into each person.
+        q = {**date_q, "$or": [{"emp_id": emp_id}, {"delegator_id": emp_id}]}
+    else:
+        q = {**date_q, "emp_id": emp_id}
+    rows = await db.del_task_instances.find(q, {"_id": 0}).to_list(2000)
     out = []
     for r in rows:
-        acts = []
-        if r.get("status") == "pending":
-            acts = ["complete", "reschedule", "reassign"]
-        elif r.get("status") == "completed":
-            acts = ["verify", "reopen"]
+        assigned_out = r.get("emp_id") != emp_id      # I delegated this to someone else
+        if assigned_out:
+            type_ = "assigned_out"
+            # I'm the assigner, not the doer — manage it, don't complete it for them.
+            acts = (["reassign"] if r.get("status") == "pending"
+                    else ["verify", "reopen"] if r.get("status") == "completed" else [])
+        else:
+            type_ = "delegated" if r.get("delegator_id") else "my_task"
+            acts = (["complete", "reschedule", "reassign"] if r.get("status") == "pending"
+                    else ["verify", "reopen"] if r.get("status") == "completed" else [])
         out.append(_ev(
-            "delegation", "delegated" if r.get("delegator_id") else "my_task",
+            "delegation", type_,
             r.get("task_title"), r["due_date"], r["instance_id"], "/delegation",
             status=r.get("status"), priority=r.get("priority"), actions=acts,
             meta={"delegator_name": r.get("delegator_name", ""), "emp_name": r.get("emp_name", ""),
-                  "requires_image": r.get("requires_image", False)},
+                  "requires_image": r.get("requires_image", False),
+                  "assigned_out": assigned_out},
         ))
     return out
 
@@ -1390,7 +1401,7 @@ async def get_agenda(request: Request):
     s_team = await _subject_team(s_email)
 
     events = []
-    events += await _agenda_delegation(s_emp, from_, to_)
+    events += await _agenda_delegation(s_emp, from_, to_, include_assigned_out=is_self)
     events += await _agenda_fms(s_team, from_, to_)
     events += await _agenda_visits(s_email, from_, to_)
     events += await _agenda_crm_tasks(s_email, from_, to_)

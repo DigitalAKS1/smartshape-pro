@@ -76,9 +76,10 @@ export default function EventActionDrawer({ event, onAction, onEditEvent, onSend
         </div>
 
         <div className="flex-1 overflow-y-auto p-5 space-y-3">
-          {(meta.delegator_name || meta.customer_name || meta.location) && (
+          {(meta.delegator_name || meta.customer_name || meta.location || (meta.assigned_out && meta.emp_name)) && (
             <div className={`text-xs ${textSec} space-y-1`}>
-              {meta.delegator_name && <p>From: {meta.delegator_name}</p>}
+              {meta.assigned_out && meta.emp_name && <p>Assigned to: {meta.emp_name}</p>}
+              {!meta.assigned_out && meta.delegator_name && <p>From: {meta.delegator_name}</p>}
               {meta.customer_name && <p>Customer: {meta.customer_name}</p>}
               {meta.location && <p>Location: {meta.location}</p>}
             </div>

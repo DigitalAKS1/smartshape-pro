@@ -26,7 +26,7 @@ export default function AgendaList({ dates, eventsByDate, onEventClick, textPri,
                   className={`${card} border rounded-lg w-full text-left px-3 py-2 flex items-center gap-2.5 cursor-pointer transition-colors duration-200 hover:bg-[var(--bg-hover)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#e94560]/60`}>
                   <span className="w-1.5 h-8 rounded-full flex-shrink-0" style={{ background: e.color }} />
                   <span className={`text-[11px] font-mono ${textMuted} w-12 flex-shrink-0`}>{e.start_time || '—'}</span>
-                  <span className={`flex-1 min-w-0 text-sm ${textPri} truncate ${(e.status === 'completed' || e.status === 'verified' || e.status === 'done') ? 'line-through opacity-60' : ''}`}>{e.title}</span>
+                  <span className={`flex-1 min-w-0 text-sm ${textPri} truncate ${(e.status === 'completed' || e.status === 'verified' || e.status === 'done') ? 'line-through opacity-60' : ''}`}>{e.title}{e.meta?.assigned_out && e.meta?.emp_name ? ` · for ${e.meta.emp_name}` : ''}</span>
                   <span className="text-[10px] px-1.5 py-0.5 rounded-full flex-shrink-0"
                     style={{ background: e.color + '22', color: e.color }}>{e.source}</span>
                 </button>

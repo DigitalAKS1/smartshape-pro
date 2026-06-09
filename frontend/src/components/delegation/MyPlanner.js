@@ -9,7 +9,7 @@ const GREEN = '#10b981';
 const AMBER = '#f59e0b';
 
 /* ── date helpers (local, no deps) ───────────────────────────────────────── */
-const iso = (d) => d.toISOString().slice(0, 10);
+const iso = (d) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
 const addDays = (s, n) => { const d = new Date(s + 'T00:00:00'); d.setDate(d.getDate() + n); return iso(d); };
 const weekdayShort = (s) => new Date(s + 'T00:00:00').toLocaleDateString(undefined, { weekday: 'short' });
 const dayNum = (s) => new Date(s + 'T00:00:00').getDate();

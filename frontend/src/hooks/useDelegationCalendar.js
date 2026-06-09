@@ -26,18 +26,24 @@ export function useDelegationCalendar() {
 
   useEffect(() => {
     (async () => {
+      let roles = [], targets = [];
       try {
         const ctx = (await delApi.myContext()).data || {};
-        const roles = ctx.roles || [];
-        if (roles.includes('boss')) {
+        roles = ctx.roles || [];
+        targets = ctx.target_employees || [];
+      } catch { /* not linked */ }
+      // A boss can view any teammate's calendar. Enable the picker up front so a
+      // failing employees.list() can't silently hide it (it just leaves the list short).
+      if (roles.includes('boss')) {
+        setCanViewTeam(true);
+        try {
           const emps = (await delApi.employees.list()).data || [];
           setTeamOptions(emps.map(e => ({ emp_id: e.emp_id, name: e.name })));
-          setCanViewTeam(true);
-        } else if (roles.includes('delegator') && (ctx.target_employees || []).length) {
-          setTeamOptions(ctx.target_employees.map(e => ({ emp_id: e.emp_id, name: e.name })));
-          setCanViewTeam(true);
-        }
-      } catch { /* not linked / no team */ }
+        } catch { /* keep picker with just "My calendar" */ }
+      } else if (roles.includes('delegator') && targets.length) {
+        setTeamOptions(targets.map(e => ({ emp_id: e.emp_id, name: e.name })));
+        setCanViewTeam(true);
+      }
     })();
   }, []);
 

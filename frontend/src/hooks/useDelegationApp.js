@@ -4,7 +4,12 @@ import { useDataSync, useAutoRefresh } from '../lib/dataSync';
 import { useAuth } from '../contexts/AuthContext';
 import { toast } from 'sonner';
 
-const TODAY = new Date().toISOString().slice(0, 10);
+// Local calendar date (NOT UTC) — due_dates are local dates, so comparing against
+// a UTC "today" mis-bucketed tasks for anyone before ~5:30am IST.
+const TODAY = (() => {
+  const d = new Date();
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+})();
 
 const newRow = (delegatorId = '') => ({
   _id: Math.random().toString(36).slice(2),
@@ -335,7 +340,11 @@ export function useDelegationApp() {
 
   /* ─────────────── personal planner ─────────────────────────────────── */
   const loadPlanner = useCallback(async () => {
-    const id = myEmpRef.current?.emp_id;
+    // Resolve from employees/user (not myEmpRef) so this re-runs once the
+    // employee list finishes loading — otherwise a delegatee who lands on the
+    // planner before employees arrive sees a permanently empty planner.
+    const me = employees.find(e => e.email === user?.email);
+    const id = me?.emp_id;
     if (!id) return;
     setPlannerLoading(true);
     try {
@@ -347,7 +356,7 @@ export function useDelegationApp() {
       setBuddyTasks((bud.data || []).filter(t => t.emp_id !== id));
     } catch { /* silent */ }
     finally { setPlannerLoading(false); }
-  }, []);
+  }, [employees, user]);
 
   /* ─── tab/load effects that depend on the loaders defined above ─────────
      (must come AFTER the useCallback definitions or their dep arrays hit the

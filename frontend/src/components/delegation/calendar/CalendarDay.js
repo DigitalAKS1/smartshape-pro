@@ -42,7 +42,7 @@ export default function CalendarDay({
                 className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs border border-[var(--border-color)] cursor-grab active:cursor-grabbing ${isDone(e) ? 'opacity-50 line-through' : ''}`}
                 style={{ background: e.color + '14' }}>
                 <span className="w-2 h-2 rounded-full" style={{ background: e.color }} />
-                <span className={textSec}>{e.title}</span>
+                <span className={textSec}>{e.title}{e.meta?.assigned_out && e.meta?.emp_name ? ` · for ${e.meta.emp_name}` : ''}</span>
               </button>
             ))}
           </div>
@@ -64,7 +64,7 @@ export default function CalendarDay({
                     className={`rounded-lg px-2.5 py-1.5 text-xs cursor-pointer flex items-center gap-2 ${isBlock ? 'cursor-grab active:cursor-grabbing' : ''} ${isDone(e) ? 'opacity-50 line-through' : ''}`}
                     style={{ background: e.color + '1f', borderLeft: `3px solid ${e.color}` }}>
                     <span className={`font-mono text-[10px] ${textMuted}`}>{e.start_time}</span>
-                    <span className={`${textPri} truncate`}>{e.title}</span>
+                    <span className={`${textPri} truncate`}>{e.title}{e.meta?.assigned_out && e.meta?.emp_name ? ` · for ${e.meta.emp_name}` : ''}</span>
                     {isBlock && <span className={`ml-auto text-[9px] ${textMuted}`}>plan</span>}
                   </div>
                 );
