@@ -2,9 +2,10 @@ import React, { useState, useEffect } from 'react';
 import AdminLayout from '../../components/layouts/AdminLayout';
 import { useCertificates } from '../../hooks/useCertificates';
 import TemplateDesigner from '../../components/certs/TemplateDesigner';
+import PdfTemplateUploader from '../../components/certs/PdfTemplateUploader';
 import BatchCreator from '../../components/certs/BatchCreator';
 import BatchDetail from '../../components/certs/BatchDetail';
-import { Award, Layers, ClipboardList, RefreshCw, Trash2, ChevronDown, ChevronUp, Plus, Calendar, ChevronRight } from 'lucide-react';
+import { Award, Layers, ClipboardList, RefreshCw, Trash2, ChevronDown, ChevronUp, Plus, Calendar, ChevronRight, Image as ImageIcon, FileText } from 'lucide-react';
 import { certsApi } from '../../lib/api';
 import { toast } from 'sonner';
 
@@ -18,6 +19,7 @@ export default function Certificates() {
   const s = useCertificates();
   const [tab, setTab]             = useState('templates');
   const [showDesigner, setShowDesigner] = useState(false);
+  const [designerKind, setDesignerKind] = useState('image');   // 'image' | 'pdf'
   const [deletingId, setDeletingId]     = useState(null);
 
   /* ── Batches tab state ── */
@@ -127,12 +129,36 @@ export default function Certificates() {
 
             {/* Designer panel */}
             {showDesigner && (
-              <TemplateDesigner
-                onSaved={() => {
-                  setShowDesigner(false);
-                  s.loadTemplates();
-                }}
-              />
+              <div className="space-y-3">
+                {/* Image / PDF mode toggle */}
+                <div className={`${card} border rounded-xl p-1 inline-flex gap-0.5`}>
+                  {[
+                    { id: 'image', label: 'Image (drag fields)', icon: ImageIcon },
+                    { id: 'pdf',   label: 'PDF (mail-merge)',     icon: FileText  },
+                  ].map(({ id, label, icon: Icon }) => (
+                    <button
+                      key={id}
+                      onClick={() => setDesignerKind(id)}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium transition-all
+                        ${designerKind === id ? 'text-white' : `${textSec} hover:bg-[var(--bg-hover)]`}`}
+                      style={designerKind === id ? { background: PINK } : {}}
+                    >
+                      <Icon className="h-3.5 w-3.5" />
+                      {label}
+                    </button>
+                  ))}
+                </div>
+
+                {designerKind === 'pdf' ? (
+                  <PdfTemplateUploader
+                    onSaved={() => { setShowDesigner(false); s.loadTemplates(); }}
+                  />
+                ) : (
+                  <TemplateDesigner
+                    onSaved={() => { setShowDesigner(false); s.loadTemplates(); }}
+                  />
+                )}
+              </div>
             )}
 
             {/* Template list */}
@@ -141,7 +167,12 @@ export default function Certificates() {
                 {s.templates.map(tpl => (
                   <div key={tpl.template_id} className={`${card} border rounded-xl overflow-hidden`}>
                     {/* Background preview */}
-                    {tpl.background_url ? (
+                    {tpl.kind === 'pdf' ? (
+                      <div className="w-full h-32 flex flex-col items-center justify-center gap-1 bg-[var(--bg-primary)]">
+                        <FileText className="h-8 w-8" style={{ color: PINK }} />
+                        <span className={`text-xs ${textMuted}`}>PDF · mail-merge</span>
+                      </div>
+                    ) : tpl.background_url ? (
                       <img
                         src={tpl.background_url}
                         alt={tpl.name}
@@ -157,16 +188,22 @@ export default function Certificates() {
                       <p className={`font-medium text-sm ${textPri} truncate`}>{tpl.name}</p>
                       <div className="flex items-center justify-between gap-2">
                         <div className="space-y-0.5">
-                          {tpl.orientation && (
-                            <p className={`text-xs ${textMuted} capitalize`}>{tpl.orientation}</p>
-                          )}
-                          {tpl.width_px && tpl.height_px && (
-                            <p className={`text-xs ${textMuted}`}>{tpl.width_px} × {tpl.height_px} px</p>
-                          )}
-                          {Array.isArray(tpl.fields) && (
-                            <p className={`text-xs ${textMuted}`}>
-                              {tpl.fields.length} field{tpl.fields.length !== 1 ? 's' : ''}
-                            </p>
+                          {tpl.kind === 'pdf' ? (
+                            <p className={`text-xs ${textMuted}`}>Token merge ({'{Name}'} …)</p>
+                          ) : (
+                            <>
+                              {tpl.orientation && (
+                                <p className={`text-xs ${textMuted} capitalize`}>{tpl.orientation}</p>
+                              )}
+                              {tpl.width_px && tpl.height_px && (
+                                <p className={`text-xs ${textMuted}`}>{tpl.width_px} × {tpl.height_px} px</p>
+                              )}
+                              {Array.isArray(tpl.fields) && (
+                                <p className={`text-xs ${textMuted}`}>
+                                  {tpl.fields.length} field{tpl.fields.length !== 1 ? 's' : ''}
+                                </p>
+                              )}
+                            </>
                           )}
                         </div>
                         <button

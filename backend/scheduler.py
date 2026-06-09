@@ -811,7 +811,7 @@ async def crm_digest_loop():
 # ══════════════════════════════════════════════════════════════════════════════
 
 from cert_engine import (
-    render_certificate_pdf, sanitize_filename, render_placeholders,
+    render_certificate_pdf, render_certificate_pdf_merge, sanitize_filename, render_placeholders,
     DEFAULT_EMAIL_SUBJECT, DEFAULT_EMAIL_BODY, DEFAULT_WA_CAPTION,
 )
 
@@ -846,8 +846,12 @@ async def _generate_pending_certs():
             out_name = f"{it['item_id']}.pdf"
             out_path = os.path.join(_CERT_DIR, out_name)
             try:
-                render_certificate_pdf(bg_path, out_path, tpl.get("fields", []),
-                                       {"name": it["name"]}, batch.get("shared_values", {}))
+                if tpl.get("kind") == "pdf":
+                    render_certificate_pdf_merge(bg_path, out_path,
+                                                 {"name": it["name"]}, batch.get("shared_values", {}))
+                else:
+                    render_certificate_pdf(bg_path, out_path, tpl.get("fields", []),
+                                           {"name": it["name"]}, batch.get("shared_values", {}))
                 await db.cert_items.update_one({"item_id": it["item_id"]}, {"$set": {
                     "gen_status": "generated", "pdf_url": f"/uploads/certificates/{out_name}"}})
                 await db.cert_batches.update_one({"batch_id": batch["batch_id"]},

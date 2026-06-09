@@ -90,6 +90,109 @@ def _anchor_x(draw: ImageDraw.ImageDraw, text: str, font, x: int, align: str) ->
     return x - w // 2  # center
 
 
+# ── PDF template token-merge (PyMuPDF) ────────────────────────────────────────
+# For templates that ARE a PDF with {Name}/{Date}/{Theme}/{Conducted By} printed
+# as text: find each token, delete it, and re-insert the real value in place —
+# keeping the original vector layout, fonts, and background untouched.
+
+def _merge_values(item: Dict[str, Any], shared: Dict[str, Any]) -> Dict[str, str]:
+    shared = shared or {}
+    expert = str(shared.get("expert", "") or "")
+    return {
+        "{Name}": str(item.get("name", "") or ""),
+        "{Date}": str(shared.get("date", "") or ""),
+        "{Theme}": str(shared.get("theme", "") or ""),
+        "{Expert}": expert,
+        "{Conducted By}": expert,
+    }
+
+
+def _base14(font_name: str) -> str:
+    """Map an arbitrary template font name to a PyMuPDF base-14 font."""
+    fl = (font_name or "").lower()
+    bold = any(k in fl for k in ("bold", "black", "semibold", "heavy"))
+    italic = "italic" in fl or "oblique" in fl
+    serif = any(k in fl for k in ("times", "serif", "georgia", "garamond", "roman", "minion"))
+    if serif:
+        return "tibi" if bold and italic else "tibo" if bold else "tiit" if italic else "tiro"
+    return "hebi" if bold and italic else "hebo" if bold else "heit" if italic else "helv"
+
+
+def render_certificate_pdf_merge(template_pdf_path: str, out_path: str,
+                                 item: Dict[str, Any], shared: Dict[str, Any]) -> str:
+    """Replace {tokens} printed in a PDF template with per-attendee values.
+    Standalone tokens (alone on their line, e.g. {Name}) are centred on the token;
+    inline tokens (after a label) are left-anchored. Returns out_path."""
+    import fitz  # PyMuPDF
+    values = _merge_values(item, shared)
+    doc = fitz.open(template_pdf_path)
+    try:
+        for page in doc:
+            info = page.get_text("dict")
+            jobs: List[Dict[str, Any]] = []
+            for blk in info.get("blocks", []):
+                for line in blk.get("lines", []):
+                    spans = line.get("spans", [])
+                    line_text = "".join(s.get("text", "") for s in spans)
+                    residual = line_text
+                    for tok in values:
+                        residual = residual.replace(tok, "")
+                    standalone = residual.strip() == ""
+                    for span in spans:
+                        stext = span.get("text", "")
+                        for tok, val in values.items():
+                            if tok not in stext:
+                                continue
+                            clip = fitz.Rect(span["bbox"])
+                            for r in page.search_for(tok, clip=clip):
+                                col = int(span.get("color", 0) or 0)
+                                rgb = ((col >> 16 & 255) / 255, (col >> 8 & 255) / 255, (col & 255) / 255)
+                                jobs.append({
+                                    "r": r, "val": val,
+                                    "size": float(span.get("size", 0) or r.height * 0.8),
+                                    "base": float(span.get("origin", (r.x0, r.y1))[1]),
+                                    "font": _base14(span.get("font", "")),
+                                    "color": rgb, "center": standalone,
+                                })
+                                page.add_redact_annot(r, fill=False, cross_out=False)
+            try:
+                page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE,
+                                      graphics=fitz.PDF_REDACT_LINE_ART_NONE)
+            except TypeError:
+                page.apply_redactions()
+            for j in jobs:
+                if not j["val"]:
+                    continue
+                try:
+                    tw = fitz.get_text_length(j["val"], fontname=j["font"], fontsize=j["size"])
+                    x = (j["r"].x0 + j["r"].x1) / 2 - tw / 2 if j["center"] else j["r"].x0
+                    page.insert_text((x, j["base"]), j["val"], fontsize=j["size"],
+                                     fontname=j["font"], color=j["color"])
+                except Exception:
+                    page.insert_text((j["r"].x0, j["base"]), j["val"], fontsize=j["size"],
+                                     fontname="helv", color=j["color"])
+        os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+        doc.save(out_path, garbage=3, deflate=True)
+    finally:
+        doc.close()
+    return out_path
+
+
+def pdf_tokens_found(template_pdf_path: str) -> List[str]:
+    """Return which known tokens are actually present in the PDF (for validation/UI)."""
+    import fitz
+    doc = fitz.open(template_pdf_path)
+    try:
+        present = []
+        all_text = "".join(page.get_text() for page in doc)
+        for tok in ("{Name}", "{Date}", "{Theme}", "{Conducted By}", "{Expert}"):
+            if tok in all_text:
+                present.append(tok)
+        return present
+    finally:
+        doc.close()
+
+
 def render_certificate_pdf(background_path: str, out_path: str,
                            fields: List[Dict[str, Any]],
                            item: Dict[str, Any], shared: Dict[str, Any]) -> str:

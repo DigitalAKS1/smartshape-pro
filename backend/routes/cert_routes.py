@@ -33,13 +33,22 @@ async def list_templates(request: Request):
 async def upload_background(request: Request, file: UploadFile = File(...)):
     await get_current_user(request)
     ext = (file.filename.rsplit(".", 1)[-1] if "." in (file.filename or "") else "png").lower()
-    if ext not in ("png", "jpg", "jpeg"):
-        raise HTTPException(400, "Background must be PNG or JPG")
+    if ext not in ("png", "jpg", "jpeg", "pdf"):
+        raise HTTPException(400, "Template must be a PNG, JPG, or PDF")
     fname = f"tpl_{uuid.uuid4().hex[:12]}.{ext}"
     path = os.path.join(CERT_DIR, fname)
     with open(path, "wb") as fh:
         fh.write(await file.read())
-    return {"url": f"/uploads/certificates/{fname}", "filename": fname}
+    url = f"/uploads/certificates/{fname}"
+    if ext == "pdf":
+        # report which {tokens} are present so the UI can confirm the merge will work
+        try:
+            from cert_engine import pdf_tokens_found
+            tokens = pdf_tokens_found(path)
+        except Exception:
+            tokens = []
+        return {"url": url, "filename": fname, "kind": "pdf", "tokens_found": tokens}
+    return {"url": url, "filename": fname, "kind": "image"}
 
 
 class TemplateField(BaseModel):
@@ -53,10 +62,11 @@ class TemplateField(BaseModel):
 class TemplateCreate(BaseModel):
     name: str
     background_url: str
+    kind: str = "image"          # image (PNG/JPG + drag fields) | pdf (token-merge)
     orientation: str = "landscape"
-    width_px: int
-    height_px: int
-    fields: List[TemplateField]
+    width_px: Optional[int] = 0
+    height_px: Optional[int] = 0
+    fields: List[TemplateField] = []
 
 @router.post("/templates")
 async def create_template(body: TemplateCreate, request: Request):
@@ -73,7 +83,7 @@ async def update_template(template_id: str, request: Request):
     user = await get_current_user(request); require_admin(user)
     body = await request.json()
     safe = {k: v for k, v in body.items()
-            if k in ("name", "background_url", "orientation", "width_px", "height_px", "fields", "is_active")}
+            if k in ("name", "background_url", "kind", "orientation", "width_px", "height_px", "fields", "is_active")}
     if safe:
         await db.cert_templates.update_one({"template_id": template_id}, {"$set": safe})
     return await db.cert_templates.find_one({"template_id": template_id}, {"_id": 0})
@@ -212,14 +222,18 @@ async def preview_item(item_id: str, request: Request):
     tpl = await db.cert_templates.find_one({"template_id": batch.get("template_id")}, {"_id": 0})
     if not tpl:
         raise HTTPException(404, "Template not found")
-    from cert_engine import render_certificate_pdf, safe_bg_path
+    from cert_engine import render_certificate_pdf, render_certificate_pdf_merge, safe_bg_path
     try:
         bg_path = safe_bg_path(CERT_DIR, tpl.get("background_url", ""))
     except ValueError:
         raise HTTPException(400, "Invalid background path")
     out_path = os.path.join(tempfile.gettempdir(), f"preview_{item_id}.pdf")
-    render_certificate_pdf(bg_path, out_path, tpl.get("fields", []),
-                           {"name": it["name"]}, batch.get("shared_values", {}))
+    if tpl.get("kind") == "pdf":
+        render_certificate_pdf_merge(bg_path, out_path,
+                                     {"name": it["name"]}, batch.get("shared_values", {}))
+    else:
+        render_certificate_pdf(bg_path, out_path, tpl.get("fields", []),
+                               {"name": it["name"]}, batch.get("shared_values", {}))
     return FileResponse(out_path, media_type="application/pdf", filename="preview.pdf")
 
 
