@@ -6,7 +6,7 @@ import GuidedTour from '../GuidedTour';
 import KeyboardShortcuts from '../KeyboardShortcuts';
 import AdminSidebar from './AdminSidebar';
 import AdminTopbar from './AdminTopbar';
-import { MODULE_ROUTE_MAP, SIDEBAR_SECTIONS, TEAM_MODULES, BOTTOM_NAV_ITEMS, MORE_ITEM } from './AdminNavItems';
+import { MODULE_ROUTE_MAP, SIDEBAR_SECTIONS, BOTTOM_NAV_ITEMS, MORE_ITEM } from './AdminNavItems';
 
 export default function AdminLayout({ children }) {
   const { user, logout } = useAuth();
@@ -20,9 +20,9 @@ export default function AdminLayout({ children }) {
     : 'sales';
   const isAdmin = team === 'admin';
 
-  const assignedModules = user?.assigned_modules || [];
-  const teamDefaults    = TEAM_MODULES[team] || [];
-  const userModules     = [...new Set([...assignedModules, ...teamDefaults])];
+  // Sidebar is authoritative on the user's own grants — NO team-default union.
+  // Admins see everything via the `isAdmin ||` checks below.
+  const userModules = user?.assigned_modules || [];
 
   const sidebarGroups = [];
   SIDEBAR_SECTIONS.forEach((section) => {
@@ -41,7 +41,7 @@ export default function AdminLayout({ children }) {
   const initials = (user?.name || 'U').split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
 
   // Bottom nav
-  const bottomItems = BOTTOM_NAV_ITEMS.filter(item => isAdmin || userModules.includes(item.module));
+  const bottomItems = BOTTOM_NAV_ITEMS.filter(item => item.path === '/today' || isAdmin || userModules.includes(item.module));
   const allBottomItems = [...bottomItems, MORE_ITEM];
 
   function isBottomActive(item) {

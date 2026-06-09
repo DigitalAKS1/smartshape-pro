@@ -42,7 +42,8 @@ const ROUTE_MODULE_MAP = {
   '/sales/visits': 'sales_portal',
   '/sales/quotations': 'sales_portal',
   '/sales/expenses': 'sales_portal',
-  '/today': 'dashboard',
+  // '/today' is NOT here — Today's Actions is universal (any authenticated user),
+  // like '/leave-management'. The company '/dashboard' stays gated on 'dashboard'.
   '/admin-control': 'analytics',
   '/delegation': 'delegation',
 };

@@ -11,10 +11,9 @@ import {
  * Each entry is either a single route object or an array of route objects.
  */
 export const MODULE_ROUTE_MAP = {
-  dashboard: [
-    { path: '/today', icon: Target, label: "Today's Actions" },
-    { path: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
-  ],
+  // Company Dashboard only (KPIs/revenue) — gated by the `dashboard` module.
+  // "Today's Actions" is split out as an always-on item (TODAY_ITEM) below.
+  dashboard: { path: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
   quotations: [
     { path: '/create-quotation', icon: FileText, label: 'Create Quotation' },
     { path: '/quotations', icon: FileText, label: 'Quotations' },
@@ -65,6 +64,9 @@ export const MODULE_ROUTE_MAP = {
   ],
 };
 
+// Always-on home link — shown to every user regardless of granted modules.
+export const TODAY_ITEM = { path: '/today', icon: Target, label: "Today's Actions" };
+
 export const SIDEBAR_SECTIONS = [
   { label: null,                modules: ['dashboard'] },
   { label: 'Sales',             modules: ['quotations', 'leads', 'field_sales', 'sales_portal'] },
@@ -95,6 +97,7 @@ export const BOTTOM_NAV_ITEMS = [
 export const MORE_ITEM = { path: '__more__', icon: MoreHorizontal, label: 'More' };
 
 export function getPageTitle(pathname) {
+  if (pathname === '/today') return "Today's Actions";
   const allRoutes = Object.values(MODULE_ROUTE_MAP).flat();
   const exact = allRoutes.find(r => r?.path === pathname);
   if (exact) return exact.label;

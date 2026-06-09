@@ -3,6 +3,7 @@ import { Link, useLocation } from 'react-router-dom';
 import { Sun, Moon, X, LogOut, CalendarDays } from 'lucide-react';
 import { useTheme } from '../../contexts/ThemeContext';
 import NotificationBell from './NotificationBell';
+import { TODAY_ITEM } from './AdminNavItems';
 
 /**
  * AdminSidebar — desktop sidebar + mobile drawer content.
@@ -52,6 +53,37 @@ export default function AdminSidebar({ sidebarGroups, user, initials, onClose, o
 
       {/* Nav */}
       <nav className="flex-1 overflow-y-auto py-2 px-3" data-testid="admin-sidebar">
+        {/* Today's Actions — always available to every user */}
+        <div className="space-y-0.5">
+          {(() => {
+            const Icon = TODAY_ITEM.icon;
+            const isActive = location.pathname === TODAY_ITEM.path;
+            return (
+              <Link
+                to={TODAY_ITEM.path}
+                onClick={onClose}
+                data-testid="admin-sidebar-today's-actions-link"
+                className={`group relative flex items-center gap-2.5 px-2 py-[7px] rounded-lg text-[13px] font-medium transition-all ${
+                  isActive
+                    ? 'bg-[var(--accent-bg)] text-[var(--accent)]'
+                    : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]'
+                }`}
+              >
+                {isActive && (
+                  <span className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-r-full bg-[var(--accent)]" />
+                )}
+                <Icon
+                  className={`h-[15px] w-[15px] flex-shrink-0 transition-colors ${
+                    isActive ? 'text-[var(--accent)]' : 'text-[var(--text-muted)] group-hover:text-[var(--text-secondary)]'
+                  }`}
+                  strokeWidth={isActive ? 2 : 1.7}
+                />
+                <span className="truncate leading-none">{TODAY_ITEM.label}</span>
+              </Link>
+            );
+          })()}
+        </div>
+
         {sidebarGroups.map((group, gi) => (
           <div key={gi}>
             {gi > 0 && <div className="h-px bg-[var(--border-color)] mx-1 my-2" />}
