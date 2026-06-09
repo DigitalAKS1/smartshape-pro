@@ -504,6 +504,9 @@ async def seed_activity_logs():
     print(f"  ✓ {len(docs)} activity logs")
 
 async def main():
+    # Refuse to wipe/seed a production database unless explicitly opted in.
+    from db_safety import guard_destructive_db
+    guard_destructive_db(DB_NAME, action="WIPE every collection and seed dummy data into")
     print("\n[SEED] Seeding SmartShape Pro dummy data...\n")
     await seed_users()
     await seed_schools()

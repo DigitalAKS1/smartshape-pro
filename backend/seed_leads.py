@@ -108,6 +108,8 @@ def rand_followup():
     return d.strftime("%Y-%m-%d")
 
 async def seed():
+    from db_safety import guard_destructive_db
+    guard_destructive_db(DB_NAME, action="seed dummy lead records into")
     client = AsyncIOMotorClient(MONGO_URL)
     db = client[DB_NAME]
 
