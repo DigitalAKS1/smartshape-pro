@@ -8,9 +8,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/ta
 import { Badge } from '../../components/ui/badge';
 import {
   ClipboardList, TrendingUp, TrendingDown, Minus, CheckCircle,
-  AlertTriangle, RefreshCw, Search, Calendar, Package,
+  AlertTriangle, RefreshCw, Search, Calendar, Package, Scissors,
 } from 'lucide-react';
 import { usePhysicalCount } from '../../hooks/usePhysicalCount';
+
+const backendUrl = process.env.REACT_APP_BACKEND_URL || '';
 
 export default function PhysicalCount() {
   const {
@@ -146,6 +148,7 @@ export default function PhysicalCount() {
                   <table className="w-full text-sm">
                     <thead className="bg-[var(--bg-primary)]/50">
                       <tr className="border-b border-[var(--border-color)]">
+                        <th className="text-left text-xs uppercase tracking-wide text-[var(--text-secondary)] px-4 py-3 w-14">Image</th>
                         <th className="text-left text-xs uppercase tracking-wide text-[var(--text-secondary)] px-4 py-3">Code</th>
                         <th className="text-left text-xs uppercase tracking-wide text-[var(--text-secondary)] px-4 py-3">Name</th>
                         <th className="text-left text-xs uppercase tracking-wide text-[var(--text-secondary)] px-4 py-3 hidden md:table-cell">Category</th>
@@ -157,7 +160,7 @@ export default function PhysicalCount() {
                     </thead>
                     <tbody>
                       {filteredDies.length === 0 ? (
-                        <tr><td colSpan={7} className="text-center py-12 text-[var(--text-muted)]">
+                        <tr><td colSpan={8} className="text-center py-12 text-[var(--text-muted)]">
                           <Package className="h-12 w-12 mx-auto mb-3 opacity-30" />
                           <p>No dies match your filter</p>
                         </td></tr>
@@ -166,6 +169,13 @@ export default function PhysicalCount() {
                         const counted = counts[die.die_id]?.counted ?? '';
                         return (
                           <tr key={die.die_id} className="border-b border-[var(--border-color)] hover:bg-[var(--bg-hover)]">
+                            <td className="px-4 py-3">
+                              <div className="w-10 h-10 rounded-lg bg-[var(--bg-primary)] overflow-hidden border border-[var(--border-color)]">
+                                {die.image_url
+                                  ? <img src={`${backendUrl}${die.image_url}`} alt="" className="w-full h-full object-contain p-0.5" />
+                                  : <div className="w-full h-full flex items-center justify-center text-[var(--text-muted)]"><Scissors className="h-4 w-4 opacity-20" /></div>}
+                              </div>
+                            </td>
                             <td className="px-4 py-3 font-mono text-[#e94560] font-medium whitespace-nowrap">{die.code}</td>
                             <td className="px-4 py-3 text-[var(--text-primary)]">{die.name}</td>
                             <td className="px-4 py-3 text-[var(--text-secondary)] hidden md:table-cell capitalize">{die.category || '—'}</td>

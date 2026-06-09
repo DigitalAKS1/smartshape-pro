@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { dies as diesApi, stock as stockApi } from '../lib/api';
 import { useDataSync, useAutoRefresh } from '../lib/dataSync';
+import { sortByCode } from '../lib/utils';
 import { toast } from 'sonner';
 
 export const CATEGORIES = [
@@ -74,7 +75,7 @@ export default function useInventory() {
       d.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
       d.code.toLowerCase().includes(searchTerm.toLowerCase())
     );
-    setFilteredDies(f);
+    setFilteredDies(sortByCode(f));
   }, [quickFilter, typeFilter, categoryFilter, searchTerm, dies]);
 
   const clearFilters = () => { setQuickFilter(null); setTypeFilter('all'); setCategoryFilter('all'); setSearchTerm(''); };
@@ -172,7 +173,7 @@ export default function useInventory() {
   const handleImport = async (file) => {
     try {
       const res = await diesApi.importCsv(file);
-      toast.success(`Created ${res.data.created}, skipped ${res.data.duplicates} duplicates`);
+      toast.success(`Created ${res.data.created}, updated ${res.data.updated ?? 0}`);
       setImportOpen(false); fetchDies();
     } catch {
       toast.error('Import failed');

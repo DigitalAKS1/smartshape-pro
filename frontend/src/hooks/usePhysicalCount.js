@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { dies as diesApi, stock } from '../lib/api';
+import { sortByCode } from '../lib/utils';
 import { toast } from 'sonner';
 
 export function usePhysicalCount() {
@@ -24,7 +25,7 @@ export function usePhysicalCount() {
         diesApi.getAll(),
         stock.getMovements(),
       ]);
-      const activeDies = (diesRes.data || []).filter(d => d.is_active !== false);
+      const activeDies = sortByCode((diesRes.data || []).filter(d => d.is_active !== false));
       setDiesList(activeDies);
       const initCounts = {};
       activeDies.forEach(d => { initCounts[d.die_id] = { counted: '', notes: '' }; });

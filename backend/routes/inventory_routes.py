@@ -6,6 +6,7 @@ import uuid
 import csv
 import io
 import os
+import re
 import mimetypes
 
 from database import db
@@ -142,40 +143,66 @@ async def import_dies_csv(file: UploadFile = File(...), request: Request = None)
             text = content.decode("latin-1")
     reader = csv.DictReader(io.StringIO(text))
     created = 0
-    duplicates = 0
+    updated = 0
     errors = []
+
+    def _norm_code(c):
+        # Match ignoring stray quotes / spaces / tabs so re-imports update the
+        # existing die instead of creating a whitespace-only duplicate.
+        return re.sub(r"\s+", "", (c or "").strip().strip('"').strip()).upper()
+
+    # Build a lookup of existing dies by normalized code (collection is small).
+    existing_dies = await db.dies.find({}, {"die_id": 1, "code": 1, "_id": 0}).to_list(None)
+    by_norm = {_norm_code(d.get("code", "")): d["die_id"] for d in existing_dies}
+
+    valid_categories = {"decorative","flowers","leaf","alphabets","numbers","butterfly","borders","giant_flowers","3d_flowers","animals_birds","snowflake","fruits","shapes","other"}
     for row in reader:
         try:
-            code = row.get("code", "").strip()
-            name = row.get("name", "").strip()
+            code = re.sub(r"\s+", " ", (row.get("code", "") or "").strip().strip('"').strip())
+            name = (row.get("name", "") or "").strip()
             if not code or not name:
                 errors.append("Row missing code or name")
                 continue
-            existing = await db.dies.find_one({"code": code})
-            if existing:
-                duplicates += 1
-                continue
-            die_id = f"die_{uuid.uuid4().hex[:8]}"
-            valid_categories = {"decorative","flowers","leaf","alphabets","numbers","butterfly","borders","giant_flowers","3d_flowers","animals_birds","snowflake","fruits","shapes","other"}
+            norm = _norm_code(code)
+            sv = (row.get("stock_qty", "") or "").strip()
+            stock_qty = int(sv) if sv.lstrip("-").isdigit() else 0
             raw_cat = row.get("category", "decorative").strip().lower().replace(" ", "_")
             category = raw_cat if raw_cat in valid_categories else "decorative"
+
+            existing_id = by_norm.get(norm)
+            if existing_id:
+                # Update stock + metadata; preserve image_url and reserved_qty.
+                await db.dies.update_one({"die_id": existing_id}, {"$set": {
+                    "code": code,
+                    "name": name,
+                    "type": row.get("type", "standard").strip().lower(),
+                    "category": category,
+                    "stock_qty": stock_qty,
+                    "min_level": int(row.get("min_level", 5) or 5),
+                    "description": row.get("description", "").strip(),
+                }})
+                updated += 1
+                continue
+
+            die_id = f"die_{uuid.uuid4().hex[:8]}"
             await db.dies.insert_one({
                 "die_id": die_id,
                 "code": code,
                 "name": name,
                 "type": row.get("type", "standard").strip().lower(),
                 "category": category,
-                "stock_qty": int(row.get("stock_qty", 0) or 0),
+                "stock_qty": stock_qty,
                 "reserved_qty": 0,
                 "min_level": int(row.get("min_level", 5) or 5),
                 "image_url": "",
                 "description": row.get("description", "").strip(),
                 "is_active": True,
             })
+            by_norm[norm] = die_id
             created += 1
         except Exception as e:
             errors.append(str(e))
-    return {"created": created, "duplicates": duplicates, "errors": errors[:10]}
+    return {"created": created, "updated": updated, "duplicates": 0, "errors": errors[:10]}
 
 
 # ==================== FILE UPLOAD & PROXY ====================

@@ -34,6 +34,35 @@ export function formatDateTime(dateString) {
   });
 }
 
+// Natural sort by die/item code so SSSD-1, SSSD-2 ... SSSD-10 order correctly
+// (plain string sort would put SSSD-10 before SSSD-2). Splits each code into
+// text/number chunks and compares chunk-by-chunk.
+export function compareCodes(a, b) {
+  const ca = String(a ?? '').trim().toUpperCase();
+  const cb = String(b ?? '').trim().toUpperCase();
+  const ra = ca.match(/(\d+|\D+)/g) || [];
+  const rb = cb.match(/(\d+|\D+)/g) || [];
+  const len = Math.max(ra.length, rb.length);
+  for (let i = 0; i < len; i++) {
+    const pa = ra[i], pb = rb[i];
+    if (pa === undefined) return -1;
+    if (pb === undefined) return 1;
+    const na = /^\d+$/.test(pa), nb = /^\d+$/.test(pb);
+    if (na && nb) {
+      const d = parseInt(pa, 10) - parseInt(pb, 10);
+      if (d !== 0) return d;
+    } else if (pa !== pb) {
+      return pa < pb ? -1 : 1;
+    }
+  }
+  return 0;
+}
+
+// Return a new array of items sorted by their `code` field, naturally.
+export function sortByCode(items) {
+  return [...(items || [])].sort((x, y) => compareCodes(x?.code, y?.code));
+}
+
 export function getStatusColor(status) {
   const colors = {
     draft: 'bg-gray-500/20 text-gray-300 border-gray-500/30',
