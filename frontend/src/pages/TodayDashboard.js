@@ -1,7 +1,8 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { Phone, CheckCircle2, MapPin, AlertTriangle, Loader2, RefreshCw, ClipboardList, ChevronRight } from 'lucide-react';
+import { Phone, CheckCircle2, MapPin, AlertTriangle, Loader2, RefreshCw, ClipboardList, ChevronRight, ListChecks } from 'lucide-react';
+import AgendaWeekWidget from '../components/delegation/AgendaWeekWidget';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
@@ -87,6 +88,25 @@ export default function TodayDashboard() {
           <StatChip count={counts.calls_today}  label="Calls"   color="bg-yellow-500/15 text-yellow-400 border-yellow-500/30" testid="stat-calls" />
           <StatChip count={counts.visits_today} label="Visits"  color="bg-blue-500/15 text-blue-400 border-blue-500/30"     testid="stat-visits" />
         </div>
+
+        {/* Quick tiles: My Tasks + Calendar */}
+        <div className="grid grid-cols-2 gap-2">
+          <button onClick={() => nav('/delegation?tab=mytasks')}
+            className="border rounded-xl p-3 flex items-center gap-2 bg-[var(--bg-card)] border-[var(--border-color)] active:opacity-75">
+            <span className="w-9 h-9 rounded-lg bg-pink-400/10 flex items-center justify-center"><ListChecks className="h-4 w-4 text-pink-400" /></span>
+            <span className="text-xs font-semibold text-[var(--text-secondary)]">My Tasks</span>
+          </button>
+          <button onClick={() => nav('/delegation?tab=calendar')}
+            className="border rounded-xl p-3 flex items-center gap-2 bg-[var(--bg-card)] border-[var(--border-color)] active:opacity-75">
+            <span className="w-9 h-9 rounded-lg bg-[#e94560]/10 flex items-center justify-center"><ClipboardList className="h-4 w-4 text-[#e94560]" /></span>
+            <span className="text-xs font-semibold text-[var(--text-secondary)]">Calendar</span>
+          </button>
+        </div>
+
+        {/* This week agenda — follow-ups, visits, tasks */}
+        <AgendaWeekWidget
+          card="bg-[var(--bg-card)] border-[var(--border-color)]"
+          textPri="text-[var(--text-primary)]" textSec="text-[var(--text-secondary)]" textMuted="text-[var(--text-muted)]" />
 
         {/* Delegation task card — admin only */}
         {delgData && (delgData.overdue > 0 || delgData.today > 0) && (

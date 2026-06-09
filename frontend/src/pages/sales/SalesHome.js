@@ -6,9 +6,10 @@ import { useSalesHome } from '../../hooks/useSalesHome';
 import {
   MapPin, FileText, Receipt, Target, Clock, Phone, MessageSquare,
   ChevronRight, AlertCircle, CheckCircle, Navigation, Flame,
-  BarChart2, Calendar,
+  BarChart2, Calendar, ListChecks,
 } from 'lucide-react';
 import { Button } from '../../components/ui/button';
+import AgendaWeekWidget from '../../components/delegation/AgendaWeekWidget';
 
 const card   = 'bg-[var(--bg-card)] border border-[var(--border-color)]';
 const tPri   = 'text-[var(--text-primary)]';
@@ -279,6 +280,7 @@ export default function SalesHome() {
               { to: '/sales/expenses',   icon: Receipt,       label: 'Expenses',    color: 'text-green-400',  bg: 'bg-green-400/10',  perm: 'expenses_log' },
               { to: '/leave-management', icon: Calendar,      label: 'Leave',       color: 'text-teal-400',   bg: 'bg-teal-400/10',   perm: 'leave_apply' },
             ].filter(a => perms[a.perm]);
+            actions.push({ to: '/delegation?tab=mytasks', icon: ListChecks, label: 'My Tasks', color: 'text-pink-400', bg: 'bg-pink-400/10' });
             if (!actions.length) return null;
             return (
               <div className={`grid gap-2 ${actions.length <= 2 ? 'grid-cols-2' : actions.length === 3 ? 'grid-cols-3' : 'grid-cols-4'}`}>
@@ -293,6 +295,11 @@ export default function SalesHome() {
               </div>
             );
           })()}
+        </section>
+
+        {/* ── THIS WEEK AGENDA ── */}
+        <section>
+          <AgendaWeekWidget card={card} textPri={tPri} textSec={tSec} textMuted={tMuted} />
         </section>
 
         {/* ── WEEK STATS ── */}

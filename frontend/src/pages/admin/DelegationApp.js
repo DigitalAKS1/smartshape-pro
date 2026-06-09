@@ -1,5 +1,5 @@
 import React from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import AdminLayout from '../../components/layouts/AdminLayout';
 import { useDelegationApp } from '../../hooks/useDelegationApp';
@@ -11,13 +11,14 @@ import ReassignTaskDialog from '../../components/delegation/ReassignTaskDialog';
 import ApprovalsInbox from '../../components/delegation/ApprovalsInbox';
 import NotificationsBell from '../../components/delegation/NotificationsBell';
 import MyPlanner from '../../components/delegation/MyPlanner';
+import MyTasksTable from '../../components/delegation/MyTasksTable';
 import {
   DelegationOverviewTab, DelegationVisitsTab, DelegationReportsTab,
   DelegationCalendarTab, DelegationPersonDrawer,
 } from '../../components/delegation/DelegationTaskList';
 import DelegationCalendar from '../../components/delegation/calendar/DelegationCalendar';
 import {
-  LayoutGrid, ClipboardList, Calendar, CalendarDays, Users, MapPin, BarChart2, Briefcase, Shield, UserCheck, User, CheckCircle2, Sun,
+  LayoutGrid, ClipboardList, Calendar, CalendarDays, Users, MapPin, BarChart2, Briefcase, Shield, UserCheck, User, CheckCircle2, Sun, ListChecks,
 } from 'lucide-react';
 
 const PINK = '#e94560';
@@ -39,6 +40,14 @@ export default function DelegationApp() {
   const { user } = useAuth();
   const nav      = useNavigate();
   const s        = useDelegationApp();
+  const [searchParams] = useSearchParams();
+
+  // Deep-link: /delegation?tab=mytasks (or ?tab=calendar) opens that tab.
+  React.useEffect(() => {
+    const t = searchParams.get('tab');
+    if (t && t !== s.viewTab) s.setViewTab(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   const card      = 'bg-[var(--bg-card)] border-[var(--border-color)]';
   const inputCls  = 'bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]';
@@ -97,6 +106,7 @@ export default function DelegationApp() {
           {[
             { id: 'calendar', label: 'Calendar', icon: CalendarDays },
             { id: 'planner', label: 'My Planner', icon: Sun },
+            { id: 'mytasks', label: 'My Tasks', icon: ListChecks },
             ...VIEWS,
             ...((s.activeRole === 'boss' || s.activeRole === 'delegator')
               ? [{ id: 'approvals', label: 'Approvals', icon: CheckCircle2 }]
@@ -121,6 +131,15 @@ export default function DelegationApp() {
             completeInst={s.completeInst} handleImageComplete={s.handleImageComplete}
             onEditTask={(inst) => s.openEditTask(inst, s.activeRole)}
             onReassign={(inst) => s.setReassignInst(inst)}
+            {...sharedTheme}
+          />
+        )}
+
+        {/* My Tasks table */}
+        {s.viewTab === 'mytasks' && (
+          <MyTasksTable
+            myEmp={s.myEmp}
+            completeInst={s.completeInst} verifyInst={s.verifyInst}
             {...sharedTheme}
           />
         )}

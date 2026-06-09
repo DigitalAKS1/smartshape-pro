@@ -11,6 +11,7 @@ import StatCard from '../../components/dashboard/StatCard';
 import RecentQuotationsCard from '../../components/dashboard/RecentQuotationsCard';
 import AgentPerformanceCard from '../../components/dashboard/AgentPerformanceCard';
 import LeadPipelineCard from '../../components/dashboard/LeadPipelineCard';
+import AgendaWeekWidget from '../../components/delegation/AgendaWeekWidget';
 
 export default function Dashboard() {
   const { isDark } = useTheme();
@@ -104,6 +105,11 @@ export default function Dashboard() {
           {statCards.map((card) => (
             <StatCard key={card.label} {...card} tk={tk} />
           ))}
+        </div>
+
+        {/* This week agenda */}
+        <div className={rv()}>
+          <AgendaWeekWidget card={tk.card} textPri={tk.t1} textSec={tk.t2} textMuted={tk.tm} />
         </div>
 
         {/* Recent Quotations */}
