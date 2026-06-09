@@ -121,8 +121,33 @@ export default function Inventory() {
           })}
         </div>
 
+        {/* Needs-reorder prompt */}
+        {!inv.isFiltered && inv.stats.needsReorder > 0 && (
+          <button onClick={() => inv.setQuickFilter('reorder')}
+            className="w-full flex items-center justify-between px-3 py-2 rounded-lg bg-yellow-500/10 border border-yellow-500/20 hover:bg-yellow-500/15 transition-colors">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="h-3.5 w-3.5 text-yellow-600" />
+              <span className="text-xs font-medium text-yellow-600">
+                {inv.stats.needsReorder} item{inv.stats.needsReorder !== 1 ? 's' : ''} at or below minimum level
+              </span>
+            </div>
+            <span className="text-xs text-yellow-600 font-medium">View reorder list →</span>
+          </button>
+        )}
+        {inv.quickFilter === 'reorder' && (
+          <div className="flex items-center justify-between px-3 py-2 rounded-lg bg-yellow-500/10 border border-yellow-500/20">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="h-3.5 w-3.5 text-yellow-600" />
+              <span className="text-xs font-medium text-yellow-600">
+                Reorder list · {inv.filteredDies.length} item{inv.filteredDies.length !== 1 ? 's' : ''} · most urgent first
+              </span>
+            </div>
+            <button onClick={inv.clearFilters} className="text-xs text-yellow-600 hover:underline font-medium">Clear</button>
+          </div>
+        )}
+
         {/* Active filter banner */}
-        {inv.isFiltered && (
+        {inv.isFiltered && inv.quickFilter !== 'reorder' && (
           <div className="flex items-center justify-between px-3 py-2 rounded-lg bg-[#e94560]/10 border border-[#e94560]/20">
             <div className="flex items-center gap-2">
               <Filter className="h-3.5 w-3.5 text-[#e94560]" />
@@ -244,6 +269,9 @@ export default function Inventory() {
                           <div className="w-14 h-1 bg-[var(--border-color)] rounded-full mt-1 overflow-hidden">
                             <div className={`h-full ${barColor} rounded-full transition-all`} style={{ width: `${pct}%` }} />
                           </div>
+                          {die.stock_qty <= die.min_level && (
+                            <span className="text-[10px] text-yellow-600 font-medium">reorder {Math.max((die.min_level || 0) - die.stock_qty, 1)}</span>
+                          )}
                         </td>
                         <td className="px-4 py-3">
                           {die.stock_qty === 0
@@ -304,6 +332,9 @@ export default function Inventory() {
                         : die.stock_qty <= die.min_level
                         ? <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-yellow-500/15 text-yellow-600 font-medium">LOW</span>
                         : <span className={`text-[10px] ${textMuted}`}>in stock</span>}
+                      {die.stock_qty <= die.min_level && (
+                        <p className="text-[9px] text-yellow-600 font-medium mt-0.5">reorder {Math.max((die.min_level || 0) - die.stock_qty, 1)}</p>
+                      )}
                     </div>
                   </div>
                   <div className="flex items-center gap-1 mt-2.5 pt-2.5 border-t border-[var(--border-color)]">
