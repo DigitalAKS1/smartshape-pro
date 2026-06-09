@@ -41,6 +41,7 @@ export default function DelegationApp() {
   const nav      = useNavigate();
   const s        = useDelegationApp();
   const [searchParams] = useSearchParams();
+  const [mtKey, setMtKey] = React.useState(0);   // bump to refresh the My Tasks table
 
   // Deep-link: /delegation?tab=mytasks (or ?tab=calendar) opens that tab.
   React.useEffect(() => {
@@ -140,6 +141,8 @@ export default function DelegationApp() {
           <MyTasksTable
             myEmp={s.myEmp}
             completeInst={s.completeInst} verifyInst={s.verifyInst}
+            onEditTask={(inst) => s.openEditTask(inst, 'delegator')}
+            refreshKey={mtKey}
             {...sharedTheme}
           />
         )}
@@ -250,15 +253,19 @@ export default function DelegationApp() {
       {s.editTask && (
         <EditTaskDialog
           task={s.editTask}
-          role={s.activeRole}
+          role={s.editTask.__instanceId ? 'delegatee' : 'delegator'}
           assignableEmployees={s.assignableEmployees}
           saving={s.savingEdit}
           onSubmit={async (payload) => {
-            if (s.activeRole === 'delegatee') {
+            // Mode follows how the dialog was opened (instance soft-edit vs full
+            // task edit), not the active role — so editing an "Assigned by me"
+            // task always does a full owner update.
+            if (s.editTask.__instanceId) {
               await s.patchInstance(s.editTask.__instanceId, payload);
               s.setEditTask(null);
             } else {
               await s.updateTask(s.editTask.task_id, payload);
+              setMtKey(k => k + 1);   // refresh My Tasks table with the edit + new history
             }
           }}
           onClose={() => s.setEditTask(null)}

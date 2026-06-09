@@ -568,9 +568,31 @@ async def update_task(task_id: str, request: Request):
     if "buddy_emp_id" in updates:
         updates["buddy_name"] = await _emp_name(updates["buddy_emp_id"])
 
-    await db.del_tasks.update_one({"task_id": task_id}, {"$set": updates})
+    # ── edit history ── record what the delegator/boss changed, so both the
+    # delegator and the delegatee can see it (logged on the task AND mirrored
+    # onto every instance, since both roles view instances).
+    by = user.get("email", "")
+    LOG_FIELDS = ("title", "description", "priority", "task_type", "frequency",
+                  "target_date", "start_date", "end_date",
+                  "require_verification", "requires_image", "buddy_emp_id")
+    logs = []
+    for f in LOG_FIELDS:
+        if f in updates and updates[f] != task.get(f):
+            logs.append(_make_change(by, f, task.get(f), updates[f]))
+    if "assignee_ids" in updates and set(updates["assignee_ids"]) != set(task.get("assignee_ids") or []):
+        old_names = ", ".join(a.get("name", "") for a in (task.get("assignees") or []))
+        new_names = ", ".join(a.get("name", "") for a in updates.get("assignees", []))
+        logs.append(_make_change(by, "assignees", old_names, new_names))
+
+    update_doc = {"$set": updates}
+    if logs:
+        update_doc["$push"] = {"change_log": {"$each": logs}}
+    await db.del_tasks.update_one({"task_id": task_id}, update_doc)
     new_task = await db.del_tasks.find_one({"task_id": task_id}, {"_id": 0})
     await _resync_pending_instances(new_task)
+    if logs:
+        await db.del_task_instances.update_many(
+            {"task_id": task_id}, {"$push": {"change_log": {"$each": logs}}})
     return await db.del_tasks.find_one({"task_id": task_id}, {"_id": 0})
 
 @router.delete("/tasks/{task_id}")

@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { delegation as delApi } from '../../lib/api';
-import { Check, Eye, Search, ArrowDownUp, Calendar, UserCheck } from 'lucide-react';
+import { Check, Eye, Search, ArrowDownUp, Calendar, UserCheck, Pencil, History, X } from 'lucide-react';
 
 const PINK = '#e94560';
 const TODAY = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
@@ -12,12 +12,13 @@ const STATUS = {
   verified: 'bg-green-500/15 text-green-500',
 };
 
-export default function MyTasksTable({ myEmp, completeInst, verifyInst, card, textPri, textSec, textMuted, inputCls }) {
+export default function MyTasksTable({ myEmp, completeInst, verifyInst, onEditTask, refreshKey, card, textPri, textSec, textMuted, inputCls }) {
   const [dir, setDir] = useState('to');        // 'to' = assigned to me, 'by' = assigned by me
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState('');
   const [q, setQ] = useState('');
+  const [historyInst, setHistoryInst] = useState(null);   // instance whose history is open
 
   const load = async () => {
     if (!myEmp?.emp_id) { setRows([]); return; }
@@ -29,7 +30,7 @@ export default function MyTasksTable({ myEmp, completeInst, verifyInst, card, te
     } catch { setRows([]); }
     finally { setLoading(false); }
   };
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [dir, myEmp]);
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [dir, myEmp, refreshKey]);
 
   const filtered = useMemo(() => rows.filter(t => {
     if (status && t.status !== status) return false;
@@ -108,17 +109,27 @@ export default function MyTasksTable({ myEmp, completeInst, verifyInst, card, te
                     <td className={`px-3 py-2.5 ${overdue ? 'text-red-500 font-semibold' : textSec}`}>{t.due_date}{overdue ? ' · overdue' : ''}</td>
                     <td className={`px-3 py-2.5 font-semibold capitalize ${PRI[t.priority] || textSec}`}>{t.priority}</td>
                     <td className="px-3 py-2.5"><span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${STATUS[t.status]}`}>{t.status}</span></td>
-                    <td className="px-3 py-2.5 text-right">
-                      {dir === 'to' && t.status === 'pending' && (
-                        <button onClick={() => onDone(t)} className="text-xs font-semibold px-2.5 py-1 rounded-lg text-white" style={{ background: '#10b981' }}>
-                          <Check className="h-3 w-3 inline" /> Done
+                    <td className="px-3 py-2.5">
+                      <div className="flex items-center justify-end gap-1.5">
+                        {dir === 'to' && t.status === 'pending' && (
+                          <button onClick={() => onDone(t)} className="text-xs font-semibold px-2.5 py-1 rounded-lg text-white" style={{ background: '#10b981' }}>
+                            <Check className="h-3 w-3 inline" /> Done
+                          </button>
+                        )}
+                        {t.status === 'completed' && (
+                          <button onClick={() => onVerify(t)} className="text-xs font-semibold px-2.5 py-1 rounded-lg text-blue-500 hover:bg-blue-500/10">
+                            <Eye className="h-3 w-3 inline" /> Verify
+                          </button>
+                        )}
+                        {dir === 'by' && onEditTask && t.status !== 'verified' && (
+                          <button onClick={() => onEditTask(t)} title="Edit task" className={`p-1.5 rounded-lg ${textMuted} hover:bg-[var(--bg-hover)]`}>
+                            <Pencil className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                        <button onClick={() => setHistoryInst(t)} title="Edit history" className={`p-1.5 rounded-lg ${textMuted} hover:bg-[var(--bg-hover)]`}>
+                          <History className="h-3.5 w-3.5" />
                         </button>
-                      )}
-                      {t.status === 'completed' && (
-                        <button onClick={() => onVerify(t)} className="text-xs font-semibold px-2.5 py-1 rounded-lg text-blue-500 hover:bg-blue-500/10">
-                          <Eye className="h-3 w-3 inline" /> Verify
-                        </button>
-                      )}
+                      </div>
                     </td>
                   </tr>
                 );
@@ -151,12 +162,65 @@ export default function MyTasksTable({ myEmp, completeInst, verifyInst, card, te
                       <Eye className="h-3.5 w-3.5 inline mr-1" /> Verify
                     </button>
                   )}
+                  <div className="flex gap-2 mt-1">
+                    {dir === 'by' && onEditTask && t.status !== 'verified' && (
+                      <button onClick={() => onEditTask(t)} className={`flex-1 h-8 rounded-lg text-xs font-semibold border border-[var(--border-color)] ${textSec}`}>
+                        <Pencil className="h-3 w-3 inline mr-1" /> Edit
+                      </button>
+                    )}
+                    <button onClick={() => setHistoryInst(t)} className={`flex-1 h-8 rounded-lg text-xs font-semibold border border-[var(--border-color)] ${textMuted}`}>
+                      <History className="h-3 w-3 inline mr-1" /> History
+                    </button>
+                  </div>
                 </div>
               );
             })}
           </div>
         </div>
       )}
+
+      {historyInst && (() => {
+        const FIELD_LABEL = {
+          title: 'Title', description: 'Description', priority: 'Priority',
+          task_type: 'Type', frequency: 'Frequency', target_date: 'Date',
+          start_date: 'Start', end_date: 'End', require_verification: 'Needs verification',
+          requires_image: 'Photo required', buddy_emp_id: 'Buddy', assignees: 'Assignees',
+          due_date: 'Due date', completion_note: 'Completion note', emp_id: 'Assignee',
+        };
+        const fmt = (v) => v === true ? 'Yes' : v === false ? 'No' : (v === '' || v == null) ? '—' : String(v);
+        const log = [...(historyInst.change_log || [])].reverse();   // newest first
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setHistoryInst(null)}>
+            <div className={`${card} border rounded-2xl w-full max-w-md max-h-[85vh] overflow-y-auto`} onClick={e => e.stopPropagation()}>
+              <div className="flex items-start justify-between px-5 py-4 border-b border-[var(--border-color)]">
+                <div>
+                  <h3 className={`text-sm font-semibold ${textPri}`}>Edit history</h3>
+                  <p className={`text-xs ${textMuted} mt-0.5`}>{historyInst.task_title}</p>
+                </div>
+                <button onClick={() => setHistoryInst(null)} className={`p-1.5 rounded-lg hover:bg-[var(--bg-hover)] ${textSec}`}><X className="h-4 w-4" /></button>
+              </div>
+              <div className="p-5 space-y-3">
+                {log.length === 0 ? (
+                  <p className={`text-sm ${textMuted} text-center py-6`}>No changes recorded yet.</p>
+                ) : log.map((e, i) => (
+                  <div key={i} className="flex gap-3">
+                    <span className="w-1.5 h-1.5 rounded-full mt-1.5 flex-shrink-0" style={{ background: '#e94560' }} />
+                    <div className="flex-1 min-w-0">
+                      <p className={`text-xs ${textPri}`}>
+                        <span className="font-semibold">{FIELD_LABEL[e.field] || e.field}</span>
+                        {e.note ? ` — ${e.note}` : <>: <span className={textMuted}>{fmt(e.from)}</span> → <span>{fmt(e.to)}</span></>}
+                      </p>
+                      <p className={`text-[11px] ${textMuted} mt-0.5`}>
+                        {e.by || 'system'}{e.at ? ` · ${new Date(e.at).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}` : ''}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
