@@ -94,6 +94,7 @@ export const dies = {
   update: (id, data) => API.put(`/dies/${id}`, data),
   archive: (id) => API.put(`/dies/${id}/archive`),
   delete: (id) => API.delete(`/dies/${id}`),
+  bulkDelete: (ids) => API.post('/dies/bulk-delete', { die_ids: ids }),
   uploadImage: (id, file) => {
     const formData = new FormData();
     formData.append('file', file);

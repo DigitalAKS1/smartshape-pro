@@ -116,6 +116,23 @@ async def delete_die(die_id: str, request: Request):
     return {"message": "Die deleted successfully"}
 
 
+class BulkDeleteInput(BaseModel):
+    die_ids: List[str]
+
+
+@router.post("/dies/bulk-delete")
+async def bulk_delete_dies(payload: BulkDeleteInput, request: Request):
+    user = await get_current_user(request)
+    require_teams(user, "admin")  # only admin can hard-delete
+    ids = [i for i in (payload.die_ids or []) if i]
+    if not ids:
+        raise HTTPException(status_code=400, detail="No items selected")
+    if len(ids) > 500:
+        raise HTTPException(status_code=400, detail="Too many items in one request (max 500)")
+    result = await db.dies.delete_many({"die_id": {"$in": ids}})
+    return {"deleted": result.deleted_count, "requested": len(ids)}
+
+
 @router.post("/dies/{die_id}/upload-image")
 async def upload_die_image(die_id: str, request: Request, file: UploadFile = File(...)):
     user = await get_current_user(request)

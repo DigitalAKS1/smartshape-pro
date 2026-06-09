@@ -6,6 +6,7 @@ import {
   Package, Plus, Download, Upload, Archive, MoreVertical,
   Grid3X3, List, Search, Edit2, TrendingUp, TrendingDown,
   CheckCircle2, AlertCircle, XCircle, Scissors, Filter, X,
+  CheckSquare, Square, Trash2,
 } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
@@ -15,7 +16,7 @@ import useInventory, { CATEGORIES, CAT_LABELS, TYPES } from '../../hooks/useInve
 import DieCard from '../../components/inventory/DieCard';
 import { CreateDieDialog, EditDieDialog } from '../../components/inventory/DieFormDialog';
 import StockMovementDialog from '../../components/inventory/StockMovementDialog';
-import { ImportDialog, DeleteConfirmDialog } from '../../components/inventory/ImportDeleteDialogs';
+import { ImportDialog, DeleteConfirmDialog, BulkDeleteConfirmDialog } from '../../components/inventory/ImportDeleteDialogs';
 
 const backendUrl = process.env.REACT_APP_BACKEND_URL || '';
 
@@ -91,6 +92,14 @@ export default function Inventory() {
                     <Upload className="mr-2 h-4 w-4" /> Import CSV
                   </DropdownMenuItem>
                 )}
+                {isAdmin && (
+                  <>
+                    <DropdownMenuSeparator className="border-[var(--border-color)]" />
+                    <DropdownMenuItem onClick={() => inv.setSelectMode(true)} className="cursor-pointer">
+                      <CheckSquare className="mr-2 h-4 w-4" /> Select &amp; delete
+                    </DropdownMenuItem>
+                  </>
+                )}
               </DropdownMenuContent>
             </DropdownMenu>
             {canWrite && (
@@ -102,6 +111,29 @@ export default function Inventory() {
             )}
           </div>
         </div>
+
+        {/* Multi-select toolbar (admin) */}
+        {isAdmin && inv.selectMode && (
+          <div className="sticky top-2 z-20 flex items-center justify-between gap-2 px-3 py-2 rounded-lg bg-[#e94560]/12 border border-[#e94560]/40 backdrop-blur">
+            <div className="flex items-center gap-3 min-w-0">
+              <button onClick={inv.exitSelectMode} className="p-1 rounded-md hover:bg-[var(--bg-hover)] text-[var(--text-secondary)]" title="Exit selection">
+                <X className="h-4 w-4" />
+              </button>
+              <span className="text-sm font-semibold text-[var(--text-primary)] whitespace-nowrap">
+                {inv.selectedIds.length} selected
+              </span>
+              <button onClick={inv.toggleSelectAllVisible} className="text-xs text-[#e94560] hover:underline font-medium whitespace-nowrap">
+                {inv.allVisibleSelected ? 'Clear all' : `Select all (${inv.filteredDies.length})`}
+              </button>
+            </div>
+            <Button size="sm" disabled={inv.selectedIds.length === 0}
+              onClick={() => inv.setBulkDeleteOpen(true)}
+              className="bg-red-600 hover:bg-red-700 text-white h-8 px-3 disabled:opacity-40">
+              <Trash2 className="h-4 w-4 sm:mr-1.5" />
+              <span className="hidden sm:inline">Delete{inv.selectedIds.length ? ` (${inv.selectedIds.length})` : ''}</span>
+            </Button>
+          </div>
+        )}
 
         {/* KPI strip */}
         <div className="grid grid-cols-4 gap-2 sm:gap-3">
@@ -226,6 +258,9 @@ export default function Inventory() {
                             onStockIn={d => inv.openStockAdj(d, 'stock_in')}
                             onStockOut={d => inv.openStockAdj(d, 'stock_out')}
                             isAdmin={isAdmin} canWrite={canWrite}
+                            selectMode={isAdmin && inv.selectMode}
+                            selected={inv.isSelected(die.die_id)}
+                            onToggleSelect={() => inv.toggleSelect(die.die_id)}
                             textPri={textPri} textMuted={textMuted} textSec={textSec}
                             card={card} backendUrl={backendUrl} />
                         ))}
@@ -242,6 +277,15 @@ export default function Inventory() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="bg-[var(--bg-primary)] border-b border-[var(--border-color)]">
+                    {isAdmin && inv.selectMode && (
+                      <th className="px-4 py-3 w-10">
+                        <button onClick={inv.toggleSelectAllVisible} title={inv.allVisibleSelected ? 'Clear all' : 'Select all'}>
+                          {inv.allVisibleSelected
+                            ? <CheckSquare className="h-4 w-4 text-[#e94560]" />
+                            : <Square className="h-4 w-4 text-[var(--text-muted)]" />}
+                        </button>
+                      </th>
+                    )}
                     {['Image','Code','Name','Category','Type','Stock','Status','Actions'].map(h => (
                       <th key={h} className={`text-left text-xs py-3 px-4 font-medium ${textMuted}`}>{h}</th>
                     ))}
@@ -252,7 +296,16 @@ export default function Inventory() {
                     const pct = die.min_level > 0 ? Math.min(100, (die.stock_qty / (die.min_level * 3)) * 100) : (die.stock_qty > 0 ? 100 : 0);
                     const barColor = die.stock_qty === 0 ? 'bg-red-500' : die.stock_qty <= die.min_level ? 'bg-yellow-500' : 'bg-green-500';
                     return (
-                      <tr key={die.die_id} className={`border-t border-[var(--border-color)] hover:bg-[var(--bg-hover)] transition-colors ${die.is_active === false ? 'opacity-50' : ''}`}>
+                      <tr key={die.die_id} className={`border-t border-[var(--border-color)] hover:bg-[var(--bg-hover)] transition-colors ${die.is_active === false ? 'opacity-50' : ''} ${isAdmin && inv.selectMode && inv.isSelected(die.die_id) ? 'bg-[#e94560]/10' : ''}`}>
+                        {isAdmin && inv.selectMode && (
+                          <td className="px-4 py-3">
+                            <button onClick={() => inv.toggleSelect(die.die_id)} title="Select row">
+                              {inv.isSelected(die.die_id)
+                                ? <CheckSquare className="h-4 w-4 text-[#e94560]" />
+                                : <Square className="h-4 w-4 text-[var(--text-muted)]" />}
+                            </button>
+                          </td>
+                        )}
                         <td className="px-4 py-3">
                           <div className="w-11 h-11 rounded-lg bg-[var(--bg-primary)] overflow-hidden">
                             {die.image_url
@@ -303,7 +356,7 @@ export default function Inventory() {
                       </tr>
                     );
                   })}
-                  {inv.filteredDies.length === 0 && <tr><td colSpan="8" className={`py-16 text-center ${textMuted}`}>No items found</td></tr>}
+                  {inv.filteredDies.length === 0 && <tr><td colSpan={isAdmin && inv.selectMode ? 9 : 8} className={`py-16 text-center ${textMuted}`}>No items found</td></tr>}
                 </tbody>
               </table>
             </div>
@@ -313,8 +366,15 @@ export default function Inventory() {
               {inv.filteredDies.length === 0
                 ? <p className={`py-12 text-center text-sm ${textMuted}`}>No items found</p>
                 : inv.filteredDies.map(die => (
-                <div key={die.die_id} className={`p-3 ${die.is_active === false ? 'opacity-50' : ''}`}>
+                <div key={die.die_id} className={`p-3 ${die.is_active === false ? 'opacity-50' : ''} ${isAdmin && inv.selectMode && inv.isSelected(die.die_id) ? 'bg-[#e94560]/10' : ''}`}>
                   <div className="flex items-center gap-3">
+                    {isAdmin && inv.selectMode && (
+                      <button onClick={() => inv.toggleSelect(die.die_id)} className="shrink-0" title="Select">
+                        {inv.isSelected(die.die_id)
+                          ? <CheckSquare className="h-5 w-5 text-[#e94560]" />
+                          : <Square className="h-5 w-5 text-[var(--text-muted)]" />}
+                      </button>
+                    )}
                     <div className="w-14 h-14 rounded-lg bg-[var(--bg-primary)] flex-shrink-0 overflow-hidden border border-[var(--border-color)]">
                       {die.image_url
                         ? <img src={`${backendUrl}${die.image_url}`} alt="" className="w-full h-full object-contain p-1" />
@@ -408,6 +468,11 @@ export default function Inventory() {
         <DeleteConfirmDialog
           open={inv.deleteConfirmOpen} onOpenChange={inv.setDeleteConfirmOpen}
           deleteTarget={inv.deleteTarget} handleDelete={inv.handleDelete}
+          textPri={textPri} textSec={textSec} textMuted={textMuted} dlgCls={dlgCls} />
+
+        <BulkDeleteConfirmDialog
+          open={inv.bulkDeleteOpen} onOpenChange={inv.setBulkDeleteOpen}
+          count={inv.selectedIds.length} onConfirm={inv.handleBulkDelete} deleting={inv.bulkDeleting}
           textPri={textPri} textSec={textSec} textMuted={textMuted} dlgCls={dlgCls} />
 
       </div>

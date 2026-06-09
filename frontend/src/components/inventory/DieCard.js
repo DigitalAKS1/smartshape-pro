@@ -1,11 +1,12 @@
 import React, { useRef } from 'react';
-import { Camera, Scissors, TrendingUp, TrendingDown, Edit2, Archive, ArchiveRestore, Trash2, MoreVertical } from 'lucide-react';
+import { Camera, Scissors, TrendingUp, TrendingDown, Edit2, Archive, ArchiveRestore, Trash2, MoreVertical, CheckSquare, Square } from 'lucide-react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../ui/dropdown-menu';
 
 export default function DieCard({
   die, uploading, onUpload, onArchive, onEdit,
   onDeleteRequest, onStockIn, onStockOut,
   isAdmin, canWrite,
+  selectMode, selected, onToggleSelect,
   textPri, textMuted, textSec, card, backendUrl,
 }) {
   const fileRef = useRef(null);
@@ -19,10 +20,21 @@ export default function DieCard({
   const barColor = die.stock_qty === 0 ? '#ef4444' : die.stock_qty <= die.min_level ? '#f59e0b' : '#22c55e';
 
   return (
-    <div className={`${card} border rounded-xl overflow-hidden flex flex-col group ${isArchived ? 'opacity-50' : ''}`}>
+    <div className={`${card} border rounded-xl overflow-hidden flex flex-col group ${isArchived ? 'opacity-50' : ''} ${selected ? 'ring-2 ring-[#e94560] border-[#e94560]' : ''}`}>
 
       {/* Image */}
       <div className="relative aspect-square bg-[var(--bg-primary)] overflow-hidden">
+
+        {/* Selection overlay (admin select mode) */}
+        {selectMode && (
+          <button onClick={onToggleSelect}
+            className={`absolute inset-0 z-20 flex items-start justify-start p-1.5 ${selected ? 'bg-[#e94560]/15' : 'bg-black/0 hover:bg-black/10'} transition-colors`}
+            title={selected ? 'Deselect' : 'Select'}>
+            {selected
+              ? <CheckSquare className="h-5 w-5 text-[#e94560] bg-white rounded" />
+              : <Square className="h-5 w-5 text-white drop-shadow" />}
+          </button>
+        )}
         {die.image_url
           ? <img src={`${backendUrl}${die.image_url}`} alt={die.name} className="w-full h-full object-contain p-2" />
           : <div className={`w-full h-full flex flex-col items-center justify-center ${textMuted} gap-1`}>

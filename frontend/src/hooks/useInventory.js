@@ -34,6 +34,10 @@ export default function useInventory() {
   const [importOpen, setImportOpen] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState(null);
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState([]);
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
   const [stockAdjOpen, setStockAdjOpen] = useState(false);
   const [stockAdjTarget, setStockAdjTarget] = useState(null);
   const [stockAdjType, setStockAdjType] = useState('stock_in');
@@ -226,6 +230,33 @@ export default function useInventory() {
     }
   };
 
+  // ── Multi-select bulk delete (admin only) ──
+  const toggleSelect = (id) =>
+    setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  const clearSelection = () => setSelectedIds([]);
+  const isSelected = (id) => selectedIds.includes(id);
+  const exitSelectMode = () => { setSelectMode(false); setSelectedIds([]); };
+  // Select / clear all currently-visible (filtered) dies
+  const allVisibleSelected = filteredDies.length > 0 && filteredDies.every(d => selectedIds.includes(d.die_id));
+  const toggleSelectAllVisible = () =>
+    setSelectedIds(allVisibleSelected ? [] : filteredDies.map(d => d.die_id));
+
+  const handleBulkDelete = async () => {
+    if (selectedIds.length === 0) return;
+    setBulkDeleting(true);
+    try {
+      const res = await diesApi.bulkDelete(selectedIds);
+      toast.success(`Deleted ${res.data?.deleted ?? selectedIds.length} item${(res.data?.deleted ?? selectedIds.length) !== 1 ? 's' : ''}`);
+      setBulkDeleteOpen(false);
+      exitSelectMode();
+      fetchDies();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Bulk delete failed');
+    } finally {
+      setBulkDeleting(false);
+    }
+  };
+
   const activeDies = dies.filter(d => d.is_active !== false);
   const stats = {
     total: activeDies.length,
@@ -269,6 +300,11 @@ export default function useInventory() {
     importOpen, setImportOpen, importRef, handleImport, downloadSample,
     // delete dialog
     deleteConfirmOpen, setDeleteConfirmOpen, deleteTarget, setDeleteTarget, handleDelete,
+    // multi-select bulk delete (admin)
+    selectMode, setSelectMode, exitSelectMode,
+    selectedIds, isSelected, toggleSelect, clearSelection,
+    allVisibleSelected, toggleSelectAllVisible,
+    bulkDeleteOpen, setBulkDeleteOpen, bulkDeleting, handleBulkDelete,
     // misc
     handleArchive, saving,
   };

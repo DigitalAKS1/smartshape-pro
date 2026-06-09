@@ -65,3 +65,31 @@ export function DeleteConfirmDialog({
     </Dialog>
   );
 }
+
+// ── Bulk Delete Confirm Dialog (admin) ─────────────────────────────────────────
+export function BulkDeleteConfirmDialog({
+  open, onOpenChange, count, onConfirm, deleting,
+  textPri, textSec, textMuted, dlgCls,
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className={`${dlgCls} w-[calc(100vw-1.5rem)] max-w-sm`}>
+        <DialogHeader><DialogTitle className="text-red-500">Delete {count} item{count !== 1 ? 's' : ''}?</DialogTitle></DialogHeader>
+        <p className={`text-sm ${textSec} mt-1`}>
+          You are about to permanently delete <strong className={textPri}>{count}</strong> selected item{count !== 1 ? 's' : ''}.<br />This cannot be undone.
+        </p>
+        <p className="text-sm text-yellow-500 flex items-center gap-1.5 mt-2">
+          <AlertTriangle className="h-4 w-4 shrink-0" />Any stock recorded on these items will be removed too.
+        </p>
+        <DialogFooter className="gap-2 mt-3">
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={deleting}
+            className={`flex-1 h-11 border-[var(--border-color)] ${textMuted}`}>Cancel</Button>
+          <Button onClick={onConfirm} disabled={deleting || count === 0}
+            className="flex-1 h-11 bg-red-600 hover:bg-red-700 text-white disabled:opacity-50">
+            <Trash2 className="mr-1.5 h-4 w-4" /> {deleting ? 'Deleting…' : `Delete ${count}`}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
