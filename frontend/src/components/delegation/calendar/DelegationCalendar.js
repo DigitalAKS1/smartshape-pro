@@ -57,6 +57,7 @@ export default function DelegationCalendar({ onEventClick, card, textPri, textSe
           <h2 className={`text-base font-bold tracking-tight ${textPri} ml-2`}>
             {c.view === 'month' ? monthLabel
               : c.view === 'week' ? `Week of ${c.range.from}`
+              : c.view === 'list' ? 'Next 30 days'
               : new Date(c.range.from + 'T00:00:00').toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}
           </h2>
         </div>
@@ -69,7 +70,7 @@ export default function DelegationCalendar({ onEventClick, card, textPri, textSe
             </select>
           )}
           <div className={`${card} border rounded-xl p-1 flex gap-0.5`}>
-            {['month', 'week', 'day'].map(v => (
+            {['month', 'week', 'day', 'list'].map(v => (
               <button key={v} onClick={() => c.setView(v)}
                 className={`px-3 py-1.5 rounded-lg text-xs font-medium capitalize ${c.view === v ? 'text-white' : `${textSec} hover:bg-[var(--bg-hover)]`}`}
                 style={c.view === v ? { background: PINK } : {}}>{v}</button>
@@ -136,6 +137,10 @@ export default function DelegationCalendar({ onEventClick, card, textPri, textSe
             helpers={c.helpers} card={card} textPri={textPri} textSec={textSec} textMuted={textMuted} />
         )}
         {!c.loading && c.view === 'week' && (
+          <AgendaList dates={rangeDates()} eventsByDate={c.eventsByDate}
+            onEventClick={(e) => e.source === 'plan' ? setBlockDialog({ block: e }) : setSelectedEvent(e)} card={card} textPri={textPri} textSec={textSec} textMuted={textMuted} />
+        )}
+        {!c.loading && c.view === 'list' && (
           <AgendaList dates={rangeDates()} eventsByDate={c.eventsByDate}
             onEventClick={(e) => e.source === 'plan' ? setBlockDialog({ block: e }) : setSelectedEvent(e)} card={card} textPri={textPri} textSec={textSec} textMuted={textMuted} />
         )}

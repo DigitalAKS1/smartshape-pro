@@ -14,11 +14,23 @@ const addDays      = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + 
 
 const ALL_SOURCES = ['delegation', 'fms', 'visit', 'task', 'followup', 'workshop', 'plan', 'reminder'];
 
+// Calendar defaults to "mine only": org-wide Workshops and team-wide FMS are
+// hidden out of the box. The user's chip choices are remembered across reloads.
+const HIDDEN_KEY = 'delg_cal_hidden_sources';
+const DEFAULT_HIDDEN = ['workshop', 'fms'];
+const loadHidden = () => {
+  try {
+    const saved = localStorage.getItem(HIDDEN_KEY);
+    if (saved) return new Set(JSON.parse(saved));
+  } catch { /* ignore */ }
+  return new Set(DEFAULT_HIDDEN);
+};
+
 export function useDelegationCalendar() {
   const [view, setView]     = useState('month');           // month | week | day
   const [cursor, setCursor] = useState(new Date());        // anchor date
   const [subjectEmp, setSubjectEmp] = useState('');        // '' = self; else emp_id (boss view)
-  const [hidden, setHidden] = useState(new Set());         // hidden source keys
+  const [hidden, setHidden] = useState(loadHidden);        // hidden source keys (persisted)
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(false);
   const [teamOptions, setTeamOptions] = useState([]);
@@ -57,6 +69,10 @@ export function useDelegationCalendar() {
       const from = startOfWeek(cursor);
       return { from: iso(from), to: iso(addDays(from, 6)) };
     }
+    if (view === 'list') {
+      // Agenda list: 30 days starting from the cursor.
+      return { from: iso(cursor), to: iso(addDays(cursor, 29)) };
+    }
     return { from: iso(cursor), to: iso(cursor) };
   }, [view, cursor]);
 
@@ -93,11 +109,18 @@ export function useDelegationCalendar() {
     return n;
   });
 
+  // Remember the user's chip choices across reloads.
+  useEffect(() => {
+    try { localStorage.setItem(HIDDEN_KEY, JSON.stringify([...hidden])); } catch { /* ignore */ }
+  }, [hidden]);
+
   const goPrev = () => setCursor(c =>
     view === 'month' ? new Date(c.getFullYear(), c.getMonth() - 1, 1)
+    : view === 'list' ? addDays(c, -30)
     : addDays(c, view === 'week' ? -7 : -1));
   const goNext = () => setCursor(c =>
     view === 'month' ? new Date(c.getFullYear(), c.getMonth() + 1, 1)
+    : view === 'list' ? addDays(c, 30)
     : addDays(c, view === 'week' ? 7 : 1));
   const goToday = () => setCursor(new Date());
 
