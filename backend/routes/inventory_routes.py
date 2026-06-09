@@ -45,6 +45,11 @@ class StockMovementCreate(BaseModel):
     quantity: int
     sales_person_id: Optional[str] = None
     notes: Optional[str] = None
+    # physical_adjustment: the actual counted quantity (system stock is set to this)
+    counted_qty: Optional[int] = None
+    session_date: Optional[str] = None
+    session_notes: Optional[str] = None
+    reference_number: Optional[str] = None
 
 
 # ==================== DIE ENDPOINTS ====================
@@ -304,13 +309,31 @@ async def create_stock_movement(movement_input: StockMovementCreate, request: Re
         "sales_person_name": None,
         "notes": movement_input.notes,
         "movement_date": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
-        "reference_number": None,
+        "reference_number": movement_input.reference_number,
     }
 
     if movement_input.movement_type == "stock_in":
         await db.dies.update_one({"die_id": movement_input.die_id}, {"$inc": {"stock_qty": movement_input.quantity}})
     elif movement_input.movement_type == "stock_out":
         await db.dies.update_one({"die_id": movement_input.die_id}, {"$inc": {"stock_qty": -movement_input.quantity}})
+    elif movement_input.movement_type == "physical_adjustment":
+        # Reconcile: set system stock to the counted quantity. Record the
+        # before/after/variance so the count history is reliable (no note-parsing).
+        system_qty = int(die.get("stock_qty", 0) or 0)
+        counted = movement_input.counted_qty
+        if counted is None:
+            raise HTTPException(status_code=400, detail="counted_qty required for physical_adjustment")
+        counted = int(counted)
+        variance = counted - system_qty
+        await db.dies.update_one({"die_id": movement_input.die_id}, {"$set": {"stock_qty": counted}})
+        movement_doc.update({
+            "quantity": abs(variance),
+            "system_qty": system_qty,
+            "counted_qty": counted,
+            "variance": variance,
+            "session_date": movement_input.session_date,
+            "session_notes": movement_input.session_notes,
+        })
     elif movement_input.movement_type == "allocated_to_sales":
         await db.sales_person_stock.update_one(
             {"sales_person_id": movement_input.sales_person_id, "die_id": movement_input.die_id},

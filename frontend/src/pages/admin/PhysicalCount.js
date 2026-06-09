@@ -245,11 +245,12 @@ export default function PhysicalCount() {
               </div>
             ) : sessionDates.map(date => {
               const items = sessions[date];
-              const netVariance = items.reduce((sum, m) => {
-                const note = m.notes || '';
-                const match = note.match(/Variance: ([+-]?\d+)/);
-                return sum + (match ? parseInt(match[1]) : 0);
-              }, 0);
+              const varOf = (m) => {
+                if (typeof m.variance === 'number') return m.variance;
+                const match = (m.notes || '').match(/Variance: ([+-]?\d+)/);
+                return match ? parseInt(match[1]) : 0;
+              };
+              const netVariance = items.reduce((sum, m) => sum + varOf(m), 0);
               return (
                 <div key={date} className="bg-[var(--bg-card)] border border-[var(--border-color)] rounded-md overflow-hidden">
                   <div className="flex items-center justify-between px-5 py-3 border-b border-[var(--border-color)] bg-[var(--bg-primary)]/30">
@@ -276,7 +277,9 @@ export default function PhysicalCount() {
                         {items.map(m => {
                           const note = m.notes || '';
                           const varMatch = note.match(/Variance: ([+-]?\d+)/);
-                          const variance = varMatch ? parseInt(varMatch[1]) : null;
+                          const variance = typeof m.variance === 'number'
+                            ? m.variance
+                            : (varMatch ? parseInt(varMatch[1]) : null);
                           return (
                             <tr key={m.movement_id} className="border-b border-[var(--border-color)] hover:bg-[var(--bg-hover)]">
                               <td className="px-5 py-3 font-mono text-[#e94560] font-medium">{m.die_code || '—'}</td>

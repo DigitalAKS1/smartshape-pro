@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { dies as diesApi, stock as stockApi } from '../lib/api';
 import { useDataSync, useAutoRefresh } from '../lib/dataSync';
-import { sortByCode } from '../lib/utils';
+import { sortByCode, compareCodes } from '../lib/utils';
 import { toast } from 'sonner';
 
 export const CATEGORIES = [
@@ -69,13 +69,24 @@ export default function useInventory() {
     let f = dies;
     if (quickFilter === 'low') f = f.filter(d => d.stock_qty <= d.min_level && d.stock_qty > 0 && d.is_active !== false);
     else if (quickFilter === 'out') f = f.filter(d => d.stock_qty === 0 && d.is_active !== false);
+    else if (quickFilter === 'reorder') f = f.filter(d => d.stock_qty <= d.min_level && d.is_active !== false);
     if (typeFilter !== 'all') f = f.filter(d => d.type === typeFilter);
     if (categoryFilter !== 'all') f = f.filter(d => (d.category || 'decorative') === categoryFilter);
     if (searchTerm) f = f.filter(d =>
       d.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
       d.code.toLowerCase().includes(searchTerm.toLowerCase())
     );
-    setFilteredDies(sortByCode(f));
+    // For shortage views, surface the most urgent first (biggest gap below min);
+    // otherwise keep natural code order.
+    if (quickFilter === 'low' || quickFilter === 'out' || quickFilter === 'reorder') {
+      f = [...f].sort((a, b) =>
+        ((b.min_level || 0) - b.stock_qty) - ((a.min_level || 0) - a.stock_qty) ||
+        compareCodes(a.code, b.code)
+      );
+      setFilteredDies(f);
+    } else {
+      setFilteredDies(sortByCode(f));
+    }
   }, [quickFilter, typeFilter, categoryFilter, searchTerm, dies]);
 
   const clearFilters = () => { setQuickFilter(null); setTypeFilter('all'); setCategoryFilter('all'); setSearchTerm(''); };
@@ -221,6 +232,7 @@ export default function useInventory() {
     inStock: activeDies.filter(d => d.stock_qty > d.min_level).length,
     lowStock: activeDies.filter(d => d.stock_qty <= d.min_level && d.stock_qty > 0).length,
     outOfStock: activeDies.filter(d => d.stock_qty === 0).length,
+    needsReorder: activeDies.filter(d => d.stock_qty <= d.min_level).length,
   };
 
   const grouped = {};

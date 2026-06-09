@@ -91,9 +91,11 @@ export function usePhysicalCount() {
           die_id: die.die_id,
           movement_type: 'physical_adjustment',
           quantity: Math.abs(variance),
+          counted_qty: parseInt(counts[die.die_id].counted, 10),
+          session_date: sessionDate,
+          session_notes: sessionNotes,
           notes: `Physical count ${sessionDate}${sessionNotes ? ': ' + sessionNotes : ''}. Counted: ${counts[die.die_id].counted}, System: ${die.stock_qty || 0}, Variance: ${variance > 0 ? '+' : ''}${variance}`,
           reference_number: `PC-${sessionDate}-${die.die_id.slice(-4)}`,
-          direction: variance > 0 ? 'in' : 'out',
         });
         successCount++;
       } catch {
@@ -121,7 +123,7 @@ export function usePhysicalCount() {
   const sessions = movements
     .filter(m => m.movement_type === 'physical_adjustment')
     .reduce((acc, m) => {
-      const date = (m.movement_date || m.created_at || '').split('T')[0];
+      const date = m.session_date || (m.movement_date || m.created_at || '').split('T')[0];
       if (!acc[date]) acc[date] = [];
       acc[date].push(m);
       return acc;
