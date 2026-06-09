@@ -810,7 +810,10 @@ async def crm_digest_loop():
 # JOB 7 — Certificate Generation Pass (cert_loop)
 # ══════════════════════════════════════════════════════════════════════════════
 
-from cert_engine import render_certificate_pdf, sanitize_filename
+from cert_engine import (
+    render_certificate_pdf, sanitize_filename, render_placeholders,
+    DEFAULT_EMAIL_SUBJECT, DEFAULT_EMAIL_BODY, DEFAULT_WA_CAPTION,
+)
 
 CERT_DRY_RUN = os.getenv("CERT_DRY_RUN", "0") == "1"
 _CERT_DIR = os.path.join(os.path.dirname(__file__), "uploads", "certificates")
@@ -902,7 +905,11 @@ async def _cert_send_one(channel: str, it: dict, batch: dict):
     fname = f"certificate_{sanitize_filename(it['name'])}.pdf"
     pdf_url = it.get("pdf_url", "")
     local_pdf = os.path.join(_CERT_DIR, pdf_url.split("/uploads/certificates/")[-1]) if pdf_url else ""
-    caption = f"Certificate — {batch.get('shared_values', {}).get('theme', '')}".strip()
+    shared = batch.get("shared_values", {})
+    # Mail-merge: per-batch templates override engine defaults; {Name}/{Date}/{Theme}/{Conducted By}.
+    subject = render_placeholders(batch.get("email_subject") or DEFAULT_EMAIL_SUBJECT, it, shared)
+    body = render_placeholders(batch.get("email_body") or DEFAULT_EMAIL_BODY, it, shared)
+    caption = render_placeholders(batch.get("wa_caption") or DEFAULT_WA_CAPTION, it, shared)
     if channel == "whatsapp":
         if not it.get("phone"):
             return None, "no_phone"
@@ -927,7 +934,7 @@ async def _cert_send_one(channel: str, it: dict, batch: dict):
         se, ap, sn = cfg
         try:
             await asyncio.to_thread(_smtp_send_attachment, se, ap, sn, it["email"],
-                                    "Your Certificate", "Please find your certificate attached.",
+                                    subject, body,
                                     local_pdf, fname)
             return True, None
         except Exception as e:

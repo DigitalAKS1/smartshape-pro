@@ -679,6 +679,7 @@ export const certsApi = {
   generate:         (id)            => API.post(`/certs/batches/${id}/generate`, {}),
   send:             (id)            => API.post(`/certs/batches/${id}/send`, {}),
   previewUrl:       (itemId)        => `${API.defaults.baseURL}/certs/items/${itemId}/preview`,
+  downloadUrl:      (batchId)       => `${API.defaults.baseURL}/certs/batches/${batchId}/download`,
 };
 
 // Delegation System

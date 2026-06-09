@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Users, BookOpen, AlignLeft, Calendar, Tag, UserCheck, Send, X } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Users, BookOpen, AlignLeft, Calendar, Tag, UserCheck, Send, X, MessageSquare } from 'lucide-react';
 import { certsApi } from '../../lib/api';
 import { toast } from 'sonner';
 import axios from 'axios';
@@ -35,6 +35,38 @@ export default function BatchCreator({ templates = [], onCreated, onCancel }) {
   const [channels, setChannels]       = useState({ whatsapp: true, email: true });
   const [title, setTitle]             = useState('');
   const [submitting, setSubmitting]   = useState(false);
+
+  /* ── mail-merge message templates (empty → backend defaults) ── */
+  const [emailSubject, setEmailSubject] = useState('');
+  const [emailBody, setEmailBody]       = useState('');
+  const [waCaption, setWaCaption]       = useState('');
+  const subjectRef = useRef(null);
+  const bodyRef    = useRef(null);
+  const captionRef = useRef(null);
+  const [activeField, setActiveField] = useState('email_body');
+
+  const TOKENS = ['{Name}', '{Date}', '{Theme}', '{Conducted By}'];
+  const MSG_FIELDS = {
+    email_subject: { ref: subjectRef, set: setEmailSubject },
+    email_body:    { ref: bodyRef,    set: setEmailBody    },
+    wa_caption:    { ref: captionRef, set: setWaCaption    },
+  };
+
+  /* insert a {Token} at the caret of the last-focused message field */
+  const insertToken = (tok) => {
+    const f = MSG_FIELDS[activeField] || MSG_FIELDS.email_body;
+    const el = f.ref.current;
+    if (!el) { f.set(prev => prev + tok); return; }
+    const start = el.selectionStart ?? el.value.length;
+    const end   = el.selectionEnd   ?? el.value.length;
+    const next  = el.value.slice(0, start) + tok + el.value.slice(end);
+    f.set(next);
+    requestAnimationFrame(() => {
+      el.focus();
+      const pos = start + tok.length;
+      try { el.setSelectionRange(pos, pos); } catch { /* noop */ }
+    });
+  };
 
   /* ── load sessions when source switches to 'session' ── */
   useEffect(() => {
@@ -94,6 +126,9 @@ export default function BatchCreator({ templates = [], onCreated, onCancel }) {
         expert: expert.trim(),
       },
       channels: chosenChannels,
+      email_subject: emailSubject.trim() || undefined,
+      email_body:    emailBody.trim()    || undefined,
+      wa_caption:    waCaption.trim()     || undefined,
     };
 
     if (source === 'session') {
@@ -314,6 +349,71 @@ export default function BatchCreator({ templates = [], onCreated, onCancel }) {
                 {label}
               </label>
             ))}
+          </div>
+        </div>
+
+        {/* Message templates (mail-merge) */}
+        <div className="space-y-3 border-t border-[var(--border-color)] pt-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <label className={`${labelCls} mb-0 flex items-center gap-1`}>
+              <MessageSquare className="h-3 w-3" /> Message to attendee (optional)
+            </label>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className={`text-xs ${textMuted}`}>Insert:</span>
+              {TOKENS.map(tok => (
+                <button
+                  key={tok}
+                  type="button"
+                  onClick={() => insertToken(tok)}
+                  className={`px-1.5 py-0.5 rounded border border-[var(--border-color)] text-xs font-mono ${textSec} hover:bg-[var(--bg-hover)] transition-colors`}
+                  title={`Insert ${tok} into the last-focused field`}
+                >
+                  {tok}
+                </button>
+              ))}
+            </div>
+          </div>
+          <p className={`text-xs ${textMuted} -mt-1`}>
+            Placeholders auto-fill per attendee. Leave blank to use the default message.
+          </p>
+
+          <div>
+            <label className={labelCls}>Email subject</label>
+            <input
+              ref={subjectRef}
+              type="text"
+              className={inputCls}
+              placeholder="Your Certificate — {Theme}"
+              value={emailSubject}
+              onFocus={() => setActiveField('email_subject')}
+              onChange={e => setEmailSubject(e.target.value)}
+            />
+          </div>
+
+          <div>
+            <label className={labelCls}>Email body</label>
+            <textarea
+              ref={bodyRef}
+              className={`${inputCls} resize-y`}
+              rows={4}
+              placeholder={'Dear {Name},\n\nThank you for attending {Theme} on {Date}, conducted by {Conducted By}. Please find your certificate attached.'}
+              value={emailBody}
+              onFocus={() => setActiveField('email_body')}
+              onChange={e => setEmailBody(e.target.value)}
+            />
+          </div>
+
+          <div>
+            <label className={labelCls}>WhatsApp caption</label>
+            <input
+              ref={captionRef}
+              type="text"
+              className={inputCls}
+              placeholder="Dear {Name}, please find your certificate for {Theme} attached."
+              value={waCaption}
+              onFocus={() => setActiveField('wa_caption')}
+              onChange={e => setWaCaption(e.target.value)}
+            />
           </div>
         </div>
 

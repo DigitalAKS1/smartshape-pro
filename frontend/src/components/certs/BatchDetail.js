@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useCallback } from 'react';
 import {
-  Zap, Send, ExternalLink, ArrowLeft,
+  Zap, Send, ExternalLink, ArrowLeft, Download,
   CheckCircle, Clock, XCircle, Loader2, AlertTriangle,
 } from 'lucide-react';
 import { certsApi } from '../../lib/api';
@@ -124,8 +124,9 @@ export default function BatchDetail({ batch, loadBatch, generate, send, onBack }
   }
 
   const { batch_id, title, status, counts = {}, items = [], shared_values = {}, channels = [] } = batch;
-  const isActive = ACTIVE_STATUSES.has(status);
-  const canSend  = status === 'ready';
+  const isActive    = ACTIVE_STATUSES.has(status);
+  const canSend     = status === 'ready';
+  const canDownload = (counts.generated || 0) > 0;
 
   /* ── action handlers ── */
   const handleGenerate = async () => {
@@ -142,6 +143,16 @@ export default function BatchDetail({ batch, loadBatch, generate, send, onBack }
   const handlePreview = (itemId) => {
     const url = certsApi.previewUrl(itemId);
     window.open(url, '_blank', 'noopener,noreferrer');
+  };
+
+  const handleDownloadAll = () => {
+    if (!canDownload) return;
+    const a = document.createElement('a');
+    a.href = certsApi.downloadUrl(batch_id);
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
   };
 
   /* ─── render ─── */
@@ -185,6 +196,17 @@ export default function BatchDetail({ batch, loadBatch, generate, send, onBack }
               <Zap className="h-4 w-4" style={{ color: PINK }} />
             )}
             <span className={textSec}>Generate</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={handleDownloadAll}
+            disabled={!canDownload}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium border border-[var(--border-color)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed hover:bg-[var(--bg-hover)]"
+            title={canDownload ? 'Download all certificates as a ZIP' : 'Generate certificates first'}
+          >
+            <Download className="h-4 w-4" style={{ color: PINK }} />
+            <span className={textSec}>Download All</span>
           </button>
 
           <button

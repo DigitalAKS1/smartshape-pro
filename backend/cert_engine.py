@@ -46,6 +46,40 @@ def sanitize_filename(name: str) -> str:
     return cleaned or "certificate"
 
 
+# ── Mail-merge message defaults + renderer ────────────────────────────────────
+DEFAULT_EMAIL_SUBJECT = "Your Certificate — {Theme}"
+DEFAULT_EMAIL_BODY = (
+    "Dear {Name},\n\n"
+    "Thank you for attending {Theme} on {Date}, conducted by {Conducted By}. "
+    "Please find your certificate attached.\n\n"
+    "Warm regards,\nSmartShape"
+)
+DEFAULT_WA_CAPTION = "Dear {Name}, please find your certificate for {Theme} attached."
+
+
+def render_placeholders(text: str, item: Dict[str, Any], shared: Dict[str, Any]) -> str:
+    """Replace mail-merge tokens (case-insensitive) with values from the attendee
+    row + batch shared values. Supported: {Name}, {Date}, {Theme}, {Expert},
+    {Conducted By}. Unknown tokens are left untouched."""
+    if not text:
+        return ""
+    shared = shared or {}
+    expert = str(shared.get("expert", "") or "")
+    values = {
+        "name": str(item.get("name", "") or ""),
+        "date": str(shared.get("date", "") or ""),
+        "theme": str(shared.get("theme", "") or ""),
+        "expert": expert,
+        "conducted by": expert,
+    }
+
+    def _sub(m):
+        key = re.sub(r"\s+", " ", m.group(1).strip().lower())
+        return values.get(key, m.group(0))
+
+    return re.sub(r"\{([^{}]+)\}", _sub, text)
+
+
 def _anchor_x(draw: ImageDraw.ImageDraw, text: str, font, x: int, align: str) -> int:
     if align == "left":
         return x

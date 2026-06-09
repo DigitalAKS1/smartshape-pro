@@ -1,10 +1,10 @@
 """Certificate pipeline — generate personalized cert PDFs and deliver via WhatsApp/email."""
 from fastapi import APIRouter, Request, HTTPException, UploadFile, File
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone
-import uuid, os, tempfile
+import uuid, os, tempfile, io, zipfile
 
 from database import db
 from auth_utils import get_current_user
@@ -100,6 +100,11 @@ class BatchCreate(BaseModel):
     shared_values: Dict[str, Any] = {}
     channels: List[str] = ["whatsapp", "email"]
     attendees: Optional[List[Attendee]] = None
+    # Mail-merge message templates (support {Name}/{Date}/{Theme}/{Conducted By}).
+    # Empty → engine defaults are used at delivery time.
+    email_subject: Optional[str] = None
+    email_body: Optional[str] = None
+    wa_caption: Optional[str] = None
 
 
 def _new_item(batch_id: str, name: str, phone: str, email: str) -> dict:
@@ -134,6 +139,9 @@ async def create_batch(body: BatchCreate, request: Request):
         "batch_id": bid, "title": body.title, "template_id": body.template_id,
         "source": body.source, "session_id": body.session_id,
         "shared_values": body.shared_values, "channels": body.channels,
+        "email_subject": (body.email_subject or "").strip() or None,
+        "email_body": (body.email_body or "").strip() or None,
+        "wa_caption": (body.wa_caption or "").strip() or None,
         "status": "draft",
         "counts": {"total": len(rows), "generated": 0, "sent_whatsapp": 0, "sent_email": 0, "failed": 0},
         "created_by": user.get("email"), "created_at": now_iso(),
@@ -213,3 +221,43 @@ async def preview_item(item_id: str, request: Request):
     render_certificate_pdf(bg_path, out_path, tpl.get("fields", []),
                            {"name": it["name"]}, batch.get("shared_values", {}))
     return FileResponse(out_path, media_type="application/pdf", filename="preview.pdf")
+
+
+# ── Bulk download (ZIP of individual PDFs, named per attendee) ─────────────────
+
+@router.get("/batches/{batch_id}/download")
+async def download_batch_zip(batch_id: str, request: Request):
+    user = await get_current_user(request); require_admin(user)
+    batch = await db.cert_batches.find_one({"batch_id": batch_id}, {"_id": 0})
+    if not batch:
+        raise HTTPException(404, "Batch not found")
+    items = await db.cert_items.find(
+        {"batch_id": batch_id, "gen_status": "generated"}, {"_id": 0}).to_list(2000)
+    if not items:
+        raise HTTPException(400, "No generated certificates to download yet")
+
+    from cert_engine import safe_bg_path, sanitize_filename
+    buf = io.BytesIO()
+    used: Dict[str, int] = {}
+    added = 0
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for it in items:
+            pdf_url = it.get("pdf_url") or ""
+            try:
+                local = safe_bg_path(CERT_DIR, pdf_url)
+            except ValueError:
+                continue
+            if not os.path.isfile(local):
+                continue
+            base = sanitize_filename(it.get("name", ""))
+            n = used.get(base, 0) + 1
+            used[base] = n
+            arcname = f"{base}.pdf" if n == 1 else f"{base}_{n}.pdf"
+            zf.write(local, arcname)
+            added += 1
+    if added == 0:
+        raise HTTPException(400, "Certificate files are not available on disk")
+
+    zip_name = sanitize_filename(batch.get("title", "")) or "certificates"
+    headers = {"Content-Disposition": f'attachment; filename="{zip_name}_certificates.zip"'}
+    return Response(content=buf.getvalue(), media_type="application/zip", headers=headers)
