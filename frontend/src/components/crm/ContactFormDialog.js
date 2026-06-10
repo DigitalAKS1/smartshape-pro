@@ -13,6 +13,7 @@ import {
   ExternalLink, AlertTriangle, ArrowRightCircle, X,
 } from 'lucide-react';
 import InterestedProductField from './InterestedProductField';
+import AddressFields from './AddressFields';
 
 export default function ContactFormDialog({
   // Contact create/edit dialog
@@ -218,12 +219,14 @@ export default function ContactFormDialog({
                       <select value={convertNewSchool.school_type} onChange={e => setConvertNewSchool({...convertNewSchool, school_type: e.target.value})} className={`h-9 px-2 rounded text-sm ${inputCls}`}>
                         {schoolTypeOptions.map(t => <option key={t} value={t}>{t}</option>)}
                       </select>
-                      <Input value={convertNewSchool.city} onChange={e => setConvertNewSchool({...convertNewSchool, city: e.target.value})} placeholder="City" className={`${inputCls} text-sm`} />
-                    </div>
-                    <div className="grid grid-cols-2 gap-2">
                       <Input value={convertNewSchool.phone} onChange={e => setConvertNewSchool({...convertNewSchool, phone: e.target.value})} placeholder="Phone" className={`${inputCls} text-sm`} />
-                      <Input type="number" value={convertNewSchool.school_strength} onChange={e => setConvertNewSchool({...convertNewSchool, school_strength: parseInt(e.target.value) || 0})} placeholder="Strength" className={`${inputCls} text-sm`} />
                     </div>
+                    <AddressFields
+                      pincode={convertNewSchool.pincode} city={convertNewSchool.city} state={convertNewSchool.state}
+                      onChange={({ pincode, city, state }) => setConvertNewSchool({ ...convertNewSchool, pincode, city, state })}
+                      inputCls={`${inputCls} text-sm`}
+                    />
+                    <Input type="number" value={convertNewSchool.school_strength} onChange={e => setConvertNewSchool({...convertNewSchool, school_strength: parseInt(e.target.value) || 0})} placeholder="Strength (students)" className={`${inputCls} text-sm`} />
                   </div>
                 ) : (
                   <select value={convertForm.school_id} onChange={e => setConvertForm({...convertForm, school_id: e.target.value})} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`} data-testid="convert-school-select">

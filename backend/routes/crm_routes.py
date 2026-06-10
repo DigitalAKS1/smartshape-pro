@@ -1471,6 +1471,7 @@ async def convert_contact_to_lead(contact_id: str, request: Request):
             "email": new_school_data.get("email", ""),
             "city": new_school_data.get("city", ""),
             "state": new_school_data.get("state", ""),
+            "pincode": new_school_data.get("pincode", ""),
             "school_strength": new_school_data.get("school_strength", 0),
             "primary_contact_name": contact["name"],
             "designation": contact.get("designation", ""),

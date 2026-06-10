@@ -106,7 +106,7 @@ export default function useLeadsCRM() {
   const [convertContact, setConvertContact] = useState(null);
   const [convertForm, setConvertForm] = useState({ school_id: '', lead_type: 'warm', priority: 'medium', interested_product: '', assigned_to: '' });
   const [convertAddNewSchool, setConvertAddNewSchool] = useState(false);
-  const [convertNewSchool, setConvertNewSchool] = useState({ school_name: '', school_type: 'CBSE', city: '', phone: '', school_strength: 0 });
+  const [convertNewSchool, setConvertNewSchool] = useState({ school_name: '', school_type: 'CBSE', city: '', state: '', pincode: '', phone: '', school_strength: 0 });
   const [contactImportOpen, setContactImportOpen] = useState(false);
   const contactFileRef = useRef(null);
   const [importFile, setImportFile] = useState(null);
@@ -486,7 +486,7 @@ export default function useLeadsCRM() {
     setConvertContact(c);
     setConvertForm({ school_id: '', lead_type: 'warm', priority: 'medium', interested_product: '', assigned_to: user?.email || '' });
     setConvertAddNewSchool(false);
-    setConvertNewSchool({ school_name: '', school_type: 'CBSE', city: '', phone: '', school_strength: 0 });
+    setConvertNewSchool({ school_name: '', school_type: 'CBSE', city: '', state: '', pincode: '', phone: '', school_strength: 0 });
     setConvertDialogOpen(true);
   };
 

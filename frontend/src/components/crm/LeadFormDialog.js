@@ -7,6 +7,7 @@ import { useTheme } from '../../contexts/ThemeContext';
 import useSchoolTypes from '../../hooks/useSchoolTypes';
 import { tags as tagsApi } from '../../lib/api';
 import InterestedProductField from './InterestedProductField';
+import AddressFields from './AddressFields';
 
 export default function LeadFormDialog({
   open, onOpenChange,
@@ -47,12 +48,14 @@ export default function LeadFormDialog({
                     <select value={newSchool.school_type} onChange={e => setNewSchool({...newSchool, school_type: e.target.value})} className={`h-9 px-2 rounded text-sm ${inputCls}`}>
                       {schoolTypeOptions.map(t => <option key={t} value={t}>{t}</option>)}
                     </select>
-                    <Input value={newSchool.city} onChange={e => setNewSchool({...newSchool, city: e.target.value})} placeholder="City" className={`${inputCls} text-sm`} />
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     <Input value={newSchool.phone} onChange={e => setNewSchool({...newSchool, phone: e.target.value})} placeholder="Phone" className={`${inputCls} text-sm`} />
-                    <Input type="number" value={newSchool.school_strength} onChange={e => setNewSchool({...newSchool, school_strength: parseInt(e.target.value) || 0})} placeholder="Strength" className={`${inputCls} text-sm`} />
                   </div>
+                  <AddressFields
+                    pincode={newSchool.pincode} city={newSchool.city} state={newSchool.state}
+                    onChange={({ pincode, city, state }) => setNewSchool({ ...newSchool, pincode, city, state })}
+                    inputCls={`${inputCls} text-sm`}
+                  />
+                  <Input type="number" value={newSchool.school_strength} onChange={e => setNewSchool({...newSchool, school_strength: parseInt(e.target.value) || 0})} placeholder="Strength (students)" className={`${inputCls} text-sm`} />
                 </div>
               ) : (
                 <select value={leadForm.school_id} onChange={e => setLeadForm({...leadForm, school_id: e.target.value})} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`} data-testid="school-select">
