@@ -65,11 +65,11 @@ async def upload_company_logo(file: UploadFile = File(...), request: Request = N
         user = await get_current_user(request)
         if user.get("role") != "admin":
             raise HTTPException(status_code=403, detail="Admin access required")
+    from services.storage import save_upload
     ext = file.filename.split(".")[-1] if "." in file.filename else "png"
     path = f"company/logo_{uuid.uuid4().hex[:8]}.{ext}"
     data = await file.read()
-    _save_file(path, data)
-    logo_url = f"/api/files/{path}"
+    logo_url = await save_upload(path, data, file.content_type or "image/png", legacy="local")
     await db.settings.update_one({"type": "company"}, {"$set": {"logo_url": logo_url}}, upsert=True)
     return {"logo_url": logo_url}
 
@@ -235,6 +235,170 @@ async def save_notification_settings(request: Request):
         upsert=True
     )
     return {"message": "Notification settings saved"}
+
+
+@router.get("/settings/sheets")
+async def get_sheets_settings(request: Request):
+    await get_current_user(request)
+    doc = await db.settings.find_one({"type": "sheets"}, {"_id": 0}) or {}
+    return {
+        "client_id": doc.get("client_id", ""),
+        "client_secret": doc.get("client_secret", ""),
+        "enabled": bool(doc.get("enabled", False)),
+    }
+
+
+@router.get("/settings/notifications")
+async def get_notification_settings(request: Request):
+    await get_current_user(request)
+    doc = await db.settings.find_one({"type": "notifications"}, {"_id": 0}) or {}
+    return {
+        "purchase_alerts_enabled":  bool(doc.get("purchase_alerts_enabled", True)),
+        "low_stock_enabled":        bool(doc.get("low_stock_enabled", True)),
+        "quotation_status_enabled": bool(doc.get("quotation_status_enabled", True)),
+    }
+
+
+# ==================== CLOUDINARY SETTINGS ====================
+
+@router.post("/settings/cloudinary")
+async def save_cloudinary_settings(request: Request):
+    user = await get_current_user(request)
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    body = await request.json()
+    update = {"type": "cloudinary", "updated_at": datetime.now(timezone.utc).isoformat()}
+    if (body.get("cloud_name") or "").strip():
+        update["cloud_name"] = body["cloud_name"].strip()
+    if (body.get("api_key") or "").strip():
+        update["api_key"] = body["api_key"].strip()
+    # only overwrite the secret when a new non-masked value is provided
+    sec = (body.get("api_secret") or "").strip()
+    if sec and sec != "***":
+        update["api_secret"] = sec
+    await db.settings.update_one({"type": "cloudinary"}, {"$set": update}, upsert=True)
+    return {"message": "Cloudinary settings saved"}
+
+
+@router.get("/settings/cloudinary")
+async def get_cloudinary_settings(request: Request):
+    user = await get_current_user(request)
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    cfg = await db.settings.find_one({"type": "cloudinary"}, {"_id": 0}) or {}
+    return {
+        "cloud_name": cfg.get("cloud_name", ""),
+        "api_key": cfg.get("api_key", ""),
+        "api_secret_set": bool((cfg.get("api_secret") or "").strip()),
+    }
+
+
+# ==================== INTEGRATION STATUS + TEST ====================
+
+@router.get("/settings/integrations/status")
+async def integrations_status(request: Request):
+    user = await get_current_user(request)
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    def _has(doc, *fields):
+        return bool(doc) and all((doc.get(f) or "").strip() for f in fields)
+
+    email = await db.settings.find_one({"type": "email"}, {"_id": 0})
+    wa = await db.settings.find_one({"type": "whatsapp"}, {"_id": 0})
+    zoom = await db.settings.find_one({"type": "zoom"}, {"_id": 0})
+    cloud = await db.settings.find_one({"type": "cloudinary"}, {"_id": 0})
+    ai = await db.settings.find_one({"type": "ai"}, {"_id": 0})
+    sheets = await db.settings.find_one({"type": "sheets"}, {"_id": 0})
+
+    return {
+        "gmail":      {"configured": _has(email, "sender_email", "gmail_app_password")},
+        "whatsapp":   {"configured": _has(wa, "username", "password")},
+        "zoom":       {"configured": _has(zoom, "account_id", "client_id", "client_secret")},
+        "cloudinary": {"configured": _has(cloud, "cloud_name", "api_key", "api_secret")},
+        "ai":         {"configured": bool(ai and (ai.get("gemini_api_key") or "").strip())},
+        "sheets":     {"configured": _has(sheets, "client_id", "client_secret")},
+    }
+
+
+@router.post("/settings/integrations/cloudinary/test")
+async def test_cloudinary(request: Request):
+    user = await get_current_user(request)
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    from services.storage import _cloudinary_config
+    cfg = await _cloudinary_config()
+    if not cfg:
+        return {"ok": False, "detail": "Cloudinary not configured"}
+    try:
+        import cloudinary, cloudinary.api
+        cloudinary.config(cloud_name=cfg["cloud_name"], api_key=cfg["api_key"],
+                          api_secret=cfg["api_secret"], secure=True)
+        cloudinary.api.ping()
+        return {"ok": True, "detail": "Connected"}
+    except Exception as e:
+        return {"ok": False, "detail": str(e)[:200]}
+
+
+@router.post("/settings/integrations/gmail/test")
+async def test_gmail(request: Request):
+    user = await get_current_user(request)
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    cfg = await db.settings.find_one({"type": "email"}, {"_id": 0}) or {}
+    sender = (cfg.get("sender_email") or "").strip()
+    pwd = (cfg.get("gmail_app_password") or "").strip()
+    if not (sender and pwd):
+        return {"ok": False, "detail": "Gmail not configured"}
+    try:
+        server = smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=15)
+        server.login(sender, pwd)
+        server.quit()
+        return {"ok": True, "detail": "SMTP login OK"}
+    except Exception as e:
+        return {"ok": False, "detail": str(e)[:200]}
+
+
+@router.post("/settings/integrations/zoom/test")
+async def test_zoom(request: Request):
+    user = await get_current_user(request)
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    import zoom_service
+    if not await zoom_service.is_configured():
+        return {"ok": False, "detail": "Zoom not configured"}
+    try:
+        await zoom_service._get_access_token(force=True)
+        return {"ok": True, "detail": "OAuth token acquired"}
+    except Exception as e:
+        return {"ok": False, "detail": str(e)[:200]}
+
+
+# ==================== ZOOM MEETING CREATION ====================
+
+@router.post("/zoom/meetings")
+async def create_zoom_meeting(request: Request):
+    user = await get_current_user(request)
+    team = get_team(user)
+    if team not in ("admin", "sales"):
+        raise HTTPException(status_code=403, detail="Not allowed")
+    import zoom_service
+    if not await zoom_service.is_configured():
+        raise HTTPException(status_code=400, detail="Zoom is not configured")
+    body = await request.json()
+    topic = (body.get("topic") or "").strip()
+    start_time = (body.get("start_time") or "").strip()
+    if not topic or not start_time:
+        raise HTTPException(status_code=400, detail="topic and start_time are required")
+    try:
+        return await zoom_service.create_meeting(
+            topic=topic, start_time=start_time,
+            duration=int(body.get("duration") or 60),
+            timezone_str=body.get("timezone") or "Asia/Kolkata",
+            agenda=body.get("agenda") or "",
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e)[:200])
 
 
 # ==================== WHATSAPP SEND ====================

@@ -59,6 +59,45 @@ async def _get_access_token(force: bool = False) -> str:
     return _token_cache["token"]
 
 
+async def create_meeting(topic: str, start_time: str, duration: int = 60,
+                         timezone_str: str = "Asia/Kolkata",
+                         agenda: str = "") -> Dict[str, Any]:
+    """Create a scheduled Zoom meeting on the account's default user (me).
+    Requires the S2S app to have the `meeting:write:admin` scope.
+    Returns {meeting_id, join_url, start_url, password, start_time, topic}.
+    """
+    if not (topic or "").strip():
+        raise ValueError("Meeting topic is required")
+    token = await _get_access_token()
+    payload = {
+        "topic": topic.strip(),
+        "type": 2,  # scheduled
+        "start_time": start_time,
+        "duration": int(duration or 60),
+        "timezone": timezone_str,
+        "agenda": agenda or "",
+        "settings": {"join_before_host": True, "waiting_room": False, "approval_type": 2},
+    }
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as c:
+        r = await c.post(f"{_API_BASE}/users/me/meetings",
+                         headers={"Authorization": f"Bearer {token}"}, json=payload)
+        if r.status_code == 401:
+            token = await _get_access_token(force=True)
+            r = await c.post(f"{_API_BASE}/users/me/meetings",
+                             headers={"Authorization": f"Bearer {token}"}, json=payload)
+        if r.status_code not in (200, 201):
+            raise RuntimeError(f"Zoom create-meeting failed ({r.status_code}): {r.text[:200]}")
+        m = r.json()
+    return {
+        "meeting_id": str(m.get("id", "")),
+        "join_url": m.get("join_url", ""),
+        "start_url": m.get("start_url", ""),
+        "password": m.get("password", ""),
+        "start_time": m.get("start_time", start_time),
+        "topic": m.get("topic", topic),
+    }
+
+
 def _norm_meeting_id(meeting_id: str) -> str:
     """Accept a raw numeric id, or a pasted join URL / spaced id."""
     s = (meeting_id or "").strip()
