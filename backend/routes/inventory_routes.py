@@ -54,6 +54,26 @@ class StockMovementCreate(BaseModel):
 
 # ==================== DIE ENDPOINTS ====================
 
+def clean_die_code(raw: str) -> str:
+    """Display code: trim, strip stray quotes, collapse internal whitespace to one space."""
+    return re.sub(r"\s+", " ", (raw or "").strip().strip('"').strip())
+
+
+def norm_die_code(raw: str) -> str:
+    """Match key used to detect duplicates: no whitespace, no quotes, uppercase.
+    So 'SSSD-07', 'SSSD-07 ' and '\"SSSD-07\"' all collide."""
+    return re.sub(r"\s+", "", (raw or "").strip().strip('"').strip()).upper()
+
+
+async def _code_in_use(norm: str, exclude_die_id: str = None) -> bool:
+    """True if any existing die has the same normalized code."""
+    q = {"die_id": {"$ne": exclude_die_id}} if exclude_die_id else {}
+    async for d in db.dies.find(q, {"code": 1, "_id": 0}):
+        if norm_die_code(d.get("code", "")) == norm:
+            return True
+    return False
+
+
 @router.get("/dies")
 async def get_dies(request: Request, include_archived: bool = False):
     await get_current_user(request)
@@ -68,6 +88,13 @@ async def create_die(die_input: DieCreate, request: Request):
     require_teams(user, "admin", "store")
     die_id = f"die_{uuid.uuid4().hex[:12]}"
     data = die_input.model_dump()
+    data["code"] = clean_die_code(data.get("code", ""))
+    if data.get("name"):
+        data["name"] = data["name"].strip()
+    if not data["code"]:
+        raise HTTPException(status_code=400, detail="Code is required")
+    if await _code_in_use(norm_die_code(data["code"])):
+        raise HTTPException(status_code=409, detail=f"A die with code '{data['code']}' already exists")
     initial_qty = data.pop("stock_qty", 0)
     die_doc = {
         "die_id": die_id,
@@ -87,6 +114,14 @@ async def update_die(die_id: str, request: Request):
     require_teams(user, "admin", "store")
     updates = await request.json()
     safe = {k: v for k, v in updates.items() if k not in ("die_id", "_id")}
+    if "code" in safe:
+        safe["code"] = clean_die_code(safe["code"])
+        if not safe["code"]:
+            raise HTTPException(status_code=400, detail="Code is required")
+        if await _code_in_use(norm_die_code(safe["code"]), exclude_die_id=die_id):
+            raise HTTPException(status_code=409, detail=f"A die with code '{safe['code']}' already exists")
+    if isinstance(safe.get("name"), str):
+        safe["name"] = safe["name"].strip()
     if safe:
         await db.dies.update_one({"die_id": die_id}, {"$set": safe})
     return await db.dies.find_one({"die_id": die_id}, {"_id": 0})
