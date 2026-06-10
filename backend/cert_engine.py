@@ -152,7 +152,10 @@ def render_certificate_pdf_merge(template_pdf_path: str, out_path: str,
                                     "size": float(span.get("size", 0) or r.height * 0.8),
                                     "base": float(span.get("origin", (r.x0, r.y1))[1]),
                                     "font": _base14(span.get("font", "")),
-                                    "color": rgb, "center": standalone,
+                                    # Centre ONLY a standalone {Name}; every other field is
+                                    # left-anchored at the token's x so a long value flows right
+                                    # into its blank and never overlaps the label to its left.
+                                    "color": rgb, "center": (tok == "{Name}" and standalone),
                                 })
                                 page.add_redact_annot(r, fill=False, cross_out=False)
             try:
