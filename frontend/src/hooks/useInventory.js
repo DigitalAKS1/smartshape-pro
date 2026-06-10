@@ -209,6 +209,17 @@ export default function useInventory() {
     toast.success('Sample CSV downloaded');
   };
 
+  const handleSendLowStockAlert = async () => {
+    try {
+      const res = await diesApi.runLowStockAlert();
+      const { low = 0, out = 0, emailed = 0 } = res.data || {};
+      if (low === 0) toast.success('All good — nothing at or below minimum level.');
+      else toast.success(`Alerted: ${low} low (${out} out of stock)${emailed ? ` · email sent to ${emailed}` : ''}`);
+    } catch (err) {
+      toast.error(err.response?.data?.detail ? formatApiErrorDetail(err.response.data.detail) : 'Failed to send alert');
+    }
+  };
+
   const handleArchive = async (die) => {
     try {
       await diesApi.archive(die.die_id);
@@ -306,6 +317,6 @@ export default function useInventory() {
     allVisibleSelected, toggleSelectAllVisible,
     bulkDeleteOpen, setBulkDeleteOpen, bulkDeleting, handleBulkDelete,
     // misc
-    handleArchive, saving,
+    handleArchive, saving, handleSendLowStockAlert,
   };
 }

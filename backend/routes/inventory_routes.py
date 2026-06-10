@@ -424,6 +424,16 @@ async def update_alert_status(alert_id: str, status: str, request: Request):
     return {"message": "Alert updated"}
 
 
+@router.post("/low-stock-alert/run")
+async def run_low_stock_alert_now(request: Request):
+    """Admin: run the low-stock digest immediately (in-app notification + email).
+    The same job runs automatically every day at 8am IST."""
+    user = await get_current_user(request)
+    require_teams(user, "admin")
+    from scheduler import run_low_stock_check  # lazy import avoids any import cycle
+    return await run_low_stock_check(trigger="manual")
+
+
 # ==================== SALES PERSON STOCK HOLDINGS ====================
 
 @router.get("/sales-person-stock")

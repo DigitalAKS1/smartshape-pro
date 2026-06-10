@@ -98,6 +98,9 @@ export default function Inventory() {
                     <DropdownMenuItem onClick={() => inv.setSelectMode(true)} className="cursor-pointer">
                       <CheckSquare className="mr-2 h-4 w-4" /> Select &amp; delete
                     </DropdownMenuItem>
+                    <DropdownMenuItem onClick={inv.handleSendLowStockAlert} className="cursor-pointer">
+                      <AlertCircle className="mr-2 h-4 w-4" /> Send low-stock alert now
+                    </DropdownMenuItem>
                   </>
                 )}
               </DropdownMenuContent>

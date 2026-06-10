@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import {
   Bell, BellOff, X, CheckCheck, FileText, AlertTriangle,
-  Clock, Gift, Zap, ClipboardList,
+  Clock, Gift, Zap, ClipboardList, PackageX,
 } from 'lucide-react';
 import { notificationsApi, pushApi } from '../../lib/api';
 
@@ -21,6 +21,7 @@ const NOTIF_META = {
   birthday_today:     { Icon: Gift,          color: '#ec4899', bg: 'rgba(236,72,153,0.12)',  url: '/leads' },
   anniversary_today:  { Icon: Zap,           color: '#a855f7', bg: 'rgba(168,85,247,0.12)',  url: '/leads' },
   delegation_overdue: { Icon: ClipboardList, color: '#e94560', bg: 'rgba(233,69,96,0.12)',   url: '/delegation' },
+  low_stock_digest:   { Icon: PackageX,      color: '#ef4444', bg: 'rgba(239,68,68,0.12)',   url: '/inventory' },
 };
 const NOTIF_DEFAULT = { Icon: Bell, color: '#6b7280', bg: 'rgba(107,114,128,0.12)' };
 

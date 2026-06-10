@@ -984,6 +984,104 @@ async def cert_loop():
         await asyncio.sleep(30)
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# JOB 8 — Low-stock daily digest (in-app notification + email to admin/store)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _low_stock_email_body(low, out):
+    lines = [
+        f"{len(low)} die(s) are at or below their minimum stock level"
+        + (f" — {len(out)} are OUT OF STOCK." if out else ".."),
+        "",
+    ]
+    if out:
+        lines.append("OUT OF STOCK:")
+        lines += [f"  - {d.get('code','?')}  {d.get('name','')}" for d in out]
+        lines.append("")
+    low_only = [d for d in low if (d.get("stock_qty", 0) or 0) > 0]
+    if low_only:
+        lines.append("LOW (at or below minimum):")
+        lines += [
+            f"  - {d.get('code','?')}  {d.get('name','')}: {d.get('stock_qty',0)} (min {d.get('min_level',0)})"
+            for d in low_only
+        ]
+        lines.append("")
+    lines.append("Open the Reorder list to act: https://app.smartshape.in/inventory")
+    return "\n".join(lines)
+
+
+async def run_low_stock_check(trigger="scheduled"):
+    """Find active dies at/below min level; alert admins in-app + email admin/store.
+    Returns a summary dict (also used by the manual 'run now' endpoint)."""
+    dies = await db.dies.find(
+        {"is_active": {"$ne": False}},
+        {"_id": 0, "die_id": 1, "code": 1, "name": 1, "stock_qty": 1, "min_level": 1},
+    ).to_list(10000)
+    low = [d for d in dies if (d.get("stock_qty", 0) or 0) <= (d.get("min_level", 0) or 0)]
+    out = [d for d in low if (d.get("stock_qty", 0) or 0) == 0]
+    if not low:
+        log.info("[low_stock] nothing at/below min level")
+        return {"ok": True, "low": 0, "out": 0, "notified": 0, "emailed": False, "trigger": trigger}
+
+    low.sort(key=lambda d: (d.get("stock_qty", 0) or 0) - (d.get("min_level", 0) or 0))
+    today = datetime.now(IST).strftime("%Y-%m-%d")
+    title = f"Low stock: {len(low)} item{'s' if len(low) != 1 else ''} need reordering"
+    top = ", ".join(f"{d.get('code','?')} ({d.get('stock_qty',0)})" for d in low[:6])
+    more = f" +{len(low) - 6} more" if len(low) > 6 else ""
+    message = f"{len(out)} out of stock, {len(low)} at/below minimum. Most urgent: {top}{more}."
+
+    # ONE in-app digest for admins (admin notifications query returns all). Deduped per day.
+    await db.notifications.update_one(
+        {"type": "low_stock_digest", "assigned_to": None, "date": today},
+        {
+            "$set": {"title": title, "message": message, "task_id": f"lowstock-{today}"},
+            "$setOnInsert": {
+                "type": "low_stock_digest", "assigned_to": None, "date": today,
+                "is_read": False, "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+        },
+        upsert=True,
+    )
+
+    # Email digest to admin + store users (only if SMTP is configured).
+    recipients = await db.users.find(
+        {"role": {"$in": ["admin", "store"]}, "is_active": {"$ne": False}},
+        {"_id": 0, "email": 1},
+    ).to_list(500)
+    emails = sorted({u["email"] for u in recipients if u.get("email")})
+    cfg = await _email_cfg()
+    sent = 0
+    if cfg and emails:
+        se, ap, sn = cfg
+        body = _low_stock_email_body(low, out)
+        subject = f"[SmartShape] Low stock — {len(low)} item(s) need reordering"
+        for em in emails:
+            try:
+                await asyncio.to_thread(_smtp_send, se, ap, sn, em, subject, body)
+                sent += 1
+            except Exception as exc:
+                log.error(f"[low_stock] email to {em} failed: {exc}")
+
+    log.info(f"[low_stock] {len(low)} low ({len(out)} out) trigger={trigger} emailed={sent}")
+    return {"ok": True, "low": len(low), "out": len(out),
+            "notified": 1, "emailed": sent, "trigger": trigger}
+
+
+async def low_stock_loop():
+    log.info("[scheduler] low-stock checker started (fires daily at 8am IST)")
+    while True:
+        try:
+            now_ist = datetime.now(IST)
+            target = now_ist.replace(hour=8, minute=0, second=0, microsecond=0)
+            if now_ist >= target:
+                target += timedelta(days=1)
+            await asyncio.sleep(max(60, (target - now_ist).total_seconds()))
+            await run_low_stock_check(trigger="scheduled")
+        except Exception as exc:
+            log.error(f"[low_stock loop] {exc}")
+            await asyncio.sleep(3600)
+
+
 async def start_scheduler():
     """Start all background automation loops. Call once from FastAPI startup."""
     asyncio.create_task(email_sender_loop())
@@ -993,5 +1091,6 @@ async def start_scheduler():
     asyncio.create_task(fms_sla_loop())
     asyncio.create_task(crm_digest_loop())
     asyncio.create_task(cert_loop())
+    asyncio.create_task(low_stock_loop())
     log.info("[scheduler] cert loop running")
-    log.info("[scheduler] all 7 background jobs running")
+    log.info("[scheduler] all 8 background jobs running")
