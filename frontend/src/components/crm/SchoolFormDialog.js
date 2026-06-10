@@ -5,8 +5,9 @@ import { Input } from '../ui/input';
 import { Label } from '../ui/label';
 import { useTheme } from '../../contexts/ThemeContext';
 import { toast } from 'sonner';
-import { INDIAN_STATES, BUDGET_RANGES } from '../../lib/crmConstants';
+import { BUDGET_RANGES } from '../../lib/crmConstants';
 import useSchoolTypes from '../../hooks/useSchoolTypes';
+import AddressFields from './AddressFields';
 
 export default function SchoolFormDialog({
   open, onOpenChange,
@@ -79,25 +80,20 @@ export default function SchoolFormDialog({
             <div><Label className={`${textSec} text-xs`}>No. of Branches</Label><Input type="number" min="0" value={editSchoolForm.number_of_branches ?? ''} onChange={e => setEditSchoolForm({...editSchoolForm, number_of_branches: e.target.value === '' ? '' : (parseInt(e.target.value) || 0)})} placeholder="e.g. 1" className={inputCls} /></div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div><Label className={`${textSec} text-xs`}>City</Label><Input value={editSchoolForm.city || ''} onChange={e => setEditSchoolForm({...editSchoolForm, city: e.target.value})} className={inputCls} /></div>
-            <div>
-              <Label className={`${textSec} text-xs`}>State</Label>
-              <select value={editSchoolForm.state || ''} onChange={e => setEditSchoolForm({...editSchoolForm, state: e.target.value})} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`} data-testid="school-state-select">
-                <option value="">Select state</option>
-                {INDIAN_STATES.map(s => <option key={s} value={s}>{s}</option>)}
-              </select>
-            </div>
-          </div>
+          <AddressFields
+            pincode={editSchoolForm.pincode} city={editSchoolForm.city} state={editSchoolForm.state}
+            onChange={({ pincode, city, state }) => setEditSchoolForm({ ...editSchoolForm, pincode, city, state })}
+            inputCls={inputCls}
+          />
 
           <div>
             <Label className={`${textSec} text-xs`}>Address</Label>
             <Input value={editSchoolForm.address || ''} onChange={e => setEditSchoolForm({...editSchoolForm, address: e.target.value})} placeholder="Street, area, landmark…" className={inputCls} data-testid="school-address-input" />
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div><Label className={`${textSec} text-xs`}>Website</Label><Input value={editSchoolForm.website || ''} onChange={e => setEditSchoolForm({...editSchoolForm, website: e.target.value})} placeholder="https://…" className={inputCls} data-testid="school-website-input" /></div>
-            <div><Label className={`${textSec} text-xs`}>Pincode</Label><Input value={editSchoolForm.pincode || ''} onChange={e => setEditSchoolForm({...editSchoolForm, pincode: e.target.value})} className={inputCls} /></div>
+          <div>
+            <Label className={`${textSec} text-xs`}>Website</Label>
+            <Input value={editSchoolForm.website || ''} onChange={e => setEditSchoolForm({...editSchoolForm, website: e.target.value})} placeholder="https://…" className={inputCls} data-testid="school-website-input" />
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
