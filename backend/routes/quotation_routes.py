@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, UploadFile, File
 from fastapi.responses import StreamingResponse
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone
@@ -569,6 +569,125 @@ async def update_quotation_status(quotation_id: str, status: str, request: Reque
         {"$set": {"quotation_status": status}},
     )
     return {"message": "Status updated"}
+
+
+# ==================== PURCHASE ORDER (customer PO against quotation) ====================
+
+_PO_ALLOWED_TYPES = {
+    "application/pdf", "image/jpeg", "image/jpg", "image/png",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+}
+_PO_EXT = {"pdf", "jpg", "jpeg", "png", "doc", "docx"}
+
+
+async def _get_quotation_for_po(quotation_id: str, user: dict):
+    """Fetch the quotation and enforce write access (admin/accounts/sales-owner; not store)."""
+    team = get_team(user)
+    quot = await db.quotations.find_one({"quotation_id": quotation_id}, {"_id": 0})
+    if not quot:
+        raise HTTPException(status_code=404, detail="Quotation not found")
+    if team == "store":
+        raise HTTPException(status_code=403, detail="Store team cannot manage PO documents")
+    if team == "sales" and quot.get("sales_person_email") != user.get("email"):
+        raise HTTPException(status_code=403, detail="Sales can only manage PO for their own quotations")
+    return quot
+
+
+@router.post("/quotations/{quotation_id}/upload-po")
+async def upload_quotation_po(quotation_id: str, request: Request, file: UploadFile = File(...)):
+    """Attach the customer's Purchase Order document to a quotation."""
+    user = await get_current_user(request)
+    await _get_quotation_for_po(quotation_id, user)
+
+    if file.content_type not in _PO_ALLOWED_TYPES:
+        raise HTTPException(status_code=400, detail="Unsupported file type. Allowed: PDF, JPG, PNG, DOC, DOCX")
+    data = await file.read()
+    if len(data) > 25 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File too large (max 25 MB)")
+
+    ext = (file.filename or "po.pdf").rsplit(".", 1)[-1].lower() if "." in (file.filename or "") else "pdf"
+    if ext not in _PO_EXT:
+        ext = "pdf"
+    path = f"quotations/{quotation_id}/po_{uuid.uuid4().hex[:8]}.{ext}"
+
+    from services.storage import save_upload
+    url = await save_upload(path, data, file.content_type or "application/pdf", legacy="local")
+
+    # optional PO metadata from the multipart form
+    form_po_number = ""
+    form_po_date = ""
+    try:
+        form = await request.form()
+        form_po_number = (form.get("po_number") or "").strip()
+        form_po_date = (form.get("po_date") or "").strip()
+    except Exception:
+        pass
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    po_doc = {
+        "file_id": f"po_{uuid.uuid4().hex[:10]}",
+        "filename": file.filename,
+        "url": url,
+        "content_type": file.content_type,
+        "size_bytes": len(data),
+        "uploaded_at": now_iso,
+        "uploaded_by": user.get("email"),
+        "uploaded_by_name": user.get("name", user.get("email")),
+    }
+    update = {
+        "po_document": po_doc,
+        "po_status": "uploaded",
+        "po_status_updated_at": now_iso,
+    }
+    if form_po_number:
+        update["po_number"] = form_po_number
+    if form_po_date:
+        update["po_date"] = form_po_date
+
+    await db.quotations.update_one({"quotation_id": quotation_id}, {"$set": update})
+    return {"po_document": po_doc, "po_status": "uploaded",
+            "po_number": form_po_number, "po_date": form_po_date}
+
+
+@router.put("/quotations/{quotation_id}/po-status")
+async def update_quotation_po_status(quotation_id: str, request: Request):
+    """Approve/reject an uploaded PO. Admin/Accounts only."""
+    user = await get_current_user(request)
+    team = get_team(user)
+    if team not in ("admin", "accounts"):
+        raise HTTPException(status_code=403, detail="Only Admin/Accounts can review PO documents")
+    body = await request.json()
+    new_status = (body.get("po_status") or "").strip()
+    if new_status not in ("approved", "rejected"):
+        raise HTTPException(status_code=400, detail="po_status must be 'approved' or 'rejected'")
+    quot = await db.quotations.find_one({"quotation_id": quotation_id}, {"_id": 0, "po_document": 1})
+    if not quot:
+        raise HTTPException(status_code=404, detail="Quotation not found")
+    if not quot.get("po_document"):
+        raise HTTPException(status_code=400, detail="No PO document uploaded yet")
+    await db.quotations.update_one(
+        {"quotation_id": quotation_id},
+        {"$set": {
+            "po_status": new_status,
+            "po_status_updated_at": datetime.now(timezone.utc).isoformat(),
+            "po_notes": (body.get("notes") or "").strip(),
+        }},
+    )
+    return {"message": f"PO {new_status}", "po_status": new_status}
+
+
+@router.delete("/quotations/{quotation_id}/po")
+async def remove_quotation_po(quotation_id: str, request: Request):
+    """Remove the attached PO document (metadata reset; file left in storage)."""
+    user = await get_current_user(request)
+    await _get_quotation_for_po(quotation_id, user)
+    await db.quotations.update_one(
+        {"quotation_id": quotation_id},
+        {"$set": {"po_status": "not_uploaded", "po_status_updated_at": datetime.now(timezone.utc).isoformat()},
+         "$unset": {"po_document": "", "po_number": "", "po_date": "", "po_notes": ""}},
+    )
+    return {"message": "PO removed", "po_status": "not_uploaded"}
 
 
 @router.delete("/quotations/{quotation_id}")

@@ -203,6 +203,15 @@ export const quotations = {
       .then(blob => { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `Quotation_${id}.pdf`; document.body.appendChild(a); a.click(); document.body.removeChild(a); });
   },
   backfillLeads: () => API.post('/quotations/backfill-leads'),
+  uploadPo: (id, file, { po_number = '', po_date = '' } = {}) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    if (po_number) fd.append('po_number', po_number);
+    if (po_date) fd.append('po_date', po_date);
+    return API.post(`/quotations/${id}/upload-po`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+  },
+  updatePoStatus: (id, po_status, notes = '') => API.put(`/quotations/${id}/po-status`, { po_status, notes }),
+  removePo: (id) => API.delete(`/quotations/${id}/po`),
 };
 
 // Schools

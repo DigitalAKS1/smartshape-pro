@@ -8,6 +8,17 @@ import { getStatusColor } from '../../lib/utils';
 
 const STATUS_BORDER = { draft:'#6b7280', sent:'#3b82f6', pending:'#f59e0b', confirmed:'#22c55e', cancelled:'#ef4444' };
 const CATALOGUE_DOT = { not_sent:'#6b7280', ready:'#8b5cf6', sent:'#3b82f6', opened:'#f59e0b', submitted:'#22c55e' };
+const PO_CHIP = {
+  uploaded: { label: 'PO', cls: 'bg-blue-500/10 text-blue-600 border-blue-500/30' },
+  approved: { label: 'PO ✓', cls: 'bg-green-500/10 text-green-600 border-green-500/30' },
+  rejected: { label: 'PO ✗', cls: 'bg-red-500/10 text-red-500 border-red-500/30' },
+};
+
+function PoChip({ status }) {
+  const c = PO_CHIP[status];
+  if (!c) return null;
+  return <span className={`ml-1.5 text-[10px] px-1.5 py-0.5 rounded-md font-bold border ${c.cls}`} title={`Purchase order: ${status}`}>{c.label}</span>;
+}
 
 const fmtRound = (n) =>
   typeof n === 'number' ? '₹' + Math.round(n).toLocaleString('en-IN') : '—';
@@ -68,6 +79,7 @@ export function QuotationRow({
         <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold border capitalize ${getStatusColor(quot.quotation_status)}`}>
           {quot.quotation_status}
         </span>
+        <PoChip status={quot.po_status} />
       </td>
       <td className="px-4 py-3.5">
         <div className="flex items-center gap-2">
@@ -166,8 +178,11 @@ export function QuotationMobileCard({
                 {quot.sales_person_name && <span className="text-[10px] text-[var(--text-muted)]">· {quot.sales_person_name}</span>}
               </div>
             </div>
-            <span className={`flex-shrink-0 px-2 py-0.5 rounded-full text-[10px] font-semibold border capitalize ${getStatusColor(quot.quotation_status)}`}>
-              {quot.quotation_status}
+            <span className="flex-shrink-0 flex items-center">
+              <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border capitalize ${getStatusColor(quot.quotation_status)}`}>
+                {quot.quotation_status}
+              </span>
+              <PoChip status={quot.po_status} />
             </span>
           </div>
         </div>

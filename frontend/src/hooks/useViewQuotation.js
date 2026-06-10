@@ -110,10 +110,19 @@ export function useViewQuotation() {
     } finally { setSavingSelection(false); }
   };
 
+  const reloadQuot = useCallback(async () => {
+    try {
+      const r = await API.get('/quotations');
+      const found = r.data.find(q => q.quotation_id === id);
+      if (found) setQuot(found);
+    } catch { /* ignore */ }
+  }, [id]);
+
   return {
     id,
     navigate,
     quot,
+    reloadQuot,
     company,
     versions,
     loading,

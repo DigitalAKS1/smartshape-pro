@@ -5,6 +5,7 @@ import QuotationLineItems from '../../components/quotations/QuotationLineItems';
 import QuotationSummary from '../../components/quotations/QuotationSummary';
 import ManageSelection from '../../components/quotations/ManageSelection';
 import QuotationInfoBlock from '../../components/quotations/QuotationInfoBlock';
+import QuotationPoPanel from '../../components/quotations/QuotationPoPanel';
 
 const BACKEND = process.env.REACT_APP_BACKEND_URL || '';
 
@@ -32,7 +33,7 @@ export default function ViewQuotation() {
   const {
     id, quot, company, versions, loading,
     creatingVersion, pdfBlobUrl, pdfLoading,
-    handleNewVersion,
+    handleNewVersion, reloadQuot,
   } = state;
 
   if (loading || !quot) {
@@ -87,6 +88,10 @@ export default function ViewQuotation() {
       />
 
       <ManageSelection state={state} />
+
+      <div className="no-print max-w-[860px] mx-auto w-full px-4 mt-4">
+        <QuotationPoPanel quotation={quot} onChanged={reloadQuot} />
+      </div>
 
       {/* ── PDF Preview ─────────────────────────────────────────────────── */}
       <div className="no-print-bg bg-[#e8e8ee] min-h-screen py-6 flex flex-col items-center">
