@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { dies as diesApi, stock as stockApi } from '../lib/api';
+import { dies as diesApi, stock as stockApi, formatApiErrorDetail } from '../lib/api';
 import { useDataSync, useAutoRefresh } from '../lib/dataSync';
 import { sortByCode, compareCodes } from '../lib/utils';
 import { toast } from 'sonner';
@@ -111,7 +111,7 @@ export default function useInventory() {
       setNewDie(BLANK_DIE); setNewDieImage(null); setNewDieImagePreview('');
       fetchDies();
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Failed to create die');
+      toast.error(err.response?.data?.detail ? formatApiErrorDetail(err.response.data.detail) : 'Failed to create die');
     } finally {
       setSaving(false);
     }
@@ -141,7 +141,7 @@ export default function useInventory() {
       setEditOpen(false); setEditTarget(null); setEditImage(null); setEditImagePreview('');
       fetchDies();
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Failed');
+      toast.error(err.response?.data?.detail ? formatApiErrorDetail(err.response.data.detail) : 'Failed');
     } finally {
       setSaving(false);
     }
@@ -181,7 +181,7 @@ export default function useInventory() {
       toast.success(`Stock ${stockAdjType === 'stock_in' ? 'added' : 'removed'}: ${stockAdjQty} units`);
       setStockAdjOpen(false); fetchDies();
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Failed');
+      toast.error(err.response?.data?.detail ? formatApiErrorDetail(err.response.data.detail) : 'Failed');
     }
   };
 
@@ -226,7 +226,7 @@ export default function useInventory() {
       toast.success('Deleted');
       setDeleteConfirmOpen(false); setDeleteTarget(null); fetchDies();
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Failed');
+      toast.error(err.response?.data?.detail ? formatApiErrorDetail(err.response.data.detail) : 'Failed');
     }
   };
 
@@ -251,7 +251,7 @@ export default function useInventory() {
       exitSelectMode();
       fetchDies();
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Bulk delete failed');
+      toast.error(err.response?.data?.detail ? formatApiErrorDetail(err.response.data.detail) : 'Bulk delete failed');
     } finally {
       setBulkDeleting(false);
     }
