@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import API from '../lib/api';
+import API, { zoomApi } from '../lib/api';
 import { toast } from 'sonner';
 
 export function useCustomerEngagement() {
@@ -77,6 +77,19 @@ export function useCustomerEngagement() {
       else { await API.post('/training/sessions', sessForm); toast.success('Session created'); }
       setSessDialog(false); fetchSessions();
     } catch { toast.error('Failed to save session'); } finally { setSaving(false); }
+  };
+  const [genningZoom, setGenningZoom] = useState(false);
+  const genSessZoom = async () => {
+    if (!sessForm.title || !sessForm.date) { toast.error('Title and date are required first'); return; }
+    setGenningZoom(true);
+    try {
+      const start = `${sessForm.date}T${sessForm.time || '10:00'}:00`;
+      const r = await zoomApi.createMeeting({ topic: sessForm.title, start_time: start, duration: 60 });
+      setSessForm(p => ({ ...p, meeting_link: r.data.join_url || '' }));
+      toast.success('Zoom meeting created');
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Could not create Zoom meeting (check Zoom setup / scope)');
+    } finally { setGenningZoom(false); }
   };
   const deleteSess = async (id) => {
     if (!window.confirm('Delete this session?')) return;
@@ -178,6 +191,7 @@ export function useCustomerEngagement() {
     // sessions
     sessions, sessDialog, setSessDialog, editSess, sessForm, setSessForm, sessRegs, setSessRegs,
     openNewSess, openEditSess, saveSess, deleteSess, viewRegs, notifySession,
+    genSessZoom, genningZoom,
     // videos
     videos, vidDialog, setVidDialog, editVid, vidForm, setVidForm,
     openNewVid, openEditVid, saveVid, deleteVid,

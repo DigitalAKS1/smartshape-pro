@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { X } from 'lucide-react';
+import { X, Video } from 'lucide-react';
+import { toast } from 'sonner';
 import { Button } from '../../ui/button';
 import { Input } from '../../ui/input';
 import CollaboratorPicker from './CollaboratorPicker';
-import { visitPlans as vpApi } from '../../../lib/api';
+import { visitPlans as vpApi, zoomApi } from '../../../lib/api';
 
 const SKY = '#0ea5e9';
 
@@ -37,6 +38,28 @@ export default function EventDialog({
   // editing starts empty (add/replace). create mode: empty.
   const [collab, setCollab] = useState({ emp_ids: [], emails: [] });
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+  const [genZoom, setGenZoom] = useState(false);
+  const generateZoom = async () => {
+    if (!form.title.trim()) { toast.error('Add a title first'); return; }
+    if (!form.date || (!form.all_day && !form.start_time)) { toast.error('Set a date and time first'); return; }
+    setGenZoom(true);
+    try {
+      const start = `${form.date}T${form.all_day ? '09:00' : form.start_time}:00`;
+      let duration = 60;
+      if (!form.all_day && form.start_time && form.end_time && form.end_time > form.start_time) {
+        const [sh, sm] = form.start_time.split(':').map(Number);
+        const [eh, em] = form.end_time.split(':').map(Number);
+        duration = (eh * 60 + em) - (sh * 60 + sm);
+      }
+      const r = await zoomApi.createMeeting({ topic: form.title.trim(), start_time: start, duration });
+      set('meeting_link', r.data.join_url || '');
+      toast.success('Zoom meeting created');
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Could not create Zoom meeting (check Zoom setup / scope)');
+    }
+    setGenZoom(false);
+  };
 
   const [plans, setPlans] = useState([]);
   useEffect(() => {
@@ -133,6 +156,12 @@ export default function EventDialog({
                     placeholder="https://zoom.us/j/…" className={`h-9 text-sm ${inputCls}`} /></div>
               )}
             </div>
+            {form.meeting_provider === 'zoom' && (
+              <Button type="button" variant="outline" onClick={generateZoom} disabled={genZoom}
+                className={`h-8 text-xs border-[var(--border-color)] ${textSec}`}>
+                <Video className="h-3.5 w-3.5 mr-1.5" /> {genZoom ? 'Creating…' : 'Generate Zoom meeting'}
+              </Button>
+            )}
             {form.meeting_provider && (
               <p className={`text-[11px] ${textMuted}`}>
                 Attendees join via a branded SmartShape link; your raw meeting URL stays private.

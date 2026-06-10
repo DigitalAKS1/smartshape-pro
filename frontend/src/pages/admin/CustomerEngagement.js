@@ -135,7 +135,15 @@ export default function CustomerEngagement() {
                     <div><label className={`block text-xs font-medium ${textSec} mb-1`}>Max Participants (0 = unlimited)</label><input type="number" className={inp} value={hook.sessForm.max_participants} onChange={e => hook.setSessForm(p => ({ ...p, max_participants: +e.target.value }))} /></div>
                   </div>
                   {hook.sessForm.platform !== 'physical'
-                    ? <div><label className={`block text-xs font-medium ${textSec} mb-1`}>Meeting Link</label><input className={inp} value={hook.sessForm.meeting_link} onChange={e => hook.setSessForm(p => ({ ...p, meeting_link: e.target.value }))} placeholder="https://zoom.us/j/..." /></div>
+                    ? <div><label className={`block text-xs font-medium ${textSec} mb-1`}>Meeting Link</label>
+                        <input className={inp} value={hook.sessForm.meeting_link} onChange={e => hook.setSessForm(p => ({ ...p, meeting_link: e.target.value }))} placeholder="https://zoom.us/j/..." />
+                        {hook.sessForm.platform === 'zoom' && (
+                          <button type="button" onClick={hook.genSessZoom} disabled={hook.genningZoom}
+                            className={`mt-2 text-xs px-2.5 py-1 rounded border border-[var(--border-color)] ${textSec} hover:bg-[var(--bg-hover)] disabled:opacity-50`}>
+                            {hook.genningZoom ? 'Creating…' : 'Generate Zoom meeting'}
+                          </button>
+                        )}
+                      </div>
                     : <div><label className={`block text-xs font-medium ${textSec} mb-1`}>Location / Venue</label><input className={inp} value={hook.sessForm.location} onChange={e => hook.setSessForm(p => ({ ...p, location: e.target.value }))} /></div>
                   }
                   <label className="flex items-center gap-2 cursor-pointer">
