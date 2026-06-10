@@ -686,6 +686,13 @@ export const certsApi = {
   zoomParticipants: (meetingId)     => API.get('/certs/zoom/participants', { params: { meeting_id: meetingId } }),
 };
 
+// Zoom -> CRM mapping import (shares Zoom creds with certsApi.zoomConfig*)
+export const crmZoom = {
+  fetch:   (meetingId) => API.get('/crm-zoom/fetch', { params: { meeting_id: meetingId } }),
+  suggest: (rows)      => API.post('/crm-zoom/suggest', { rows }),
+  import:  (body)      => API.post('/crm-zoom/import', body),
+};
+
 // Delegation System
 export const delegation = {
   departments: {

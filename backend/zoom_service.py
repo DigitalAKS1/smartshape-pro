@@ -5,6 +5,7 @@ enter them in the app (no server/env access needed). Mirrors the db.settings pat
 used for email/whatsapp config.
 """
 import base64
+import re
 import time
 from typing import List, Dict, Any, Optional, Tuple
 
@@ -121,3 +122,144 @@ async def get_meeting_participants(meeting_id: str) -> List[Dict[str, str]]:
         if name:
             out.append({"name": name, "email": email, "phone": ""})
     return out
+
+
+# ── CRM extraction: topic + registrants (school/designation) + display-name parse ──
+
+_DESIG_HINTS = (
+    "principal", "vice principal", "director", "head", "coordinator", "teacher",
+    "manager", "owner", "admin", "hod", "dean", "professor", "prof", "founder",
+    "chairman", "president", "incharge", "in-charge", "counsellor", "counselor",
+    "trustee", "registrar",
+)
+_SCHOOL_HINTS = ("school", "academy", "vidyalaya", "college", "institute", "convent",
+                 "public school", "international", "university", "gurukul")
+
+
+def _looks_like_designation(s: str) -> bool:
+    t = (s or "").lower()
+    return any(h in t for h in _DESIG_HINTS)
+
+
+def _looks_like_school(s: str) -> bool:
+    t = (s or "").lower()
+    return any(h in t for h in _SCHOOL_HINTS)
+
+
+def parse_display_name(display: str):
+    """Split a Zoom display name like 'Aman Kumar | DPS Delhi | Principal' into
+    (name, school, designation). Best-effort: first chunk is the person; remaining
+    chunks are classified by keyword. Returns ('', '', '') gracefully."""
+    raw = (display or "").strip()
+    if not raw:
+        return "", "", ""
+    parts = [p.strip() for p in re.split(r"\s*[|/\-–—,]\s*", raw) if p.strip()]
+    if len(parts) <= 1:
+        return raw, "", ""
+    name = parts[0]
+    school, desig = "", ""
+    for chunk in parts[1:]:
+        if not desig and _looks_like_designation(chunk):
+            desig = chunk
+        elif not school and _looks_like_school(chunk):
+            school = chunk
+        elif not school:
+            school = chunk
+        elif not desig:
+            desig = chunk
+    return name, school, desig
+
+
+async def get_meeting_topic(meeting_id: str) -> str:
+    mid = _norm_meeting_id(meeting_id)
+    token = await _get_access_token()
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as c:
+        for path in (f"/meetings/{mid}", f"/past_meetings/{mid}"):
+            try:
+                r = await c.get(f"{_API_BASE}{path}", headers={"Authorization": f"Bearer {token}"})
+                if r.status_code == 200:
+                    topic = (r.json().get("topic") or "").strip()
+                    if topic:
+                        return topic
+            except Exception:
+                continue
+    return ""
+
+
+async def get_meeting_registrants(meeting_id: str) -> List[Dict[str, str]]:
+    """Registrants with structured school/designation from built-in + custom fields.
+    Returns [] if the meeting had no registration (or scope missing)."""
+    mid = _norm_meeting_id(meeting_id)
+    token = await _get_access_token()
+    rows: List[Dict[str, str]] = []
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as c:
+        for status in ("approved", "pending"):
+            next_token = ""
+            while True:
+                params = {"status": status, "page_size": 300}
+                if next_token:
+                    params["next_page_token"] = next_token
+                try:
+                    r = await c.get(f"{_API_BASE}/meetings/{mid}/registrants",
+                                    headers={"Authorization": f"Bearer {token}"}, params=params)
+                except Exception:
+                    break
+                if r.status_code != 200:
+                    break
+                data = r.json()
+                for reg in data.get("registrants", []) or []:
+                    name = f"{reg.get('first_name','')} {reg.get('last_name','')}".strip()
+                    school = (reg.get("org") or "").strip()
+                    desig = (reg.get("job_title") or "").strip()
+                    for q in reg.get("custom_questions", []) or []:
+                        title = (q.get("title") or "").lower()
+                        val = (q.get("value") or "").strip()
+                        if not val:
+                            continue
+                        if not school and ("school" in title or "institut" in title or "organi" in title or "college" in title):
+                            school = val
+                        elif not desig and ("design" in title or "title" in title or "role" in title or "job" in title or "position" in title):
+                            desig = val
+                    if name:
+                        rows.append({"name": name, "email": (reg.get("email") or "").strip(),
+                                     "school": school, "designation": desig})
+                next_token = data.get("next_page_token") or ""
+                if not next_token:
+                    break
+    return rows
+
+
+async def get_meeting_crm_data(meeting_id: str) -> Dict[str, Any]:
+    """Combine topic (theme) + registrants (structured school/designation) + attendees,
+    falling back to display-name parsing. Returns {theme, rows:[{name,email,phone,school,designation,source}]}."""
+    topic = await get_meeting_topic(meeting_id)
+    registrants = await get_meeting_registrants(meeting_id)
+    participants = await get_meeting_participants(meeting_id)
+
+    reg_by_email = {r["email"].lower(): r for r in registrants if r.get("email")}
+    rows: List[Dict[str, str]] = []
+    seen = set()
+
+    def add(name, email, school, desig, source):
+        key = (email or "").lower() or (name or "").lower()
+        if not key or key in seen or not name:
+            return
+        seen.add(key)
+        rows.append({"name": name, "email": email or "", "phone": "",
+                     "school": school or "", "designation": desig or "", "source": source})
+
+    # Prefer attendees (who actually joined); enrich from registration or display name.
+    for p in participants:
+        email = (p.get("email") or "").strip()
+        reg = reg_by_email.get(email.lower()) if email else None
+        if reg:
+            add(reg["name"], email or reg.get("email", ""), reg.get("school", ""), reg.get("designation", ""), "registration")
+        else:
+            nm, sch, des = parse_display_name(p.get("name", ""))
+            add(nm or p.get("name", ""), email, sch, des, "display_name")
+
+    # Registrants who didn't appear in the participant list (e.g. no-shows / upcoming).
+    for r in registrants:
+        add(r["name"], r.get("email", ""), r.get("school", ""), r.get("designation", ""), "registration")
+
+    return {"theme": topic, "rows": rows}
