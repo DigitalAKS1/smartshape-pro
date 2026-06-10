@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { X } from 'lucide-react';
 import { Button } from '../../ui/button';
 import { Input } from '../../ui/input';
 import CollaboratorPicker from './CollaboratorPicker';
+import { visitPlans as vpApi } from '../../../lib/api';
 
 const SKY = '#0ea5e9';
 
@@ -27,6 +28,9 @@ export default function EventDialog({
     description: event?.meta?.description || '',
     meeting_provider: event?.meta?.meeting_provider || (editing ? '' : meetingDefaults.provider) || '',
     meeting_link: event?.meta?.meeting_link || (editing ? '' : meetingDefaults.link) || '',
+    event_type: event?.meta?.event_type || 'meeting',
+    visit_plan_id: event?.meta?.visit_plan_id || '',
+    create_visit_plan: false,
     color: event?.color || SKY,
   });
   // edit mode: we only have collaborator display names from the agenda; collaborator
@@ -34,8 +38,22 @@ export default function EventDialog({
   const [collab, setCollab] = useState({ emp_ids: [], emails: [] });
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
+  const [plans, setPlans] = useState([]);
+  useEffect(() => {
+    (async () => {
+      try {
+        const today = new Date().toISOString().slice(0, 10);
+        const r = await vpApi.getAll();
+        setPlans((r.data || []).filter(p => (p.visit_date || '') >= today));
+      } catch { /* no plans */ }
+    })();
+  }, []);
+  const IN_PERSON = ['exhibition', 'school_workshop', 'physical_workshop'];
+  const isInPerson = IN_PERSON.includes(form.event_type);
+
   const valid = form.title.trim() && form.date &&
-    (form.all_day || (form.start_time && form.end_time && form.end_time > form.start_time));
+    (form.all_day || (form.start_time && form.end_time && form.end_time > form.start_time)) &&
+    (!isInPerson || form.location.trim());
 
   const submit = () => {
     const payload = {
@@ -46,6 +64,15 @@ export default function EventDialog({
       meeting_provider: form.meeting_provider,
       meeting_link: form.meeting_provider ? form.meeting_link.trim() : '',
     };
+    payload.event_type = form.event_type;
+    if (form.event_type === 'meeting') {
+      payload.meeting_provider = form.meeting_provider;
+      payload.meeting_link = form.meeting_provider ? form.meeting_link.trim() : '';
+    } else {
+      payload.meeting_provider = ''; payload.meeting_link = '';
+    }
+    if (form.visit_plan_id) payload.visit_plan_id = form.visit_plan_id;
+    if (form.create_visit_plan) payload.create_visit_plan = true;
     if (collab.emp_ids.length) payload.collaborator_emp_ids = collab.emp_ids;
     if (collab.emails.length) payload.collaborator_emails = collab.emails;
     onSave(payload, editing ? event.entity_id : null);
@@ -64,6 +91,15 @@ export default function EventDialog({
         <div className="p-5 space-y-3">
           <div><label className={lbl}>Title</label>
             <Input value={form.title} onChange={e => set('title', e.target.value)} placeholder="Meeting, call, workshop…" className={`h-9 text-sm ${inputCls}`} /></div>
+          <div><label className={lbl}>Type</label>
+            <select value={form.event_type} onChange={e => set('event_type', e.target.value)} className={fld}>
+              <option value="meeting">Meeting (online)</option>
+              <option value="exhibition">Exhibition</option>
+              <option value="school_workshop">School Workshop</option>
+              <option value="physical_workshop">Physical Workshop</option>
+              <option value="other">Other</option>
+            </select>
+          </div>
           <div><label className={lbl}>Date</label>
             <input type="date" value={form.date} onChange={e => set('date', e.target.value)} className={fld} /></div>
           <label className={`flex items-center gap-2 text-sm ${textSec}`}>
@@ -77,28 +113,53 @@ export default function EventDialog({
                 <input type="time" value={form.end_time} onChange={e => set('end_time', e.target.value)} className={fld} /></div>
             </div>
           )}
-          <div><label className={lbl}>Location</label>
-            <Input value={form.location} onChange={e => set('location', e.target.value)} placeholder="Optional" className={`h-9 text-sm ${inputCls}`} /></div>
-          <div className="grid grid-cols-2 gap-3">
-            <div><label className={lbl}>Meeting type</label>
-              <select value={form.meeting_provider} onChange={e => set('meeting_provider', e.target.value)} className={fld}>
-                <option value="">None</option>
-                <option value="zoom">Zoom</option>
-                <option value="meet">Google Meet</option>
-                <option value="other">Other</option>
-              </select>
+          <div><label className={lbl}>Location{isInPerson ? ' *' : ''}</label>
+            <Input value={form.location} onChange={e => set('location', e.target.value)}
+              placeholder={isInPerson ? 'Venue / address (required)' : 'Optional'} className={`h-9 text-sm ${inputCls}`} /></div>
+
+          {form.event_type === 'meeting' && (<>
+            <div className="grid grid-cols-2 gap-3">
+              <div><label className={lbl}>Meeting type</label>
+                <select value={form.meeting_provider} onChange={e => set('meeting_provider', e.target.value)} className={fld}>
+                  <option value="">None</option>
+                  <option value="zoom">Zoom</option>
+                  <option value="meet">Google Meet</option>
+                  <option value="other">Other</option>
+                </select>
+              </div>
+              {form.meeting_provider && (
+                <div><label className={lbl}>Meeting link</label>
+                  <Input value={form.meeting_link} onChange={e => set('meeting_link', e.target.value)}
+                    placeholder="https://zoom.us/j/…" className={`h-9 text-sm ${inputCls}`} /></div>
+              )}
             </div>
             {form.meeting_provider && (
-              <div><label className={lbl}>Meeting link</label>
-                <Input value={form.meeting_link} onChange={e => set('meeting_link', e.target.value)}
-                  placeholder="https://zoom.us/j/…" className={`h-9 text-sm ${inputCls}`} /></div>
+              <p className={`text-[11px] ${textMuted}`}>
+                Attendees join via a branded SmartShape link; your raw meeting URL stays private.
+              </p>
             )}
-          </div>
-          {form.meeting_provider && (
-            <p className={`text-[11px] ${textMuted}`}>
-              Attendees join via a branded SmartShape link; your raw meeting URL stays private.
-            </p>
+          </>)}
+
+          {isInPerson && (
+            <div className="space-y-2 rounded-lg border border-[var(--border-color)] p-3">
+              <p className={`text-[11px] font-semibold uppercase tracking-wide ${textMuted}`}>Team visit plan</p>
+              <select value={form.visit_plan_id} disabled={form.create_visit_plan}
+                onChange={e => set('visit_plan_id', e.target.value)} className={`${fld} disabled:opacity-50`}>
+                <option value="">— Link an existing visit plan (optional) —</option>
+                {plans.map(p => (
+                  <option key={p.plan_id} value={p.plan_id}>
+                    {p.school_name || 'Visit'} · {p.visit_date}{p.visit_time ? ` ${p.visit_time}` : ''}
+                  </option>
+                ))}
+              </select>
+              <label className={`flex items-center gap-2 text-xs ${textSec}`}>
+                <input type="checkbox" checked={form.create_visit_plan}
+                  onChange={e => { set('create_visit_plan', e.target.checked); if (e.target.checked) set('visit_plan_id', ''); }} />
+                Create a new team visit plan from this event
+              </label>
+            </div>
           )}
+
           <CollaboratorPicker value={collab} onChange={setCollab} teamOptions={teamOptions}
             textPri={textPri} textSec={textSec} textMuted={textMuted} inputCls={inputCls} />
           {editing && <p className={`text-[11px] ${textMuted}`}>Adding collaborators here appends/updates the list.</p>}

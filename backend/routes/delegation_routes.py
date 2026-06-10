@@ -1452,7 +1452,11 @@ async def get_agenda(request: Request):
 # ══════════════════════════════════════════════════════════════════════════════
 
 EVENT_EDITABLE = ("title", "description", "location", "color", "date", "start_time", "end_time",
-                  "all_day", "meeting_provider", "meeting_link")
+                  "all_day", "meeting_provider", "meeting_link", "event_type", "visit_plan_id")
+
+IN_PERSON_EVENT_TYPES = ("exhibition", "school_workshop", "physical_workshop")
+EVENT_TYPE_COLORS = {"meeting": "#0ea5e9", "exhibition": "#a855f7",
+                     "school_workshop": "#f59e0b", "physical_workshop": "#14b8a6", "other": "#0ea5e9"}
 
 
 async def _build_collaborators(creator_email, creator_emp_id, creator_name, emp_ids, emails):
@@ -1489,6 +1493,29 @@ async def create_event(request: Request):
     st, et = body.get("start_time") or "", body.get("end_time") or ""
     if st and et and et <= st:
         raise HTTPException(400, "End time must be after start time")
+
+    event_type = (body.get("event_type") or "meeting").strip()
+    if event_type in IN_PERSON_EVENT_TYPES and not (body.get("location") or "").strip():
+        raise HTTPException(400, "Location is required for in-person events")
+
+    visit_plan_id = (body.get("visit_plan_id") or "").strip()
+    # Optionally create a team visit plan from this in-person event (also spawns the "Visit:" task).
+    if not visit_plan_id and body.get("create_visit_plan") and event_type in IN_PERSON_EVENT_TYPES:
+        try:
+            vp_id = f"vp_{uuid.uuid4().hex[:12]}"
+            await db.visit_plans.insert_one({
+                "plan_id": vp_id,
+                "school_name": (body.get("location") or title),
+                "school_id": "", "assigned_to": user.get("email"),
+                "assigned_name": actor["name"], "visit_date": body["date"],
+                "visit_time": st, "purpose": title, "status": "planned",
+                "created_by": user.get("email"), "created_at": now_iso(),
+                "source_event": True,
+            })
+            visit_plan_id = vp_id
+        except Exception:
+            visit_plan_id = ""   # never block the event on a visit-plan failure
+
     collab = await _build_collaborators(user.get("email"), actor["emp_id"], actor["name"],
                                         body.get("collaborator_emp_ids"), body.get("collaborator_emails"))
     doc = {
@@ -1497,6 +1524,7 @@ async def create_event(request: Request):
         "date": body["date"], "start_time": st, "end_time": et, "all_day": bool(body.get("all_day")),
         "meeting_provider": (body.get("meeting_provider") or "").strip(),
         "meeting_link": (body.get("meeting_link") or "").strip(),
+        "event_type": event_type, "visit_plan_id": visit_plan_id,
         "created_by": user.get("email"), "created_by_emp_id": actor["emp_id"],
         "collaborators": collab, "linked_event_id": body.get("linked_event_id", ""),
         "status": "active", "ext_sync": {}, "created_at": now_iso(), "updated_at": now_iso(),
@@ -1515,6 +1543,10 @@ async def update_event(event_id: str, request: Request):
         raise HTTPException(403, "Only the creator can edit this event")
     body = await request.json()
     updates = {k: v for k, v in body.items() if k in EVENT_EDITABLE}
+    eff_type = updates.get("event_type", ev.get("event_type", "meeting"))
+    eff_loc = updates.get("location", ev.get("location", ""))
+    if eff_type in IN_PERSON_EVENT_TYPES and not (eff_loc or "").strip():
+        raise HTTPException(400, "Location is required for in-person events")
     st = updates.get("start_time", ev.get("start_time"))
     et = updates.get("end_time", ev.get("end_time"))
     if st and et and et <= st:
@@ -1948,19 +1980,23 @@ async def _agenda_events(emp_id, email, dfrom, dto):
                 my_resp = c.get("response")
         acts = ["edit", "cancel"] if is_creator else ["respond", "open"]
         ext = r.get("ext_sync") or {}
-        out.append(_ev(
+        evt = _ev(
             "event", "event", r.get("title"), r["date"], r["event_id"], "/delegation",
             start_time=(r.get("start_time") or None), end_time=(r.get("end_time") or None),
             status=r.get("status"), actions=acts,
             meta={"created_by_name": r.get("created_by", ""), "is_creator": is_creator,
                   "my_response": my_resp, "location": r.get("location", ""),
                   "description": r.get("description", ""),
+                  "event_type": r.get("event_type", "meeting"),
+                  "visit_plan_id": r.get("visit_plan_id", ""),
                   "invited": ext.get("sequence") is not None,
                   "sequence": ext.get("sequence"),
                   "meeting_provider": r.get("meeting_provider", ""),
                   "meeting_link": r.get("meeting_link", ""),
                   "join_url": _event_join_url(r),
-                  "collaborators": [c.get("name") or c.get("email") for c in r.get("collaborators", [])]}))
+                  "collaborators": [c.get("name") or c.get("email") for c in r.get("collaborators", [])]})
+        evt["color"] = EVENT_TYPE_COLORS.get(r.get("event_type", "meeting"), evt["color"])
+        out.append(evt)
     return out
 
 

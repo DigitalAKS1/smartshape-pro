@@ -8,6 +8,7 @@ import DayPlanBlockDialog from './DayPlanBlockDialog';
 import EventActionDrawer from './EventActionDrawer';
 import EventDialog from './EventDialog';
 import RemindersPanel from './RemindersPanel';
+import DayPopup from './DayPopup';
 
 const PINK = '#e94560';
 const SKY = '#0ea5e9';
@@ -30,6 +31,7 @@ export default function DelegationCalendar({ onEventClick, card, textPri, textSe
   const [feedUrls, setFeedUrls] = React.useState(null);                   // {url, webcal_url}
   const [savingM, setSavingM] = React.useState(false);
   const [remindersOpen, setRemindersOpen] = React.useState(false);
+  const [dayPopup, setDayPopup] = React.useState(null);   // 'YYYY-MM-DD' or null
   const monthLabel = c.cursor.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
 
   const openSettings = async () => {
@@ -133,7 +135,7 @@ export default function DelegationCalendar({ onEventClick, card, textPri, textSe
       <div key={c.view + c.range.from} className="cal-reveal">
         {!c.loading && c.view === 'month' && (
           <CalendarMonth cursor={c.cursor} eventsByDate={c.eventsByDate}
-            onDayClick={(d) => { c.setCursor(d); c.setView('day'); }}
+            onDayClick={(d) => setDayPopup(c.helpers.iso(d))}
             helpers={c.helpers} card={card} textPri={textPri} textSec={textSec} textMuted={textMuted} />
         )}
         {!c.loading && c.view === 'week' && (
@@ -300,6 +302,16 @@ export default function DelegationCalendar({ onEventClick, card, textPri, textSe
           }}
           onClose={() => c.setEventDialog(null)}
           card={card} textPri={textPri} textSec={textSec} textMuted={textMuted} inputCls={inputCls} />
+      )}
+
+      {dayPopup && (
+        <DayPopup
+          date={dayPopup}
+          events={c.eventsByDate[dayPopup] || []}
+          onOpen={(e) => { setDayPopup(null); e.source === 'plan' ? setBlockDialog({ block: e }) : setSelectedEvent(e); }}
+          onOpenDay={() => { c.setCursor(new Date(dayPopup + 'T00:00:00')); c.setView('day'); setDayPopup(null); }}
+          onClose={() => setDayPopup(null)}
+          card={card} textPri={textPri} textSec={textSec} textMuted={textMuted} />
       )}
     </div>
   );

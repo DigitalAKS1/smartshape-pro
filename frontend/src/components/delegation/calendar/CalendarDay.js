@@ -17,6 +17,15 @@ export default function CalendarDay({
   const hourOf = (t) => Math.max(START_HOUR, Math.min(END_HOUR, parseInt((t || '06:00').slice(0, 2), 10)));
   const eventsAtHour = (h) => timed.filter(e => hourOf(e.start_time) === h);
 
+  // Personal blocks paint a band across every hour they cover (e.g. 9AM–1PM).
+  const blocks = events.filter(e => e.source === 'plan' && e.start_time);
+  const hourEnd = (t) => { const m = (t || '').match(/^(\d{2}):(\d{2})/); return m ? parseInt(m[1], 10) + (parseInt(m[2], 10) > 0 ? 1 : 0) : 0; };
+  const blockCovering = (h) => blocks.find(b => {
+    const s = parseInt((b.start_time || '00:00').slice(0, 2), 10);
+    const e = b.end_time ? hourEnd(b.end_time) : s + 1;
+    return h >= s && h < e;
+  });
+
   const handleDrop = (h) => (ev) => {
     ev.preventDefault();
     if (readOnly) return;
@@ -55,6 +64,7 @@ export default function CalendarDay({
             onDragOver={(e) => e.preventDefault()} onDrop={handleDrop(h)}>
             <div className={`w-16 flex-shrink-0 text-right pr-2 pt-1.5 text-[10px] ${textMuted} border-r border-[var(--border-color)]`}>{label(h)}</div>
             <div className={`flex-1 p-1.5 space-y-1 group relative ${!readOnly ? 'cursor-pointer' : ''}`}
+              style={blockCovering(h) ? { background: (blockCovering(h).color || '#64748b') + '22' } : undefined}
               onClick={() => !readOnly && onAddBlock?.(hhmm(h))} title={!readOnly ? 'Click to add here' : undefined}>
               {eventsAtHour(h).map(e => {
                 const isBlock = e.source === 'plan';
