@@ -143,6 +143,7 @@ export default function DelegationApp() {
             completeInst={s.completeInst} verifyInst={s.verifyInst}
             onEditTask={(inst) => s.openEditTask(inst, 'delegator')}
             refreshKey={mtKey}
+            isManager={user?.role === 'admin'}
             {...sharedTheme}
           />
         )}

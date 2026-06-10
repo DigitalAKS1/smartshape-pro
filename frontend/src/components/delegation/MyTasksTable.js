@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { delegation as delApi } from '../../lib/api';
-import { Check, Eye, Search, ArrowDownUp, Calendar, UserCheck, Pencil, History, X } from 'lucide-react';
+import { Check, Eye, Search, ArrowDownUp, Calendar, UserCheck, Pencil, History, X, Trash2 } from 'lucide-react';
+import { toast } from 'sonner';
 
 const PINK = '#e94560';
 const TODAY = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
@@ -12,13 +13,19 @@ const STATUS = {
   verified: 'bg-green-500/15 text-green-500',
 };
 
-export default function MyTasksTable({ myEmp, completeInst, verifyInst, onEditTask, refreshKey, card, textPri, textSec, textMuted, inputCls }) {
+export default function MyTasksTable({ myEmp, completeInst, verifyInst, onEditTask, refreshKey, isManager, card, textPri, textSec, textMuted, inputCls }) {
   const [dir, setDir] = useState('to');        // 'to' = assigned to me, 'by' = assigned by me
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState('');
   const [q, setQ] = useState('');
   const [historyInst, setHistoryInst] = useState(null);   // instance whose history is open
+  const [selected, setSelected] = useState(new Set());     // selected instance_ids (manager multi-delete)
+  const [delDlg, setDelDlg] = useState(null);              // { tasks: [{task_id, task_title}] }
+  const [delReason, setDelReason] = useState('');
+  const [delBusy, setDelBusy] = useState(false);
+  const showSelect = dir === 'by' && isManager;            // admins can multi-select in "by me"
+  useEffect(() => { setSelected(new Set()); }, [dir]);
 
   const load = async () => {
     if (!myEmp?.emp_id) { setRows([]); return; }
@@ -45,6 +52,26 @@ export default function MyTasksTable({ myEmp, completeInst, verifyInst, onEditTa
 
   const onDone = async (inst) => { await completeInst(inst); load(); };
   const onVerify = async (inst) => { await verifyInst(inst.instance_id); load(); };
+
+  const toggleSel = (id) => setSelected(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const askDeleteOne = (t) => { setDelReason(''); setDelDlg({ tasks: [{ task_id: t.task_id, task_title: t.task_title }] }); };
+  const askDeleteSelected = () => {
+    const m = new Map();
+    rows.filter(r => selected.has(r.instance_id)).forEach(r => m.set(r.task_id, r.task_title));
+    if (!m.size) return;
+    setDelReason('');
+    setDelDlg({ tasks: [...m].map(([task_id, task_title]) => ({ task_id, task_title })) });
+  };
+  const confirmDelete = async () => {
+    if (!delReason.trim() || !delDlg) return;
+    setDelBusy(true);
+    try {
+      for (const tk of delDlg.tasks) await delApi.tasks.delete(tk.task_id, { reason: delReason.trim() });
+      toast.success(`Deleted ${delDlg.tasks.length} task${delDlg.tasks.length !== 1 ? 's' : ''}`);
+      setDelDlg(null); setSelected(new Set()); load();
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Delete failed'); }
+    finally { setDelBusy(false); }
+  };
 
   if (!myEmp) {
     return <div className={`${card} border rounded-xl p-10 text-center`}>
@@ -79,6 +106,18 @@ export default function MyTasksTable({ myEmp, completeInst, verifyInst, onEditTa
         </select>
       </div>
 
+      {showSelect && selected.size > 0 && (
+        <div className="flex items-center justify-between rounded-xl px-3 py-2" style={{ background: '#e9456012' }}>
+          <span className="text-xs font-semibold" style={{ color: PINK }}>{selected.size} selected</span>
+          <div className="flex items-center gap-2">
+            <button onClick={() => setSelected(new Set())} className={`text-xs px-2 py-1 rounded-lg ${textMuted} hover:bg-[var(--bg-hover)]`}>Clear</button>
+            <button onClick={askDeleteSelected} className="text-xs font-semibold px-3 py-1 rounded-lg text-white flex items-center gap-1" style={{ background: '#ef4444' }}>
+              <Trash2 className="h-3.5 w-3.5" /> Delete selected
+            </button>
+          </div>
+        </div>
+      )}
+
       {loading ? (
         <div className="flex items-center justify-center py-12">
           <div className="animate-spin rounded-full h-7 w-7 border-4 border-[#e94560] border-t-transparent" />
@@ -94,6 +133,13 @@ export default function MyTasksTable({ myEmp, completeInst, verifyInst, onEditTa
           <table className="w-full text-sm hidden sm:table">
             <thead>
               <tr className="bg-[var(--bg-primary)] border-b border-[var(--border-color)]">
+                {showSelect && (
+                  <th className="py-2.5 pl-3 w-8">
+                    <input type="checkbox"
+                      checked={filtered.length > 0 && filtered.every(t => selected.has(t.instance_id))}
+                      onChange={e => setSelected(e.target.checked ? new Set(filtered.map(t => t.instance_id)) : new Set())} />
+                  </th>
+                )}
                 {['Task', dir === 'to' ? 'From' : 'To', 'Due', 'Priority', 'Status', ''].map((h, i) => (
                   <th key={i} className={`py-2.5 px-3 text-left text-[10px] font-semibold uppercase tracking-wider ${textMuted}`}>{h}</th>
                 ))}
@@ -104,6 +150,11 @@ export default function MyTasksTable({ myEmp, completeInst, verifyInst, onEditTa
                 const overdue = t.status === 'pending' && t.due_date < TODAY;
                 return (
                   <tr key={t.instance_id} className="border-b border-[var(--border-color)] hover:bg-[var(--bg-hover)]">
+                    {showSelect && (
+                      <td className="pl-3 w-8">
+                        <input type="checkbox" checked={selected.has(t.instance_id)} onChange={() => toggleSel(t.instance_id)} />
+                      </td>
+                    )}
                     <td className={`px-3 py-2.5 font-medium ${textPri}`}>{t.task_title}</td>
                     <td className={`px-3 py-2.5 ${textSec}`}>{dir === 'to' ? (t.delegator_name || '—') : t.emp_name}</td>
                     <td className={`px-3 py-2.5 ${overdue ? 'text-red-500 font-semibold' : textSec}`}>{t.due_date}{overdue ? ' · overdue' : ''}</td>
@@ -124,6 +175,11 @@ export default function MyTasksTable({ myEmp, completeInst, verifyInst, onEditTa
                         {dir === 'by' && onEditTask && t.status !== 'verified' && (
                           <button onClick={() => onEditTask(t)} title="Edit task" className={`p-1.5 rounded-lg ${textMuted} hover:bg-[var(--bg-hover)]`}>
                             <Pencil className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                        {dir === 'by' && (
+                          <button onClick={() => askDeleteOne(t)} title="Delete task" className="p-1.5 rounded-lg text-red-500 hover:bg-red-500/10">
+                            <Trash2 className="h-3.5 w-3.5" />
                           </button>
                         )}
                         <button onClick={() => setHistoryInst(t)} title="Edit history" className={`p-1.5 rounded-lg ${textMuted} hover:bg-[var(--bg-hover)]`}>
@@ -168,6 +224,11 @@ export default function MyTasksTable({ myEmp, completeInst, verifyInst, onEditTa
                         <Pencil className="h-3 w-3 inline mr-1" /> Edit
                       </button>
                     )}
+                    {dir === 'by' && (
+                      <button onClick={() => askDeleteOne(t)} className="flex-1 h-8 rounded-lg text-xs font-semibold border border-red-500/30 text-red-500">
+                        <Trash2 className="h-3 w-3 inline mr-1" /> Delete
+                      </button>
+                    )}
                     <button onClick={() => setHistoryInst(t)} className={`flex-1 h-8 rounded-lg text-xs font-semibold border border-[var(--border-color)] ${textMuted}`}>
                       <History className="h-3 w-3 inline mr-1" /> History
                     </button>
@@ -175,6 +236,33 @@ export default function MyTasksTable({ myEmp, completeInst, verifyInst, onEditTa
                 </div>
               );
             })}
+          </div>
+        </div>
+      )}
+
+      {delDlg && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => !delBusy && setDelDlg(null)}>
+          <div className={`${card} border rounded-2xl w-full max-w-sm`} onClick={e => e.stopPropagation()}>
+            <div className="px-5 py-4 border-b border-[var(--border-color)]">
+              <h3 className={`text-sm font-semibold ${textPri}`}>Delete {delDlg.tasks.length > 1 ? `${delDlg.tasks.length} tasks` : 'task'}</h3>
+              <p className={`text-xs ${textMuted} mt-0.5 truncate`}>
+                {delDlg.tasks.length === 1 ? delDlg.tasks[0].task_title : delDlg.tasks.map(t => t.task_title).join(', ')}
+              </p>
+            </div>
+            <div className="p-5 space-y-2">
+              <label className={`block text-[11px] font-semibold uppercase tracking-wide ${textMuted}`}>Reason (required)</label>
+              <textarea value={delReason} onChange={e => setDelReason(e.target.value)} rows={3}
+                placeholder="Why is this being deleted? (saved to the deletion log)"
+                className={`w-full px-2.5 py-2 text-sm rounded-lg border border-[var(--border-color)] ${inputCls}`} />
+              <p className={`text-[11px] ${textMuted}`}>This removes the task for everyone. The reason + who/when is kept in the audit log.</p>
+            </div>
+            <div className="flex justify-end gap-2 px-5 py-4 border-t border-[var(--border-color)]">
+              <button onClick={() => setDelDlg(null)} disabled={delBusy} className={`h-9 px-3 rounded-lg text-sm border border-[var(--border-color)] ${textSec}`}>Cancel</button>
+              <button onClick={confirmDelete} disabled={delBusy || !delReason.trim()}
+                className="h-9 px-4 rounded-lg text-sm font-semibold text-white disabled:opacity-50" style={{ background: '#ef4444' }}>
+                {delBusy ? 'Deleting…' : 'Delete'}
+              </button>
+            </div>
           </div>
         </div>
       )}

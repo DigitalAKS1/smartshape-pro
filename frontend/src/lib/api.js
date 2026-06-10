@@ -732,8 +732,9 @@ export const delegation = {
     create:     (data) => API.post('/delegation/tasks', data),
     bulkCreate: (arr)  => API.post('/delegation/tasks/bulk', arr),
     update:     (id,d) => API.put(`/delegation/tasks/${id}`, d),
-    delete:     (id)   => API.delete(`/delegation/tasks/${id}`),
+    delete:     (id,data) => API.delete(`/delegation/tasks/${id}`, { data }),
   },
+  taskDeletions: () => API.get('/delegation/task-deletions'),
   instances: {
     list:             (p)    => API.get('/delegation/instances', { params: p }),
     patch:            (id,d) => API.patch(`/delegation/instances/${id}`, d),

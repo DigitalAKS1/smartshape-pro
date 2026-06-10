@@ -597,9 +597,51 @@ async def update_task(task_id: str, request: Request):
 
 @router.delete("/tasks/{task_id}")
 async def archive_task(task_id: str, request: Request):
-    await get_current_user(request)
-    await db.del_tasks.update_one({"task_id": task_id}, {"$set": {"is_active": False}})
-    return {"ok": True}
+    """Delete a task WITH a reason. Only the task's delegator or a boss/admin may
+    delete. The reason + who/when is logged to del_task_deletions (audit), the task
+    is archived, and its instances are removed so it disappears from all views."""
+    user = await get_current_user(request)
+    actor = await _resolve_actor(user)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    reason = (body.get("reason") or "").strip()
+
+    task = await db.del_tasks.find_one({"task_id": task_id}, {"_id": 0})
+    if not task:
+        raise HTTPException(404, "Task not found")
+    is_admin = user.get("role") == "admin"
+    if not (actor["is_boss"] or is_admin or (actor["emp_id"] and actor["emp_id"] == task.get("delegator_id"))):
+        raise HTTPException(403, "Only the delegator or an admin can delete this task")
+    if not reason:
+        raise HTTPException(400, "A reason is required to delete a task")
+
+    inst_count = await db.del_task_instances.count_documents({"task_id": task_id})
+    await db.del_task_deletions.insert_one({
+        "deletion_id": gen_id("del"), "task_id": task_id,
+        "task_title": task.get("title"), "task_number": task.get("task_number"),
+        "delegator_id": task.get("delegator_id"), "delegator_name": task.get("delegator_name"),
+        "assignee_ids": task.get("assignee_ids", []),
+        "deleted_by": user.get("email"), "deleted_by_name": actor["name"],
+        "reason": reason, "instance_count": inst_count, "deleted_at": now_iso(),
+    })
+    await db.del_tasks.update_one({"task_id": task_id}, {"$set": {
+        "is_active": False, "deleted_reason": reason,
+        "deleted_by": user.get("email"), "deleted_at": now_iso()}})
+    await db.del_task_instances.delete_many({"task_id": task_id})
+    return {"ok": True, "deleted_instances": inst_count}
+
+
+@router.get("/task-deletions")
+async def list_task_deletions(request: Request):
+    """Audit log of deleted tasks. Boss/admin sees all; a delegator sees their own."""
+    user = await get_current_user(request)
+    actor = await _resolve_actor(user)
+    q = {}
+    if not (actor["is_boss"] or user.get("role") == "admin"):
+        q["delegator_id"] = actor["emp_id"]
+    return await db.del_task_deletions.find(q, {"_id": 0}).sort("deleted_at", -1).to_list(500)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
