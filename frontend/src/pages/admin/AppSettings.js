@@ -1,21 +1,29 @@
 import React from 'react';
 import AdminLayout from '../../components/layouts/AdminLayout';
-import { Building2, Mail, MessageSquare, Clock, MapPin, Shield, Sparkles } from 'lucide-react';
+import { Building2, Mail, MessageSquare, Clock, MapPin, Shield, Sparkles, Video, Cloud, FileSpreadsheet, Bell } from 'lucide-react';
 import useAppSettings from '../../hooks/useAppSettings';
 import CompanySettingsSection from '../../components/settings/CompanySettingsSection';
 import SecuritySection from '../../components/settings/SecuritySection';
 import ModuleToggles from '../../components/settings/ModuleToggles';
 import DeviceManagement from '../../components/settings/DeviceManagement';
 import AISection from '../../components/settings/AISection';
+import ZoomSection from '../../components/settings/ZoomSection';
+import CloudinarySection from '../../components/settings/CloudinarySection';
+import SheetsSection from '../../components/settings/SheetsSection';
+import NotificationsSection from '../../components/settings/NotificationsSection';
 
 const TABS = [
-  { id: 'company',   label: 'Company',   icon: Building2 },
-  { id: 'email',     label: 'Gmail',     icon: Mail },
-  { id: 'whatsapp',  label: 'WhatsApp',  icon: MessageSquare },
-  { id: 'scheduled', label: 'Sched WA',  icon: Clock },
-  { id: 'field',     label: 'Field',     icon: MapPin },
-  { id: 'devices',   label: 'Devices',   icon: Shield },
-  { id: 'ai',        label: 'AI',        icon: Sparkles },
+  { id: 'company',       label: 'Company',       icon: Building2 },
+  { id: 'email',         label: 'Gmail',         icon: Mail },
+  { id: 'whatsapp',      label: 'WhatsApp',      icon: MessageSquare },
+  { id: 'scheduled',     label: 'Sched WA',      icon: Clock },
+  { id: 'zoom',          label: 'Zoom',          icon: Video },
+  { id: 'cloudinary',    label: 'Cloudinary',    icon: Cloud },
+  { id: 'ai',            label: 'AI',            icon: Sparkles },
+  { id: 'sheets',        label: 'Sheets',        icon: FileSpreadsheet },
+  { id: 'field',         label: 'Field',         icon: MapPin },
+  { id: 'devices',       label: 'Devices',       icon: Shield },
+  { id: 'notifications', label: 'Notifications', icon: Bell },
 ];
 
 export default function AppSettings() {
@@ -42,12 +50,12 @@ export default function AppSettings() {
         </div>
 
         {/* Tabs */}
-        <div className={`flex gap-1 ${card} border rounded-md p-1`}>
+        <div className={`flex flex-wrap gap-1 ${card} border rounded-md p-1`}>
           {TABS.map(tab => {
             const Icon = tab.icon;
             return (
               <button key={tab.id} onClick={() => s.setActiveTab(tab.id)}
-                className={`flex-1 flex items-center justify-center gap-1.5 px-4 py-2 rounded text-sm font-medium transition-all ${s.activeTab === tab.id ? 'bg-[#e94560] text-white' : `${textSec} hover:bg-[var(--bg-hover)]`}`}
+                className={`flex-1 min-w-[110px] flex items-center justify-center gap-1.5 px-3 py-2 rounded text-sm font-medium transition-all ${s.activeTab === tab.id ? 'bg-[#e94560] text-white' : `${textSec} hover:bg-[var(--bg-hover)]`}`}
                 data-testid={`settings-tab-${tab.id}`}>
                 <Icon className="h-4 w-4" /> {tab.label}
               </button>
@@ -141,6 +149,23 @@ export default function AppSettings() {
             showVapiKey={s.showVapiKey} setShowVapiKey={s.setShowVapiKey}
             saveDialler={s.saveDialler}
           />
+        )}
+
+        {s.activeTab === 'zoom' && (
+          <ZoomSection configured={s.integrationStatus?.zoom?.configured} onSaved={s.refreshStatus} />
+        )}
+
+        {s.activeTab === 'cloudinary' && (
+          <CloudinarySection configured={s.integrationStatus?.cloudinary?.configured} onSaved={s.refreshStatus} />
+        )}
+
+        {s.activeTab === 'sheets' && (
+          <SheetsSection sheets={s.sheets} setSheets={s.setSheets} save={s.saveSheets}
+            configured={s.integrationStatus?.sheets?.configured} />
+        )}
+
+        {s.activeTab === 'notifications' && (
+          <NotificationsSection prefs={s.notifPrefs} setPrefs={s.setNotifPrefs} save={s.saveNotifPrefs} />
         )}
       </div>
     </AdminLayout>

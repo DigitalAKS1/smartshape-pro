@@ -3,6 +3,7 @@ import { toast } from 'sonner';
 import {
   settingsApi, whatsappApi, emailApi, whatsappTemplates,
   whatsappScheduled, officeSettings, deviceApi,
+  integrationsApi, sheetsApi, notifPrefsApi,
 } from '../lib/api';
 
 export default function useAppSettings() {
@@ -81,6 +82,11 @@ export default function useAppSettings() {
   const [deviceLoading, setDeviceLoading] = useState(false);
   const [deviceActioning, setDeviceActioning] = useState('');
 
+  // Integrations hub
+  const [integrationStatus, setIntegrationStatus] = useState({});
+  const [sheets, setSheets] = useState({ client_id: '', client_secret: '', enabled: false });
+  const [notifPrefs, setNotifPrefs] = useState({});
+
   // ── Initial load ───────────────────────────────────────────
   useEffect(() => {
     const load = async () => {
@@ -102,10 +108,26 @@ export default function useAppSettings() {
         setAiKeyMasked(ai.data.gemini_api_key_masked || '');
         if (dl.data) setDialler(prev => ({ ...prev, ...dl.data }));
       } catch {}
+      // Integrations (best-effort; don't block the page on any single failure)
+      try { const st = await integrationsApi.status(); setIntegrationStatus(st.data || {}); } catch {}
+      try { const sh = await sheetsApi.get(); setSheets(sh.data); } catch {}
+      try { const np = await notifPrefsApi.get(); setNotifPrefs(np.data); } catch {}
       setLoading(false);
     };
     load();
   }, []);
+
+  const refreshStatus = async () => {
+    try { const r = await integrationsApi.status(); setIntegrationStatus(r.data || {}); } catch {}
+  };
+  const saveSheets = async () => {
+    try { await sheetsApi.save(sheets); toast.success('Sheets settings saved'); refreshStatus(); }
+    catch { toast.error('Failed to save'); }
+  };
+  const saveNotifPrefs = async () => {
+    try { await notifPrefsApi.save(notifPrefs); toast.success('Notification settings saved'); }
+    catch { toast.error('Failed to save'); }
+  };
 
   // ── Devices tab ────────────────────────────────────────────
   const loadDevices = async (filter) => {
@@ -410,5 +432,10 @@ export default function useAppSettings() {
     devicePolicy, setDevicePolicy,
     devicePolicySaving, deviceLoading, deviceActioning,
     loadDevices, approveDevice, revokeDevice, removeDevice, saveDevicePolicy,
+
+    // Integrations hub
+    integrationStatus, refreshStatus,
+    sheets, setSheets, saveSheets,
+    notifPrefs, setNotifPrefs, saveNotifPrefs,
   };
 }

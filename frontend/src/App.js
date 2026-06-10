@@ -21,7 +21,6 @@ import StockManagement from './pages/admin/StockManagement';
 import PhysicalCount from './pages/admin/PhysicalCount';
 import Analytics from './pages/admin/Analytics';
 import Payroll from './pages/admin/Payroll';
-import Settings from './pages/admin/Settings';
 import UserManagement from './pages/admin/UserManagement';
 import ModuleMaster from './pages/admin/ModuleMaster';
 import CRMMasters from './pages/admin/CRMMasters';
@@ -164,7 +163,7 @@ function AppRouter() {
       <Route path="/physical-count" element={<ProtectedRoute><PhysicalCount /></ProtectedRoute>} />
       <Route path="/analytics" element={<ProtectedRoute><Analytics /></ProtectedRoute>} />
       <Route path="/payroll" element={<ProtectedRoute><Payroll /></ProtectedRoute>} />
-      <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
+      <Route path="/settings" element={<Navigate to="/app-settings" replace />} />
       <Route path="/user-management" element={<ProtectedRoute><UserManagement /></ProtectedRoute>} />
       <Route path="/module-master" element={<ProtectedRoute><ModuleMaster /></ProtectedRoute>} />
       <Route path="/crm-masters" element={<ProtectedRoute><CRMMasters /></ProtectedRoute>} />

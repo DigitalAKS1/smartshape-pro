@@ -615,6 +615,35 @@ export const settingsApi = {
   saveDialler: (data) => API.put('/settings/ai-dialler', data),
 };
 
+// Integrations hub
+export const integrationsApi = {
+  status: () => API.get('/settings/integrations/status'),
+  test: (which) => API.post(`/settings/integrations/${which}/test`),
+};
+
+// Cloudinary
+export const cloudinaryApi = {
+  get: () => API.get('/settings/cloudinary'),
+  save: (data) => API.post('/settings/cloudinary', data),
+};
+
+// Google Sheets
+export const sheetsApi = {
+  get: () => API.get('/settings/sheets'),
+  save: (data) => API.post('/settings/sheets', data),
+};
+
+// Notification preferences
+export const notifPrefsApi = {
+  get: () => API.get('/settings/notifications'),
+  save: (data) => API.post('/settings/notifications', data),
+};
+
+// Zoom (meeting creation; credentials reuse certsApi.zoomConfig*)
+export const zoomApi = {
+  createMeeting: (data) => API.post('/zoom/meetings', data),
+};
+
 // WhatsApp Send
 export const whatsappApi = {
   send: (data) => API.post('/whatsapp/send', data),
