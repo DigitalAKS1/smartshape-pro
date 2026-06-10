@@ -681,6 +681,9 @@ export const certsApi = {
   stop:             (id)            => API.post(`/certs/batches/${id}/stop`, {}),
   previewUrl:       (itemId)        => `${API.defaults.baseURL}/certs/items/${itemId}/preview`,
   downloadUrl:      (batchId)       => `${API.defaults.baseURL}/certs/batches/${batchId}/download`,
+  zoomConfigGet:    ()              => API.get('/certs/zoom/config'),
+  zoomConfigSave:   (body)          => API.post('/certs/zoom/config', body),
+  zoomParticipants: (meetingId)     => API.get('/certs/zoom/participants', { params: { meeting_id: meetingId } }),
 };
 
 // Delegation System

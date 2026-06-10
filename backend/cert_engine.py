@@ -40,6 +40,19 @@ def resolve_field_value(key: str, item: Dict[str, Any], shared: Dict[str, Any]) 
     return ""
 
 
+_WS_RE = re.compile(r"[ \t]+")
+
+def clean_name(raw: str) -> str:
+    """Trim, collapse inner whitespace, and Proper-Case a person's name.
+    Handles ALLCAPS, hyphens, and apostrophes (anne-marie -> Anne-Marie, O'BRIEN -> O'Brien)."""
+    s = _WS_RE.sub(" ", (raw or "").strip())
+    if not s:
+        return ""
+    def cap_word(w: str) -> str:
+        return re.sub(r"[A-Za-z]+", lambda m: m.group(0).capitalize(), w)
+    return " ".join(cap_word(w) for w in s.split(" "))
+
+
 def sanitize_filename(name: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9._-]", "_", (name or "").strip())
     cleaned = re.sub(r"_{3,}", "__", cleaned).strip("_")

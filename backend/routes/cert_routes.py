@@ -224,6 +224,59 @@ async def debug_run_loop(request: Request):
     return {"ok": True}
 
 
+# ── Zoom integration (config in db.settings + participant fetch) ───────────────
+
+class ZoomConfig(BaseModel):
+    account_id: Optional[str] = None
+    client_id: Optional[str] = None
+    client_secret: Optional[str] = None
+
+@router.get("/zoom/config")
+async def get_zoom_cfg(request: Request):
+    user = await get_current_user(request); require_admin(user)
+    cfg = await db.settings.find_one({"type": "zoom"}, {"_id": 0}) or {}
+    # never return the secret; just say whether one is stored
+    return {
+        "account_id": cfg.get("account_id", ""),
+        "client_id": cfg.get("client_id", ""),
+        "has_secret": bool(cfg.get("client_secret")),
+        "configured": bool(cfg.get("account_id") and cfg.get("client_id") and cfg.get("client_secret")),
+    }
+
+@router.post("/zoom/config")
+async def save_zoom_cfg(body: ZoomConfig, request: Request):
+    user = await get_current_user(request); require_admin(user)
+    update = {"type": "zoom", "updated_at": now_iso(), "updated_by": user.get("email")}
+    if body.account_id is not None:
+        update["account_id"] = body.account_id.strip()
+    if body.client_id is not None:
+        update["client_id"] = body.client_id.strip()
+    # only overwrite the secret when a non-empty value is supplied
+    if body.client_secret:
+        update["client_secret"] = body.client_secret.strip()
+    await db.settings.update_one({"type": "zoom"}, {"$set": update}, upsert=True)
+    cfg = await db.settings.find_one({"type": "zoom"}, {"_id": 0}) or {}
+    return {"ok": True, "configured": bool(cfg.get("account_id") and cfg.get("client_id") and cfg.get("client_secret"))}
+
+@router.get("/zoom/participants")
+async def zoom_participants(request: Request, meeting_id: str = ""):
+    user = await get_current_user(request); require_admin(user)
+    import zoom_service
+    if not await zoom_service.is_configured():
+        raise HTTPException(400, "Zoom is not configured. Add your Zoom API credentials first.")
+    if not meeting_id.strip():
+        raise HTTPException(400, "Meeting ID is required")
+    from cert_engine import clean_name
+    try:
+        people = await zoom_service.get_meeting_participants(meeting_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(502, f"Zoom fetch failed: {str(e)[:300]}")
+    rows = [{"name": clean_name(p["name"]), "email": p.get("email", ""), "phone": ""} for p in people]
+    return {"participants": rows, "count": len(rows)}
+
+
 # ── Preview ───────────────────────────────────────────────────────────────────
 
 @router.get("/items/{item_id}/preview")
