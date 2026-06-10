@@ -256,6 +256,7 @@ async def get_notification_settings(request: Request):
         "purchase_alerts_enabled":  bool(doc.get("purchase_alerts_enabled", True)),
         "low_stock_enabled":        bool(doc.get("low_stock_enabled", True)),
         "quotation_status_enabled": bool(doc.get("quotation_status_enabled", True)),
+        "auto_create_so_on_submit": bool(doc.get("auto_create_so_on_submit", True)),
     }
 
 

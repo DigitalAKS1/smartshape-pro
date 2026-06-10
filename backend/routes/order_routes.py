@@ -106,27 +106,23 @@ async def export_orders_bulk(payload: BulkExportInput, request: Request):
                     headers={"Content-Disposition": 'attachment; filename="sales_orders_tally.xml"'})
 
 
-@router.post("/orders")
-async def create_order_from_quotation(request: Request):
-    user = await get_current_user(request)
-    body = await request.json()
-    quotation_id = body.get("quotation_id")
-    if not quotation_id:
-        raise HTTPException(status_code=400, detail="quotation_id required")
+async def create_order_for_quotation(quotation_id: str, *, created_by: str,
+                                     lead_id: Optional[str] = None,
+                                     payment_threshold_pct: float = 50.0,
+                                     payment_received: float = 0.0,
+                                     notes: str = "", source: str = "manual"):
+    """Create a Sales Order from a quotation + its catalogue selection.
+
+    Idempotent: returns (order, created=False) if an order already exists for the
+    quotation. `source` is recorded for audit ('manual' | 'catalogue_submit').
+    Shared by the manual admin route and the auto-generation on catalogue submit.
+    """
     quot = await db.quotations.find_one({"quotation_id": quotation_id}, {"_id": 0})
     if not quot:
         raise HTTPException(status_code=404, detail="Quotation not found")
-    existing = await db.orders.find_one({"quotation_id": quotation_id})
+    existing = await db.orders.find_one({"quotation_id": quotation_id}, {"_id": 0})
     if existing:
-        raise HTTPException(status_code=400, detail="Order already exists for this quotation")
-
-    lead_id = body.get("lead_id")
-    if lead_id:
-        lead = await db.leads.find_one({"lead_id": lead_id}, {"_id": 0})
-        if not lead:
-            raise HTTPException(status_code=404, detail="Lead not found")
-        if lead.get("stage") not in ("negotiation", "won"):
-            raise HTTPException(status_code=400, detail="Lead must be in Negotiation or Won stage to convert")
+        return existing, False
 
     order_id = f"ord_{uuid.uuid4().hex[:12]}"
     order_num_count = await db.orders.count_documents({})
@@ -139,6 +135,9 @@ async def create_order_from_quotation(request: Request):
             {"catalogue_selection_id": selection["selection_id"]}, {"_id": 0}
         ).to_list(1000)
 
+    eff_lead_id = lead_id or quot.get("lead_id") or ""
+    note_text = notes or ("Auto-created from catalogue submission" if source == "catalogue_submit"
+                          else "Order created from quotation")
     now_iso = datetime.now(timezone.utc).isoformat()
     order_doc = {
         "order_id": order_id,
@@ -147,17 +146,19 @@ async def create_order_from_quotation(request: Request):
         "quote_number": quot.get("quote_number", ""),
         "school_id": quot.get("school_id", ""),
         "school_name": quot.get("school_name", ""),
-        "lead_id": lead_id or "",
+        "lead_id": eff_lead_id,
         "package_name": quot.get("package_name", ""),
         "total_items": len(sel_items),
         "grand_total": quot.get("grand_total", 0),
         "order_status": "pending",
         "production_stage": "order_created",
-        "payment_threshold_pct": float(body.get("payment_threshold_pct", 50)),
-        "payment_received": float(body.get("payment_received", 0)),
+        "payment_threshold_pct": float(payment_threshold_pct),
+        "payment_received": float(payment_received),
         "dispatch_date": None,
-        "notes": body.get("notes", ""),
-        "created_by": user["email"],
+        "notes": notes,
+        "source": source,
+        "auto_created_on_submit": source == "catalogue_submit",
+        "created_by": created_by,
         "created_at": now_iso,
         "updated_at": now_iso,
     }
@@ -180,26 +181,56 @@ async def create_order_from_quotation(request: Request):
         "timeline_id": f"tl_{uuid.uuid4().hex[:8]}",
         "order_id": order_id,
         "status": "pending",
-        "note": "Order created from quotation",
-        "updated_by": user["email"],
+        "note": note_text,
+        "updated_by": created_by,
         "timestamp": now_iso,
     })
 
     await db.quotations.update_one({"quotation_id": quotation_id}, {"$set": {"quotation_status": "confirmed"}})
 
-    if lead_id:
-        await db.leads.update_one({"lead_id": lead_id}, {"$set": {
+    if eff_lead_id:
+        await db.leads.update_one({"lead_id": eff_lead_id}, {"$set": {
             "is_locked": True,
             "order_id": order_id,
             "stage": "won",
             "last_activity_date": now_iso,
             "updated_at": now_iso,
         }})
-        await log_activity(user["email"], "convert_to_order", "lead", lead_id, f"Order {order_number} created")
+        await log_activity(created_by, "convert_to_order", "lead", eff_lead_id, f"Order {order_number} created")
 
-    await log_activity(user["email"], "create", "order", order_id,
-                       f"Order {order_number} created from {quot.get('quote_number', '')}")
-    return await db.orders.find_one({"order_id": order_id}, {"_id": 0})
+    await log_activity(created_by, "create", "order", order_id,
+                       f"Order {order_number} created from {quot.get('quote_number', '')} ({source})")
+    return order_doc, True
+
+
+@router.post("/orders")
+async def create_order_from_quotation(request: Request):
+    user = await get_current_user(request)
+    team = get_team(user)
+    if team == "store":
+        raise HTTPException(status_code=403, detail="Store team cannot create orders")
+    body = await request.json()
+    quotation_id = body.get("quotation_id")
+    if not quotation_id:
+        raise HTTPException(status_code=400, detail="quotation_id required")
+
+    lead_id = body.get("lead_id")
+    if lead_id:
+        lead = await db.leads.find_one({"lead_id": lead_id}, {"_id": 0})
+        if not lead:
+            raise HTTPException(status_code=404, detail="Lead not found")
+        if lead.get("stage") not in ("negotiation", "won"):
+            raise HTTPException(status_code=400, detail="Lead must be in Negotiation or Won stage to convert")
+
+    order, created = await create_order_for_quotation(
+        quotation_id, created_by=user["email"], lead_id=lead_id,
+        payment_threshold_pct=float(body.get("payment_threshold_pct", 50)),
+        payment_received=float(body.get("payment_received", 0)),
+        notes=body.get("notes", ""), source="manual",
+    )
+    if not created:
+        raise HTTPException(status_code=400, detail="Order already exists for this quotation")
+    return order
 
 
 @router.put("/orders/{order_id}/status")

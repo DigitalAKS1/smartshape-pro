@@ -1556,7 +1556,23 @@ async def submit_catalogue_selection(token: str, request: Request):
     except Exception as e:
         logging.error(f"Submission confirmation email error: {e}")
 
-    return {"message": "Selection submitted successfully"}
+    # Auto-generate the Sales Order from the submitted selection (toggle-controlled,
+    # default ON). Idempotent + non-blocking: a failure must never break submission.
+    auto_order = None
+    try:
+        notif = await db.settings.find_one({"type": "notifications"}, {"_id": 0}) or {}
+        if notif.get("auto_create_so_on_submit", True):
+            from routes.order_routes import create_order_for_quotation
+            order, created = await create_order_for_quotation(
+                quot["quotation_id"], created_by="system", source="catalogue_submit",
+            )
+            if created:
+                auto_order = {"order_id": order["order_id"], "order_number": order["order_number"]}
+                logging.info(f"Auto-created order {order['order_number']} from catalogue {selection_id}")
+    except Exception as e:
+        logging.error(f"Auto SO creation failed for {quot.get('quotation_id')}: {e}")
+
+    return {"message": "Selection submitted successfully", "order": auto_order}
 
 
 # ==================== QUOTATION PDF ====================

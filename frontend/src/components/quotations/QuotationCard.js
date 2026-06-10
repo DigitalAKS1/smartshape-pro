@@ -40,8 +40,11 @@ const initials = (name) =>
 export function QuotationRow({
   quot, isSelected, onToggle, catalogueLabel,
   onWhatsApp, onEmail, onDelete, onHistory, onCopyLink, onCreateOrder,
-  canDelete, quotApi,
+  canDelete, canCreateSO, quotApi,
 }) {
+  // Show "Create Sales Order" when the catalogue is submitted (anyone with access)
+  // or for admins/accounts on any quotation. Hidden once confirmed (order exists).
+  const showCreateSO = quot.quotation_status !== 'confirmed' && (quot.catalogue_status === 'submitted' || canCreateSO);
   return (
     <tr className="group hover:bg-[var(--bg-hover)] transition-colors">
       <td className="px-4 py-3.5">
@@ -128,9 +131,9 @@ export function QuotationRow({
             className="w-8 h-8 rounded-lg flex items-center justify-center text-[var(--text-muted)] hover:text-[#3b82f6] hover:bg-[#3b82f6]/8 transition-colors" title="Send Email">
             <Mail className="h-3.5 w-3.5" />
           </button>
-          {quot.catalogue_status === 'submitted' && (
+          {showCreateSO && (
             <button onClick={() => onCreateOrder(quot.quotation_id)}
-              className="w-8 h-8 rounded-lg flex items-center justify-center text-green-400 hover:bg-green-400/10 transition-colors" title="Create Order">
+              className="w-8 h-8 rounded-lg flex items-center justify-center text-green-400 hover:bg-green-400/10 transition-colors" title="Create Sales Order">
               <ShoppingCart className="h-3.5 w-3.5" />
             </button>
           )}
@@ -148,8 +151,9 @@ export function QuotationRow({
 
 // ── Mobile card ────────────────────────────────────────────────────────────────
 export function QuotationMobileCard({
-  quot, catalogueLabel, onWhatsApp, onEmail, onCreateOrder,
+  quot, catalogueLabel, onWhatsApp, onEmail, onCreateOrder, canCreateSO,
 }) {
+  const showCreateSO = quot.quotation_status !== 'confirmed' && (quot.catalogue_status === 'submitted' || canCreateSO);
   const fmtDateTime = (iso) => {
     if (!iso) return null;
     try {
@@ -220,11 +224,11 @@ export function QuotationMobileCard({
           </button>
         </Link>
       </div>
-      {quot.catalogue_status === 'submitted' && (
+      {showCreateSO && (
         <div className="px-3 pb-3">
           <button onClick={() => onCreateOrder(quot.quotation_id)}
             className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-green-500/10 border border-green-500/30 text-sm font-semibold text-green-400 active:opacity-70">
-            <ShoppingCart className="h-4 w-4" /> Convert to Order
+            <ShoppingCart className="h-4 w-4" /> Create Sales Order
           </button>
         </div>
       )}

@@ -121,6 +121,7 @@ export default function Quotations() {
                       onCopyLink={q.handleCopyLink}
                       onCreateOrder={q.handleCreateOrder}
                       canDelete={canDelete}
+                      canCreateSO={isAdmin}
                       quotApi={quotApi} />
                   ))}
                 </tbody>
@@ -182,7 +183,8 @@ export default function Quotations() {
                 catalogueLabel={q.catalogueLabel}
                 onWhatsApp={q.handleOpenWhatsApp}
                 onEmail={q.openCatalogueDialog}
-                onCreateOrder={q.handleCreateOrder} />
+                onCreateOrder={q.handleCreateOrder}
+                canCreateSO={isAdmin} />
             ))}
           </div>
         )}
