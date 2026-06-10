@@ -12,7 +12,39 @@ _FONT_CANDIDATES = [
     "C:\\Windows\\Fonts\\Arial.ttf",
 ]
 
-def _load_font(size: int) -> ImageFont.FreeTypeFont:
+# ── Curated bundled fonts (per-field font choice) ─────────────────────────────
+FONT_DIR = os.path.join(os.path.dirname(__file__), "fonts")
+FONT_REGISTRY = {
+    "Roboto": "Roboto-Regular.ttf",
+    "Open Sans": "OpenSans-Regular.ttf",
+    "Montserrat": "Montserrat-Regular.ttf",
+    "Lato": "Lato-Regular.ttf",
+    "Merriweather": "Merriweather-Regular.ttf",
+    "Playfair Display": "PlayfairDisplay-Regular.ttf",
+    "Great Vibes": "GreatVibes-Regular.ttf",
+    "Dancing Script": "DancingScript-Regular.ttf",
+}
+
+def font_families():
+    """Family names for the designer dropdown ('Default' = system fallback)."""
+    return ["Default"] + list(FONT_REGISTRY.keys())
+
+def font_path(family):
+    """Absolute path to a curated TTF, or None for Default/unknown."""
+    fn = FONT_REGISTRY.get(family or "")
+    if not fn:
+        return None
+    p = os.path.join(FONT_DIR, fn)
+    return p if os.path.isfile(p) else None
+
+
+def _load_font(size: int, family: str = "Default") -> ImageFont.FreeTypeFont:
+    fp = font_path(family)
+    if fp:
+        try:
+            return ImageFont.truetype(fp, size)
+        except Exception:
+            pass
     for p in _FONT_CANDIDATES:
         if os.path.isfile(p):
             try:
@@ -219,11 +251,68 @@ def render_certificate_pdf(background_path: str, out_path: str,
         text = resolve_field_value(f.get("key", ""), item, shared)
         if not text:
             continue
-        font = _load_font(int(f.get("size", 24)))
+        font = _load_font(int(f.get("size", 24)), f.get("font", "Default"))
         color = f.get("color", "#000000")
         x = int(f.get("x", 0)); y = int(f.get("y", 0))
         ax = _anchor_x(draw, text, font, x, f.get("align", "center"))
         draw.text((ax, y), text, fill=color, font=font)
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     img.save(out_path, "PDF", resolution=150.0)
+    return out_path
+
+
+# ── PDF drag-overlay (PyMuPDF) — place fields at chosen x/y with chosen font ───
+def _hex_rgb(c):
+    c = (c or "#000000").lstrip("#")
+    if len(c) == 3:
+        c = "".join(ch * 2 for ch in c)
+    try:
+        return (int(c[0:2], 16) / 255, int(c[2:4], 16) / 255, int(c[4:6], 16) / 255)
+    except Exception:
+        return (0, 0, 0)
+
+
+def render_certificate_pdf_overlay(template_pdf_path: str, out_path: str,
+                                   fields: List[Dict[str, Any]],
+                                   item: Dict[str, Any], shared: Dict[str, Any],
+                                   design_w: int, design_h: int) -> str:
+    """Overlay drag-positioned fields onto a PDF template (page 0) with chosen
+    font/size/color. design_w/design_h = pixel size of the raster preview the
+    fields were placed on; positions+sizes scale to PDF points. Returns out_path."""
+    import fitz  # PyMuPDF
+    doc = fitz.open(template_pdf_path)
+    try:
+        page = doc[0]
+        pw, ph = page.rect.width, page.rect.height
+        sx = pw / float(design_w or pw)
+        sy = ph / float(design_h or ph)
+        for f in (fields or []):
+            val = resolve_field_value(f.get("key", ""), item, shared)
+            if not val:
+                continue
+            pt = max(4.0, float(f.get("size", 24)) * sx)
+            fp = font_path(f.get("font", "Default"))
+            alias = "f_" + re.sub(r"[^a-z0-9]", "", str(f.get("font", "default")).lower())
+            try:
+                tw = (fitz.Font(fontfile=fp).text_length(val, pt) if fp
+                      else fitz.get_text_length(val, fontname="helv", fontsize=pt))
+            except Exception:
+                tw = 0.0
+            px = float(f.get("x", 0)) * sx
+            align = f.get("align", "center")
+            ax = px - tw / 2 if align == "center" else (px - tw if align == "right" else px)
+            baseline = float(f.get("y", 0)) * sy + pt  # top-left designer y -> PDF baseline
+            rgb = _hex_rgb(f.get("color"))
+            try:
+                if fp:
+                    page.insert_text((ax, baseline), val, fontsize=pt, fontfile=fp,
+                                     fontname=alias, color=rgb)
+                else:
+                    page.insert_text((ax, baseline), val, fontsize=pt, fontname="helv", color=rgb)
+            except Exception:
+                page.insert_text((ax, baseline), val, fontsize=pt, fontname="helv", color=rgb)
+        os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+        doc.save(out_path, garbage=3, deflate=True)
+    finally:
+        doc.close()
     return out_path
