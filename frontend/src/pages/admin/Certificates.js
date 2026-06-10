@@ -240,6 +240,7 @@ export default function Certificates() {
                 loadBatch={s.loadBatch}
                 generate={s.generate}
                 send={s.send}
+                stop={s.stop}
                 onBack={() => {
                   setSelectedBatchId(null);
                   s.loadBatches();

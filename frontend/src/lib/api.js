@@ -678,6 +678,7 @@ export const certsApi = {
   addAttendees:     (id, attendees) => API.post(`/certs/batches/${id}/attendees`, { attendees }),
   generate:         (id)            => API.post(`/certs/batches/${id}/generate`, {}),
   send:             (id)            => API.post(`/certs/batches/${id}/send`, {}),
+  stop:             (id)            => API.post(`/certs/batches/${id}/stop`, {}),
   previewUrl:       (itemId)        => `${API.defaults.baseURL}/certs/items/${itemId}/preview`,
   downloadUrl:      (batchId)       => `${API.defaults.baseURL}/certs/batches/${batchId}/download`,
 };

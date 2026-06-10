@@ -100,6 +100,16 @@ export function useCertificates() {
     }
   };
 
+  const stop = async (id) => {
+    try {
+      await certsApi.stop(id);
+      toast.success('Batch stopped');
+      await loadBatch(id);
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Failed to stop batch');
+    }
+  };
+
   return {
     /* state */
     templates,
@@ -116,5 +126,6 @@ export function useCertificates() {
     addAttendees,
     generate,
     send,
+    stop,
   };
 }

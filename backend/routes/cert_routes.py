@@ -201,6 +201,20 @@ async def send_batch(batch_id: str, request: Request):
     await db.cert_batches.update_one({"batch_id": batch_id}, {"$set": {"status": "sending"}})
     return {"ok": True, "message": "Delivery queued"}
 
+@router.post("/batches/{batch_id}/stop")
+async def stop_batch(batch_id: str, request: Request):
+    """Pause an in-progress generate/send. Already-done work is kept; remaining items
+    stay pending so the user can resume with Generate/Send. The scheduler stops picking
+    the batch up because its status is no longer generating/sending."""
+    user = await get_current_user(request); require_admin(user)
+    batch = await db.cert_batches.find_one({"batch_id": batch_id}, {"_id": 0})
+    if not batch:
+        raise HTTPException(404, "Batch not found")
+    if batch.get("status") not in ("generating", "sending"):
+        return {"ok": True, "message": "Batch is not running", "status": batch.get("status")}
+    await db.cert_batches.update_one({"batch_id": batch_id}, {"$set": {"status": "stopped"}})
+    return {"ok": True, "message": "Batch stopped", "status": "stopped"}
+
 @router.post("/_run-loop")
 async def debug_run_loop(request: Request):
     """Admin-only: run one pass of the cert generation+delivery loop synchronously (tests/manual)."""

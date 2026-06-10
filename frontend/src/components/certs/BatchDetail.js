@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useCallback } from 'react';
 import {
-  Zap, Send, ExternalLink, ArrowLeft, Download,
-  CheckCircle, Clock, XCircle, Loader2, AlertTriangle,
+  Zap, Send, ExternalLink, ArrowLeft, Download, Square,
+  CheckCircle, Clock, XCircle, Loader2, AlertTriangle, PauseCircle,
 } from 'lucide-react';
 import { certsApi } from '../../lib/api';
 
@@ -41,6 +41,8 @@ function BatchStatusIcon({ status }) {
     return <CheckCircle className="h-4 w-4 text-emerald-500" />;
   if (status === 'draft')
     return <Clock className="h-4 w-4 text-yellow-500" />;
+  if (status === 'stopped')
+    return <PauseCircle className="h-4 w-4 text-orange-500" />;
   return <AlertTriangle className="h-4 w-4 text-gray-400" />;
 }
 
@@ -69,7 +71,7 @@ const ACTIVE_STATUSES = new Set(['generating', 'sending']);
  *   send       — (id) => Promise  (from hook)
  *   onBack     — callback to return to the batch list
  */
-export default function BatchDetail({ batch, loadBatch, generate, send, onBack }) {
+export default function BatchDetail({ batch, loadBatch, generate, send, stop, onBack }) {
   const card      = 'bg-[var(--bg-card)] border-[var(--border-color)]';
   const textPri   = 'text-[var(--text-primary)]';
   const textSec   = 'text-[var(--text-secondary)]';
@@ -125,7 +127,7 @@ export default function BatchDetail({ batch, loadBatch, generate, send, onBack }
 
   const { batch_id, title, status, counts = {}, items = [], shared_values = {}, channels = [] } = batch;
   const isActive    = ACTIVE_STATUSES.has(status);
-  const canSend     = status === 'ready';
+  const canSend     = status === 'ready' || status === 'stopped';
   const canDownload = (counts.generated || 0) > 0;
 
   /* ── action handlers ── */
@@ -138,6 +140,11 @@ export default function BatchDetail({ batch, loadBatch, generate, send, onBack }
   const handleSend = async () => {
     await send(batch_id);
     startPolling();
+  };
+
+  const handleStop = async () => {
+    if (stop) await stop(batch_id);
+    stopPolling();
   };
 
   const handlePreview = (itemId) => {
@@ -224,8 +231,28 @@ export default function BatchDetail({ batch, loadBatch, generate, send, onBack }
             )}
             Send
           </button>
+
+          {isActive && (
+            <button
+              type="button"
+              onClick={handleStop}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium text-white transition-opacity bg-orange-500 hover:bg-orange-600"
+              title="Stop — pause this batch (keeps finished work; resume with Generate/Send)"
+            >
+              <Square className="h-4 w-4" />
+              Stop
+            </button>
+          )}
         </div>
       </div>
+
+      {status === 'stopped' && (
+        <div className="flex items-center gap-2 text-xs text-orange-600 dark:text-orange-400">
+          <PauseCircle className="h-3.5 w-3.5" />
+          Stopped — finished work is kept. Click <span className="font-medium">Generate</span> or
+          <span className="font-medium"> Send</span> to resume the remaining items.
+        </div>
+      )}
 
       {/* Shared values + channels */}
       <div className={`${card} border rounded-xl p-4 flex flex-wrap gap-4 text-sm`}>

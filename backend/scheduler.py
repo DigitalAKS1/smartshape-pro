@@ -836,6 +836,11 @@ async def _generate_pending_certs():
         items = await db.cert_items.find(
             {"batch_id": batch["batch_id"], "gen_status": "pending"}, {"_id": 0}).to_list(2000)
         for it in items:
+            # Honour a Stop requested mid-pass: if the batch left "generating", halt now
+            # (remaining items stay pending so the user can resume with Generate).
+            cur = await db.cert_batches.find_one({"batch_id": batch["batch_id"]}, {"_id": 0, "status": 1})
+            if not cur or cur.get("status") != "generating":
+                break
             # Atomic claim so overlapping passes (background loop vs manual run) don't
             # double-render or double-count this item.
             claim = await db.cert_items.update_one(
@@ -862,7 +867,10 @@ async def _generate_pending_certs():
                 await db.cert_batches.update_one({"batch_id": batch["batch_id"]},
                                                  {"$inc": {"counts.failed": 1}})
         final_status = "sending" if batch.get("origin_flow_id") else "ready"
-        await db.cert_batches.update_one({"batch_id": batch["batch_id"]}, {"$set": {"status": final_status}})
+        # Conditional: don't resurrect a batch the user Stopped mid-pass.
+        await db.cert_batches.update_one(
+            {"batch_id": batch["batch_id"], "status": "generating"},
+            {"$set": {"status": final_status}})
 
 
 async def _deliver_pending_certs():
@@ -874,6 +882,11 @@ async def _deliver_pending_certs():
         items = await db.cert_items.find(
             {"batch_id": batch["batch_id"], "gen_status": "generated"}, {"_id": 0}).to_list(2000)
         for it in items:
+            # Honour a Stop requested mid-send: halt promptly; unsent items stay pending
+            # so the user can resume with Send (delivery is idempotent per channel).
+            cur = await db.cert_batches.find_one({"batch_id": batch["batch_id"]}, {"_id": 0, "status": 1})
+            if not cur or cur.get("status") != "sending":
+                break
             for ch in channels:
                 # Atomic claim: only one concurrent pass (background loop vs a manual
                 # run) can move this channel pending/failed -> sending, so a certificate
@@ -901,7 +914,10 @@ async def _deliver_pending_certs():
                 elif new_status == "failed":
                     await db.cert_batches.update_one({"batch_id": batch["batch_id"]},
                                                      {"$inc": {"counts.failed": 1}})
-        await db.cert_batches.update_one({"batch_id": batch["batch_id"]}, {"$set": {"status": "done"}})
+        # Conditional: a Stop during delivery set status to "stopped" — don't mark it done.
+        await db.cert_batches.update_one(
+            {"batch_id": batch["batch_id"], "status": "sending"},
+            {"$set": {"status": "done"}})
 
 
 async def _cert_send_one(channel: str, it: dict, batch: dict):
