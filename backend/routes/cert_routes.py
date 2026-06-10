@@ -51,6 +51,45 @@ async def upload_background(request: Request, file: UploadFile = File(...)):
     return {"url": url, "filename": fname, "kind": "image"}
 
 
+@router.get("/fonts")
+async def list_fonts(request: Request):
+    """Curated font families for the designer dropdown."""
+    await get_current_user(request)
+    from cert_engine import font_families
+    return {"families": font_families()}
+
+
+@router.post("/templates/pdf-preview")
+async def pdf_preview(request: Request, file: UploadFile = File(...)):
+    """Upload a PDF template and get a raster preview (page 0 @150dpi) the drag
+    designer can place fields on. Stores the real PDF + the preview PNG."""
+    await get_current_user(request)
+    import fitz  # PyMuPDF
+    if not (file.filename or "").lower().endswith(".pdf"):
+        raise HTTPException(400, "Must be a PDF")
+    data = await file.read()
+    pdf_name = f"tpl_{uuid.uuid4().hex[:12]}.pdf"
+    with open(os.path.join(CERT_DIR, pdf_name), "wb") as fh:
+        fh.write(data)
+    doc = fitz.open(os.path.join(CERT_DIR, pdf_name))
+    try:
+        page = doc[0]
+        pix = page.get_pixmap(dpi=150)
+        prev_name = pdf_name[:-4] + "_preview.png"
+        pix.save(os.path.join(CERT_DIR, prev_name))
+        w, h = pix.width, pix.height
+    finally:
+        doc.close()
+    try:
+        from cert_engine import pdf_tokens_found
+        tokens = pdf_tokens_found(os.path.join(CERT_DIR, pdf_name))
+    except Exception:
+        tokens = []
+    return {"pdf_url": f"/uploads/certificates/{pdf_name}",
+            "preview_url": f"/uploads/certificates/{prev_name}",
+            "width_px": w, "height_px": h, "tokens_found": tokens}
+
+
 class TemplateField(BaseModel):
     key: str            # name | date | theme | expert
     x: int
@@ -58,14 +97,16 @@ class TemplateField(BaseModel):
     size: int = 24
     color: str = "#000000"
     align: str = "center"   # left | center | right
+    font: str = "Default"   # curated family name (see cert_engine.FONT_REGISTRY)
 
 class TemplateCreate(BaseModel):
     name: str
     background_url: str
-    kind: str = "image"          # image (PNG/JPG + drag fields) | pdf (token-merge)
+    kind: str = "image"          # image (PNG/JPG + drag fields) | pdf (token-merge OR drag fields)
     orientation: str = "landscape"
     width_px: Optional[int] = 0
     height_px: Optional[int] = 0
+    preview_url: Optional[str] = ""   # raster preview the designer placed fields on (pdf kind)
     fields: List[TemplateField] = []
 
 @router.post("/templates")
@@ -83,7 +124,7 @@ async def update_template(template_id: str, request: Request):
     user = await get_current_user(request); require_admin(user)
     body = await request.json()
     safe = {k: v for k, v in body.items()
-            if k in ("name", "background_url", "kind", "orientation", "width_px", "height_px", "fields", "is_active")}
+            if k in ("name", "background_url", "kind", "orientation", "width_px", "height_px", "preview_url", "fields", "is_active")}
     if safe:
         await db.cert_templates.update_one({"template_id": template_id}, {"$set": safe})
     return await db.cert_templates.find_one({"template_id": template_id}, {"_id": 0})
@@ -289,15 +330,21 @@ async def preview_item(item_id: str, request: Request):
     tpl = await db.cert_templates.find_one({"template_id": batch.get("template_id")}, {"_id": 0})
     if not tpl:
         raise HTTPException(404, "Template not found")
-    from cert_engine import render_certificate_pdf, render_certificate_pdf_merge, safe_bg_path
+    from cert_engine import (render_certificate_pdf, render_certificate_pdf_merge,
+                             render_certificate_pdf_overlay, safe_bg_path)
     try:
         bg_path = safe_bg_path(CERT_DIR, tpl.get("background_url", ""))
     except ValueError:
         raise HTTPException(400, "Invalid background path")
     out_path = os.path.join(tempfile.gettempdir(), f"preview_{item_id}.pdf")
     if tpl.get("kind") == "pdf":
-        render_certificate_pdf_merge(bg_path, out_path,
-                                     {"name": it["name"]}, batch.get("shared_values", {}))
+        if tpl.get("fields"):
+            render_certificate_pdf_overlay(bg_path, out_path, tpl.get("fields", []),
+                                           {"name": it["name"]}, batch.get("shared_values", {}),
+                                           tpl.get("width_px") or 0, tpl.get("height_px") or 0)
+        else:
+            render_certificate_pdf_merge(bg_path, out_path,
+                                         {"name": it["name"]}, batch.get("shared_values", {}))
     else:
         render_certificate_pdf(bg_path, out_path, tpl.get("fields", []),
                                {"name": it["name"]}, batch.get("shared_values", {}))
