@@ -20,22 +20,39 @@ const FIELD_COLORS = {
   expert: '#d97706',
 };
 
+// Representative preview text so the on-canvas size + alignment read true.
+const SAMPLE = {
+  name:   'Attendee Name',
+  date:   '12 June 2026',
+  theme:  'Workshop Theme',
+  expert: 'Expert Name',
+};
+
 // Fallback font list if /certs/fonts is unavailable; mirrors cert_engine.FONT_REGISTRY.
 const FALLBACK_FONTS = ['Default', 'Roboto', 'Open Sans', 'Montserrat', 'Lato',
   'Merriweather', 'Playfair Display', 'Great Vibes', 'Dancing Script'];
 
-function initFieldState() {
+// Lay fields out proportionally to the uploaded page so they land in sensible
+// spots (name large + centred, theme below it, date/expert along the footer)
+// instead of bunched in the top-left corner. Falls back to small defaults
+// before any dimensions are known.
+function initFieldState(w = 0, h = 0) {
+  if (w > 0 && h > 0) {
+    const cx = Math.round(w / 2);
+    const layout = {
+      name:   { x: cx,                 y: Math.round(h * 0.42), size: Math.round(w * 0.055), align: 'center' },
+      theme:  { x: cx,                 y: Math.round(h * 0.60), size: Math.round(w * 0.030), align: 'center' },
+      date:   { x: Math.round(w * 0.25), y: Math.round(h * 0.84), size: Math.round(w * 0.022), align: 'center' },
+      expert: { x: Math.round(w * 0.75), y: Math.round(h * 0.84), size: Math.round(w * 0.022), align: 'center' },
+    };
+    return Object.fromEntries(
+      FIELDS.map(f => [f.key, { ...layout[f.key], color: f.defaultColor, font: 'Default' }])
+    );
+  }
   return Object.fromEntries(
     FIELDS.map((f, i) => [
       f.key,
-      {
-        x:     100,
-        y:     100 + i * 60,
-        size:  36,
-        color: f.defaultColor,
-        align: 'center',
-        font:  'Default',
-      },
+      { x: 100, y: 100 + i * 60, size: 36, color: f.defaultColor, align: 'center', font: 'Default' },
     ])
   );
 }
@@ -123,7 +140,7 @@ export default function TemplateDesigner({ onSaved }) {
         setNaturalH(d.height_px || 0);
         setDisplayH(d.width_px ? Math.round((d.height_px / d.width_px) * DISPLAY_WIDTH) : 0);
         setBgUrl(d.preview_url);
-        setFields(initFieldState());
+        setFields(initFieldState(d.width_px || 0, d.height_px || 0));
         toast.success('PDF loaded — drag fields onto it');
       } else {
         const res = await certsApi.uploadBackground(fd);
@@ -138,7 +155,7 @@ export default function TemplateDesigner({ onSaved }) {
           setNaturalH(img.naturalHeight);
           setDisplayH(Math.round((img.naturalHeight / img.naturalWidth) * DISPLAY_WIDTH));
           setBgUrl(url);
-          setFields(initFieldState());
+          setFields(initFieldState(img.naturalWidth, img.naturalHeight));
           toast.success('Background uploaded');
         };
         img.onerror = () => { toast.error('Could not load uploaded image'); setUploading(false); };
@@ -285,19 +302,31 @@ export default function TemplateDesigner({ onSaved }) {
                 style={{ display: 'block', width: DISPLAY_WIDTH, height: displayH || 'auto' }} />
               {FIELDS.map(f => {
                 const fld = fields[f.key];
+                const col = FIELD_COLORS[f.key];
+                // preview at the REAL scaled font size + chosen face/colour
+                const dispSize = Math.max(8, scale > 0 ? fld.size / scale : fld.size);
+                // anchor like the backend: x = align point, y = text top
+                const tx = fld.align === 'center' ? 'translateX(-50%)'
+                         : fld.align === 'right'  ? 'translateX(-100%)' : 'none';
+                const dotLeft = fld.align === 'center' ? '50%'
+                              : fld.align === 'right'  ? '100%' : '0%';
                 return (
                   <div key={f.key} onMouseDown={e => onMarkerMouseDown(e, f.key)}
+                    title={`${f.label} — drag to reposition`}
                     style={{
                       position: 'absolute', left: toDisplayX(fld.x), top: toDisplayY(fld.y),
-                      transform: 'translate(-50%, -50%)', cursor: 'grab', userSelect: 'none',
-                      padding: '2px 8px', borderRadius: 4,
-                      background: FIELD_COLORS[f.key] + 'cc', border: `2px solid ${FIELD_COLORS[f.key]}`,
-                      color: '#fff', fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap',
+                      transform: tx, cursor: 'grab', userSelect: 'none', whiteSpace: 'nowrap',
+                      zIndex: 10, lineHeight: 1, fontSize: dispSize, color: fld.color,
                       fontFamily: fld.font && fld.font !== 'Default' ? `'${fld.font}', sans-serif` : 'inherit',
-                      boxShadow: '0 1px 4px rgba(0,0,0,0.35)', zIndex: 10,
-                    }}
-                    title={`${f.label} — drag to reposition`}>
-                    {f.label}
+                      textShadow: '0 0 3px #fff, 0 0 3px #fff, 0 0 2px #fff',
+                      outline: `1px dashed ${col}`, outlineOffset: 3,
+                    }}>
+                    {SAMPLE[f.key]}
+                    <span style={{
+                      position: 'absolute', top: 0, left: dotLeft, width: 9, height: 9,
+                      borderRadius: '50%', background: col, border: '2px solid #fff',
+                      transform: 'translate(-50%, -50%)', boxShadow: '0 0 2px rgba(0,0,0,0.5)',
+                    }} />
                   </div>
                 );
               })}
