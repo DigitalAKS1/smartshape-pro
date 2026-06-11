@@ -72,7 +72,26 @@ function ensureFontsLink(families) {
   document.head.appendChild(link);
 }
 
-export default function TemplateDesigner({ onSaved }) {
+// Hydrate the keyed field-state object from a saved template's field array,
+// falling back to defaults for any missing field/prop.
+function fieldsFromTemplate(arr) {
+  const base = initFieldState();
+  (arr || []).forEach(f => {
+    if (!f || !base[f.key]) return;
+    base[f.key] = {
+      x:     Number.isFinite(f.x) ? f.x : base[f.key].x,
+      y:     Number.isFinite(f.y) ? f.y : base[f.key].y,
+      size:  Number.isFinite(f.size) ? f.size : base[f.key].size,
+      color: f.color || base[f.key].color,
+      align: f.align || base[f.key].align,
+      font:  f.font  || 'Default',
+    };
+  });
+  return base;
+}
+
+export default function TemplateDesigner({ onSaved, editTemplate = null }) {
+  const isEdit = !!(editTemplate && editTemplate.template_id);
   /* ── theme helpers ── */
   const card      = 'bg-[var(--bg-card)] border-[var(--border-color)]';
   const textPri   = 'text-[var(--text-primary)]';
@@ -80,17 +99,21 @@ export default function TemplateDesigner({ onSaved }) {
   const textMuted = 'text-[var(--text-muted)]';
   const inputCls  = 'bg-[var(--bg-primary)] border border-[var(--border-color)] text-[var(--text-primary)] rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-[#e94560]';
 
-  /* ── state ── */
-  const [bgUrl, setBgUrl]             = useState(null);   // display image (preview for PDF)
-  const [realBg, setRealBg]           = useState(null);   // saved background_url (PDF path for pdf kind)
-  const [previewUrl, setPreviewUrl]   = useState('');     // raster preview (pdf kind)
-  const [kind, setKind]               = useState('image');// 'image' | 'pdf'
-  const [naturalW, setNaturalW]       = useState(0);
-  const [naturalH, setNaturalH]       = useState(0);
-  const [displayH, setDisplayH]       = useState(0);
-  const [fields, setFields]           = useState(initFieldState);
-  const [templateName, setTemplateName] = useState('');
-  const [orientation, setOrientation] = useState('landscape');
+  /* ── state (hydrated from editTemplate when editing) ── */
+  const e0 = editTemplate || {};
+  const e0kind = e0.kind === 'pdf' ? 'pdf' : 'image';
+  const e0display = e0kind === 'pdf' ? (e0.preview_url || '') : (e0.background_url || '');
+  const [bgUrl, setBgUrl]             = useState(isEdit ? (e0display || null) : null);   // display image (preview for PDF)
+  const [realBg, setRealBg]           = useState(isEdit ? (e0.background_url || null) : null);  // saved background_url (PDF path for pdf kind)
+  const [previewUrl, setPreviewUrl]   = useState(isEdit ? (e0.preview_url || '') : '');  // raster preview (pdf kind)
+  const [kind, setKind]               = useState(isEdit ? e0kind : 'image');             // 'image' | 'pdf'
+  const [naturalW, setNaturalW]       = useState(isEdit ? (e0.width_px || 0) : 0);
+  const [naturalH, setNaturalH]       = useState(isEdit ? (e0.height_px || 0) : 0);
+  const [displayH, setDisplayH]       = useState(
+    isEdit && e0.width_px ? Math.round((e0.height_px / e0.width_px) * DISPLAY_WIDTH) : 0);
+  const [fields, setFields]           = useState(isEdit ? fieldsFromTemplate(e0.fields) : initFieldState);
+  const [templateName, setTemplateName] = useState(isEdit ? (e0.name || '') : '');
+  const [orientation, setOrientation] = useState(isEdit ? (e0.orientation || 'landscape') : 'landscape');
   const [uploading, setUploading]     = useState(false);
   const [saving, setSaving]           = useState(false);
   const [families, setFamilies]       = useState(FALLBACK_FONTS);
@@ -224,8 +247,13 @@ export default function TemplateDesigner({ onSaved }) {
           font:  fields[f.key].font,
         })),
       };
-      await certsApi.createTemplate(body);
-      toast.success('Template saved');
+      if (isEdit) {
+        await certsApi.updateTemplate(editTemplate.template_id, body);
+        toast.success('Template updated');
+      } else {
+        await certsApi.createTemplate(body);
+        toast.success('Template saved');
+      }
       setBgUrl(null); setRealBg(null); setPreviewUrl(''); setKind('image');
       setNaturalW(0); setNaturalH(0); setDisplayH(0);
       setTemplateName(''); setFields(initFieldState());
@@ -235,7 +263,7 @@ export default function TemplateDesigner({ onSaved }) {
     } finally {
       setSaving(false);
     }
-  }, [templateName, realBg, kind, previewUrl, orientation, naturalW, naturalH, fields, onSaved]);
+  }, [templateName, realBg, kind, previewUrl, orientation, naturalW, naturalH, fields, onSaved, isEdit, editTemplate]);
 
   /* ───────────────────────────────────────────────────────────── render ── */
   return (
@@ -243,7 +271,7 @@ export default function TemplateDesigner({ onSaved }) {
 
       {/* ── Meta row ── */}
       <div className={`${card} border rounded-xl p-4`}>
-        <p className={`text-xs font-semibold uppercase tracking-wide ${textMuted} mb-3`}>New Template</p>
+        <p className={`text-xs font-semibold uppercase tracking-wide ${textMuted} mb-3`}>{isEdit ? `Edit Template — ${e0.name || ''}` : 'New Template'}</p>
         <div className="flex flex-wrap gap-3 items-end">
           <div className="flex-1 min-w-[160px]">
             <label className={`block text-xs ${textSec} mb-1`}>Template Name *</label>
@@ -277,7 +305,7 @@ export default function TemplateDesigner({ onSaved }) {
           <button onClick={handleSave} disabled={saving || !realBg || !templateName.trim()}
             className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-sm font-medium text-white disabled:opacity-40 disabled:cursor-not-allowed transition-opacity"
             style={{ background: PINK }}>
-            <Save className="h-4 w-4" />{saving ? 'Saving…' : 'Save Template'}
+            <Save className="h-4 w-4" />{saving ? 'Saving…' : (isEdit ? 'Update Template' : 'Save Template')}
           </button>
         </div>
         {kind === 'pdf' && bgUrl && (

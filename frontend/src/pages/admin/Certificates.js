@@ -5,7 +5,7 @@ import TemplateDesigner from '../../components/certs/TemplateDesigner';
 import PdfTemplateUploader from '../../components/certs/PdfTemplateUploader';
 import BatchCreator from '../../components/certs/BatchCreator';
 import BatchDetail from '../../components/certs/BatchDetail';
-import { Award, Layers, ClipboardList, RefreshCw, Trash2, ChevronDown, ChevronUp, Plus, Calendar, ChevronRight, Image as ImageIcon, FileText } from 'lucide-react';
+import { Award, Layers, ClipboardList, RefreshCw, Trash2, ChevronDown, ChevronUp, Plus, Calendar, ChevronRight, Image as ImageIcon, FileText, Pencil } from 'lucide-react';
 import { certsApi } from '../../lib/api';
 import { toast } from 'sonner';
 
@@ -21,6 +21,16 @@ export default function Certificates() {
   const [showDesigner, setShowDesigner] = useState(false);
   const [designerKind, setDesignerKind] = useState('image');   // 'image' | 'pdf'
   const [deletingId, setDeletingId]     = useState(null);
+  const [editingTemplate, setEditingTemplate] = useState(null); // template being edited (null = new)
+
+  const openNewDesigner = () => { setEditingTemplate(null); setShowDesigner(v => !v); };
+  const openEditDesigner = (tpl) => {
+    setEditingTemplate(tpl);
+    setDesignerKind('image');           // the drag-designer (handles image + PDF overlay)
+    setShowDesigner(true);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+  const closeDesigner = () => { setShowDesigner(false); setEditingTemplate(null); s.loadTemplates(); };
 
   /* ── Batches tab state ── */
   const [showCreator, setShowCreator]     = useState(false);
@@ -115,7 +125,7 @@ export default function Certificates() {
                   : 'No templates yet'}
               </p>
               <button
-                onClick={() => setShowDesigner(v => !v)}
+                onClick={openNewDesigner}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium text-white"
                 style={{ background: PINK }}
               >
@@ -130,32 +140,34 @@ export default function Certificates() {
             {/* Designer panel */}
             {showDesigner && (
               <div className="space-y-3">
-                {/* Image / PDF mode toggle */}
-                <div className={`${card} border rounded-xl p-1 inline-flex gap-0.5`}>
-                  {[
-                    { id: 'image', label: 'Image (drag fields)', icon: ImageIcon },
-                    { id: 'pdf',   label: 'PDF (mail-merge)',     icon: FileText  },
-                  ].map(({ id, label, icon: Icon }) => (
-                    <button
-                      key={id}
-                      onClick={() => setDesignerKind(id)}
-                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium transition-all
-                        ${designerKind === id ? 'text-white' : `${textSec} hover:bg-[var(--bg-hover)]`}`}
-                      style={designerKind === id ? { background: PINK } : {}}
-                    >
-                      <Icon className="h-3.5 w-3.5" />
-                      {label}
-                    </button>
-                  ))}
-                </div>
+                {/* Designer mode toggle (hidden while editing an existing template) */}
+                {!editingTemplate && (
+                  <div className={`${card} border rounded-xl p-1 inline-flex gap-0.5`}>
+                    {[
+                      { id: 'image', label: 'Drag & drop (image / PDF)', icon: ImageIcon },
+                      { id: 'pdf',   label: 'PDF mail-merge ({tokens})',  icon: FileText  },
+                    ].map(({ id, label, icon: Icon }) => (
+                      <button
+                        key={id}
+                        onClick={() => setDesignerKind(id)}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium transition-all
+                          ${designerKind === id ? 'text-white' : `${textSec} hover:bg-[var(--bg-hover)]`}`}
+                        style={designerKind === id ? { background: PINK } : {}}
+                      >
+                        <Icon className="h-3.5 w-3.5" />
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                )}
 
-                {designerKind === 'pdf' ? (
-                  <PdfTemplateUploader
-                    onSaved={() => { setShowDesigner(false); s.loadTemplates(); }}
-                  />
+                {!editingTemplate && designerKind === 'pdf' ? (
+                  <PdfTemplateUploader onSaved={closeDesigner} />
                 ) : (
                   <TemplateDesigner
-                    onSaved={() => { setShowDesigner(false); s.loadTemplates(); }}
+                    key={editingTemplate?.template_id || 'new'}
+                    editTemplate={editingTemplate}
+                    onSaved={closeDesigner}
                   />
                 )}
               </div>
@@ -206,14 +218,25 @@ export default function Certificates() {
                             </>
                           )}
                         </div>
-                        <button
-                          onClick={() => handleDeleteTemplate(tpl.template_id, tpl.name)}
-                          disabled={deletingId === (tpl.template_id)}
-                          className="p-1.5 rounded-lg text-red-500 hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors disabled:opacity-40"
-                          title="Delete template"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
+                        <div className="flex items-center gap-1">
+                          {(tpl.kind !== 'pdf' || (Array.isArray(tpl.fields) && tpl.fields.length > 0)) && (
+                            <button
+                              onClick={() => openEditDesigner(tpl)}
+                              className={`p-1.5 rounded-lg ${textMuted} hover:bg-[var(--bg-hover)] transition-colors`}
+                              title="Edit template (fonts, positions, colours)"
+                            >
+                              <Pencil className="h-4 w-4" />
+                            </button>
+                          )}
+                          <button
+                            onClick={() => handleDeleteTemplate(tpl.template_id, tpl.name)}
+                            disabled={deletingId === (tpl.template_id)}
+                            className="p-1.5 rounded-lg text-red-500 hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors disabled:opacity-40"
+                            title="Delete template"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </div>
