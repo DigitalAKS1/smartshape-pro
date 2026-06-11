@@ -865,6 +865,9 @@ async def create_school(request: Request):
         "created_by": user["email"],
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
+    _pm = body.get("portal_login_methods")
+    if isinstance(_pm, dict):
+        school_doc["portal_login_methods"] = {k: bool(_pm.get(k, False)) for k in ("email_link", "magic_link", "google")}
     await db.schools.insert_one(school_doc)
     return await db.schools.find_one({"school_id": school_id}, {"_id": 0})
 

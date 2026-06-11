@@ -166,6 +166,23 @@ async def _auto_register_from_quotation(quot: dict, created_by_email: str):
     if school_id and quotation_id:
         await db.quotations.update_one({"quotation_id": quotation_id}, {"$set": {"school_id": school_id}})
 
+    # ── School Portal: persist per-quote login methods + send activation/welcome invite ──
+    if school_id and email:
+        pm = quot.get("portal_login_methods")
+        if isinstance(pm, dict):
+            await db.schools.update_one(
+                {"school_id": school_id},
+                {"$set": {"portal_login_methods": {k: bool(pm.get(k, False)) for k in ("email_link", "magic_link", "google")}}},
+            )
+        school_doc = await db.schools.find_one({"school_id": school_id})
+        # Only invite schools that have not yet set a password (avoid re-spamming on re-quote).
+        if school_doc and not school_doc.get("password_hash"):
+            try:
+                from services.school_auth import send_portal_invite
+                await send_portal_invite(school_doc)
+            except Exception as e:
+                logging.error(f"school portal invite failed for {school_id}: {e}")
+
     # ── 2. Contact ─────────────────────────────────────────────────────────────
     if pname and (phone or email):
         or_clauses = []
