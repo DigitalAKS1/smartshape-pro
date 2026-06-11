@@ -1,5 +1,5 @@
 /* SmartShape Pro Service Worker v2 — offline-first shell + background sync */
-const CACHE_VERSION = 'ssp-v9';
+const CACHE_VERSION = 'ssp-v10';
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const API_CACHE = `${CACHE_VERSION}-api`;
 const OFFLINE_URL = '/offline.html';
@@ -46,10 +46,17 @@ self.addEventListener('fetch', (event) => {
   // Only intercept GET — mutations are handled by the app's offline queue
   if (req.method !== 'GET') return;
 
-  // Navigation → network-first, fallback to offline page
+  // Navigation → network-first; on failure fall back to the cached app shell
+  // (so SPA routes like /settings still load & route client-side), then the
+  // offline page. Always resolve to a Response so respondWith never rejects.
   if (req.mode === 'navigate') {
     event.respondWith(
-      fetch(req).catch(() => caches.match(OFFLINE_URL))
+      fetch(req).catch(() =>
+        caches.match(req)
+          .then((r) => r || caches.match('/index.html'))
+          .then((r) => r || caches.match(OFFLINE_URL))
+          .then((r) => r || Response.error())
+      )
     );
     return;
   }
@@ -78,9 +85,12 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Let non-API, non-asset requests fail naturally — no synthetic 503
+  // Other same-origin GETs: network-first, then cache. Resolve to a network-error
+  // Response on failure instead of a second un-caught fetch() — a rejecting
+  // respondWith() turns a transient failure into a hard SW network error and an
+  // "Uncaught (in promise)" rejection.
   event.respondWith(
-    fetch(req).catch(() => caches.match(req).then(r => r || fetch(req)))
+    fetch(req).catch(() => caches.match(req).then((r) => r || Response.error()))
   );
 });
 
