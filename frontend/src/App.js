@@ -71,6 +71,7 @@ import ZoomJoin from './pages/ZoomJoin';
 
 // School Portal
 import SchoolLogin from './pages/SchoolLogin';
+import SchoolActivate from './pages/SchoolActivate';
 import SchoolDashboard from './pages/school/SchoolDashboard';
 
 import { ThemeProvider } from './contexts/ThemeContext';
@@ -147,6 +148,7 @@ function AppRouter() {
       <Route path="/my-quote/:token" element={<CustomerPortal />} />
       <Route path="/customer-login" element={<CustomerLogin />} />
       <Route path="/school/login" element={<SchoolLogin />} />
+      <Route path="/school/activate" element={<SchoolActivate />} />
       <Route path="/school" element={<SchoolDashboard />} />
       <Route path="/get-app" element={<GetApp />} />
       <Route path="/zoom/:eventId" element={<ZoomJoin />} />

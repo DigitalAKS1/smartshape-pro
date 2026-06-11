@@ -574,6 +574,12 @@ export const schoolAuth = {
   quotations: () => API.get('/school/quotations'),
   notifications: () => API.get('/school/notifications'),
   markRead: () => API.put('/school/notifications/read'),
+  // Phase 1 — Access
+  methods: (email) => API.get('/school/auth/methods', { params: { email } }),
+  activateVerify: (token) => API.post('/school/auth/activate/verify', { token }),
+  setPassword: (token, password) => API.post('/school/auth/set-password', { token, password }),
+  requestMagic: (email) => API.post('/school/auth/magic-link/request', { email }),
+  googleStartUrl: () => `${API.defaults.baseURL}/school/auth/google/start`,
 };
 
 // Dispatches
@@ -603,6 +609,13 @@ export const activityLogs = {
 // School password (admin)
 export const schoolAdmin = {
   setPassword: (schoolId, password) => API.put(`/schools/${schoolId}/set-password`, { password }),
+  resendInvite: (schoolId) => API.post(`/school/${schoolId}/resend-invite`),
+};
+
+// School Portal login-method settings (admin)
+export const schoolPortalSettings = {
+  get: () => API.get('/settings/school-portal'),
+  save: (data) => API.post('/settings/school-portal', data),
 };
 
 // Settings

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
-import { packages, salesPersons, quotations, companySettings, contacts as contactsApi, schools as schoolsApi } from '../lib/api';
+import { packages, salesPersons, quotations, companySettings, contacts as contactsApi, schools as schoolsApi, schoolPortalSettings } from '../lib/api';
 
 export default function useCreateQuotation() {
   const navigate = useNavigate();
@@ -52,6 +52,7 @@ export default function useCreateQuotation() {
     font_size_mode: 'medium',
     currency_symbol: '₹',
     valid_until: '',
+    portal_login_methods: { email_link: true, magic_link: false, google: false },
   });
   const [selectedPackage, setSelectedPackage] = useState(null);
 
@@ -74,6 +75,19 @@ export default function useCreateQuotation() {
           bank_details_override: prev.bank_details_override || comp.bank_details || '',
           terms_override: prev.terms_override || comp.terms_conditions || '',
         }));
+        // Seed per-quote portal login methods from the global defaults.
+        try {
+          const sp = await schoolPortalSettings.get();
+          const g = sp.data || {};
+          setFormData(prev => ({
+            ...prev,
+            portal_login_methods: {
+              email_link: !!g.email_link_enabled,
+              magic_link: !!g.magic_link_enabled,
+              google: !!g.google_enabled,
+            },
+          }));
+        } catch { /* keep defaults */ }
       } catch {
         toast.error('Failed to load data');
       }

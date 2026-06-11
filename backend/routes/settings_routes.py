@@ -294,6 +294,42 @@ async def get_cloudinary_settings(request: Request):
     }
 
 
+# ==================== SCHOOL PORTAL SETTINGS ====================
+
+@router.post("/settings/school-portal")
+async def save_school_portal_settings(request: Request):
+    user = await get_current_user(request)
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    body = await request.json()
+    update = {"type": "school_portal", "updated_at": datetime.now(timezone.utc).isoformat()}
+    for k in ("email_link_enabled", "magic_link_enabled", "google_enabled"):
+        if k in body:
+            update[k] = bool(body[k])
+    if (body.get("google_client_id") or "").strip():
+        update["google_client_id"] = body["google_client_id"].strip()
+    sec = (body.get("google_client_secret") or "").strip()
+    if sec and sec != "***":
+        update["google_client_secret"] = sec
+    await db.settings.update_one({"type": "school_portal"}, {"$set": update}, upsert=True)
+    return {"message": "School portal settings saved"}
+
+
+@router.get("/settings/school-portal")
+async def get_school_portal_settings(request: Request):
+    user = await get_current_user(request)
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    cfg = await db.settings.find_one({"type": "school_portal"}, {"_id": 0}) or {}
+    return {
+        "email_link_enabled": bool(cfg.get("email_link_enabled", True)),
+        "magic_link_enabled": bool(cfg.get("magic_link_enabled", False)),
+        "google_enabled": bool(cfg.get("google_enabled", False)),
+        "google_client_id": cfg.get("google_client_id", ""),
+        "google_client_secret_set": bool((cfg.get("google_client_secret") or "").strip()),
+    }
+
+
 # ==================== INTEGRATION STATUS + TEST ====================
 
 @router.get("/settings/integrations/status")
@@ -311,6 +347,7 @@ async def integrations_status(request: Request):
     cloud = await db.settings.find_one({"type": "cloudinary"}, {"_id": 0})
     ai = await db.settings.find_one({"type": "ai"}, {"_id": 0})
     sheets = await db.settings.find_one({"type": "sheets"}, {"_id": 0})
+    sp = await db.settings.find_one({"type": "school_portal"}, {"_id": 0})
 
     return {
         "gmail":      {"configured": _has(email, "sender_email", "gmail_app_password")},
@@ -319,6 +356,7 @@ async def integrations_status(request: Request):
         "cloudinary": {"configured": _has(cloud, "cloud_name", "api_key", "api_secret")},
         "ai":         {"configured": bool(ai and (ai.get("gemini_api_key") or "").strip())},
         "sheets":     {"configured": _has(sheets, "client_id", "client_secret")},
+        "school_portal": {"configured": bool(sp and (sp.get("email_link_enabled", True) or sp.get("magic_link_enabled") or sp.get("google_enabled")))},
     }
 
 

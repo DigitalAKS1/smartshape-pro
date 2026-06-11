@@ -163,6 +163,27 @@ export default function QuotationStep3Pricing({
             />
           </div>
         </div>
+
+        {/* School portal login methods (per-quote override of the global defaults) */}
+        <div className="mt-4 rounded-md border border-[var(--border-color)] p-3">
+          <Label className={`text-xs ${tMut}`}>School portal login (for this customer)</Label>
+          <div className="flex flex-wrap gap-4 mt-2">
+            {[['email_link', 'Email link + password'], ['magic_link', 'Magic link'], ['google', 'Sign in with Google']].map(([k, label]) => (
+              <label key={k} className={`flex items-center gap-2 text-sm ${tPri} cursor-pointer`}>
+                <input
+                  type="checkbox"
+                  checked={!!(formData.portal_login_methods || {})[k]}
+                  onChange={e => setFormData(p => ({
+                    ...p,
+                    portal_login_methods: { ...(p.portal_login_methods || {}), [k]: e.target.checked },
+                  }))}
+                  className="w-4 h-4 rounded border-[var(--border-color)] bg-[var(--bg-primary)]"
+                />
+                {label}
+              </label>
+            ))}
+          </div>
+        </div>
       </div>
 
       {/* Product Lines */}

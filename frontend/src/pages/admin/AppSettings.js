@@ -1,6 +1,6 @@
 import React from 'react';
 import AdminLayout from '../../components/layouts/AdminLayout';
-import { Building2, Mail, MessageSquare, Clock, MapPin, Shield, Sparkles, Video, Cloud, FileSpreadsheet, Bell, Lock } from 'lucide-react';
+import { Building2, Mail, MessageSquare, Clock, MapPin, Shield, Sparkles, Video, Cloud, FileSpreadsheet, Bell, Lock, GraduationCap } from 'lucide-react';
 import useAppSettings from '../../hooks/useAppSettings';
 import CompanySettingsSection from '../../components/settings/CompanySettingsSection';
 import SecuritySection from '../../components/settings/SecuritySection';
@@ -11,6 +11,7 @@ import ZoomSection from '../../components/settings/ZoomSection';
 import CloudinarySection from '../../components/settings/CloudinarySection';
 import SheetsSection from '../../components/settings/SheetsSection';
 import NotificationsSection from '../../components/settings/NotificationsSection';
+import SchoolPortalSection from '../../components/settings/SchoolPortalSection';
 import SecurityTab from '../../components/settings/SecurityTab';
 
 const TABS = [
@@ -25,6 +26,7 @@ const TABS = [
   { id: 'field',         label: 'Field',         icon: MapPin },
   { id: 'devices',       label: 'Devices',       icon: Shield },
   { id: 'notifications', label: 'Notifications', icon: Bell },
+  { id: 'school_portal', label: 'School Portal', icon: GraduationCap },
   { id: 'security',      label: 'Security',      icon: Lock },
 ];
 
@@ -168,6 +170,10 @@ export default function AppSettings() {
 
         {s.activeTab === 'notifications' && (
           <NotificationsSection prefs={s.notifPrefs} setPrefs={s.setNotifPrefs} save={s.saveNotifPrefs} />
+        )}
+
+        {s.activeTab === 'school_portal' && (
+          <SchoolPortalSection configured={s.integrationStatus?.school_portal?.configured} onSaved={s.refreshStatus} />
         )}
 
         {s.activeTab === 'security' && <SecurityTab />}

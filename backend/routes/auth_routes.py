@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, EmailStr
 from typing import Optional
 from datetime import datetime, timezone, timedelta
@@ -8,6 +9,8 @@ import requests
 import os
 import logging
 import smtplib
+import urllib.parse
+import httpx
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
@@ -22,6 +25,11 @@ from auth_utils import (
     get_current_user, get_current_school,
     JWT_SECRET, JWT_ALGORITHM,
 )
+from services import school_auth
+
+_GOOGLE_AUTH = "https://accounts.google.com/o/oauth2/v2/auth"
+_GOOGLE_TOKEN = "https://oauth2.googleapis.com/token"
+_GOOGLE_USERINFO = "https://www.googleapis.com/oauth2/v3/userinfo"
 
 router = APIRouter()
 
@@ -456,3 +464,154 @@ async def school_login(request: Request, response: Response):
     school_data = await db.schools.find_one({"school_id": school_id}, {"_id": 0, "password_hash": 0})
     school_data["role"] = "school"
     return school_data
+
+
+def _issue_school_cookie(response: Response, school: dict) -> dict:
+    """Set the school access-token cookie on `response` and return a safe school dict."""
+    payload = {
+        "sub": school["school_id"], "email": school["email"], "role": "school",
+        "exp": datetime.now(timezone.utc) + timedelta(hours=24), "type": "access",
+    }
+    token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    response.set_cookie(key="access_token", value=token, max_age=86400, **_COOKIE_KWARGS)
+    data = {k: v for k, v in school.items() if k not in ("_id", "password_hash")}
+    data["role"] = "school"
+    return data
+
+
+@router.get("/school/auth/methods")
+async def school_auth_methods(email: str = ""):
+    """Public: which login methods are available for this email's school.
+    Unknown emails fall back to the global defaults (no enumeration signal)."""
+    email = (email or "").lower().strip()
+    g = await school_auth.get_global_settings()
+    fallback = {"email_link": g["email_link_enabled"], "magic_link": g["magic_link_enabled"], "google": g["google_enabled"]}
+    if not email:
+        return fallback
+    school = await db.schools.find_one({"email": email})
+    if not school:
+        return fallback
+    return await school_auth.effective_methods(school)
+
+
+@router.post("/school/auth/activate/verify")
+async def school_activate_verify(request: Request):
+    body = await request.json()
+    raw = (body.get("token") or "").strip()
+    school = await school_auth.peek_token(raw, "activation")
+    if not school:
+        raise HTTPException(status_code=400, detail="This link is invalid or has expired")
+    email = school.get("email", "")
+    masked = (email[:2] + "***" + email[email.find("@"):]) if "@" in email else "***"
+    return {"email_masked": masked}
+
+
+@router.post("/school/auth/set-password")
+async def school_set_password(request: Request, response: Response):
+    body = await request.json()
+    raw = (body.get("token") or "").strip()
+    password = body.get("password") or ""
+    if len(password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+    school = await school_auth.consume_token(raw, "activation")
+    if not school:
+        raise HTTPException(status_code=400, detail="This link is invalid or has expired")
+    await db.schools.update_one({"school_id": school["school_id"]},
+                                {"$set": {"password_hash": hash_password(password)}})
+    fresh = await db.schools.find_one({"school_id": school["school_id"]})
+    return _issue_school_cookie(response, fresh)
+
+
+@router.post("/school/auth/magic-link/request")
+async def school_magic_request(request: Request):
+    body = await request.json()
+    email = (body.get("email") or "").lower().strip()
+    generic = {"message": "If that email is registered, a login link has been sent."}
+    if not email:
+        return generic
+    school = await db.schools.find_one({"email": email})
+    if school:
+        methods = await school_auth.effective_methods(school)
+        if methods.get("magic_link"):
+            raw = await school_auth.issue_token(school["school_id"], email, "magic")
+            url = school_auth.magic_url(raw)
+            html = f"""<div style="font-family:Arial,sans-serif">
+              <p>Click to sign in to your SmartShape School Portal (valid 15 minutes):</p>
+              <p><a href="{url}" style="background:#e94560;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none">Sign in</a></p></div>"""
+            await school_auth._send_email(email, "Your SmartShape sign-in link", html)
+    return generic
+
+
+@router.get("/school/auth/magic-link/verify")
+async def school_magic_verify(token: str = ""):
+    school = await school_auth.consume_token(token, "magic")
+    if not school:
+        raise HTTPException(status_code=400, detail="This link is invalid or has expired")
+    redirect = RedirectResponse(url=f"{school_auth._frontend_base()}/school", status_code=303)
+    _issue_school_cookie(redirect, school)
+    return redirect
+
+
+@router.post("/school/{school_id}/resend-invite")
+async def school_resend_invite(school_id: str, request: Request):
+    user = await get_current_user(request)
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    school = await db.schools.find_one({"school_id": school_id})
+    if not school:
+        raise HTTPException(status_code=404, detail="School not found")
+    return await school_auth.send_portal_invite(school)
+
+
+@router.get("/school/auth/google/start")
+async def school_google_start():
+    g = await school_auth.get_global_settings()
+    if not (g["google_enabled"] and g["google_client_id"]):
+        raise HTTPException(status_code=400, detail="Google sign-in is not enabled")
+    params = {
+        "client_id": g["google_client_id"],
+        "redirect_uri": _google_redirect_uri(),
+        "response_type": "code",
+        "scope": "openid email profile",
+        "access_type": "online",
+        "prompt": "select_account",
+    }
+    return RedirectResponse(url=f"{_GOOGLE_AUTH}?{urllib.parse.urlencode(params)}", status_code=303)
+
+
+@router.get("/school/auth/google/callback")
+async def school_google_callback(code: str = ""):
+    g = await school_auth.get_global_settings()
+    if not (g["google_enabled"] and g["google_client_id"] and g["google_client_secret"]):
+        raise HTTPException(status_code=400, detail="Google sign-in is not enabled")
+    if not code:
+        raise HTTPException(status_code=400, detail="Missing code")
+    async with httpx.AsyncClient(timeout=20) as client:
+        tok = await client.post(_GOOGLE_TOKEN, data={
+            "code": code, "client_id": g["google_client_id"], "client_secret": g["google_client_secret"],
+            "redirect_uri": _google_redirect_uri(), "grant_type": "authorization_code",
+        })
+        if tok.status_code != 200:
+            raise HTTPException(status_code=400, detail="Google auth failed")
+        access = tok.json().get("access_token")
+        ui = await client.get(_GOOGLE_USERINFO, headers={"Authorization": f"Bearer {access}"})
+        if ui.status_code != 200:
+            raise HTTPException(status_code=400, detail="Could not read Google profile")
+        info = ui.json()
+    email = (info.get("email") or "").lower().strip()
+    if not info.get("email_verified") or not email:
+        raise HTTPException(status_code=400, detail="Google email not verified")
+    school = await db.schools.find_one({"email": email})
+    if not school:
+        return RedirectResponse(url=f"{school_auth._frontend_base()}/school/login?err=not_registered", status_code=303)
+    methods = await school_auth.effective_methods(school)
+    if not methods.get("google"):
+        return RedirectResponse(url=f"{school_auth._frontend_base()}/school/login?err=google_disabled", status_code=303)
+    redirect = RedirectResponse(url=f"{school_auth._frontend_base()}/school", status_code=303)
+    _issue_school_cookie(redirect, school)
+    return redirect
+
+
+def _google_redirect_uri() -> str:
+    base = os.environ.get("BACKEND_PUBLIC_URL") or os.environ.get("FRONTEND_URL", "http://localhost:3000")
+    return base.rstrip("/") + "/api/school/auth/google/callback"
