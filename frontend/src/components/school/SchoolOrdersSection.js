@@ -1,6 +1,6 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { FileText, Eye, Send, Calendar, Package, MessageSquare } from 'lucide-react';
+import { FileText, Eye, Send, Calendar, Package, MessageSquare, Receipt } from 'lucide-react';
 import { Button } from '../ui/button';
 import PlanVisitButton from './PlanVisitButton';
 
@@ -61,13 +61,14 @@ function RollupCard({ label, value, sub, tk, accent }) {
 }
 
 // ── Quotations + Sales Orders tab ─────────────────────────────────────────────
-export function SchoolSalesSection({ quotations, orders = [], metrics, tk }) {
+export function SchoolSalesSection({ quotations, orders = [], invoices = [], metrics, tk }) {
   return (
     <div className="sp-tab space-y-5">
-      {/* Revenue rollup: Quoted → Ordered → Paid */}
-      <div className="grid grid-cols-3 gap-3">
+      {/* Revenue rollup: Quoted → Ordered → Invoiced → Paid */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <RollupCard label="Quoted" value={metrics.total_revenue_quoted} sub={`${quotations.length} quote${quotations.length !== 1 ? 's' : ''}`} tk={tk} />
         <RollupCard label="Ordered" value={metrics.total_revenue_ordered} sub={`${orders.length} order${orders.length !== 1 ? 's' : ''}`} tk={tk} accent />
+        <RollupCard label="Invoiced" value={metrics.total_invoiced} sub={`${invoices.length} invoice${invoices.length !== 1 ? 's' : ''}`} tk={tk} />
         <RollupCard label="Paid" value={metrics.total_paid} sub={`of ${fmtMoney(metrics.total_revenue_ordered)}`} tk={tk} />
       </div>
 
@@ -123,6 +124,33 @@ export function SchoolSalesSection({ quotations, orders = [], metrics, tk }) {
                     <span>Paid {fmtMoney(o.payment_received)}</span>
                     {o.package_name && <span>{o.package_name}</span>}
                     <span>{fmt(o.created_at)}</span>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Invoices */}
+      <div>
+        <p className={`text-[11px] uppercase tracking-wide ${tk.tm} mb-2`}>Invoices · {invoices.length}</p>
+        {invoices.length === 0 ? (
+          <EmptyState icon={Receipt} label="No invoices uploaded for this school yet." />
+        ) : (
+          <div className={`${tk.card} border ${tk.border} rounded-2xl overflow-hidden divide-y ${tk.divide}`}>
+            {invoices.map(inv => (
+              <div key={inv.invoice_id} className="px-5 py-4 flex items-center gap-4">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className={`font-semibold text-sm ${tk.t1}`}>{inv.invoice_number}</span>
+                    {inv.order_number && <Badge label={`SO ${inv.order_number}`} cls="bg-blue-50 text-blue-700" />}
+                    {inv.match_status === 'unmatched' && <Badge label="unmatched" cls="bg-red-50 text-red-600" />}
+                  </div>
+                  <p className="sp-num text-xl font-black text-[#e94560] mt-0.5">{fmtMoney(inv.total_amount)}</p>
+                  <div className={`flex items-center gap-3 mt-0.5 text-xs ${tk.tm} flex-wrap`}>
+                    {inv.tax_amount > 0 && <span>incl. GST {fmtMoney(inv.tax_amount)}</span>}
+                    <span>{fmt(inv.invoice_date || inv.created_at)}</span>
                   </div>
                 </div>
               </div>

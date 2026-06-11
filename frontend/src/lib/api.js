@@ -513,6 +513,19 @@ export const orders = {
   exportBulk: (ids, fmt) => API.post('/orders/export', { order_ids: ids, format: fmt }, { responseType: 'blob' }),
 };
 
+// Invoices — bulk JSON/XML import auto-mapped to school + sales order
+export const invoices = {
+  list: (params) => API.get('/invoices', { params }),
+  bulkImport: (file) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    return API.post('/invoices/bulk-import', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+  },
+  map: (id, data) => API.post(`/invoices/${id}/map`, data),
+  remove: (id) => API.delete(`/invoices/${id}`),
+  templateUrl: (fmt) => `${process.env.REACT_APP_BACKEND_URL}/api/invoices/import-template?format=${fmt}`,
+};
+
 // Trigger a browser download from an axios blob response (uses server filename).
 export function downloadBlob(res, fallbackName) {
   const blob = new Blob([res.data], { type: res.headers?.['content-type'] || 'application/octet-stream' });

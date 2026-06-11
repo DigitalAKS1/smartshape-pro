@@ -22,6 +22,7 @@ import { PROD_STAGES, ORDER_STATUSES, buildDispatchMessage } from '../../lib/ord
 import WaPickerButton from '../../components/orders/WaPickerButton';
 import HoldsTab from '../../components/orders/HoldsTab';
 import OrderDetailPanel from '../../components/orders/OrderDetailPanel';
+import InvoiceBulkImport from '../../components/crm/InvoiceBulkImport';
 
 export default function OrdersManagement() {
   const om = useOrdersManagement();
@@ -74,6 +75,9 @@ export default function OrdersManagement() {
             </div>
           ))}
         </div>
+
+        {/* Bulk invoice import */}
+        <InvoiceBulkImport onDone={om.reload || om.fetchData} />
 
         {/* Tabs */}
         <div className={`flex gap-1 ${card} border rounded-md p-1`}>

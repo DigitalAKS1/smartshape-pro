@@ -1131,6 +1131,15 @@ async def get_school_profile(school_id: str, request: Request):
     communications.sort(key=lambda x: x.get("at") or "", reverse=True)
     communications = communications[:200]
 
+    # Invoices — by school_id (primary) or by this school's orders/quotations
+    inv_or = [{"school_id": school_id}]
+    order_ids = [o.get("order_id") for o in orders if o.get("order_id")]
+    if order_ids:
+        inv_or.append({"order_id": {"$in": order_ids}})
+    if quote_ids:
+        inv_or.append({"quotation_id": {"$in": quote_ids}})
+    invoices = await db.invoices.find({"$or": inv_or}, {"_id": 0, "raw": 0}).sort("invoice_date", -1).to_list(None)
+
     active_stages = {"new", "contacted", "demo", "quoted", "negotiation"}
     active_leads_count = sum(1 for l in leads if l.get("stage") in active_stages)
 
@@ -1151,6 +1160,7 @@ async def get_school_profile(school_id: str, request: Request):
     total_revenue_quoted = sum(q.get("grand_total", 0) or 0 for q in quotations)
     total_revenue_ordered = sum(o.get("grand_total", 0) or 0 for o in orders)
     total_paid = sum(o.get("payment_received", 0) or 0 for o in orders)
+    total_invoiced = sum(i.get("total_amount", 0) or 0 for i in invoices)
 
     return {
         "school": school,
@@ -1163,6 +1173,7 @@ async def get_school_profile(school_id: str, request: Request):
         "meetings": meetings,
         "dispatches": dispatches,
         "communications": communications,
+        "invoices": invoices,
         "metrics": {
             "total_leads": len(leads),
             "active_leads": active_leads_count,
@@ -1174,6 +1185,8 @@ async def get_school_profile(school_id: str, request: Request):
             "total_orders": len(orders),
             "total_revenue_ordered": total_revenue_ordered,
             "total_paid": total_paid,
+            "total_invoices": len(invoices),
+            "total_invoiced": total_invoiced,
             "total_communications": len(communications),
             "last_contacted": last_contacted,
             "days_since_last_contact": days_since,

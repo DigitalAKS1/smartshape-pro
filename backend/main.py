@@ -23,10 +23,10 @@ from auth_utils import hash_password, verify_password
 # ── Route modules ──────────────────────────────────────────────────────────────
 from routes.auth_routes import router as auth_router
 from routes.crm_routes import router as crm_router
-from routes.crm_zoom_routes import router as crm_zoom_router
 from routes.quotation_routes import router as quotation_router
 from routes.inventory_routes import router as inventory_router
 from routes.order_routes import router as order_router
+from routes.invoice_routes import router as invoice_router
 from routes.field_routes import router as field_router
 from routes.hr_routes import router as hr_router
 from routes.admin_routes import router as admin_router, run_auto_reminders
@@ -71,10 +71,10 @@ app.add_middleware(
 # ── Register routers (all under /api) ──────────────────────────────────────────
 app.include_router(auth_router, prefix="/api")
 app.include_router(crm_router, prefix="/api")
-app.include_router(crm_zoom_router, prefix="/api")
 app.include_router(quotation_router, prefix="/api")
 app.include_router(inventory_router, prefix="/api")
 app.include_router(order_router, prefix="/api")
+app.include_router(invoice_router, prefix="/api")
 app.include_router(field_router, prefix="/api")
 app.include_router(hr_router, prefix="/api")
 app.include_router(admin_router, prefix="/api")
