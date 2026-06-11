@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Request, UploadFile, File
+from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone
@@ -595,7 +595,10 @@ async def _get_quotation_for_po(quotation_id: str, user: dict):
 
 
 @router.post("/quotations/{quotation_id}/upload-po")
-async def upload_quotation_po(quotation_id: str, request: Request, file: UploadFile = File(...)):
+async def upload_quotation_po(quotation_id: str, request: Request,
+                              file: UploadFile = File(...),
+                              po_number: str = Form(default=""),
+                              po_date: str = Form(default="")):
     """Attach the customer's Purchase Order document to a quotation."""
     user = await get_current_user(request)
     await _get_quotation_for_po(quotation_id, user)
@@ -614,15 +617,8 @@ async def upload_quotation_po(quotation_id: str, request: Request, file: UploadF
     from services.storage import save_upload
     url = await save_upload(path, data, file.content_type or "application/pdf", legacy="local")
 
-    # optional PO metadata from the multipart form
-    form_po_number = ""
-    form_po_date = ""
-    try:
-        form = await request.form()
-        form_po_number = (form.get("po_number") or "").strip()
-        form_po_date = (form.get("po_date") or "").strip()
-    except Exception:
-        pass
+    form_po_number = (po_number or "").strip()
+    form_po_date = (po_date or "").strip()
 
     now_iso = datetime.now(timezone.utc).isoformat()
     po_doc = {

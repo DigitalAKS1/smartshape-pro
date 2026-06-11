@@ -381,7 +381,7 @@ async def test_zoom(request: Request):
 async def create_zoom_meeting(request: Request):
     user = await get_current_user(request)
     team = get_team(user)
-    if team not in ("admin", "sales"):
+    if team not in ("admin", "accounts", "sales"):
         raise HTTPException(status_code=403, detail="Not allowed")
     import zoom_service
     if not await zoom_service.is_configured():
