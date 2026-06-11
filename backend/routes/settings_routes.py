@@ -322,7 +322,7 @@ async def get_school_portal_settings(request: Request):
         raise HTTPException(status_code=403, detail="Admin access required")
     cfg = await db.settings.find_one({"type": "school_portal"}, {"_id": 0}) or {}
     return {
-        "email_link_enabled": bool(cfg.get("email_link_enabled", True)),
+        "email_link_enabled": bool(cfg.get("email_link_enabled", False)),
         "magic_link_enabled": bool(cfg.get("magic_link_enabled", False)),
         "google_enabled": bool(cfg.get("google_enabled", False)),
         "google_client_id": cfg.get("google_client_id", ""),
@@ -356,7 +356,7 @@ async def integrations_status(request: Request):
         "cloudinary": {"configured": _has(cloud, "cloud_name", "api_key", "api_secret")},
         "ai":         {"configured": bool(ai and (ai.get("gemini_api_key") or "").strip())},
         "sheets":     {"configured": _has(sheets, "client_id", "client_secret")},
-        "school_portal": {"configured": bool(sp and (sp.get("email_link_enabled", True) or sp.get("magic_link_enabled") or sp.get("google_enabled")))},
+        "school_portal": {"configured": bool(sp and (sp.get("email_link_enabled") or sp.get("magic_link_enabled") or sp.get("google_enabled")))},
     }
 
 

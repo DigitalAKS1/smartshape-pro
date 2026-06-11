@@ -52,7 +52,7 @@ export default function useCreateQuotation() {
     font_size_mode: 'medium',
     currency_symbol: '₹',
     valid_until: '',
-    portal_login_methods: { email_link: true, magic_link: false, google: false },
+    portal_login_methods: { email_link: false, magic_link: false, google: false },
   });
   const [selectedPackage, setSelectedPackage] = useState(null);
 

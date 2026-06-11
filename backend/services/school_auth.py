@@ -36,7 +36,8 @@ def _backend_base() -> str:
 async def get_global_settings() -> dict:
     doc = await db.settings.find_one({"type": "school_portal"}, {"_id": 0}) or {}
     return {
-        "email_link_enabled": bool(doc.get("email_link_enabled", True)),
+        # All methods default OFF — the portal stays dormant until an admin enables it in App Settings.
+        "email_link_enabled": bool(doc.get("email_link_enabled", False)),
         "magic_link_enabled": bool(doc.get("magic_link_enabled", False)),
         "google_enabled": bool(doc.get("google_enabled", False)),
         "google_client_id": doc.get("google_client_id", ""),

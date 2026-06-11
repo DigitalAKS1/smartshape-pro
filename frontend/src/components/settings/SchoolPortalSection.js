@@ -18,7 +18,7 @@ const METHODS = [
 
 export default function SchoolPortalSection({ configured, onSaved }) {
   const [cfg, setCfg] = useState({
-    email_link_enabled: true, magic_link_enabled: false, google_enabled: false,
+    email_link_enabled: false, magic_link_enabled: false, google_enabled: false,
     google_client_id: '', google_client_secret_set: false,
   });
   const [secret, setSecret] = useState('');
