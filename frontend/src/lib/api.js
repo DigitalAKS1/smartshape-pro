@@ -509,7 +509,22 @@ export const orders = {
   updateProductionStage: (id, stage, note) => API.put(`/orders/${id}/production-stage`, { production_stage: stage, note }),
   recordPayment: (id, data) => API.post(`/orders/${id}/payment`, data),
   getPayments: (id) => API.get(`/orders/${id}/payments`),
+  exportOne: (id, fmt) => API.get(`/orders/${id}/export`, { params: { format: fmt }, responseType: 'blob' }),
+  exportBulk: (ids, fmt) => API.post('/orders/export', { order_ids: ids, format: fmt }, { responseType: 'blob' }),
 };
+
+// Trigger a browser download from an axios blob response (uses server filename).
+export function downloadBlob(res, fallbackName) {
+  const blob = new Blob([res.data], { type: res.headers?.['content-type'] || 'application/octet-stream' });
+  const cd = res.headers?.['content-disposition'] || '';
+  const m = cd.match(/filename="?([^";]+)"?/);
+  const name = (m && m[1]) || fallbackName || 'download';
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = name;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
 
 export const adminAnalytics = {
   funnel: () => API.get('/admin/funnel'),

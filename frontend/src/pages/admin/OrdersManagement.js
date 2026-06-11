@@ -9,8 +9,11 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { toast } from 'sonner';
 import {
   Package, Truck, CheckCircle, Search, Eye, ArrowRight,
-  AlertTriangle, CreditCard, DollarSign,
+  AlertTriangle, CreditCard, DollarSign, Download, FileCode, FileJson,
+  CheckSquare, Square, X,
 } from 'lucide-react';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../../components/ui/dropdown-menu';
+import { useAuth } from '../../contexts/AuthContext';
 import KanbanBoard from '../../components/KanbanBoard';
 import WhatsAppSendDialog from '../../components/WhatsAppSendDialog';
 
@@ -22,6 +25,8 @@ import OrderDetailPanel from '../../components/orders/OrderDetailPanel';
 
 export default function OrdersManagement() {
   const om = useOrdersManagement();
+  const { user } = useAuth();
+  const canExport = user?.role === 'admin' || user?.role === 'accounts';
 
   const inputCls = 'bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]';
   const textPri  = 'text-[var(--text-primary)]';
@@ -134,6 +139,28 @@ export default function OrdersManagement() {
           </div>
         )}
 
+        {/* Bulk Tally export toolbar */}
+        {om.activeTab === 'orders' && canExport && om.selectedOrders.size > 0 && (
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-3 py-2 rounded-lg bg-[#e94560]/10 border border-[#e94560]/30">
+            <div className="flex items-center gap-3">
+              <button onClick={om.clearOrderSelection} className={`p-1 rounded-md hover:bg-[var(--bg-hover)] ${textSec}`} title="Clear selection">
+                <X className="h-4 w-4" />
+              </button>
+              <span className={`text-sm font-semibold ${textPri}`}>{om.selectedOrders.size} selected</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button size="sm" disabled={om.exporting} onClick={() => om.handleExportSelected('xml')}
+                className="bg-[#e94560] hover:bg-[#f05c75] text-white h-8">
+                <FileCode className="h-3.5 w-3.5 mr-1.5" /> Tally XML
+              </Button>
+              <Button size="sm" variant="outline" disabled={om.exporting} onClick={() => om.handleExportSelected('json')}
+                className={`border-[var(--border-color)] ${textSec} h-8`}>
+                <FileJson className="h-3.5 w-3.5 mr-1.5" /> JSON
+              </Button>
+            </div>
+          </div>
+        )}
+
         {/* Orders list */}
         {om.activeTab === 'orders' && (
           <div className="space-y-3" data-testid="orders-list">
@@ -146,6 +173,14 @@ export default function OrdersManagement() {
                 return (
                   <div key={order.order_id} className={`${card} border rounded-md p-4`} data-testid={`order-card-${order.order_number}`}>
                     <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                      {canExport && (
+                        <button onClick={() => om.toggleOrderSelect(order.order_id)}
+                          className="shrink-0 self-start sm:self-center" title="Select for Tally export">
+                          {om.selectedOrders.has(order.order_id)
+                            ? <CheckSquare className="h-5 w-5 text-[#e94560]" />
+                            : <Square className="h-5 w-5 text-[var(--text-muted)]" />}
+                        </button>
+                      )}
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 mb-1">
                           <span className="font-mono text-sm text-[#e94560] font-medium">{order.order_number}</span>
@@ -191,6 +226,25 @@ export default function OrdersManagement() {
                             data-testid={`status-order-${order.order_number}`} title="Change status">
                             <ArrowRight className="h-3.5 w-3.5" />
                           </Button>
+                          {canExport && (
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <Button variant="outline" size="sm" title="Export for Tally"
+                                  className={`border-[var(--border-color)] ${textSec} h-8 w-8 p-0 sm:h-9 sm:w-auto sm:px-3`}
+                                  data-testid={`export-order-${order.order_number}`}>
+                                  <Download className="h-3.5 w-3.5" />
+                                </Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end" className={dlgCls}>
+                                <DropdownMenuItem onClick={() => om.handleExportOne(order, 'xml')} className="cursor-pointer">
+                                  <FileCode className="mr-2 h-4 w-4" /> Tally XML
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => om.handleExportOne(order, 'json')} className="cursor-pointer">
+                                  <FileJson className="mr-2 h-4 w-4" /> JSON
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                          )}
                         </div>
                       </div>
                     </div>

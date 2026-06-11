@@ -1,13 +1,16 @@
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import StreamingResponse
-from typing import Optional
+from fastapi.responses import StreamingResponse, Response
+from pydantic import BaseModel
+from typing import Optional, List
 from datetime import datetime, timezone
 import uuid
 import io
+import json
 
 from database import db
 from auth_utils import get_current_user
 from rbac import get_team, require_teams
+from tally_export import gather_so, build_json, build_voucher_xml, build_envelope
 
 router = APIRouter()
 
@@ -53,6 +56,54 @@ async def get_order(order_id: str, request: Request):
     timeline = await db.order_timeline.find({"order_id": order_id}, {"_id": 0}).sort("timestamp", 1).to_list(100)
     order["timeline"] = timeline
     return order
+
+
+# ==================== TALLY EXPORT (Sales Order → XML / JSON) ====================
+
+class BulkExportInput(BaseModel):
+    order_ids: List[str]
+    format: str = "xml"  # "xml" (Tally voucher) | "json"
+
+
+@router.get("/orders/{order_id}/export")
+async def export_order(order_id: str, request: Request, format: str = "xml"):
+    """Download a single Sales Order as a Tally-importable XML voucher or JSON."""
+    user = await get_current_user(request)
+    require_teams(user, "admin", "accounts")
+    data = await gather_so(order_id)
+    if not data:
+        raise HTTPException(status_code=404, detail="Order not found")
+    num = data["order"].get("order_number", order_id)
+    if format == "json":
+        content = json.dumps(build_json(data), indent=2, ensure_ascii=False, default=str)
+        return Response(content, media_type="application/json",
+                        headers={"Content-Disposition": f'attachment; filename="SO_{num}.json"'})
+    xml = build_envelope([build_voucher_xml(data)],
+                         data["company"].get("company_name", "SmartShape"))
+    return Response(xml, media_type="application/xml",
+                    headers={"Content-Disposition": f'attachment; filename="SO_{num}.xml"'})
+
+
+@router.post("/orders/export")
+async def export_orders_bulk(payload: BulkExportInput, request: Request):
+    """Download many Sales Orders at once — one combined Tally XML (multiple
+    vouchers, import in one go) or a JSON array."""
+    user = await get_current_user(request)
+    require_teams(user, "admin", "accounts")
+    ids = [i for i in (payload.order_ids or []) if i]
+    if not ids:
+        raise HTTPException(status_code=400, detail="No orders selected")
+    datas = [d for d in [await gather_so(i) for i in ids] if d]
+    if not datas:
+        raise HTTPException(status_code=404, detail="No matching orders")
+    company_name = datas[0]["company"].get("company_name", "SmartShape")
+    if payload.format == "json":
+        content = json.dumps([build_json(d) for d in datas], indent=2, ensure_ascii=False, default=str)
+        return Response(content, media_type="application/json",
+                        headers={"Content-Disposition": 'attachment; filename="sales_orders.json"'})
+    xml = build_envelope([build_voucher_xml(d) for d in datas], company_name)
+    return Response(xml, media_type="application/xml",
+                    headers={"Content-Disposition": 'attachment; filename="sales_orders_tally.xml"'})
 
 
 @router.post("/orders")

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { orders as ordersApi, holds as holdsApi, quotations as quotApi, dispatches as dispatchesApi, dispatchApi } from '../lib/api';
+import { orders as ordersApi, holds as holdsApi, quotations as quotApi, dispatches as dispatchesApi, dispatchApi, downloadBlob } from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
 import { toast } from 'sonner';
 
@@ -159,6 +159,42 @@ export default function useOrdersManagement() {
     });
   };
 
+  // ── Sales Order export (Tally XML / JSON) ──
+  const [selectedOrders, setSelectedOrders] = useState(new Set());
+  const [exporting, setExporting] = useState(false);
+  const toggleOrderSelect = (orderId) => {
+    setSelectedOrders(prev => {
+      const next = new Set(prev);
+      next.has(orderId) ? next.delete(orderId) : next.add(orderId);
+      return next;
+    });
+  };
+  const clearOrderSelection = () => setSelectedOrders(new Set());
+
+  const handleExportOne = async (order, fmt) => {
+    try {
+      const res = await ordersApi.exportOne(order.order_id, fmt);
+      downloadBlob(res, `SO_${order.order_number}.${fmt}`);
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Export failed');
+    }
+  };
+
+  const handleExportSelected = async (fmt) => {
+    const ids = [...selectedOrders];
+    if (ids.length === 0) { toast.info('Select at least one order'); return; }
+    setExporting(true);
+    try {
+      const res = await ordersApi.exportBulk(ids, fmt);
+      downloadBlob(res, fmt === 'json' ? 'sales_orders.json' : 'sales_orders_tally.xml');
+      toast.success(`Exported ${ids.length} order${ids.length !== 1 ? 's' : ''} as ${fmt.toUpperCase()}`);
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Export failed');
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const selectAllVisibleHolds = (visibleIds) => {
     setSelectedHolds(prev => {
       const allSelected = visibleIds.every(id => prev.has(id));
@@ -287,6 +323,9 @@ export default function useOrdersManagement() {
     selectedHolds, setSelectedHolds,
     holdSchoolFilter, setHoldSchoolFilter,
     bulkReleasing,
+    // sales-order export (Tally)
+    selectedOrders, toggleOrderSelect, clearOrderSelection, exporting,
+    handleExportOne, handleExportSelected,
     // tracking
     trackingDialog, setTrackingDialog,
     trackingForm, setTrackingForm,
