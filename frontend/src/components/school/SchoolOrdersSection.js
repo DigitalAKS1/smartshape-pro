@@ -1,6 +1,6 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { FileText, Eye, Send, Calendar } from 'lucide-react';
+import { FileText, Eye, Send, Calendar, Package } from 'lucide-react';
 import { Button } from '../ui/button';
 import PlanVisitButton from './PlanVisitButton';
 
@@ -42,45 +42,94 @@ function fmtMoney(n) {
   return `₹${n}`;
 }
 
-// ── Quotations / Sales tab ────────────────────────────────────────────────────
-export function SchoolSalesSection({ quotations, metrics, tk }) {
+const ORDER_CLS = {
+  pending:    'bg-amber-50 text-amber-700',
+  confirmed:  'bg-blue-50 text-blue-700',
+  dispatched: 'bg-violet-50 text-violet-700',
+  delivered:  'bg-emerald-50 text-emerald-700',
+  cancelled:  'bg-red-50 text-red-600',
+};
+
+function RollupCard({ label, value, sub, tk, accent }) {
   return (
-    <div className="sp-tab space-y-4">
-      {quotations.length > 0 && (
-        <div className="flex items-center justify-between">
-          <p className={`text-sm ${tk.tm}`}>{quotations.length} quotation{quotations.length !== 1 ? 's' : ''}</p>
-          <p className={`text-sm font-semibold ${tk.t1}`}>
-            Pipeline: <span className="text-[#e94560]">{fmtMoney(metrics.total_revenue_quoted)}</span>
-          </p>
-        </div>
-      )}
-      {quotations.length === 0 ? (
-        <EmptyState icon={FileText} label="No quotations raised for this school yet." />
-      ) : (
-        <div className={`${tk.card} border ${tk.border} rounded-2xl overflow-hidden divide-y ${tk.divide}`}>
-          {quotations.map(q => (
-            <div key={q.quotation_id} className="px-5 py-4 flex items-center gap-4">
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className={`font-semibold text-sm ${tk.t1}`}>{q.quotation_number || q.quotation_id}</span>
-                  <Badge label={q.status} cls={QUOT_CLS[q.status]} />
+    <div className={`${tk.card} border ${tk.border} rounded-2xl px-4 py-3`}>
+      <p className={`text-[11px] uppercase tracking-wide ${tk.tm}`}>{label}</p>
+      <p className={`sp-num text-2xl font-black mt-0.5 ${accent ? 'text-[#e94560]' : tk.t1}`}>{fmtMoney(value)}</p>
+      {sub && <p className={`text-[11px] ${tk.tm} mt-0.5`}>{sub}</p>}
+    </div>
+  );
+}
+
+// ── Quotations + Sales Orders tab ─────────────────────────────────────────────
+export function SchoolSalesSection({ quotations, orders = [], metrics, tk }) {
+  return (
+    <div className="sp-tab space-y-5">
+      {/* Revenue rollup: Quoted → Ordered → Paid */}
+      <div className="grid grid-cols-3 gap-3">
+        <RollupCard label="Quoted" value={metrics.total_revenue_quoted} sub={`${quotations.length} quote${quotations.length !== 1 ? 's' : ''}`} tk={tk} />
+        <RollupCard label="Ordered" value={metrics.total_revenue_ordered} sub={`${orders.length} order${orders.length !== 1 ? 's' : ''}`} tk={tk} accent />
+        <RollupCard label="Paid" value={metrics.total_paid} sub={`of ${fmtMoney(metrics.total_revenue_ordered)}`} tk={tk} />
+      </div>
+
+      {/* Quotations */}
+      <div>
+        <p className={`text-[11px] uppercase tracking-wide ${tk.tm} mb-2`}>Quotations</p>
+        {quotations.length === 0 ? (
+          <EmptyState icon={FileText} label="No quotations raised for this school yet." />
+        ) : (
+          <div className={`${tk.card} border ${tk.border} rounded-2xl overflow-hidden divide-y ${tk.divide}`}>
+            {quotations.map(q => (
+              <div key={q.quotation_id} className="px-5 py-4 flex items-center gap-4">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className={`font-semibold text-sm ${tk.t1}`}>{q.quotation_number || q.quotation_id}</span>
+                    <Badge label={q.status || q.quotation_status} cls={QUOT_CLS[q.status || q.quotation_status]} />
+                  </div>
+                  <p className="sp-num text-xl font-black text-[#e94560] mt-0.5">{fmtMoney(q.grand_total)}</p>
+                  <div className={`flex items-center gap-3 mt-0.5 text-xs ${tk.tm} flex-wrap`}>
+                    {q.items?.length > 0 && <span>{q.items.length} item{q.items.length !== 1 ? 's' : ''}</span>}
+                    {q.created_by_name && <span>{q.created_by_name}</span>}
+                    <span>{fmt(q.created_at)}</span>
+                  </div>
                 </div>
-                <p className="sp-num text-xl font-black text-[#e94560] mt-0.5">{fmtMoney(q.grand_total)}</p>
-                <div className={`flex items-center gap-3 mt-0.5 text-xs ${tk.tm} flex-wrap`}>
-                  {q.items?.length > 0 && <span>{q.items.length} item{q.items.length !== 1 ? 's' : ''}</span>}
-                  {q.created_by_name && <span>{q.created_by_name}</span>}
-                  <span>{fmt(q.created_at)}</span>
+                <Link to={`/view-quotation/${q.quotation_id}`}>
+                  <Button size="sm" variant="ghost" className={`${tk.tm} hover:text-[#e94560] h-8 w-8 p-0`}>
+                    <Eye className="h-4 w-4" />
+                  </Button>
+                </Link>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Sales Orders */}
+      <div>
+        <p className={`text-[11px] uppercase tracking-wide ${tk.tm} mb-2`}>Sales Orders</p>
+        {orders.length === 0 ? (
+          <EmptyState icon={Package} label="No sales orders for this school yet." />
+        ) : (
+          <div className={`${tk.card} border ${tk.border} rounded-2xl overflow-hidden divide-y ${tk.divide}`}>
+            {orders.map(o => (
+              <div key={o.order_id} className="px-5 py-4 flex items-center gap-4">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className={`font-semibold text-sm ${tk.t1}`}>{o.order_number || o.order_id}</span>
+                    <Badge label={o.order_status} cls={ORDER_CLS[o.order_status]} />
+                    {o.production_stage && <Badge label={String(o.production_stage).replace(/_/g, ' ')} cls="bg-slate-100 text-slate-600" />}
+                  </div>
+                  <p className="sp-num text-xl font-black text-[#e94560] mt-0.5">{fmtMoney(o.grand_total)}</p>
+                  <div className={`flex items-center gap-3 mt-0.5 text-xs ${tk.tm} flex-wrap`}>
+                    <span>Paid {fmtMoney(o.payment_received)}</span>
+                    {o.package_name && <span>{o.package_name}</span>}
+                    <span>{fmt(o.created_at)}</span>
+                  </div>
                 </div>
               </div>
-              <Link to={`/view-quotation/${q.quotation_id}`}>
-                <Button size="sm" variant="ghost" className={`${tk.tm} hover:text-[#e94560] h-8 w-8 p-0`}>
-                  <Eye className="h-4 w-4" />
-                </Button>
-              </Link>
-            </div>
-          ))}
-        </div>
-      )}
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

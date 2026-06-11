@@ -124,6 +124,14 @@ export default function useSchoolProfile(school_id) {
               : `₹${q.grand_total}`)
             : '₹0',
         })),
+        ...(profile.orders || []).map(o => ({
+          date: o.created_at, dot: 'bg-fuchsia-400',
+          label: `Sales Order ${o.order_number || ''} · ${o.order_status || ''}`,
+          detail: o.grand_total != null
+            ? (o.grand_total >= 100000 ? `₹${(o.grand_total / 100000).toFixed(1)}L`
+              : o.grand_total >= 1000 ? `₹${(o.grand_total / 1000).toFixed(0)}K` : `₹${o.grand_total}`)
+            : '',
+        })),
         ...profile.dispatches.map(d => ({
           date: d.sent_date || d.created_at, dot: 'bg-amber-400',
           label: `${d.material_type} dispatched`,

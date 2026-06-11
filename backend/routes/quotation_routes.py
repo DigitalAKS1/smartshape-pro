@@ -161,6 +161,11 @@ async def _auto_register_from_quotation(quot: dict, created_by_email: str):
             })
             logging.info(f"Auto-created school '{sname}' from quotation {quot.get('quotation_id')}")
 
+    # Stamp the resolved school_id back on the quotation so the 360° school view
+    # links by FK (not a fragile school_name string match).
+    if school_id and quotation_id:
+        await db.quotations.update_one({"quotation_id": quotation_id}, {"$set": {"school_id": school_id}})
+
     # ── 2. Contact ─────────────────────────────────────────────────────────────
     if pname and (phone or email):
         or_clauses = []

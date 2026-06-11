@@ -1028,15 +1028,15 @@ async def get_school_profile(school_id: str, request: Request):
     contacts_list = contacts_by_fk + contacts_by_name
 
     quotations = await db.quotations.find(
-        {"school_name": school_name},
-        {"_id": 0, "quotation_id": 1, "quotation_number": 1, "status": 1,
+        {"$or": [{"school_id": school_id}, {"school_name": school_name}]},
+        {"_id": 0, "quotation_id": 1, "quotation_number": 1, "status": 1, "quotation_status": 1,
          "grand_total": 1, "currency_symbol": 1, "created_at": 1, "created_by_name": 1, "items": 1}
     ).sort("created_at", -1).to_list(None)
 
     # Fetch from visit_plans (admin-scheduled, have school_id)
     vp_list = await db.visit_plans.find({"school_id": school_id}, {"_id": 0}).sort("visit_date", -1).to_list(None)
     # Also fetch self-created field_visits by school_name match (reps who didn't have a plan)
-    fv_list = await db.field_visits.find({"school_name": school_name}, {"_id": 0}).sort("visit_date", -1).to_list(None)
+    fv_list = await db.field_visits.find({"$or": [{"school_id": school_id}, {"school_name": school_name}]}, {"_id": 0}).sort("visit_date", -1).to_list(None)
     # Normalize both to a unified schema for the frontend
     def _norm_vp(v):
         status = v.get("status", "planned")
@@ -1076,6 +1076,15 @@ async def get_school_profile(school_id: str, request: Request):
         ).sort("followup_date", -1).to_list(None)
         dispatches = await db.physical_dispatches.find({"lead_id": {"$in": lead_ids}}, {"_id": 0}).sort("sent_date", -1).to_list(None)
 
+    # Sales Orders (SO) for this school — by FK, its leads, or its quotations
+    quote_ids = [q.get("quotation_id") for q in quotations if q.get("quotation_id")]
+    order_or = [{"school_id": school_id}]
+    if lead_ids:
+        order_or.append({"lead_id": {"$in": lead_ids}})
+    if quote_ids:
+        order_or.append({"quotation_id": {"$in": quote_ids}})
+    orders = await db.orders.find({"$or": order_or}, {"_id": 0}).sort("created_at", -1).to_list(None)
+
     active_stages = {"new", "contacted", "demo", "quoted", "negotiation"}
     active_leads_count = sum(1 for l in leads if l.get("stage") in active_stages)
 
@@ -1094,12 +1103,15 @@ async def get_school_profile(school_id: str, request: Request):
             pass
 
     total_revenue_quoted = sum(q.get("grand_total", 0) or 0 for q in quotations)
+    total_revenue_ordered = sum(o.get("grand_total", 0) or 0 for o in orders)
+    total_paid = sum(o.get("payment_received", 0) or 0 for o in orders)
 
     return {
         "school": school,
         "leads": leads,
         "contacts": contacts_list,
         "quotations": quotations,
+        "orders": orders,
         "visits": visits,
         "call_notes": call_notes,
         "meetings": meetings,
@@ -1112,6 +1124,9 @@ async def get_school_profile(school_id: str, request: Request):
             "total_calls": len(call_notes),
             "total_quotations": len(quotations),
             "total_revenue_quoted": total_revenue_quoted,
+            "total_orders": len(orders),
+            "total_revenue_ordered": total_revenue_ordered,
+            "total_paid": total_paid,
             "last_contacted": last_contacted,
             "days_since_last_contact": days_since,
         },
