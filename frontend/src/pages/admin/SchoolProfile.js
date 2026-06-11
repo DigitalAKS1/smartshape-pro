@@ -124,7 +124,7 @@ export default function SchoolProfile() {
   }
   if (!profile) return null;
 
-  const { school, leads, contacts, quotations, orders = [], visits, call_notes, meetings, dispatches, metrics } = profile;
+  const { school, leads, contacts, quotations, orders = [], visits, call_notes, meetings, dispatches, communications = [], metrics } = profile;
   const rv = (delay = '') => `transition-all duration-500 ease-out ${delay} ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-3'}`;
 
   // Open the Edit School modal in place, prefilled from the current school
@@ -302,7 +302,7 @@ export default function SchoolProfile() {
           )}
 
           {sp.activeTab === 'marketing' && (
-            <SchoolMarketingSection dispatches={dispatches} tk={tk} />
+            <SchoolMarketingSection dispatches={dispatches} communications={communications} tk={tk} />
           )}
 
           {sp.activeTab === 'visits' && (

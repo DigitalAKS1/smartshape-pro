@@ -1085,6 +1085,52 @@ async def get_school_profile(school_id: str, request: Request):
         order_or.append({"quotation_id": {"$in": quote_ids}})
     orders = await db.orders.find({"$or": order_or}, {"_id": 0}).sort("created_at", -1).to_list(None)
 
+    # Communications timeline — WhatsApp / Email / Drip / Greetings reaching this
+    # school's contacts + leads (aggregated via existing contact_id / lead_id / phone links).
+    contact_ids = [c.get("contact_id") for c in contacts_list if c.get("contact_id")]
+    phones = [c.get("phone") for c in contacts_list if c.get("phone")]
+    communications = []
+    if contact_ids:
+        async for m in db.whatsapp_scheduled.find(
+            {"contact_id": {"$in": contact_ids}},
+            {"_id": 0, "campaign_name": 1, "status": 1, "sent_at": 1, "scheduled_at": 1}
+        ).sort("scheduled_at", -1).limit(200):
+            communications.append({"channel": "whatsapp", "label": m.get("campaign_name") or "WhatsApp message",
+                                   "status": m.get("status", ""), "at": m.get("sent_at") or m.get("scheduled_at")})
+        async for m in db.email_scheduled.find(
+            {"contact_id": {"$in": contact_ids}},
+            {"_id": 0, "subject": 1, "status": 1, "sent_at": 1, "queued_at": 1}
+        ).sort("queued_at", -1).limit(200):
+            communications.append({"channel": "email", "label": m.get("subject") or "Email",
+                                   "status": m.get("status", ""), "at": m.get("sent_at") or m.get("queued_at")})
+    if lead_ids:
+        enrolls = await db.drip_enrollments.find(
+            {"lead_id": {"$in": lead_ids}},
+            {"_id": 0, "sequence_id": 1, "status": 1, "enrolled_at": 1, "current_step": 1}
+        ).sort("enrolled_at", -1).limit(100).to_list(100)
+        seq_names = {}
+        seq_ids = list({e.get("sequence_id") for e in enrolls if e.get("sequence_id")})
+        if seq_ids:
+            async for sq in db.drip_sequences.find({"sequence_id": {"$in": seq_ids}}, {"_id": 0, "sequence_id": 1, "name": 1}):
+                seq_names[sq["sequence_id"]] = sq.get("name")
+        for e in enrolls:
+            communications.append({"channel": "drip", "label": seq_names.get(e.get("sequence_id")) or "Drip sequence",
+                                   "status": e.get("status", ""), "at": e.get("enrolled_at"),
+                                   "detail": f"Step {(e.get('current_step', 0) or 0) + 1}"})
+    g_or = []
+    if contact_ids:
+        g_or.append({"contact_id": {"$in": contact_ids}})
+    if phones:
+        g_or.append({"phone": {"$in": phones}})
+    if g_or:
+        async for g in db.greeting_logs.find(
+            {"$or": g_or}, {"_id": 0, "greeting_type": 1, "status": 1, "sent_at": 1}
+        ).sort("sent_at", -1).limit(100):
+            communications.append({"channel": "greeting", "label": g.get("greeting_type") or "Greeting",
+                                   "status": g.get("status", ""), "at": g.get("sent_at")})
+    communications.sort(key=lambda x: x.get("at") or "", reverse=True)
+    communications = communications[:200]
+
     active_stages = {"new", "contacted", "demo", "quoted", "negotiation"}
     active_leads_count = sum(1 for l in leads if l.get("stage") in active_stages)
 
@@ -1116,6 +1162,7 @@ async def get_school_profile(school_id: str, request: Request):
         "call_notes": call_notes,
         "meetings": meetings,
         "dispatches": dispatches,
+        "communications": communications,
         "metrics": {
             "total_leads": len(leads),
             "active_leads": active_leads_count,
@@ -1127,6 +1174,7 @@ async def get_school_profile(school_id: str, request: Request):
             "total_orders": len(orders),
             "total_revenue_ordered": total_revenue_ordered,
             "total_paid": total_paid,
+            "total_communications": len(communications),
             "last_contacted": last_contacted,
             "days_since_last_contact": days_since,
         },

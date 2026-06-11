@@ -1,6 +1,6 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { FileText, Eye, Send, Calendar, Package } from 'lucide-react';
+import { FileText, Eye, Send, Calendar, Package, MessageSquare } from 'lucide-react';
 import { Button } from '../ui/button';
 import PlanVisitButton from './PlanVisitButton';
 
@@ -135,33 +135,76 @@ export function SchoolSalesSection({ quotations, orders = [], metrics, tk }) {
 }
 
 // ── Marketing / Dispatches tab ─────────────────────────────────────────────────
-export function SchoolMarketingSection({ dispatches, tk }) {
+const CHANNEL = {
+  whatsapp: { label: 'WhatsApp', cls: 'text-green-600',  dot: 'bg-green-400' },
+  email:    { label: 'Email',    cls: 'text-blue-600',   dot: 'bg-blue-400' },
+  drip:     { label: 'Drip',     cls: 'text-violet-600', dot: 'bg-violet-400' },
+  greeting: { label: 'Greeting', cls: 'text-amber-600',  dot: 'bg-amber-400' },
+};
+const COMM_STATUS = (s) => s === 'sent' ? 'bg-emerald-50 text-emerald-700'
+  : s === 'failed' ? 'bg-red-50 text-red-600'
+  : s === 'active' ? 'bg-blue-50 text-blue-700' : 'bg-slate-100 text-slate-600';
+
+export function SchoolMarketingSection({ dispatches, communications = [], tk }) {
   return (
-    <div className="sp-tab space-y-4">
-      <p className={`text-sm ${tk.tm}`}>{dispatches.length} dispatch{dispatches.length !== 1 ? 'es' : ''}</p>
-      {dispatches.length === 0 ? (
-        <EmptyState icon={Send} label="No brochures or samples dispatched to this school yet." />
-      ) : (
-        <div className={`${tk.card} border ${tk.border} rounded-2xl overflow-hidden divide-y ${tk.divide}`}>
-          {dispatches.map((d, i) => (
-            <div key={i} className="px-5 py-4 flex items-start gap-4">
-              <div className="w-2 h-2 rounded-full bg-amber-400 flex-shrink-0 mt-2" />
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className={`font-semibold text-sm ${tk.t1} capitalize`}>{d.material_type}</span>
-                  {d.received_confirmed && <Badge label="Received" cls="bg-emerald-50 text-emerald-700" />}
+    <div className="sp-tab space-y-5">
+      {/* Communications — WhatsApp / Email / Drip / Greetings to this school's contacts */}
+      <div>
+        <p className={`text-[11px] uppercase tracking-wide ${tk.tm} mb-2`}>Communications · {communications.length}</p>
+        {communications.length === 0 ? (
+          <EmptyState icon={MessageSquare} label="No WhatsApp, email, drip or greeting messages to this school yet." />
+        ) : (
+          <div className={`${tk.card} border ${tk.border} rounded-2xl overflow-hidden divide-y ${tk.divide}`}>
+            {communications.slice(0, 100).map((m, i) => {
+              const ch = CHANNEL[m.channel] || {};
+              return (
+                <div key={i} className="px-5 py-3 flex items-start gap-3">
+                  <span className={`w-2 h-2 rounded-full mt-1.5 flex-shrink-0 ${ch.dot || 'bg-slate-300'}`} />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className={`text-[10px] font-bold uppercase ${ch.cls || tk.tm}`}>{ch.label || m.channel}</span>
+                      <span className={`text-sm ${tk.t1} truncate`}>{m.label}</span>
+                      {m.status && <Badge label={m.status} cls={COMM_STATUS(m.status)} />}
+                    </div>
+                    <div className={`flex items-center gap-2 mt-0.5 text-xs ${tk.tm} flex-wrap`}>
+                      {m.detail && <span>{m.detail}</span>}
+                      <span>{fmt(m.at)}</span>
+                    </div>
+                  </div>
                 </div>
-                {d.description && <p className={`text-xs ${tk.tm} mt-0.5`}>{d.description}</p>}
-                <div className={`flex items-center gap-3 mt-1 text-xs ${tk.tm} flex-wrap`}>
-                  {d.courier_name    && <span>Via {d.courier_name}</span>}
-                  {d.tracking_number && <span>#{d.tracking_number}</span>}
-                  <span>{fmt(d.sent_date || d.created_at)}</span>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Brochures & Samples dispatched */}
+      <div>
+        <p className={`text-[11px] uppercase tracking-wide ${tk.tm} mb-2`}>Brochures &amp; Samples · {dispatches.length}</p>
+        {dispatches.length === 0 ? (
+          <EmptyState icon={Send} label="No brochures or samples dispatched to this school yet." />
+        ) : (
+          <div className={`${tk.card} border ${tk.border} rounded-2xl overflow-hidden divide-y ${tk.divide}`}>
+            {dispatches.map((d, i) => (
+              <div key={i} className="px-5 py-4 flex items-start gap-4">
+                <div className="w-2 h-2 rounded-full bg-amber-400 flex-shrink-0 mt-2" />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className={`font-semibold text-sm ${tk.t1} capitalize`}>{d.material_type}</span>
+                    {d.received_confirmed && <Badge label="Received" cls="bg-emerald-50 text-emerald-700" />}
+                  </div>
+                  {d.description && <p className={`text-xs ${tk.tm} mt-0.5`}>{d.description}</p>}
+                  <div className={`flex items-center gap-3 mt-1 text-xs ${tk.tm} flex-wrap`}>
+                    {d.courier_name    && <span>Via {d.courier_name}</span>}
+                    {d.tracking_number && <span>#{d.tracking_number}</span>}
+                    <span>{fmt(d.sent_date || d.created_at)}</span>
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}
-        </div>
-      )}
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
