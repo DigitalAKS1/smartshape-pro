@@ -1769,3 +1769,40 @@ async def run_db_integrity(request: Request):
         "status": "clean" if total_fixed == 0 else "repaired"
     }
     return report
+
+
+# ── Daily "your day" WhatsApp digest (tasks / visits / follow-ups) ─────────────
+
+@router.get("/admin/daily-digest-settings")
+async def get_daily_digest_settings(request: Request):
+    await get_current_user(request)
+    cfg = await db.settings.find_one({"type": "daily_digest"}, {"_id": 0}) or {}
+    return {"enabled": bool(cfg.get("enabled", False)), "send_time": cfg.get("send_time", "08:00")}
+
+
+@router.put("/admin/daily-digest-settings")
+async def put_daily_digest_settings(request: Request):
+    user = await get_current_user(request)
+    if user.get("role") != "admin":
+        raise HTTPException(403, "Admin only")
+    import re as _re
+    body = await request.json()
+    st = (body.get("send_time") or "08:00").strip()
+    if not _re.match(r"^([01]\d|2[0-3]):[0-5]\d$", st):
+        raise HTTPException(400, "send_time must be HH:MM (24-hour)")
+    enabled = bool(body.get("enabled"))
+    await db.settings.update_one(
+        {"type": "daily_digest"},
+        {"$set": {"type": "daily_digest", "enabled": enabled, "send_time": st}}, upsert=True)
+    return {"enabled": enabled, "send_time": st}
+
+
+@router.post("/admin/daily-digest/run")
+async def run_daily_digest_now(request: Request):
+    user = await get_current_user(request)
+    if user.get("role") != "admin":
+        raise HTTPException(403, "Admin only")
+    from scheduler import build_and_enqueue_daily_digests, _wa_cfg, DAILY_DIGEST_DRY_RUN
+    if not DAILY_DIGEST_DRY_RUN and not await _wa_cfg():
+        raise HTTPException(400, "WhatsApp is not configured")
+    return await build_and_enqueue_daily_digests()

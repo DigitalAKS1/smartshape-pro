@@ -556,11 +556,121 @@ async def greeting_loop():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# JOB — Daily "your day" WhatsApp digest (tasks / visits / follow-ups / CRM)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _digest_base_url():
+    return os.getenv("PUBLIC_BASE_URL", "https://app.smartshape.in").rstrip("/")
+
+
+def _due_label(due, today):
+    if not due:
+        return ""
+    if due >= today:
+        return "Today"
+    try:
+        d = datetime.strptime(due, "%Y-%m-%d").date()
+        t = datetime.strptime(today, "%Y-%m-%d").date()
+        return f"Overdue {(t - d).days}d"
+    except Exception:
+        return "Overdue"
+
+
+async def build_and_enqueue_daily_digests():
+    """Per-person 'your day' WhatsApp digest of due-today + overdue items. Returns a summary."""
+    today = datetime.now(IST).date().isoformat()
+    base = _digest_base_url()
+    emps = await db.del_employees.find(
+        {"is_active": True},
+        {"_id": 0, "emp_id": 1, "name": 1, "email": 1, "phone": 1, "mobile": 1},
+    ).to_list(1000)
+    sent = skipped = 0
+    for e in emps:
+        try:
+            phone = (e.get("phone") or e.get("mobile") or "").strip()
+            if not phone:
+                skipped += 1
+                continue
+            emp_id = e.get("emp_id")
+            email = e.get("email") or ""
+            tasks = await db.del_task_instances.find(
+                {"emp_id": emp_id, "status": "pending", "due_date": {"$lte": today}},
+                {"_id": 0, "task_title": 1, "due_date": 1}).sort("due_date", 1).to_list(50)
+            visits = await db.visit_plans.find(
+                {"assigned_to": email, "status": {"$in": ["planned", "in_progress"]},
+                 "visit_date": {"$lte": today}},
+                {"_id": 0, "school_name": 1, "visit_time": 1, "visit_date": 1}).sort("visit_date", 1).to_list(50) if email else []
+            fups = await db.followups.find(
+                {"assigned_to": email, "status": "pending", "followup_date": {"$lte": today}},
+                {"_id": 0, "followup_type": 1, "lead_name": 1, "followup_date": 1}).sort("followup_date", 1).to_list(50) if email else []
+            crm = await db.tasks.find(
+                {"assigned_to": email, "status": {"$nin": ["done", "completed"]}, "due_date": {"$lte": today}},
+                {"_id": 0, "title": 1, "due_date": 1}).sort("due_date", 1).to_list(50) if email else []
+            if (len(tasks) + len(visits) + len(fups) + len(crm)) == 0:
+                skipped += 1
+                continue
+
+            first = (e.get("name") or "there").split(" ")[0]
+            lines = [f"Good morning {first} \U0001F305 — your day at SmartShape", ""]
+
+            def section(title, items, fmt):
+                if not items:
+                    return
+                lines.append(f"{title} ({len(items)})")
+                for it in items[:8]:
+                    lines.append("• " + fmt(it))
+                if len(items) > 8:
+                    lines.append(f"  +{len(items) - 8} more")
+                lines.append("")
+
+            section("\U0001F4CB Tasks", tasks, lambda t: f"{t.get('task_title', 'Task')} — {_due_label(t.get('due_date'), today)}")
+            section("\U0001F4CD Visits", visits, lambda v: f"{v.get('school_name', 'Visit')}" + (f" · {v.get('visit_time')}" if v.get('visit_time') else ""))
+            section("\U0001F4DE Follow-ups", fups, lambda f: f"{(f.get('followup_type') or 'call').title()}: {f.get('lead_name', '')}".strip())
+            section("\U0001F5D2 CRM", crm, lambda c: f"{c.get('title', 'Task')} — {_due_label(c.get('due_date'), today)}")
+            lines.append(f"Open ▶ {base}/today")
+            message = "\n".join(lines).strip()
+
+            if DAILY_DIGEST_DRY_RUN:
+                log.info(f"[digest][dry] {phone}\n{message}")
+            else:
+                await db.whatsapp_scheduled.insert_one({
+                    "scheduled_id": f"wsch_{uuid.uuid4().hex[:12]}", "campaign_id": "daily_digest",
+                    "status": "pending", "phone": phone, "message": message,
+                    "created_at": datetime.now(timezone.utc).isoformat()})
+            sent += 1
+        except Exception as exc:
+            log.warning(f"[digest] {e.get('email')} failed: {exc}")
+            skipped += 1
+    log.info(f"[digest] {sent} enqueued, {skipped} skipped")
+    return {"sent": sent, "skipped": skipped, "recipients": sent}
+
+
+async def daily_digest_loop():
+    log.info("[scheduler] daily digest loop started")
+    last_fired = None
+    while True:
+        try:
+            cfg = await db.settings.find_one({"type": "daily_digest"}, {"_id": 0}) or {}
+            now_ist = datetime.now(IST)
+            today = now_ist.date().isoformat()
+            if cfg.get("enabled") and now_ist.strftime("%H:%M") == cfg.get("send_time", "08:00") and last_fired != today:
+                last_fired = today
+                if await _wa_cfg():
+                    await build_and_enqueue_daily_digests()
+                else:
+                    log.info("[digest] due but WhatsApp not configured — skipped")
+        except Exception as exc:
+            log.error(f"[digest loop] {exc}")
+        await asyncio.sleep(45)   # < 60s so every target minute gets a tick
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # JOB 5 — FMS SLA Notification Engine
 # ══════════════════════════════════════════════════════════════════════════════
 
 FMS_DRY_RUN = os.getenv("FMS_NOTIFY_DRY_RUN", "0") == "1"
 CRM_DIGEST_DRY_RUN = os.getenv("CRM_DIGEST_DRY_RUN", "0") == "1"
+DAILY_DIGEST_DRY_RUN = os.getenv("DAILY_DIGEST_DRY_RUN", "0") == "1"
 
 
 async def _fms_send_wa(phone: str, text: str) -> tuple[bool, str]:
@@ -1092,5 +1202,6 @@ async def start_scheduler():
     asyncio.create_task(crm_digest_loop())
     asyncio.create_task(cert_loop())
     asyncio.create_task(low_stock_loop())
+    asyncio.create_task(daily_digest_loop())
     log.info("[scheduler] cert loop running")
-    log.info("[scheduler] all 8 background jobs running")
+    log.info("[scheduler] all 9 background jobs running")
