@@ -11,6 +11,7 @@ import ZoomSection from '../../components/settings/ZoomSection';
 import CloudinarySection from '../../components/settings/CloudinarySection';
 import SheetsSection from '../../components/settings/SheetsSection';
 import NotificationsSection from '../../components/settings/NotificationsSection';
+import DailyDigestSection from '../../components/settings/DailyDigestSection';
 import SchoolPortalSection from '../../components/settings/SchoolPortalSection';
 import SecurityTab from '../../components/settings/SecurityTab';
 
@@ -169,7 +170,10 @@ export default function AppSettings() {
         )}
 
         {s.activeTab === 'notifications' && (
-          <NotificationsSection prefs={s.notifPrefs} setPrefs={s.setNotifPrefs} save={s.saveNotifPrefs} />
+          <div className="space-y-4">
+            <NotificationsSection prefs={s.notifPrefs} setPrefs={s.setNotifPrefs} save={s.saveNotifPrefs} />
+            <DailyDigestSection />
+          </div>
         )}
 
         {s.activeTab === 'school_portal' && (

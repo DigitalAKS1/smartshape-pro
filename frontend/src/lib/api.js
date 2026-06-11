@@ -127,6 +127,13 @@ export const officeSettings = {
   save: (data) => API.post('/settings/office-location', data),
 };
 
+// Daily WhatsApp digest (tasks/visits/follow-ups)
+export const dailyDigest = {
+  get:    () => API.get('/admin/daily-digest-settings'),
+  save:   (data) => API.put('/admin/daily-digest-settings', data),
+  runNow: () => API.post('/admin/daily-digest/run'),
+};
+
 // Admin field monitoring
 export const fieldAdmin = {
   geofenceAlerts: () => API.get('/admin/geofence-alerts'),
