@@ -160,6 +160,17 @@ export default function SchoolDashboard() {
 
   const unread = notifications.filter(n => !n.read).length;
 
+  // Notifications live in the header bell, so they're not in the tab row.
+  const TABS = [
+    { id: 'orders', label: 'Orders', icon: ShoppingCart, count: orders.length },
+    { id: 'quotations', label: 'Quotes', icon: FileText, count: quotations.length },
+    { id: 'payments', label: 'Payments', icon: CreditCard },
+    { id: 'documents', label: 'Docs', icon: Download, count: documents.length },
+    { id: 'teachers', label: 'Teachers', icon: Users },
+    { id: 'training', label: 'Training', icon: GraduationCap },
+    { id: 'profile', label: 'Profile', icon: User },
+  ];
+
   return (
     <div className="min-h-screen bg-[var(--bg-primary)]">
       {/* Header */}
@@ -195,21 +206,19 @@ export default function SchoolDashboard() {
         </div>
 
         {/* Tabs */}
-        <div className={`flex flex-wrap gap-1 ${card} border rounded-md p-1`}>
-          {['orders', 'quotations', 'payments', 'documents', 'teachers', 'training', 'profile', 'notifications'].map(tab => (
-            <button key={tab} onClick={() => { setActiveTab(tab); if (tab === 'notifications') markNotificationsRead(); if (tab === 'teachers') loadTeachers(); }}
-              className={`flex-1 min-w-[90px] px-3 py-2 rounded text-sm font-medium transition-all capitalize ${activeTab === tab ? 'bg-[#e94560] text-white' : `${textSec} hover:bg-[var(--bg-hover)]`}`}
-              data-testid={`school-tab-${tab}`}>
-              {tab === 'orders' ? `Orders (${orders.length})`
-                : tab === 'quotations' ? `Quotations (${quotations.length})`
-                : tab === 'payments' ? 'Payments'
-                : tab === 'documents' ? `Documents (${documents.length})`
-                : tab === 'teachers' ? 'Teachers'
-                : tab === 'training' ? 'Training'
-                : tab === 'profile' ? 'Profile'
-                : `Notifications ${unread > 0 ? `(${unread})` : ''}`}
-            </button>
-          ))}
+        <div className={`flex gap-1 overflow-x-auto ${card} border rounded-lg p-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden`}>
+          {TABS.map(({ id, label, icon: Icon, count }) => {
+            const active = activeTab === id;
+            return (
+              <button key={id} onClick={() => { setActiveTab(id); if (id === 'teachers') loadTeachers(); }}
+                className={`flex-shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium whitespace-nowrap transition-all ${active ? 'bg-[#e94560] text-white shadow-sm' : `${textSec} hover:bg-[var(--bg-hover)]`}`}
+                data-testid={`school-tab-${id}`}>
+                <Icon className="h-4 w-4 flex-shrink-0" />
+                {label}
+                {count > 0 && <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${active ? 'bg-white/25' : 'bg-[var(--bg-hover)] text-[var(--text-muted)]'}`}>{count}</span>}
+              </button>
+            );
+          })}
         </div>
 
         {/* ORDERS TAB */}
