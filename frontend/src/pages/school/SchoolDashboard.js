@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { schoolAuth, schoolDocUrl, schoolTeachers } from '../../lib/api';
+import { schoolAuth, schoolDocUrl, schoolTeachers, portalMeetings } from '../../lib/api';
+import PortalTraining from '../../components/portal/PortalTraining';
 import { formatCurrency, formatDate, getStatusColor } from '../../lib/utils';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
@@ -195,7 +196,7 @@ export default function SchoolDashboard() {
 
         {/* Tabs */}
         <div className={`flex flex-wrap gap-1 ${card} border rounded-md p-1`}>
-          {['orders', 'quotations', 'payments', 'documents', 'teachers', 'profile', 'notifications'].map(tab => (
+          {['orders', 'quotations', 'payments', 'documents', 'teachers', 'training', 'profile', 'notifications'].map(tab => (
             <button key={tab} onClick={() => { setActiveTab(tab); if (tab === 'notifications') markNotificationsRead(); if (tab === 'teachers') loadTeachers(); }}
               className={`flex-1 min-w-[90px] px-3 py-2 rounded text-sm font-medium transition-all capitalize ${activeTab === tab ? 'bg-[#e94560] text-white' : `${textSec} hover:bg-[var(--bg-hover)]`}`}
               data-testid={`school-tab-${tab}`}>
@@ -204,6 +205,7 @@ export default function SchoolDashboard() {
                 : tab === 'payments' ? 'Payments'
                 : tab === 'documents' ? `Documents (${documents.length})`
                 : tab === 'teachers' ? 'Teachers'
+                : tab === 'training' ? 'Training'
                 : tab === 'profile' ? 'Profile'
                 : `Notifications ${unread > 0 ? `(${unread})` : ''}`}
             </button>
@@ -348,6 +350,9 @@ export default function SchoolDashboard() {
             ))}
           </div>
         )}
+
+        {/* TRAINING TAB */}
+        {activeTab === 'training' && <PortalTraining meetingsFetch={portalMeetings.forSchool} />}
 
         {/* TEACHERS TAB */}
         {activeTab === 'teachers' && (

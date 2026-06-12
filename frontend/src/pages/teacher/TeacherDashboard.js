@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { teacherAuth, teacherVideos, portal, uploadVideoToCloudinary } from '../../lib/api';
+import { teacherAuth, teacherVideos, portal, uploadVideoToCloudinary, portalMeetings } from '../../lib/api';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
 import { toast } from 'sonner';
-import { Presentation, LogOut, Video, Trophy, Images, Upload, Trash2, Clock, CheckCircle, XCircle, Bell } from 'lucide-react';
+import PortalTraining from '../../components/portal/PortalTraining';
+import { Presentation, LogOut, Video, Trophy, Images, Upload, Trash2, Clock, CheckCircle, XCircle, Bell, GraduationCap } from 'lucide-react';
 
 const STATUS = {
   pending: { color: 'bg-yellow-500/15 text-yellow-400', icon: Clock, label: 'Pending review' },
@@ -79,7 +80,7 @@ export default function TeacherDashboard() {
 
   if (loading) return <div className="min-h-screen bg-[var(--bg-primary)] flex items-center justify-center"><div className="animate-spin rounded-full h-12 w-12 border-4 border-[#e94560] border-t-transparent" /></div>;
 
-  const TABS = [{ id: 'videos', label: 'My Videos', icon: Video }, { id: 'competitions', label: 'Competitions', icon: Trophy }, { id: 'gallery', label: 'Gallery', icon: Images }];
+  const TABS = [{ id: 'videos', label: 'My Videos', icon: Video }, { id: 'competitions', label: 'Competitions', icon: Trophy }, { id: 'gallery', label: 'Gallery', icon: Images }, { id: 'training', label: 'Training', icon: GraduationCap }];
   const openComps = competitions.filter(c => ['open', 'upcoming'].includes(c.computed_status));
 
   return (
@@ -209,6 +210,9 @@ export default function TeacherDashboard() {
             ))}
           </div>
         )}
+
+        {/* TRAINING */}
+        {activeTab === 'training' && <PortalTraining meetingsFetch={portalMeetings.forTeacher} />}
       </div>
     </div>
   );

@@ -623,6 +623,25 @@ export const teacherAuth = {
   me: () => API.get('/teacher/me'),
 };
 
+// Phase 3 — Training calendar + videos (shared by school & teacher portals)
+export const portalTraining = {
+  sessions: () => API.get('/portal/training'),
+  register: (id) => API.post(`/portal/training/${id}/register`),
+  unregister: (id) => API.delete(`/portal/training/${id}/register`),
+  videos: () => API.get('/portal/training-videos'),
+  viewVideo: (id) => API.post(`/portal/training-videos/${id}/view`),
+};
+// 1:1 meetings: school vs teacher fetchers, + admin scheduler
+export const portalMeetings = {
+  forSchool: () => API.get('/school/meetings'),
+  forTeacher: () => API.get('/teacher/meetings'),
+};
+export const adminMeetings = {
+  create: (data) => API.post('/admin/portal-meetings', data),
+  list: (params = {}) => API.get('/admin/portal-meetings', { params }),
+  update: (id, data) => API.put(`/admin/portal-meetings/${id}`, data),
+};
+
 // Teacher videos + portal-shared gallery/competitions
 export const teacherVideos = {
   sign: (data) => API.post('/teacher/videos/sign', data),
