@@ -72,6 +72,8 @@ import ZoomJoin from './pages/ZoomJoin';
 // School Portal
 import SchoolLogin from './pages/SchoolLogin';
 import SchoolActivate from './pages/SchoolActivate';
+import Privacy from './pages/Privacy';
+import Terms from './pages/Terms';
 import SchoolDashboard from './pages/school/SchoolDashboard';
 // Teacher Portal
 import TeacherLogin from './pages/TeacherLogin';
@@ -166,6 +168,8 @@ function AppRouter() {
       <Route path="/competitions-admin" element={<ProtectedRoute><CompetitionsAdmin /></ProtectedRoute>} />
       <Route path="/meetings-admin" element={<ProtectedRoute><MeetingsAdmin /></ProtectedRoute>} />
       <Route path="/get-app" element={<GetApp />} />
+      <Route path="/privacy" element={<Privacy />} />
+      <Route path="/terms" element={<Terms />} />
       <Route path="/zoom/:eventId" element={<ZoomJoin />} />
       
       {/* Protected Routes - Admin */}

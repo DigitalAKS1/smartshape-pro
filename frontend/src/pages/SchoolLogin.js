@@ -98,6 +98,9 @@ export default function SchoolLogin() {
           <p className="text-center text-xs text-[var(--text-muted)]">
             Admin? <a href="/login" className="text-[#e94560] hover:underline">Login here</a>
           </p>
+          <p className="text-center text-[11px] text-[var(--text-muted)]">
+            <a href="/privacy" className="hover:underline">Privacy</a> · <a href="/terms" className="hover:underline">Terms</a>
+          </p>
         </div>
       </div>
     </div>
