@@ -85,6 +85,21 @@ export function useCustomerPortal(token) {
     }
   };
 
+  const [approving, setApproving] = useState(false);
+  const approveChanges = async () => {
+    setApproving(true);
+    try {
+      const r = await fetch(`${BACKEND}/api/customer-portal/${token}/approve-changes`, { method: 'POST' });
+      if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.detail || 'Failed'); }
+      toast.success('Thank you! Your changes are confirmed.');
+      await fetchDashboard();
+    } catch (err) {
+      toast.error(err.message || 'Could not confirm changes');
+    } finally {
+      setApproving(false);
+    }
+  };
+
   const fetchTickets = useCallback(async () => {
     if (ticketsLoaded) return;
     try {
@@ -131,5 +146,6 @@ export function useCustomerPortal(token) {
     registerSession,
     tickets, ticketForm, setTicketForm,
     ticketSubmitting, handleTicketSubmit,
+    approveChanges, approving,
   };
 }

@@ -6,6 +6,7 @@ from email.mime.multipart import MIMEMultipart
 
 from database import db
 from auth_utils import get_current_user, hash_password, verify_password
+from rbac import get_team
 
 router = APIRouter()
 
@@ -217,6 +218,10 @@ async def get_customer_portal(token: str):
             "catalogue_submitted_at": quot.get("catalogue_submitted_at"),
             "sales_person_name":  quot.get("sales_person_name"),
             "sales_person_email": quot.get("sales_person_email"),
+            "selection_change_status": quot.get("selection_change_status"),
+            "selection_change_reason": quot.get("selection_change_reason"),
+            "selection_changed_at":    quot.get("selection_changed_at"),
+            "selection_approved_at":   quot.get("selection_approved_at"),
         },
         "selection_items": items,
         "order_status": order.get("order_status") if order else None,
@@ -236,6 +241,13 @@ async def update_customer_selection(token: str, request: Request):
     quot = await db.quotations.find_one({"catalogue_token": token}, {"_id": 0})
     if not quot:
         raise HTTPException(status_code=404, detail="Quotation not found")
+
+    # Only admin/accounts, or the sales person who owns this quotation, may edit.
+    team = get_team(user)
+    owns = (quot.get("sales_person_email", "").lower() == user.get("email", "").lower())
+    if team not in ("admin", "accounts") and not (team == "sales" and owns):
+        raise HTTPException(status_code=403,
+            detail="Only admin/accounts or the owning sales person can edit this selection")
 
     selection = await db.catalogue_selections.find_one(
         {"quotation_id": quot["quotation_id"]}, {"_id": 0}
@@ -289,6 +301,19 @@ async def update_customer_selection(token: str, request: Request):
                     await db.dies.update_one({"die_id": new_die_id}, {"$inc": {"reserved_qty": 1}})
                     added_dies.append(new_die)
 
+    # Flag the selection as awaiting customer approval (the removed_by_admin /
+    # added_by_admin item statuses double as the highlight markers on the portal).
+    if removed_dies or added_dies:
+        await db.quotations.update_one(
+            {"quotation_id": quot["quotation_id"]},
+            {"$set": {
+                "selection_change_status": "pending_customer_approval",
+                "selection_change_reason": reason,
+                "selection_changed_at": now,
+                "selection_changed_by": user["email"],
+                "selection_approved_at": None,
+            }})
+
     # Send notification email to customer
     customer_email = quot.get("customer_email", "")
     if customer_email and (removed_dies or added_dies):
@@ -316,8 +341,11 @@ School: {quot.get('school_name')}
                 body += f"\nItems added as replacement:\n{added_lines}\n"
 
             body += f"""
-You can view your updated selection at:
+👉 Please REVIEW & APPROVE these changes here:
 {portal_url}
+
+The changes are highlighted (added in green, removed in red). They are not
+final until you tap "Confirm These Changes" on that page.
 
 For any queries please contact:
 {quot.get('sales_person_name', '')}
@@ -337,6 +365,62 @@ SmartShape Pro Team"""
         {"catalogue_selection_id": selection["selection_id"]}, {"_id": 0}
     ).to_list(1000)
     return {"message": "Selection updated", "items": items}
+
+
+@router.post("/customer-portal/{token}/approve-changes")
+async def approve_selection_changes(token: str):
+    """PUBLIC (token-based): the customer confirms the admin's proposed changes.
+
+    Clears the pending flag, settles the highlighted items, and notifies the
+    owning sales person + whoever made the change.
+    """
+    quot = await db.quotations.find_one({"catalogue_token": token}, {"_id": 0})
+    if not quot:
+        raise HTTPException(status_code=404, detail="Portal not found")
+    if quot.get("selection_change_status") != "pending_customer_approval":
+        # Idempotent — nothing to approve (already approved or no changes).
+        return {"message": "No pending changes to approve",
+                "selection_change_status": quot.get("selection_change_status")}
+
+    now = datetime.now(timezone.utc).isoformat()
+    selection = await db.catalogue_selections.find_one(
+        {"quotation_id": quot["quotation_id"]}, {"_id": 0})
+    if selection:
+        # Added items become normal selected items (highlight clears); removed items
+        # stay removed (already excluded from the active selection everywhere).
+        await db.catalogue_selection_items.update_many(
+            {"catalogue_selection_id": selection["selection_id"], "status": "added_by_admin"},
+            {"$set": {"status": "selected", "approved_at": now}})
+
+    await db.quotations.update_one(
+        {"quotation_id": quot["quotation_id"]},
+        {"$set": {"selection_change_status": "approved", "selection_approved_at": now}})
+
+    # Notify staff: owning sales + whoever proposed the change.
+    try:
+        se, ap, sn = await _email_cfg()
+        staff = [quot.get("sales_person_email", ""), quot.get("selection_changed_by", "")]
+        staff = [e for e in dict.fromkeys(staff) if e and e.lower() != se.lower()]
+        if staff:
+            body = (f"Good news — {quot.get('school_name', 'the customer')} has APPROVED the "
+                    f"changes you made to their shape selection.\n\n"
+                    f"Quote: {quot.get('quote_number')}\n"
+                    f"School: {quot.get('school_name')}\n"
+                    f"Approved at: {now}\n\nYou can proceed with the order.")
+            await _send_email(se, ap, sn, staff, [],
+                f"Selection changes APPROVED – {quot.get('school_name')}", body)
+    except Exception as e:
+        logging.error(f"Approval notification email failed: {e}")
+
+    await db.activity_logs.insert_one({
+        "log_id": f"act_{uuid.uuid4().hex[:8]}",
+        "user_email": "customer", "action": "approve_selection_changes",
+        "entity_type": "quotation", "entity_id": quot["quotation_id"],
+        "details": f"Customer approved selection changes for {quot.get('quote_number','')}",
+        "timestamp": now,
+    })
+    return {"message": "Changes approved", "selection_change_status": "approved",
+            "selection_approved_at": now}
 
 
 # ── Catalogue submission confirmation email (called from quotation_routes) ────
@@ -487,6 +571,10 @@ async def get_customer_dashboard(token: str):
             "catalogue_status":   quot.get("catalogue_status"),
             "sales_person_name":  quot.get("sales_person_name"),
             "sales_person_email": quot.get("sales_person_email"),
+            "selection_change_status": quot.get("selection_change_status"),
+            "selection_change_reason": quot.get("selection_change_reason"),
+            "selection_changed_at":    quot.get("selection_changed_at"),
+            "selection_approved_at":   quot.get("selection_approved_at"),
         },
         "selection_items": items,
         "order_status": order.get("order_status") if order else None,

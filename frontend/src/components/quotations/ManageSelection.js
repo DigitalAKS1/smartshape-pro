@@ -1,6 +1,6 @@
 import React from 'react';
 import { Button } from '../ui/button';
-import { RefreshCw, CheckCircle2, AlertTriangle, X, Search } from 'lucide-react';
+import { RefreshCw, CheckCircle2, AlertTriangle, X, Search, Plus, Trash2, Clock } from 'lucide-react';
 
 const BACKEND = process.env.REACT_APP_BACKEND_URL || '';
 
@@ -15,31 +15,47 @@ export default function ManageSelection({ state }) {
     allDies,
     dieSearch, setDieSearch,
     replacingItem, setReplacingItem,
+    addingItem, setAddingItem,
     replacements, setReplacements,
     selReason, setSelReason,
     savingSelection,
     showManage, setShowManage,
     handleSaveSelection,
+    canEditSelection,
   } = state;
 
   if (quot?.catalogue_status !== 'submitted') return null;
 
+  const changeStatus = quot?.selection_change_status;
+
   return (
     <div className="no-print bg-[var(--bg-primary)] border-b border-[var(--border-color)] px-6 py-4">
       <div className="max-w-4xl mx-auto">
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-2">
+        <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <CheckCircle2 className="h-4 w-4 text-green-400" />
             <span className="text-sm font-semibold text-[var(--text-primary)]">Catalogue Submitted</span>
             <span className="text-xs text-[var(--text-secondary)]">
               — {selItems.filter(i => i.status !== 'removed_by_admin').length} items selected by customer
             </span>
+            {changeStatus === 'pending_customer_approval' && (
+              <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium border border-amber-500/30 bg-amber-500/10 text-amber-400">
+                <Clock className="h-3 w-3" /> Awaiting customer approval
+              </span>
+            )}
+            {changeStatus === 'approved' && (
+              <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium border border-green-500/30 bg-green-500/10 text-green-400">
+                <CheckCircle2 className="h-3 w-3" /> Changes approved by customer
+              </span>
+            )}
           </div>
-          <Button size="sm" variant="outline" onClick={() => setShowManage(v => !v)}
-            className="border-[var(--border-color)] text-[var(--text-secondary)]">
-            <RefreshCw className="mr-1.5 h-3 w-3" />
-            {showManage ? 'Hide' : 'Manage Selection'}
-          </Button>
+          {canEditSelection && (
+            <Button size="sm" variant="outline" onClick={() => setShowManage(v => !v)}
+              className="border-[var(--border-color)] text-[var(--text-secondary)]">
+              <RefreshCw className="mr-1.5 h-3 w-3" />
+              {showManage ? 'Hide' : 'Manage Selection'}
+            </Button>
+          )}
         </div>
 
         {showManage && (
@@ -62,8 +78,13 @@ export default function ManageSelection({ state }) {
                 {replacements.map((r, i) => (
                   <div key={i} className="flex items-center gap-2 text-xs bg-yellow-500/10 border border-yellow-500/20 rounded px-3 py-2">
                     <AlertTriangle className="h-3 w-3 text-yellow-400 flex-shrink-0" />
-                    <span className="text-[var(--text-secondary)]">Remove <strong className="text-red-400">{r.old_die_name}</strong></span>
-                    {r.new_die_id && <><span className="text-[var(--text-secondary)]">→ Add</span><strong className="text-green-400">{r.new_die_name}</strong></>}
+                    {r.old_die_id && r.new_die_id ? (
+                      <span className="text-[var(--text-secondary)]">Replace <strong className="text-red-400">{r.old_die_name}</strong> → <strong className="text-green-400">{r.new_die_name}</strong></span>
+                    ) : r.old_die_id ? (
+                      <span className="text-[var(--text-secondary)]">Remove <strong className="text-red-400">{r.old_die_name}</strong></span>
+                    ) : (
+                      <span className="text-[var(--text-secondary)]">Add <strong className="text-green-400">{r.new_die_name}</strong></span>
+                    )}
                     <button onClick={() => setReplacements(prev => prev.filter((_, j) => j !== i))}
                       className="ml-auto text-[var(--text-secondary)] hover:text-red-400">
                       <X className="h-3 w-3" />
@@ -75,7 +96,14 @@ export default function ManageSelection({ state }) {
 
             {/* Items list */}
             <div>
-              <p className="text-xs font-medium text-[var(--text-secondary)] mb-2">Selected Items</p>
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-xs font-medium text-[var(--text-secondary)]">Selected Items</p>
+                <button
+                  onClick={() => { setAddingItem(true); setReplacingItem(null); setDieSearch(''); }}
+                  className="inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded bg-green-500/10 text-green-400 hover:bg-green-500/20 font-medium">
+                  <Plus className="h-3 w-3" /> Add item
+                </button>
+              </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-72 overflow-y-auto pr-1">
                 {selItems.map((item, i) => {
                   const isRemoved = item.status === 'removed_by_admin';
@@ -102,11 +130,19 @@ export default function ManageSelection({ state }) {
                         {item.admin_note && <p className="text-yellow-400 italic truncate">Note: {item.admin_note}</p>}
                       </div>
                       {!isRemoved && !isAdded && !inQueue && (
-                        <button
-                          onClick={() => setReplacingItem(replacingItem === item.die_id ? null : item.die_id)}
-                          className="flex-shrink-0 text-[10px] px-2 py-1 rounded bg-[#e94560]/10 text-[#e94560] hover:bg-[#e94560]/20 font-medium whitespace-nowrap">
-                          Replace
-                        </button>
+                        <div className="flex-shrink-0 flex items-center gap-1">
+                          <button
+                            onClick={() => { setReplacingItem(replacingItem === item.die_id ? null : item.die_id); setAddingItem(false); }}
+                            className="text-[10px] px-2 py-1 rounded bg-[#e94560]/10 text-[#e94560] hover:bg-[#e94560]/20 font-medium whitespace-nowrap">
+                            Replace
+                          </button>
+                          <button
+                            title="Delete this item"
+                            onClick={() => setReplacements(prev => [...prev, { old_die_id: item.die_id, old_die_name: item.die_name, new_die_id: null, new_die_name: null, note: '' }])}
+                            className="p-1 rounded text-red-400 hover:bg-red-500/10">
+                            <Trash2 className="h-3 w-3" />
+                          </button>
+                        </div>
                       )}
                       {inQueue && <span className="flex-shrink-0 text-[10px] text-orange-400 font-medium">Queued</span>}
                     </div>
@@ -176,10 +212,60 @@ export default function ManageSelection({ state }) {
               );
             })()}
 
+            {/* Add-item picker (standalone — customer wants an extra die) */}
+            {addingItem && (() => {
+              const filteredDies = allDies.filter(d =>
+                !selItems.some(i => i.die_id === d.die_id && i.status !== 'removed_by_admin') &&
+                !replacements.some(r => r.new_die_id === d.die_id) &&
+                (dieSearch === '' ||
+                  d.name?.toLowerCase().includes(dieSearch.toLowerCase()) ||
+                  d.code?.toLowerCase().includes(dieSearch.toLowerCase()))
+              ).slice(0, 20);
+              return (
+                <div className="border border-green-500/30 rounded-lg p-3 bg-green-500/5">
+                  <p className="text-xs font-medium text-[var(--text-secondary)] mb-2">
+                    Add an item to the customer's selection
+                    <button onClick={() => { setAddingItem(false); setDieSearch(''); }}
+                      className="ml-2 text-[var(--text-secondary)] hover:text-red-400">
+                      <X className="h-3 w-3 inline" />
+                    </button>
+                  </p>
+                  <div className="relative mb-2">
+                    <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-[var(--text-secondary)]" />
+                    <input value={dieSearch} onChange={e => setDieSearch(e.target.value)}
+                      placeholder="Search dies by name or code…"
+                      className="w-full h-8 pl-7 pr-3 rounded border border-[var(--border-color)] bg-[var(--bg-card)] text-xs text-[var(--text-primary)] focus:outline-none focus:ring-1 focus:ring-[#e94560]" />
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 max-h-48 overflow-y-auto">
+                    {filteredDies.map(die => (
+                      <button key={die.die_id}
+                        onClick={() => {
+                          setReplacements(prev => [...prev, { old_die_id: null, old_die_name: null, new_die_id: die.die_id, new_die_name: die.name, note: '' }]);
+                          setAddingItem(false); setDieSearch('');
+                        }}
+                        className="flex items-center gap-1.5 p-1.5 rounded border border-[var(--border-color)] hover:border-green-500/50 hover:bg-green-500/5 text-left transition-colors">
+                        {die.image_url
+                          ? <img src={`${BACKEND}${die.image_url}`} alt="" className="w-7 h-7 rounded object-contain bg-[var(--bg-primary)] flex-shrink-0" />
+                          : <div className="w-7 h-7 rounded bg-[var(--bg-primary)] flex-shrink-0" />
+                        }
+                        <div className="flex-1 min-w-0">
+                          <p className="font-mono text-[9px] text-[#e94560] leading-none">{die.code}</p>
+                          <p className="text-[10px] text-[var(--text-primary)] leading-tight truncate">{die.name}</p>
+                        </div>
+                      </button>
+                    ))}
+                    {filteredDies.length === 0 && (
+                      <p className="col-span-3 text-center text-xs text-[var(--text-secondary)] py-4">No dies found</p>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
+
             {/* Save */}
             <div className="flex justify-end gap-2 pt-2 border-t border-[var(--border-color)]">
               <Button size="sm" variant="outline"
-                onClick={() => { setShowManage(false); setReplacements([]); setReplacingItem(null); }}
+                onClick={() => { setShowManage(false); setReplacements([]); setReplacingItem(null); setAddingItem(false); }}
                 className="border-[var(--border-color)] text-[var(--text-secondary)]">
                 Cancel
               </Button>

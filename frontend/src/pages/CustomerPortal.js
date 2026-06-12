@@ -69,6 +69,7 @@ export default function CustomerPortal() {
     registerSession,
     tickets, ticketForm, setTicketForm,
     ticketSubmitting, handleTicketSubmit,
+    approveChanges, approving,
   } = useCustomerPortal(token);
 
   if (loading) return <Spinner />;
@@ -170,6 +171,63 @@ export default function CustomerPortal() {
 
       {/* Tab content */}
       <div className="max-w-4xl mx-auto px-4 py-6 pb-20 space-y-5">
+
+        {/* Pending changes — review & approve banner */}
+        {q.selection_change_status === 'pending_customer_approval' && hasChanges && (
+          <div className="bg-[#1a1a2e] rounded-xl border border-amber-500/40 p-5">
+            <div className="flex items-start gap-3">
+              <span className="text-2xl">📝</span>
+              <div className="flex-1 min-w-0">
+                <h3 className="text-white font-semibold">We've proposed some changes to your selection</h3>
+                <p className="text-[#a0a0b0] text-sm mt-0.5">Please review and confirm so we can proceed with your order.</p>
+                {q.selection_change_reason && (
+                  <p className="text-xs text-amber-300 mt-2"><span className="text-[#6b6b80]">Reason:</span> {q.selection_change_reason}</p>
+                )}
+              </div>
+            </div>
+
+            <div className="grid sm:grid-cols-2 gap-3 mt-4">
+              {addedItems.length > 0 && (
+                <div className="rounded-lg border border-green-500/30 bg-green-500/5 p-3">
+                  <p className="text-[11px] font-semibold text-green-400 uppercase tracking-wide mb-2">Added ({addedItems.length})</p>
+                  <ul className="space-y-1">
+                    {addedItems.map(it => (
+                      <li key={it.die_id} className="text-xs text-white flex items-center gap-1.5">
+                        <span className="text-green-400">＋</span>{it.die_name} <span className="text-[#6b6b80] font-mono">({it.die_code})</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {removedItems.length > 0 && (
+                <div className="rounded-lg border border-red-500/30 bg-red-500/5 p-3">
+                  <p className="text-[11px] font-semibold text-red-400 uppercase tracking-wide mb-2">Removed ({removedItems.length})</p>
+                  <ul className="space-y-1">
+                    {removedItems.map(it => (
+                      <li key={it.die_id} className="text-xs text-[#a0a0b0] flex items-center gap-1.5 line-through">
+                        <span className="text-red-400">✗</span>{it.die_name} <span className="text-[#6b6b80] font-mono">({it.die_code})</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-end mt-4">
+              <button onClick={approveChanges} disabled={approving}
+                data-testid="approve-changes-btn"
+                className="bg-[#10b981] hover:bg-[#0ea371] text-white text-sm font-medium px-5 py-2.5 rounded-lg transition-colors disabled:opacity-60">
+                {approving ? 'Confirming…' : '✓ Confirm These Changes'}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {q.selection_change_status === 'approved' && q.selection_approved_at && (
+          <div className="bg-green-500/5 rounded-xl border border-green-500/30 px-4 py-3 text-sm text-green-400">
+            ✓ You approved the latest changes to your selection. Thank you!
+          </div>
+        )}
 
         {/* OVERVIEW */}
         {tab === 'overview' && (

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import API, { quotations, companySettings, dies as diesApi } from '../lib/api';
+import { useAuth } from '../contexts/AuthContext';
 import { toast } from 'sonner';
 
 const BACKEND = process.env.REACT_APP_BACKEND_URL || '';
@@ -8,6 +9,7 @@ const BACKEND = process.env.REACT_APP_BACKEND_URL || '';
 export function useViewQuotation() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const { user } = useAuth();
 
   const [quot, setQuot] = useState(null);
   const [company, setCompany] = useState({});
@@ -22,6 +24,7 @@ export function useViewQuotation() {
   const [allDies, setAllDies] = useState([]);
   const [dieSearch, setDieSearch] = useState('');
   const [replacingItem, setReplacingItem] = useState(null);
+  const [addingItem, setAddingItem] = useState(false);   // standalone "add die" picker
   const [replacements, setReplacements] = useState([]);
   const [selReason, setSelReason] = useState('');
   const [savingSelection, setSavingSelection] = useState(false);
@@ -118,11 +121,21 @@ export function useViewQuotation() {
     } catch { /* ignore */ }
   }, [id]);
 
+  // Admin/accounts always; a sales person only on their own quotation.
+  const canEditSelection = !!user && (
+    ['admin', 'accounts'].includes(user.role) ||
+    (user.role === 'sales_person' &&
+      (quot?.sales_person_email || '').toLowerCase() === (user.email || '').toLowerCase())
+  );
+
   return {
     id,
     navigate,
     quot,
     reloadQuot,
+    canEditSelection,
+    addingItem,
+    setAddingItem,
     company,
     versions,
     loading,
