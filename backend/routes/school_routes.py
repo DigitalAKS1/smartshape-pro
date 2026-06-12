@@ -765,3 +765,174 @@ async def admin_update_school_request(request_id: str, request: Request):
     await db.school_requests.update_one({"request_id": request_id},
                                         {"$set": {"status": status, "handled_at": datetime.now(timezone.utc).isoformat()}})
     return await db.school_requests.find_one({"request_id": request_id}, {"_id": 0})
+
+
+# ==================== PHASE 3 — TRAINING, CALENDAR & MEETINGS ====================
+
+async def _portal_principal(request: Request):
+    """Return (kind, principal) where kind is 'teacher' or 'school'."""
+    try:
+        t = await get_current_teacher(request)
+        return "teacher", t
+    except HTTPException:
+        s = await get_current_school(request)
+        return "school", s
+
+
+# ── Training calendar (both portals) ───────────────────────────────────────────
+
+@router.get("/portal/training")
+async def portal_training(request: Request):
+    kind, p = await _portal_principal(request)
+    me_id = p["teacher_id"] if kind == "teacher" else p["school_id"]
+    sessions = await db.training_sessions.find(
+        {"is_published": {"$ne": False}, "status": {"$ne": "cancelled"}},
+        {"_id": 0}
+    ).sort("date", 1).to_list(200)
+    for s in sessions:
+        sid = s.get("session_id")
+        count = await db.session_registrations.count_documents({"session_id": sid})
+        s["registration_count"] = count
+        mx = int(s.get("max_participants", 0) or 0)
+        s["is_full"] = (mx > 0 and count >= mx)
+        s["registered"] = bool(await db.session_registrations.find_one(
+            {"session_id": sid, "registrant_id": me_id}))
+    return sessions
+
+
+@router.post("/portal/training/{session_id}/register")
+async def portal_training_register(session_id: str, request: Request):
+    kind, p = await _portal_principal(request)
+    sess = await db.training_sessions.find_one({"session_id": session_id})
+    if not sess or sess.get("is_published") is False:
+        raise HTTPException(status_code=404, detail="Session not found")
+    me_id = p["teacher_id"] if kind == "teacher" else p["school_id"]
+    existing = await db.session_registrations.find_one({"session_id": session_id, "registrant_id": me_id}, {"_id": 0})
+    if existing:
+        return existing
+    mx = int(sess.get("max_participants", 0) or 0)
+    if mx > 0 and await db.session_registrations.count_documents({"session_id": session_id}) >= mx:
+        raise HTTPException(status_code=400, detail="This session is full")
+    doc = {
+        "registration_id": f"reg_{uuid.uuid4().hex[:12]}",
+        "session_id": session_id,
+        "registrant_type": kind,
+        "registrant_id": me_id,
+        "name": p.get("name") or p.get("school_name", ""),
+        "email": p.get("email", ""),
+        "school_id": p.get("school_id"),
+        "registered_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.session_registrations.insert_one(doc)
+    return await db.session_registrations.find_one({"registration_id": doc["registration_id"]}, {"_id": 0})
+
+
+@router.delete("/portal/training/{session_id}/register")
+async def portal_training_unregister(session_id: str, request: Request):
+    kind, p = await _portal_principal(request)
+    me_id = p["teacher_id"] if kind == "teacher" else p["school_id"]
+    await db.session_registrations.delete_many({"session_id": session_id, "registrant_id": me_id})
+    return {"message": "Unregistered"}
+
+
+# ── Training videos library (both portals) ─────────────────────────────────────
+
+@router.get("/portal/training-videos")
+async def portal_training_videos(request: Request):
+    await _portal_principal(request)
+    return await db.training_videos.find(
+        {"is_published": {"$ne": False}},
+        {"_id": 0, "video_id": 1, "title": 1, "description": 1, "youtube_url": 1,
+         "thumbnail_url": 1, "duration_mins": 1, "category": 1, "view_count": 1}
+    ).sort("published_at", -1).to_list(500)
+
+
+@router.post("/portal/training-videos/{video_id}/view")
+async def portal_training_video_view(video_id: str, request: Request):
+    await _portal_principal(request)
+    await db.training_videos.update_one({"video_id": video_id}, {"$inc": {"view_count": 1}})
+    return {"ok": True}
+
+
+# ── Private 1:1 meetings ───────────────────────────────────────────────────────
+
+@router.get("/school/meetings")
+async def school_meetings(request: Request):
+    school = await get_current_school(request)
+    return await db.portal_meetings.find(
+        {"school_id": school["school_id"], "status": {"$ne": "cancelled"}}, {"_id": 0}
+    ).sort("scheduled_at", 1).to_list(200)
+
+
+@router.get("/teacher/meetings")
+async def teacher_meetings(request: Request):
+    teacher = await get_current_teacher(request)
+    return await db.portal_meetings.find(
+        {"school_id": teacher.get("school_id"), "status": {"$ne": "cancelled"},
+         "$or": [{"teacher_id": None}, {"teacher_id": {"$exists": False}}, {"teacher_id": teacher["teacher_id"]}]},
+        {"_id": 0}
+    ).sort("scheduled_at", 1).to_list(200)
+
+
+@router.post("/admin/portal-meetings")
+async def admin_create_meeting(request: Request):
+    user = await _require_admin(request)
+    body = await request.json()
+    school_id = body.get("school_id")
+    if not school_id or not await db.schools.find_one({"school_id": school_id}):
+        raise HTTPException(status_code=404, detail="School not found")
+    title = (body.get("title") or "").strip() or "Meeting"
+    platform = body.get("platform") if body.get("platform") in ("zoom", "meet", "physical") else "zoom"
+    meeting_link = (body.get("meeting_link") or "").strip()
+    scheduled_at = body.get("scheduled_at") or ""
+    # Best-effort Zoom auto-create when asked and no link supplied.
+    if platform == "zoom" and not meeting_link and body.get("create_zoom"):
+        try:
+            import zoom_service
+            if await zoom_service.is_configured():
+                zm = await zoom_service.create_meeting(topic=title, start_time=scheduled_at or "",
+                                                       duration=int(body.get("duration") or 30),
+                                                       timezone_str="Asia/Kolkata", agenda=body.get("description") or "")
+                meeting_link = zm.get("join_url") or zm.get("start_url") or ""
+        except Exception as e:
+            import logging
+            logging.warning(f"portal meeting zoom create failed: {e}")
+    meeting_id = f"pm_{uuid.uuid4().hex[:12]}"
+    doc = {
+        "meeting_id": meeting_id, "school_id": school_id, "teacher_id": body.get("teacher_id") or None,
+        "title": title, "description": (body.get("description") or "").strip(),
+        "scheduled_at": scheduled_at, "platform": platform, "meeting_link": meeting_link,
+        "location": (body.get("location") or "").strip(), "status": "scheduled",
+        "notes": (body.get("notes") or "").strip(), "created_by": user.get("email"),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.portal_meetings.insert_one(doc)
+    school = await db.schools.find_one({"school_id": school_id}, {"_id": 0})
+    await _notify_admin_school_action(school, f"has a meeting scheduled: {title}")
+    if doc["teacher_id"]:
+        await _notify_teacher(doc["teacher_id"], "New meeting scheduled", f'{title} — {scheduled_at}')
+    return await db.portal_meetings.find_one({"meeting_id": meeting_id}, {"_id": 0})
+
+
+@router.get("/admin/portal-meetings")
+async def admin_list_meetings(request: Request, school_id: str = None, status: str = None):
+    await _require_admin(request)
+    q = {}
+    if school_id:
+        q["school_id"] = school_id
+    if status:
+        q["status"] = status
+    return await db.portal_meetings.find(q, {"_id": 0}).sort("scheduled_at", -1).to_list(500)
+
+
+@router.put("/admin/portal-meetings/{meeting_id}")
+async def admin_update_meeting(meeting_id: str, request: Request):
+    await _require_admin(request)
+    body = await request.json()
+    update = {k: body[k] for k in ("title", "description", "scheduled_at", "platform",
+                                   "meeting_link", "location", "status", "notes", "teacher_id") if k in body}
+    if not await db.portal_meetings.find_one({"meeting_id": meeting_id}):
+        raise HTTPException(status_code=404, detail="Meeting not found")
+    if update:
+        await db.portal_meetings.update_one({"meeting_id": meeting_id}, {"$set": update})
+    return await db.portal_meetings.find_one({"meeting_id": meeting_id}, {"_id": 0})
