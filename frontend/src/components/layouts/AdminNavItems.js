@@ -73,18 +73,16 @@ export const MODULE_ROUTE_MAP = {
 // Always-on home link — shown to every user regardless of granted modules.
 export const TODAY_ITEM = { path: '/today', icon: Target, label: "Today's Actions" };
 
+// Consolidated into a handful of scannable groups (was 10+ groups, many single-item).
+// Module gating is unchanged — each item still only shows for users who have that module.
 export const SIDEBAR_SECTIONS = [
-  { label: null,                modules: ['dashboard'] },
-  { label: 'Sales',             modules: ['quotations', 'leads', 'field_sales', 'sales_portal'] },
-  { label: 'Store & Inventory', modules: ['inventory', 'stock_management', 'purchase_alerts', 'physical_count', 'package_master', 'store'] },
-  { label: 'Procurement',       modules: ['procurement'] },
-  { label: 'Finance & HR',      modules: ['accounts', 'payroll', 'hr'] },
-  { label: 'Reports',           modules: ['analytics'] },
-  { label: 'Delegation',        modules: ['delegation'] },
-  { label: 'Flow Management',   modules: ['flow_management'] },
-  { label: 'Certificates',      modules: ['certificates'] },
-  { label: 'School Portal',     modules: ['school_portal'] },
-  { label: 'Administration',    modules: ['user_management', 'settings'] },
+  { label: null,                 modules: ['dashboard'] },
+  { label: 'Sales & CRM',        modules: ['quotations', 'leads', 'field_sales', 'sales_portal'] },
+  { label: 'Inventory & Supply', modules: ['inventory', 'stock_management', 'purchase_alerts', 'physical_count', 'package_master', 'store', 'procurement'] },
+  { label: 'Finance & People',   modules: ['accounts', 'payroll', 'hr'] },
+  { label: 'Operations',         modules: ['delegation', 'flow_management', 'analytics'] },
+  { label: 'School Engagement',  modules: ['school_portal', 'certificates'] },
+  { label: 'Administration',     modules: ['user_management', 'settings'] },
 ];
 
 export const TEAM_MODULES = {

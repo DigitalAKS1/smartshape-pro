@@ -100,20 +100,19 @@ export default function AdminSidebar({ sidebarGroups, user, initials, onClose, o
         {sidebarGroups.map((group, gi) => {
           const isCollapsed = group.label ? (!!collapsed[group.label] && !groupHasActive(group)) : false;
           return (
-          <div key={gi}>
-            {gi > 0 && <div className="h-px bg-[var(--border-color)] mx-1 my-2" />}
+          <div key={gi} className={group.label ? 'mt-3 first:mt-0' : ''}>
             {group.label && (
               <button
                 type="button"
                 onClick={() => toggleGroup(group.label)}
-                className="w-full flex items-center justify-between px-2 pt-1 pb-1.5 rounded-lg hover:bg-[var(--bg-hover)] transition-colors group/header"
+                className="w-full flex items-center gap-1.5 px-2 py-1 rounded-md text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-colors group/header"
               >
-                <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--text-muted)]">{group.label}</span>
-                <ChevronDown className={`h-3 w-3 text-[var(--text-muted)] transition-transform duration-200 ${isCollapsed ? '-rotate-90' : ''}`} />
+                <ChevronDown className={`h-3 w-3 flex-shrink-0 transition-transform duration-200 ${isCollapsed ? '-rotate-90' : ''}`} />
+                <span className="text-[10px] font-bold uppercase tracking-[0.14em]">{group.label}</span>
               </button>
             )}
             {!isCollapsed && (
-            <div className="space-y-0.5">
+            <div className="space-y-0.5 mt-0.5">
               {group.items.map((item) => {
                 const Icon = item.icon;
                 const isActive = location.pathname === item.path
