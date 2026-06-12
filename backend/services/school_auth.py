@@ -140,6 +140,26 @@ async def _send_email(to_email: str, subject: str, html: str) -> bool:
         return False
 
 
+async def send_password_reset(school: dict) -> bool:
+    """Email a password-reset link (reuses the activation token + set-password page)."""
+    email = (school.get("email") or "").strip()
+    if not email:
+        return False
+    raw = await issue_token(school["school_id"], email, "activation")
+    url = activation_url(raw)
+    html = f"""
+    <div style="font-family:Arial,sans-serif;max-width:520px;margin:auto">
+      <h2 style="color:#e94560">Reset your password</h2>
+      <p>Hello {school.get('school_name', 'there')},</p>
+      <p>We received a request to reset your SmartShape School Portal password. Click below to set a new one (link valid 7 days):</p>
+      <p style="margin:28px 0">
+        <a href="{url}" style="background:#e94560;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none">Set a new password</a>
+      </p>
+      <p style="color:#888;font-size:12px">If you didn't request this, you can safely ignore this email — your password won't change.</p>
+    </div>"""
+    return await _send_email(email, "Reset your SmartShape School Portal password", html)
+
+
 async def send_portal_invite(school: dict) -> dict:
     """Send the activation/welcome email per the school's effective methods.
     Returns {sent: bool, activation_url: str|None}."""

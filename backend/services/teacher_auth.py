@@ -73,6 +73,26 @@ async def consume_token(raw: str) -> dict | None:
     return await db.teachers.find_one({"teacher_id": doc["teacher_id"]})
 
 
+async def send_password_reset(teacher: dict) -> bool:
+    """Email a password-reset link to a teacher (reuses activation token + set-password page)."""
+    email = (teacher.get("email") or "").strip()
+    if not email:
+        return False
+    raw = await issue_token(teacher["teacher_id"], email)
+    url = activation_url(raw)
+    html = f"""
+    <div style="font-family:Arial,sans-serif;max-width:520px;margin:auto">
+      <h2 style="color:#e94560">Reset your password</h2>
+      <p>Hello {teacher.get('name', 'there')},</p>
+      <p>We received a request to reset your SmartShape Teacher Portal password. Click below to set a new one (link valid 7 days):</p>
+      <p style="margin:28px 0">
+        <a href="{url}" style="background:#e94560;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none">Set a new password</a>
+      </p>
+      <p style="color:#888;font-size:12px">If you didn't request this, you can safely ignore this email.</p>
+    </div>"""
+    return await _send_email(email, "Reset your SmartShape Teacher Portal password", html)
+
+
 async def send_teacher_invite(teacher: dict, school_name: str = "") -> dict:
     """Email the teacher an activation link to set their password. Returns {sent, activation_url}."""
     email = (teacher.get("email") or "").strip()

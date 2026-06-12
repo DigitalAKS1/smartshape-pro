@@ -43,6 +43,12 @@ export default function SchoolLogin() {
     catch { toast.error('Could not send link'); }
   };
 
+  const forgotPassword = async () => {
+    if (!email) return toast.error('Enter your email first');
+    try { await schoolAuth.forgot(email); toast.success('If that email is registered, a reset link has been sent.'); }
+    catch { toast.error('Could not send reset link'); }
+  };
+
   return (
     <div className="min-h-screen bg-[var(--bg-primary)] flex items-center justify-center p-4">
       <div className="w-full max-w-sm">
@@ -73,6 +79,9 @@ export default function SchoolLogin() {
                 data-testid="school-login-button">
                 {loading ? 'Signing in…' : <><LogIn className="mr-2 h-4 w-4" /> Sign In</>}
               </Button>
+              <button type="button" onClick={forgotPassword} className="w-full text-center text-xs text-[var(--text-muted)] hover:text-[#e94560]">
+                Forgot password?
+              </button>
             </form>
           )}
 

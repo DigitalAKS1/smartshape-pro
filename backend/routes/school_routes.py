@@ -442,6 +442,21 @@ async def teacher_me(request: Request):
     return teacher
 
 
+@router.post("/teacher/auth/forgot")
+async def teacher_forgot_password(request: Request):
+    body = await request.json()
+    email = (body.get("email") or "").lower().strip()
+    generic = {"message": "If that email is registered, a password-reset link has been sent."}
+    if email:
+        t = await db.teachers.find_one({"email": email})
+        if t:
+            try:
+                await teacher_auth.send_password_reset(t)
+            except Exception:
+                pass
+    return generic
+
+
 # ==================== PHASE 2 / MODULE B — SHARED HELPERS ====================
 
 async def _admin_notify(title: str, message: str, ntype: str = "teacher_content", extra: dict = None):

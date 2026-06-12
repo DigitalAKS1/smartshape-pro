@@ -588,6 +588,7 @@ export const schoolAuth = {
   activateVerify: (token) => API.post('/school/auth/activate/verify', { token }),
   setPassword: (token, password) => API.post('/school/auth/set-password', { token, password }),
   requestMagic: (email) => API.post('/school/auth/magic-link/request', { email }),
+  forgot: (email) => API.post('/school/auth/forgot', { email }),
   googleStartUrl: () => `${API.defaults.baseURL}/school/auth/google/start`,
   // Phase 2 — Customer portal
   payments: () => API.get('/school/payments'),
@@ -620,6 +621,7 @@ export const teacherAuth = {
   login: (data) => API.post('/teacher/auth/login', data),
   activateVerify: (token) => API.post('/teacher/auth/activate/verify', { token }),
   setPassword: (token, password) => API.post('/teacher/auth/set-password', { token, password }),
+  forgot: (email) => API.post('/teacher/auth/forgot', { email }),
   me: () => API.get('/teacher/me'),
 };
 
