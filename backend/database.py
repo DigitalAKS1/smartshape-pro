@@ -17,14 +17,28 @@ client = AsyncIOMotorClient(mongo_url)
 db = client[db_name]
 
 
+async def _i(coro):
+    """Create one index, but never let a failure (e.g. a unique index over
+    pre-existing duplicate data) crash app startup. Logs and continues."""
+    try:
+        await coro
+    except Exception as e:  # DuplicateKeyError, IndexOptionsConflict, etc.
+        logging.warning("index skipped: %s", str(e)[:180])
+
+
 async def connect_db():
-    """Called on startup — creates indexes and verifies connection."""
+    """Called on startup — creates indexes (best-effort) and verifies connection.
+
+    Every index is created independently and non-fatally: a single bad index
+    (such as a unique constraint over existing duplicate values) must NEVER abort
+    startup, or the container fails its health check and the deploy is rejected.
+    """
 
     # ── Unique constraints ──────────────────────────────────────────────────
-    await db.users.create_index("email", unique=True)
-    await db.dies.create_index("code", unique=True)
-    await db.contacts.create_index("contact_id", unique=True)
-    await db.contacts.create_index("phone", background=True)   # dedup checks
+    await _i(db.users.create_index("email", unique=True))
+    await _i(db.dies.create_index("code", unique=True))
+    await _i(db.contacts.create_index("contact_id", unique=True))
+    await _i(db.contacts.create_index("phone", background=True))   # dedup checks
 
     # ── Auth / session ──────────────────────────────────────────────────────
     await db.login_attempts.create_index("identifier")
@@ -71,7 +85,7 @@ async def connect_db():
     await db.quotation_edit_history.create_index([("quotation_id", 1), ("edited_at", -1)], background=True)
 
     # ── Orders ──────────────────────────────────────────────────────────────
-    await db.orders.create_index([("quotation_id", 1)], unique=True, background=True)
+    await _i(db.orders.create_index([("quotation_id", 1)], unique=True, background=True))
     await db.orders.create_index([("school_id", 1), ("order_status", 1)], background=True)
     await db.orders.create_index([("lead_id", 1)], background=True)
     await db.orders.create_index("order_number", background=True)
@@ -83,9 +97,9 @@ async def connect_db():
 
     # ── Inventory ───────────────────────────────────────────────────────────
     await db.stock_movements.create_index([("die_id", 1), ("movement_date", -1)], background=True)
-    await db.sales_person_stock.create_index(
+    await _i(db.sales_person_stock.create_index(
         [("sales_person_id", 1), ("die_id", 1)], unique=True, background=True
-    )
+    ))
 
     # ── Marketing ───────────────────────────────────────────────────────────
     await db.whatsapp_campaigns.create_index([("status", 1), ("created_at", -1)], background=True)
@@ -131,9 +145,9 @@ async def connect_db():
     await db.vendors.create_index("is_active", background=True)
     await db.vendor_items.create_index([("vendor_id", 1)], background=True)
     await db.vendor_items.create_index([("item_ref.id", 1)], background=True)
-    await db.vendor_items.create_index(
+    await _i(db.vendor_items.create_index(
         [("vendor_id", 1), ("item_ref.source", 1), ("item_ref.id", 1)],
-        unique=True, background=True)
+        unique=True, background=True))
     await db.purchase_items.create_index("name", background=True)
     await db.requisitions.create_index([("status", 1), ("created_at", -1)], background=True)
     await db.purchase_orders.create_index([("status", 1), ("created_at", -1)], background=True)
