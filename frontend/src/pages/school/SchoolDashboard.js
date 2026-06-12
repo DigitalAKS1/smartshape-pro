@@ -43,7 +43,7 @@ export default function SchoolDashboard() {
   const [newContact, setNewContact] = useState({ name: '', phone: '', designation: '' });
   const [reorderMsg, setReorderMsg] = useState('');
   const [teachers, setTeachers] = useState([]);
-  const [newTeacher, setNewTeacher] = useState({ name: '', email: '', subject: '' });
+  const [newTeacher, setNewTeacher] = useState({ name: '', email: '', phone: '', subject: '' });
 
   const textPri = 'text-[var(--text-primary)]';
   const textSec = 'text-[var(--text-secondary)]';
@@ -369,10 +369,12 @@ export default function SchoolDashboard() {
             <div className={`${card} border rounded-md p-4 space-y-3`}>
               <h3 className={`text-sm font-medium ${textPri} flex items-center gap-2`}><Users className="h-4 w-4" /> Invite a teacher</h3>
               <p className={`text-xs ${textMuted}`}>They'll get an email to set a password, then they can upload workshop videos and enter competitions.</p>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 <Input placeholder="Name" value={newTeacher.name} onChange={e => setNewTeacher({ ...newTeacher, name: e.target.value })}
                   className="bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]" />
                 <Input placeholder="Email" value={newTeacher.email} onChange={e => setNewTeacher({ ...newTeacher, email: e.target.value })}
+                  className="bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]" />
+                <Input placeholder="Phone (for WhatsApp)" value={newTeacher.phone} onChange={e => setNewTeacher({ ...newTeacher, phone: e.target.value })}
                   className="bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]" />
                 <Input placeholder="Subject (optional)" value={newTeacher.subject} onChange={e => setNewTeacher({ ...newTeacher, subject: e.target.value })}
                   className="bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]" />

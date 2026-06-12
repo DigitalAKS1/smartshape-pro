@@ -358,6 +358,7 @@ async def school_create_teacher(request: Request):
     doc = {
         "teacher_id": teacher_id, "school_id": school["school_id"],
         "name": name, "email": email, "subject": (body.get("subject") or "").strip(),
+        "phone": (body.get("phone") or "").strip(),
         "status": "active", "created_by": school["school_id"], "created_at": now_iso,
     }
     await db.teachers.insert_one(doc)
@@ -376,7 +377,7 @@ async def school_update_teacher(teacher_id: str, request: Request):
     if not teacher:
         raise HTTPException(status_code=404, detail="Teacher not found")
     body = await request.json()
-    update = {k: body[k] for k in ("name", "subject", "status") if k in body}
+    update = {k: body[k] for k in ("name", "subject", "status", "phone") if k in body}
     if update:
         await db.teachers.update_one({"teacher_id": teacher_id}, {"$set": update})
     return await db.teachers.find_one({"teacher_id": teacher_id}, {"_id": 0, "password_hash": 0})
@@ -490,6 +491,46 @@ async def _email_school(school_id: str, subject: str, heading: str, body: str, c
             await _send_email(s["email"], subject, _portal_email_html(s.get("school_name", ""), heading, body, cta_label, cta_url))
         except Exception:
             pass
+
+
+# ── WhatsApp for the same events (opt-in; default OFF since WA costs quota) ──
+
+async def _wa_enabled() -> bool:
+    cfg = await db.settings.find_one({"type": "school_portal"}, {"_id": 0, "notify_whatsapp": 1}) or {}
+    return bool(cfg.get("notify_whatsapp"))
+
+
+async def _wa_send(phone: str, message: str):
+    phone = (phone or "").strip()
+    if not phone:
+        return
+    wa = await db.settings.find_one({"type": "whatsapp"}, {"_id": 0})
+    if not wa or not wa.get("username"):
+        return
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=15) as c:
+            await c.post("https://app.messageautosender.com/message/new",
+                         data={"username": wa["username"], "password": wa.get("password", ""),
+                               "receiverMobileNo": phone, "message": message})
+    except Exception:
+        pass
+
+
+async def _wa_teacher(teacher_id: str, message: str):
+    if not await _wa_enabled():
+        return
+    t = await db.teachers.find_one({"teacher_id": teacher_id}, {"_id": 0, "phone": 1})
+    if t and (t.get("phone") or "").strip():
+        await _wa_send(t["phone"], message)
+
+
+async def _wa_school(school_id: str, message: str):
+    if not await _wa_enabled():
+        return
+    s = await db.schools.find_one({"school_id": school_id}, {"_id": 0, "phone": 1})
+    if s and (s.get("phone") or "").strip():
+        await _wa_send(s["phone"], message)
 
 
 async def _require_admin(request: Request) -> dict:
@@ -609,6 +650,7 @@ async def admin_approve_video(video_id: str, request: Request):
     await _notify_teacher(v["teacher_id"], "Your video was approved", f'"{v.get("title")}" is now live in the gallery.')
     await _email_teacher(v["teacher_id"], "Your SmartShape video was approved 🎉", "Video approved",
                          f'Your video "<b>{v.get("title")}</b>" has been approved and is now live in the gallery.')
+    await _wa_teacher(v["teacher_id"], f'🎉 Your SmartShape video "{v.get("title")}" was approved and is now live in the gallery!')
     return await db.teacher_videos.find_one({"video_id": video_id}, {"_id": 0})
 
 
@@ -626,6 +668,7 @@ async def admin_reject_video(video_id: str, request: Request):
     await _notify_teacher(v["teacher_id"], "Your video needs changes", f'"{v.get("title")}": {reason}')
     await _email_teacher(v["teacher_id"], "Your SmartShape video needs changes", "Video needs changes",
                          f'Your video "<b>{v.get("title")}</b>" wasn\'t approved. Reason: {reason}. You can edit and re-upload from your portal.')
+    await _wa_teacher(v["teacher_id"], f'Your SmartShape video "{v.get("title")}" needs changes: {reason}. Please edit and re-upload from your portal.')
     return await db.teacher_videos.find_one({"video_id": video_id}, {"_id": 0})
 
 
@@ -726,6 +769,7 @@ async def admin_set_winners(competition_id: str, request: Request):
             await _notify_teacher(v["teacher_id"], "🏆 You won!", f'"{v.get("title")}" won {comp.get("title")}!')
             await _email_teacher(v["teacher_id"], f"🏆 You won {comp.get('title')}!", "Congratulations!",
                                  f'Your entry "<b>{v.get("title")}</b>" won <b>{comp.get("title")}</b>. {comp.get("prizes") or ""}')
+            await _wa_teacher(v["teacher_id"], f'🏆 Congratulations! Your entry "{v.get("title")}" won {comp.get("title")}! {comp.get("prizes") or ""}')
     return await db.competitions.find_one({"competition_id": competition_id}, {"_id": 0})
 
 
@@ -949,11 +993,14 @@ async def admin_create_meeting(request: Request):
     await _notify_admin_school_action(school, f"has a meeting scheduled: {title}")
     _mbody = f'A meeting "<b>{title}</b>" is scheduled for <b>{scheduled_at}</b>' + (f' ({platform}).' if platform else '.')
     _cta = ("Join meeting", meeting_link) if meeting_link else ("", "")
+    _wamsg = f'Meeting "{title}" scheduled for {scheduled_at}.' + (f' Join: {meeting_link}' if meeting_link else '')
     if doc["teacher_id"]:
         await _notify_teacher(doc["teacher_id"], "New meeting scheduled", f'{title} — {scheduled_at}')
         await _email_teacher(doc["teacher_id"], f"Meeting scheduled: {title}", "Meeting scheduled", _mbody, *_cta)
+        await _wa_teacher(doc["teacher_id"], _wamsg)
     else:
         await _email_school(school_id, f"Meeting scheduled: {title}", "Meeting scheduled", _mbody, *_cta)
+        await _wa_school(school_id, _wamsg)
     return await db.portal_meetings.find_one({"meeting_id": meeting_id}, {"_id": 0})
 
 

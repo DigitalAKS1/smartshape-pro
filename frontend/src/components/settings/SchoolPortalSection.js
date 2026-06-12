@@ -19,7 +19,7 @@ const METHODS = [
 export default function SchoolPortalSection({ configured, onSaved }) {
   const [cfg, setCfg] = useState({
     email_link_enabled: false, magic_link_enabled: false, google_enabled: false,
-    google_client_id: '', google_client_secret_set: false,
+    google_client_id: '', google_client_secret_set: false, notify_whatsapp: false,
   });
   const [secret, setSecret] = useState('');
   const [saving, setSaving] = useState(false);
@@ -36,6 +36,7 @@ export default function SchoolPortalSection({ configured, onSaved }) {
         magic_link_enabled: cfg.magic_link_enabled,
         google_enabled: cfg.google_enabled,
         google_client_id: cfg.google_client_id,
+        notify_whatsapp: cfg.notify_whatsapp,
       };
       if (secret.trim()) body.google_client_secret = secret.trim();
       await schoolPortalSettings.save(body);
@@ -75,6 +76,16 @@ export default function SchoolPortalSection({ configured, onSaved }) {
               className="w-5 h-5 rounded border-[var(--border-color)] bg-[var(--bg-primary)] flex-shrink-0" />
           </div>
         ))}
+      </div>
+
+      <div className="flex items-center justify-between p-4 bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-md">
+        <div className="pr-4">
+          <p className="text-[var(--text-primary)] font-medium">WhatsApp notifications</p>
+          <p className="text-sm text-[var(--text-muted)]">Also send schools &amp; teachers a WhatsApp for key events (video approved, competition won, meeting scheduled). Requires WhatsApp configured. Off by default (uses message quota).</p>
+        </div>
+        <input type="checkbox" checked={!!cfg.notify_whatsapp}
+          onChange={e => setCfg({ ...cfg, notify_whatsapp: e.target.checked })}
+          className="w-5 h-5 rounded border-[var(--border-color)] bg-[var(--bg-primary)] flex-shrink-0" />
       </div>
 
       {cfg.google_enabled && (
