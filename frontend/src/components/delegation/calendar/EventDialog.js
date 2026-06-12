@@ -114,12 +114,16 @@ export default function EventDialog({
         <div className="p-5 space-y-3">
           <div><label className={lbl}>Title</label>
             <Input value={form.title} onChange={e => set('title', e.target.value)} placeholder="Meeting, call, workshop…" className={`h-9 text-sm ${inputCls}`} /></div>
-          <div><label className={lbl}>Type</label>
+          <div><label className={lbl}>Event type</label>
             <select value={form.event_type} onChange={e => set('event_type', e.target.value)} className={fld}>
-              <option value="meeting">Meeting (online)</option>
-              <option value="exhibition">Exhibition</option>
-              <option value="school_workshop">School Workshop</option>
-              <option value="physical_workshop">Physical Workshop</option>
+              <optgroup label="Online">
+                <option value="meeting">Online meeting</option>
+              </optgroup>
+              <optgroup label="In person">
+                <option value="exhibition">Exhibition</option>
+                <option value="school_workshop">School workshop</option>
+                <option value="physical_workshop">Physical workshop</option>
+              </optgroup>
               <option value="other">Other</option>
             </select>
           </div>
@@ -142,7 +146,7 @@ export default function EventDialog({
 
           {form.event_type === 'meeting' && (<>
             <div className="grid grid-cols-2 gap-3">
-              <div><label className={lbl}>Meeting type</label>
+              <div><label className={lbl}>Join via</label>
                 <select value={form.meeting_provider} onChange={e => set('meeting_provider', e.target.value)} className={fld}>
                   <option value="">None</option>
                   <option value="zoom">Zoom</option>
