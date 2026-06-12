@@ -209,28 +209,28 @@ export default function MyTasksTable({ myEmp, completeInst, verifyInst, onEditTa
                     <span className={`capitalize ${PRI[t.priority] || ''}`}>{t.priority}</span>
                   </div>
                   {(dir === 'to' && t.status === 'pending') && (
-                    <button onClick={() => onDone(t)} className="w-full h-8 rounded-lg text-xs font-semibold text-white mt-1" style={{ background: '#10b981' }}>
-                      <Check className="h-3.5 w-3.5 inline mr-1" /> Mark Done
+                    <button onClick={() => onDone(t)} className="w-full h-11 rounded-lg text-sm font-semibold text-white mt-1" style={{ background: '#10b981' }}>
+                      <Check className="h-4 w-4 inline mr-1" /> Mark Done
                     </button>
                   )}
                   {t.status === 'completed' && (
-                    <button onClick={() => onVerify(t)} className="w-full h-8 rounded-lg text-xs font-semibold text-blue-500 border border-[var(--border-color)] mt-1">
-                      <Eye className="h-3.5 w-3.5 inline mr-1" /> Verify
+                    <button onClick={() => onVerify(t)} className="w-full h-11 rounded-lg text-sm font-semibold text-blue-500 border border-[var(--border-color)] mt-1">
+                      <Eye className="h-4 w-4 inline mr-1" /> Verify
                     </button>
                   )}
                   <div className="flex gap-2 mt-1">
                     {dir === 'by' && onEditTask && t.status !== 'verified' && (
-                      <button onClick={() => onEditTask(t)} className={`flex-1 h-8 rounded-lg text-xs font-semibold border border-[var(--border-color)] ${textSec}`}>
-                        <Pencil className="h-3 w-3 inline mr-1" /> Edit
+                      <button onClick={() => onEditTask(t)} className={`flex-1 h-10 rounded-lg text-xs font-semibold border border-[var(--border-color)] ${textSec}`}>
+                        <Pencil className="h-3.5 w-3.5 inline mr-1" /> Edit
                       </button>
                     )}
                     {dir === 'by' && (
-                      <button onClick={() => askDeleteOne(t)} className="flex-1 h-8 rounded-lg text-xs font-semibold border border-red-500/30 text-red-500">
-                        <Trash2 className="h-3 w-3 inline mr-1" /> Delete
+                      <button onClick={() => askDeleteOne(t)} className="flex-1 h-10 rounded-lg text-xs font-semibold border border-red-500/30 text-red-500">
+                        <Trash2 className="h-3.5 w-3.5 inline mr-1" /> Delete
                       </button>
                     )}
-                    <button onClick={() => setHistoryInst(t)} className={`flex-1 h-8 rounded-lg text-xs font-semibold border border-[var(--border-color)] ${textMuted}`}>
-                      <History className="h-3 w-3 inline mr-1" /> History
+                    <button onClick={() => setHistoryInst(t)} className={`flex-1 h-10 rounded-lg text-xs font-semibold border border-[var(--border-color)] ${textMuted}`}>
+                      <History className="h-3.5 w-3.5 inline mr-1" /> History
                     </button>
                   </div>
                 </div>

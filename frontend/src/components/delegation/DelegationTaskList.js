@@ -640,7 +640,7 @@ export function DelegationPersonDrawer({
           </button>
         </div>
 
-        <div className="grid grid-cols-4 gap-2 px-5 py-3 border-b border-[var(--border-color)]">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 px-5 py-3 border-b border-[var(--border-color)]">
           {[
             { label: 'Pending',   value: drawerTasks.filter(t => t.status === 'pending').length,   cls: 'text-orange-500' },
             { label: 'Completed', value: drawerTasks.filter(t => t.status === 'completed').length, cls: 'text-blue-500'   },

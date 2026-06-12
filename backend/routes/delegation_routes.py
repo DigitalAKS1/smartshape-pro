@@ -1347,7 +1347,7 @@ async def _agenda_fms(team, dfrom, dto):
         acts = ["complete_stage", "open"] if s.get("status") != "done" else ["open"]
         out.append(_ev(
             "fms", "fms_stage", f"{label} — {flow.get('title', '')}".strip(" —"),
-            d, s.get("stage_id", ""), "/flow-management",
+            d, s.get("stage_id", ""), f"/flow-management?flow={s.get('flow_id', '')}",
             start_time=t, status=s.get("status"), actions=acts,
             meta={"flow_id": s.get("flow_id"), "customer_name": flow.get("customer_name", ""),
                   "tat_status": s.get("tat_status", "")},
@@ -1371,7 +1371,7 @@ async def _agenda_visits(email, dfrom, dto):
             acts = ["checkout", "open"]
         out.append(_ev(
             "visit", "visit", r.get("school_name") or "Visit", r["visit_date"],
-            r.get("plan_id", ""), "/visit-planning",
+            r.get("plan_id", ""), f"/visit-planning?plan={r.get('plan_id', '')}",
             start_time=(r.get("visit_time") or None), status=st, actions=acts,
             meta={"school_id": r.get("school_id", ""), "assigned_name": r.get("assigned_name", "")},
         ))
@@ -1390,7 +1390,7 @@ async def _agenda_crm_tasks(email, dfrom, dto):
         acts = ["open"] if done else ["complete", "reschedule", "open"]
         out.append(_ev(
             "task", "my_task", r.get("title") or "Task", r["due_date"],
-            r.get("task_id", ""), "/leads",
+            r.get("task_id", ""), f"/leads?lead={r.get('lead_id', '')}",
             start_time=(r.get("due_time") or None), status=r.get("status"),
             priority=r.get("priority"), actions=acts,
             meta={"lead_id": r.get("lead_id", ""), "lead_name": r.get("lead_name", "")},
@@ -1411,7 +1411,7 @@ async def _agenda_followups(email, dfrom, dto):
         acts = ["open"] if done else ["log_outcome", "reschedule", "open"]
         out.append(_ev(
             "followup", ftype, f"{ftype.title()} · {r.get('lead_name', '') or r.get('lead_id', '')}".strip(" ·"),
-            r["followup_date"], r.get("followup_id", ""), "/leads",
+            r["followup_date"], r.get("followup_id", ""), f"/leads?lead={r.get('lead_id', '')}",
             start_time=(r.get("followup_time") or None), status=r.get("status"), actions=acts,
             meta={"lead_id": r.get("lead_id", ""), "outcome": r.get("outcome", "")},
         ))

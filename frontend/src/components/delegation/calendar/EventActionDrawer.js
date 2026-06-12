@@ -214,9 +214,9 @@ export default function EventActionDrawer({ event, onAction, onEditEvent, onSend
           )}
 
           {has('reassign') && (
-            <button onClick={() => navigate('/delegation')}
+            <button onClick={() => navigate('/delegation?tab=mytasks')}
               className={`${row} border border-[var(--border-color)] ${textSec}`}>
-              <ArrowRightLeft className="h-4 w-4" /> Reassign (in Delegation)
+              <ArrowRightLeft className="h-4 w-4" /> Reassign (in My Tasks)
             </button>
           )}
         </div>

@@ -329,7 +329,7 @@ export default function MyPlanner({
                   <div className="space-y-1 flex-1">
                     {d.list.slice(0, 4).map(t => (
                       <div key={t.instance_id}
-                        className={`text-[10px] px-1.5 py-1 rounded truncate flex items-center gap-1 ${DONE(t) ? `line-through ${textMuted}` : textSec}`}
+                        className={`text-[11px] px-1.5 py-1 rounded truncate flex items-center gap-1 ${DONE(t) ? `line-through ${textMuted}` : textSec}`}
                         style={{ background: 'var(--bg-hover)' }}>
                         <PriorityDot p={t.priority} /> <span className="truncate">{t.task_title}</span>
                       </div>
