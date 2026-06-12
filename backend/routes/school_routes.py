@@ -460,6 +460,38 @@ async def _notify_teacher(teacher_id: str, title: str, message: str):
     })
 
 
+# ── Transactional emails for portal events (reuse the Gmail pipeline; best-effort) ──
+
+def _portal_email_html(name: str, heading: str, body: str, cta_label: str = "", cta_url: str = "") -> str:
+    btn = (f'<p style="margin:24px 0"><a href="{cta_url}" style="background:#e94560;color:#fff;'
+           f'padding:11px 20px;border-radius:8px;text-decoration:none">{cta_label}</a></p>') if cta_label and cta_url else ""
+    return f"""<div style="font-family:Arial,sans-serif;max-width:520px;margin:auto">
+      <h2 style="color:#e94560">{heading}</h2>
+      <p>Hello {name or 'there'},</p>
+      <p>{body}</p>{btn}
+      <p style="color:#888;font-size:12px">— SmartShape Pro</p></div>"""
+
+
+async def _email_teacher(teacher_id: str, subject: str, heading: str, body: str, cta_label="", cta_url=""):
+    from services.school_auth import _send_email
+    t = await db.teachers.find_one({"teacher_id": teacher_id}, {"_id": 0, "email": 1, "name": 1})
+    if t and (t.get("email") or "").strip():
+        try:
+            await _send_email(t["email"], subject, _portal_email_html(t.get("name", ""), heading, body, cta_label, cta_url))
+        except Exception:
+            pass
+
+
+async def _email_school(school_id: str, subject: str, heading: str, body: str, cta_label="", cta_url=""):
+    from services.school_auth import _send_email
+    s = await db.schools.find_one({"school_id": school_id}, {"_id": 0, "email": 1, "school_name": 1})
+    if s and (s.get("email") or "").strip():
+        try:
+            await _send_email(s["email"], subject, _portal_email_html(s.get("school_name", ""), heading, body, cta_label, cta_url))
+        except Exception:
+            pass
+
+
 async def _require_admin(request: Request) -> dict:
     user = await get_current_user(request)
     if user.get("role") != "admin":
@@ -575,6 +607,8 @@ async def admin_approve_video(video_id: str, request: Request):
         "status": "approved", "review_note": None, "reviewed_by": user.get("email"),
         "reviewed_at": datetime.now(timezone.utc).isoformat()}})
     await _notify_teacher(v["teacher_id"], "Your video was approved", f'"{v.get("title")}" is now live in the gallery.')
+    await _email_teacher(v["teacher_id"], "Your SmartShape video was approved 🎉", "Video approved",
+                         f'Your video "<b>{v.get("title")}</b>" has been approved and is now live in the gallery.')
     return await db.teacher_videos.find_one({"video_id": video_id}, {"_id": 0})
 
 
@@ -590,6 +624,8 @@ async def admin_reject_video(video_id: str, request: Request):
         "status": "rejected", "review_note": reason, "reviewed_by": user.get("email"),
         "reviewed_at": datetime.now(timezone.utc).isoformat()}})
     await _notify_teacher(v["teacher_id"], "Your video needs changes", f'"{v.get("title")}": {reason}')
+    await _email_teacher(v["teacher_id"], "Your SmartShape video needs changes", "Video needs changes",
+                         f'Your video "<b>{v.get("title")}</b>" wasn\'t approved. Reason: {reason}. You can edit and re-upload from your portal.')
     return await db.teacher_videos.find_one({"video_id": video_id}, {"_id": 0})
 
 
@@ -688,6 +724,8 @@ async def admin_set_winners(competition_id: str, request: Request):
         v = await db.teacher_videos.find_one({"video_id": vid})
         if v:
             await _notify_teacher(v["teacher_id"], "🏆 You won!", f'"{v.get("title")}" won {comp.get("title")}!')
+            await _email_teacher(v["teacher_id"], f"🏆 You won {comp.get('title')}!", "Congratulations!",
+                                 f'Your entry "<b>{v.get("title")}</b>" won <b>{comp.get("title")}</b>. {comp.get("prizes") or ""}')
     return await db.competitions.find_one({"competition_id": competition_id}, {"_id": 0})
 
 
@@ -909,8 +947,13 @@ async def admin_create_meeting(request: Request):
     await db.portal_meetings.insert_one(doc)
     school = await db.schools.find_one({"school_id": school_id}, {"_id": 0})
     await _notify_admin_school_action(school, f"has a meeting scheduled: {title}")
+    _mbody = f'A meeting "<b>{title}</b>" is scheduled for <b>{scheduled_at}</b>' + (f' ({platform}).' if platform else '.')
+    _cta = ("Join meeting", meeting_link) if meeting_link else ("", "")
     if doc["teacher_id"]:
         await _notify_teacher(doc["teacher_id"], "New meeting scheduled", f'{title} — {scheduled_at}')
+        await _email_teacher(doc["teacher_id"], f"Meeting scheduled: {title}", "Meeting scheduled", _mbody, *_cta)
+    else:
+        await _email_school(school_id, f"Meeting scheduled: {title}", "Meeting scheduled", _mbody, *_cta)
     return await db.portal_meetings.find_one({"meeting_id": meeting_id}, {"_id": 0})
 
 
