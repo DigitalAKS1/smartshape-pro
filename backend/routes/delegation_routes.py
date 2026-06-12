@@ -1494,7 +1494,8 @@ async def get_agenda(request: Request):
 # ══════════════════════════════════════════════════════════════════════════════
 
 EVENT_EDITABLE = ("title", "description", "location", "color", "date", "start_time", "end_time",
-                  "all_day", "meeting_provider", "meeting_link", "event_type", "visit_plan_id")
+                  "all_day", "meeting_provider", "meeting_link", "event_type", "visit_plan_id",
+                  "exhibition")
 
 IN_PERSON_EVENT_TYPES = ("exhibition", "school_workshop", "physical_workshop")
 EVENT_TYPE_COLORS = {"meeting": "#0ea5e9", "exhibition": "#a855f7",
@@ -1567,6 +1568,7 @@ async def create_event(request: Request):
         "meeting_provider": (body.get("meeting_provider") or "").strip(),
         "meeting_link": (body.get("meeting_link") or "").strip(),
         "event_type": event_type, "visit_plan_id": visit_plan_id,
+        "exhibition": (body.get("exhibition") if event_type == "exhibition" and isinstance(body.get("exhibition"), dict) else {}),
         "created_by": user.get("email"), "created_by_emp_id": actor["emp_id"],
         "collaborators": collab, "linked_event_id": body.get("linked_event_id", ""),
         "status": "active", "ext_sync": {}, "created_at": now_iso(), "updated_at": now_iso(),
@@ -2031,6 +2033,7 @@ async def _agenda_events(emp_id, email, dfrom, dto):
                   "description": r.get("description", ""),
                   "event_type": r.get("event_type", "meeting"),
                   "visit_plan_id": r.get("visit_plan_id", ""),
+                  "exhibition": r.get("exhibition", {}),
                   "invited": ext.get("sequence") is not None,
                   "sequence": ext.get("sequence"),
                   "meeting_provider": r.get("meeting_provider", ""),

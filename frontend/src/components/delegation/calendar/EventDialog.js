@@ -32,6 +32,12 @@ export default function EventDialog({
     event_type: event?.meta?.event_type || 'meeting',
     visit_plan_id: event?.meta?.visit_plan_id || '',
     create_visit_plan: false,
+    // Exhibition-specific details (only used when event_type === 'exhibition')
+    ex_stall: event?.meta?.exhibition?.stall_no || '',
+    ex_footfall: event?.meta?.exhibition?.expected_footfall || '',
+    ex_organiser: event?.meta?.exhibition?.organiser || '',
+    ex_organiser_contact: event?.meta?.exhibition?.organiser_contact || '',
+    ex_setup_time: event?.meta?.exhibition?.setup_time || '',
     color: event?.color || SKY,
   });
   // edit mode: we only have collaborator display names from the agenda; collaborator
@@ -94,6 +100,15 @@ export default function EventDialog({
     } else {
       payload.meeting_provider = ''; payload.meeting_link = '';
     }
+    if (form.event_type === 'exhibition') {
+      payload.exhibition = {
+        stall_no: form.ex_stall.trim(),
+        expected_footfall: form.ex_footfall === '' ? '' : Number(form.ex_footfall),
+        organiser: form.ex_organiser.trim(),
+        organiser_contact: form.ex_organiser_contact.trim(),
+        setup_time: form.ex_setup_time,
+      };
+    }
     if (form.visit_plan_id) payload.visit_plan_id = form.visit_plan_id;
     if (form.create_visit_plan) payload.create_visit_plan = true;
     if (collab.emp_ids.length) payload.collaborator_emp_ids = collab.emp_ids;
@@ -143,6 +158,30 @@ export default function EventDialog({
           <div><label className={lbl}>Location{isInPerson ? ' *' : ''}</label>
             <Input value={form.location} onChange={e => set('location', e.target.value)}
               placeholder={isInPerson ? 'Venue / address (required)' : 'Optional'} className={`h-9 text-sm ${inputCls}`} /></div>
+
+          {form.event_type === 'exhibition' && (
+            <div className="space-y-2 rounded-lg border border-[var(--border-color)] p-3">
+              <p className={`text-[11px] font-semibold uppercase tracking-wide ${textMuted}`}>Exhibition details</p>
+              <div className="grid grid-cols-2 gap-3">
+                <div><label className={lbl}>Stall / booth no.</label>
+                  <Input value={form.ex_stall} onChange={e => set('ex_stall', e.target.value)}
+                    placeholder="e.g. B-12" className={`h-9 text-sm ${inputCls}`} /></div>
+                <div><label className={lbl}>Expected footfall</label>
+                  <input type="number" min="0" value={form.ex_footfall} onChange={e => set('ex_footfall', e.target.value)}
+                    placeholder="e.g. 500" className={fld} /></div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div><label className={lbl}>Organiser</label>
+                  <Input value={form.ex_organiser} onChange={e => set('ex_organiser', e.target.value)}
+                    placeholder="Organising body" className={`h-9 text-sm ${inputCls}`} /></div>
+                <div><label className={lbl}>Organiser contact</label>
+                  <Input value={form.ex_organiser_contact} onChange={e => set('ex_organiser_contact', e.target.value)}
+                    placeholder="Phone / email" className={`h-9 text-sm ${inputCls}`} /></div>
+              </div>
+              <div><label className={lbl}>Setup time</label>
+                <input type="time" value={form.ex_setup_time} onChange={e => set('ex_setup_time', e.target.value)} className={fld} /></div>
+            </div>
+          )}
 
           {form.event_type === 'meeting' && (<>
             <div className="grid grid-cols-2 gap-3">
