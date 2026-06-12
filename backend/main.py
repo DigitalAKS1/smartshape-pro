@@ -269,9 +269,11 @@ async def startup():
         {"die_id": "die_m002", "code": "D-MCH-002", "name": "Machine Press B", "type": "machine", "stock_qty": 3, "reserved_qty": 0, "min_level": 2, "is_active": True}
     ]
 
-    for die in sample_dies:
-        existing = await db.dies.find_one({"die_id": die["die_id"]})
-        if not existing:
+    # Only seed demo dies on a brand-new (empty) database. Once real inventory
+    # exists we must NOT re-insert these, or a deliberately deleted demo die
+    # (D-STD-/D-LRG-/D-MCH-) would resurrect itself on every backend restart.
+    if await db.dies.count_documents({}) == 0:
+        for die in sample_dies:
             await db.dies.insert_one(die)
 
     # Seed modules
