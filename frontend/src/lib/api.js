@@ -636,6 +636,15 @@ export const portal = {
   competition: (id) => API.get(`/competitions/${id}`),
 };
 
+// Admin: School Portal inbox (school/teacher submissions + activity feed)
+export const portalInbox = {
+  get: () => API.get('/admin/portal-inbox'),
+  summary: () => API.get('/admin/portal-inbox/summary'),
+  markRead: (id) => API.put(`/admin/portal-inbox/notifications/${id}/read`),
+  markAllRead: () => API.put('/admin/portal-inbox/notifications/read-all'),
+  updateRequest: (id, status) => API.put(`/admin/school-requests/${id}`, { status }),
+};
+
 // Admin: teacher-content review + competitions
 export const adminContent = {
   videos: (status = 'pending') => API.get('/admin/teacher-videos', { params: { status } }),

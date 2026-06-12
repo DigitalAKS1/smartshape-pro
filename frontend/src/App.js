@@ -79,6 +79,7 @@ import TeacherActivate from './pages/TeacherActivate';
 import TeacherDashboard from './pages/teacher/TeacherDashboard';
 import ContentReview from './pages/admin/ContentReview';
 import CompetitionsAdmin from './pages/admin/CompetitionsAdmin';
+import PortalInbox from './pages/admin/PortalInbox';
 
 import { ThemeProvider } from './contexts/ThemeContext';
 import GeofenceGuard from './components/GeofenceGuard';
@@ -159,6 +160,7 @@ function AppRouter() {
       <Route path="/teacher/login" element={<TeacherLogin />} />
       <Route path="/teacher/activate" element={<TeacherActivate />} />
       <Route path="/teacher" element={<TeacherDashboard />} />
+      <Route path="/portal-inbox" element={<ProtectedRoute><PortalInbox /></ProtectedRoute>} />
       <Route path="/teacher-review" element={<ProtectedRoute><ContentReview /></ProtectedRoute>} />
       <Route path="/competitions-admin" element={<ProtectedRoute><CompetitionsAdmin /></ProtectedRoute>} />
       <Route path="/get-app" element={<GetApp />} />

@@ -706,3 +706,55 @@ async def portal_competition_detail(competition_id: str, request: Request):
          "video_url": 1, "thumbnail_url": 1, "machine_used": 1, "dies_used": 1}
     ).sort("reviewed_at", -1).to_list(500)
     return comp
+
+
+# ==================== ADMIN — SCHOOL PORTAL INBOX (closes the review loop) ====================
+
+@router.get("/admin/portal-inbox")
+async def admin_portal_inbox(request: Request):
+    await _require_admin(request)
+    notifications = await db.admin_notifications.find({}, {"_id": 0}).sort("created_at", -1).to_list(100)
+    requests_ = await db.school_requests.find({"status": "open"}, {"_id": 0}).sort("created_at", -1).to_list(100)
+    unread = await db.admin_notifications.count_documents({"read": False})
+    pending_videos = await db.teacher_videos.count_documents({"status": "pending"})
+    return {
+        "notifications": notifications,
+        "requests": requests_,
+        "counts": {"unread": unread, "open_requests": len(requests_), "pending_videos": pending_videos},
+    }
+
+
+@router.get("/admin/portal-inbox/summary")
+async def admin_portal_inbox_summary(request: Request):
+    await _require_admin(request)
+    return {
+        "unread": await db.admin_notifications.count_documents({"read": False}),
+        "open_requests": await db.school_requests.count_documents({"status": "open"}),
+        "pending_videos": await db.teacher_videos.count_documents({"status": "pending"}),
+    }
+
+
+@router.put("/admin/portal-inbox/notifications/{notification_id}/read")
+async def admin_mark_notif_read(notification_id: str, request: Request):
+    await _require_admin(request)
+    await db.admin_notifications.update_one({"notification_id": notification_id}, {"$set": {"read": True}})
+    return {"message": "ok"}
+
+
+@router.put("/admin/portal-inbox/notifications/read-all")
+async def admin_mark_all_notifs_read(request: Request):
+    await _require_admin(request)
+    await db.admin_notifications.update_many({"read": False}, {"$set": {"read": True}})
+    return {"message": "ok"}
+
+
+@router.put("/admin/school-requests/{request_id}")
+async def admin_update_school_request(request_id: str, request: Request):
+    await _require_admin(request)
+    body = await request.json()
+    status = body.get("status") or "handled"
+    if not await db.school_requests.find_one({"request_id": request_id}):
+        raise HTTPException(status_code=404, detail="Request not found")
+    await db.school_requests.update_one({"request_id": request_id},
+                                        {"$set": {"status": status, "handled_at": datetime.now(timezone.utc).isoformat()}})
+    return await db.school_requests.find_one({"request_id": request_id}, {"_id": 0})

@@ -3,7 +3,7 @@ import {
   Warehouse, ClipboardList, DollarSign, Users,
   Smartphone, Layers, IndianRupee, UserCog, Store, MapPin, Target,
   CalendarDays, Calendar, ShoppingCart, Upload, Activity,
-  Home, MoreHorizontal, Zap, Heart, Truck, Award, Video, Trophy,
+  Home, MoreHorizontal, Zap, Heart, Truck, Award, Video, Trophy, Inbox,
 } from 'lucide-react';
 
 /**
@@ -44,6 +44,7 @@ export const MODULE_ROUTE_MAP = {
     { path: '/dispatch-tracking', icon: Package, label: 'Dispatch Tracking' },
     { path: '/customer-engagement', icon: Heart, label: 'Customer Engagement' },
     { path: '/marketing', icon: Zap, label: 'Marketing & WhatsApp' },
+    { path: '/portal-inbox', icon: Inbox, label: 'Portal Inbox' },
     { path: '/teacher-review', icon: Video, label: 'Teacher Content' },
     { path: '/competitions-admin', icon: Trophy, label: 'Competitions' },
   ],
