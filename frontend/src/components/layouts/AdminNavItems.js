@@ -44,6 +44,9 @@ export const MODULE_ROUTE_MAP = {
     { path: '/dispatch-tracking', icon: Package, label: 'Dispatch Tracking' },
     { path: '/customer-engagement', icon: Heart, label: 'Customer Engagement' },
     { path: '/marketing', icon: Zap, label: 'Marketing & WhatsApp' },
+  ],
+  // School & Teacher portal admin — grouped in its own collapsible section.
+  school_portal: [
     { path: '/portal-inbox', icon: Inbox, label: 'Portal Inbox', adminOnly: true },
     { path: '/teacher-review', icon: Video, label: 'Teacher Content', adminOnly: true },
     { path: '/competitions-admin', icon: Trophy, label: 'Competitions', adminOnly: true },
@@ -80,6 +83,7 @@ export const SIDEBAR_SECTIONS = [
   { label: 'Delegation',        modules: ['delegation'] },
   { label: 'Flow Management',   modules: ['flow_management'] },
   { label: 'Certificates',      modules: ['certificates'] },
+  { label: 'School Portal',     modules: ['school_portal'] },
   { label: 'Administration',    modules: ['user_management', 'settings'] },
 ];
 

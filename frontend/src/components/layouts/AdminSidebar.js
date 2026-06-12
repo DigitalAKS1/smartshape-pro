@@ -1,6 +1,6 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Sun, Moon, X, LogOut, CalendarDays } from 'lucide-react';
+import { Sun, Moon, X, LogOut, CalendarDays, ChevronDown } from 'lucide-react';
 import { useTheme } from '../../contexts/ThemeContext';
 import NotificationBell from './NotificationBell';
 import { TODAY_ITEM } from './AdminNavItems';
@@ -18,6 +18,19 @@ import { TODAY_ITEM } from './AdminNavItems';
 export default function AdminSidebar({ sidebarGroups, user, initials, onClose, onLogout }) {
   const { toggleTheme, isDark } = useTheme();
   const location = useLocation();
+
+  // Collapsible nav groups — persisted so the sidebar remembers what you closed.
+  const [collapsed, setCollapsed] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('sidebarCollapsed') || '{}'); } catch { return {}; }
+  });
+  const toggleGroup = (label) => setCollapsed((prev) => {
+    const next = { ...prev, [label]: !prev[label] };
+    try { localStorage.setItem('sidebarCollapsed', JSON.stringify(next)); } catch { /* ignore */ }
+    return next;
+  });
+  const groupHasActive = (group) => group.items.some((it) =>
+    location.pathname === it.path
+    || (it.path !== '/today' && it.path !== '/dashboard' && location.pathname.startsWith(it.path + '/')));
 
   return (
     <div className="h-full flex flex-col">
@@ -84,14 +97,22 @@ export default function AdminSidebar({ sidebarGroups, user, initials, onClose, o
           })()}
         </div>
 
-        {sidebarGroups.map((group, gi) => (
+        {sidebarGroups.map((group, gi) => {
+          const isCollapsed = group.label ? (!!collapsed[group.label] && !groupHasActive(group)) : false;
+          return (
           <div key={gi}>
             {gi > 0 && <div className="h-px bg-[var(--border-color)] mx-1 my-2" />}
             {group.label && (
-              <p className="px-2 pt-1 pb-1.5 text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--text-muted)]">
-                {group.label}
-              </p>
+              <button
+                type="button"
+                onClick={() => toggleGroup(group.label)}
+                className="w-full flex items-center justify-between px-2 pt-1 pb-1.5 rounded-lg hover:bg-[var(--bg-hover)] transition-colors group/header"
+              >
+                <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--text-muted)]">{group.label}</span>
+                <ChevronDown className={`h-3 w-3 text-[var(--text-muted)] transition-transform duration-200 ${isCollapsed ? '-rotate-90' : ''}`} />
+              </button>
             )}
+            {!isCollapsed && (
             <div className="space-y-0.5">
               {group.items.map((item) => {
                 const Icon = item.icon;
@@ -123,8 +144,10 @@ export default function AdminSidebar({ sidebarGroups, user, initials, onClose, o
                 );
               })}
             </div>
+            )}
           </div>
-        ))}
+          );
+        })}
 
         {/* My Account section always present */}
         <div>
