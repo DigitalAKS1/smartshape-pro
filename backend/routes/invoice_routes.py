@@ -46,7 +46,7 @@ def _num(v):
 
 
 def _norm_invoice(raw: dict) -> dict:
-    return {
+    n = {
         "invoice_number": str(_g(raw, "invoice_number", "invoice_no", "invoiceno", "number", "inv_no", "bill_no")).strip(),
         "invoice_date": str(_g(raw, "invoice_date", "date", "inv_date", "bill_date")).strip(),
         "school_name": str(_g(raw, "school_name", "school", "buyer", "buyer_name", "customer", "customer_name", "party", "party_name")).strip(),
@@ -61,6 +61,10 @@ def _norm_invoice(raw: dict) -> dict:
         "items": raw.get("items") or raw.get("line_items") or [],
         "raw": raw,
     }
+    # Minimal exports carry only 'amount' -> subtotal; derive total from subtotal+tax.
+    if n["total_amount"] == 0 and n["subtotal"] > 0:
+        n["total_amount"] = round(n["subtotal"] + n["tax_amount"], 2)
+    return n
 
 
 # ── Parsers ───────────────────────────────────────────────────────────────────
@@ -121,19 +125,23 @@ async def _match_school(n: dict):
 
 
 async def _match_order(n: dict):
+    """Returns (order_id, quotation_id, school_id, school_name) for a matched SO/quote."""
     ref = n["order_number"] or n["po_number"]
     if ref:
         o = await db.orders.find_one({"order_number": {"$regex": f"^{re.escape(ref)}$", "$options": "i"}},
-                                     {"_id": 0, "order_id": 1, "quotation_id": 1})
+                                     {"_id": 0, "order_id": 1, "quotation_id": 1, "school_id": 1, "school_name": 1})
         if o:
-            return o["order_id"], o.get("quotation_id", "")
+            return o["order_id"], o.get("quotation_id", ""), o.get("school_id", ""), o.get("school_name", "")
     if n["quotation_number"]:
         q = await db.quotations.find_one({"$or": [{"quotation_number": n["quotation_number"]}, {"quote_number": n["quotation_number"]}]},
-                                         {"_id": 0, "quotation_id": 1})
+                                         {"_id": 0, "quotation_id": 1, "school_id": 1, "school_name": 1})
         if q:
-            o = await db.orders.find_one({"quotation_id": q["quotation_id"]}, {"_id": 0, "order_id": 1})
-            return (o["order_id"] if o else ""), q["quotation_id"]
-    return "", ""
+            o = await db.orders.find_one({"quotation_id": q["quotation_id"]},
+                                         {"_id": 0, "order_id": 1, "school_id": 1, "school_name": 1})
+            sid = (o.get("school_id") if o else "") or q.get("school_id", "")
+            sname = (o.get("school_name") if o else "") or q.get("school_name", "")
+            return (o["order_id"] if o else ""), q["quotation_id"], sid, sname
+    return "", "", "", ""
 
 
 # ── Bulk import ────────────────────────────────────────────────────────────────
@@ -159,11 +167,23 @@ async def bulk_import_invoices(request: Request, file: UploadFile = File(...)):
             if not n["invoice_number"]:
                 s["errors"].append("row missing invoice_number")
                 continue
-            if await db.invoices.find_one({"invoice_number": n["invoice_number"]}, {"_id": 0, "invoice_id": 1}):
+            # Dedup scoped by GSTIN so the same invoice number reused by two
+            # different schools isn't wrongly dropped.
+            if await db.invoices.find_one(
+                {"invoice_number": n["invoice_number"], "gstin": n["gstin"]},
+                {"_id": 0, "invoice_id": 1},
+            ):
                 s["skipped_dupe"] += 1
                 continue
             school_id, school_name = await _match_school(n)
-            order_id, quotation_id = await _match_order(n) if school_id else ("", "")
+            order_id, quotation_id, o_school_id, o_school_name = await _match_order(n)
+            # If the school wasn't matched but the order/quote was, adopt its school.
+            if not school_id and o_school_id:
+                school_id, school_name = o_school_id, o_school_name
+            # If the order belongs to a different school than the matched one,
+            # don't cross-link — drop the order link.
+            elif school_id and o_school_id and o_school_id != school_id:
+                order_id, quotation_id = "", ""
             if school_id and order_id:
                 status = "matched"; s["matched_so"] += 1
             elif school_id:

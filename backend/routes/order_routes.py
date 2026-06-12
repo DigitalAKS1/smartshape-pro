@@ -29,6 +29,19 @@ async def log_activity(user_email: str, action: str, entity_type: str, entity_id
     })
 
 
+async def _assert_dispatchable(order, items):
+    """Guard shared by all dispatch paths: block out-of-stock items and
+    enforce the payment threshold before an order can leave the building."""
+    for it in items:
+        if it.get("status") == "out_of_stock":
+            raise HTTPException(status_code=400, detail=f"Cannot dispatch — item out of stock: {it.get('die_name','')}")
+    threshold = float(order.get("payment_threshold_pct", 50))
+    grand = float(order.get("grand_total", 0) or 0)
+    received = float(order.get("total_paid", order.get("payment_received", 0)) or 0)
+    if grand > 0 and (received / grand * 100) < threshold:
+        raise HTTPException(status_code=400, detail=f"Cannot dispatch — payment below threshold ({threshold}% required)")
+
+
 # ==================== ORDERS ====================
 
 @router.get("/orders")
@@ -249,6 +262,7 @@ async def update_order_status(order_id: str, request: Request):
     if new_status == "dispatched":
         update_data["dispatch_date"] = body.get("dispatch_date", datetime.now(timezone.utc).strftime("%Y-%m-%d"))
         items = await db.order_items.find({"order_id": order_id}, {"_id": 0}).to_list(1000)
+        await _assert_dispatchable(order, items)
         for item in items:
             if item.get("status") == "on_hold":
                 await db.dies.update_one({"die_id": item["die_id"]}, {
@@ -290,14 +304,7 @@ async def update_order_production_stage(order_id: str, request: Request):
         raise HTTPException(status_code=404, detail="Order not found")
     if new_stage == "dispatched":
         items = await db.order_items.find({"order_id": order_id}, {"_id": 0}).to_list(1000)
-        for it in items:
-            if it.get("status") == "out_of_stock":
-                raise HTTPException(status_code=400, detail=f"Cannot dispatch — item out of stock: {it.get('die_name','')}")
-        threshold = float(order.get("payment_threshold_pct", 50))
-        grand = float(order.get("grand_total", 0) or 0)
-        received = float(order.get("payment_received", 0) or 0)
-        if grand > 0 and (received / grand * 100) < threshold:
-            raise HTTPException(status_code=400, detail=f"Cannot dispatch — payment below threshold ({threshold}% required)")
+        await _assert_dispatchable(order, items)
     now_iso = datetime.now(timezone.utc).isoformat()
     await db.orders.update_one({"order_id": order_id}, {"$set": {
         "production_stage": new_stage,
@@ -342,9 +349,8 @@ async def record_payment(order_id: str, request: Request):
     await db.payments.insert_one(payment_doc)
     all_payments = await db.payments.find({"order_id": order_id}, {"_id": 0}).to_list(None)
     total_paid = sum(p["amount"] for p in all_payments)
-    quot = await db.quotations.find_one({"quotation_id": order.get("quotation_id")}, {"_id": 0})
-    grand_total = (quot or {}).get("grand_total", 0)
-    payment_status = "paid" if total_paid >= grand_total else "partial" if total_paid > 0 else "unpaid"
+    grand_total = float(order.get("grand_total", 0) or 0)
+    payment_status = "paid" if grand_total > 0 and total_paid >= grand_total else "partial" if total_paid > 0 else "unpaid"
     await db.orders.update_one({"order_id": order_id}, {
         "$set": {"total_paid": total_paid, "payment_status": payment_status}
     })
@@ -374,6 +380,9 @@ async def create_dispatch(request: Request):
     if order["order_status"] not in ("confirmed", "pending"):
         raise HTTPException(status_code=400, detail=f"Cannot dispatch order in '{order['order_status']}' status")
 
+    items = await db.order_items.find({"order_id": order_id}, {"_id": 0}).to_list(1000)
+    await _assert_dispatchable(order, items)
+
     dispatch_id = f"dsp_{uuid.uuid4().hex[:12]}"
     dispatch_count = await db.dispatches.count_documents({})
     dispatch_number = f"DSP-{datetime.now(timezone.utc).year}-{dispatch_count + 1:04d}"
@@ -394,7 +403,6 @@ async def create_dispatch(request: Request):
     }
     await db.dispatches.insert_one(dispatch_doc)
 
-    items = await db.order_items.find({"order_id": order_id}, {"_id": 0}).to_list(1000)
     for item in items:
         if item.get("status") in ("on_hold", "confirmed"):
             await db.dies.update_one({"die_id": item["die_id"]}, {

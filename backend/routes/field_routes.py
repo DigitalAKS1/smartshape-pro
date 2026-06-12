@@ -845,7 +845,7 @@ async def submit_reimbursement(month_year: str, request: Request):
     visits = await db.field_visits.find({
         "sales_person_email": user["email"],
         "visit_date": {"$regex": f"^{month_year}"},
-        "status": "visited",
+        "status": {"$in": ["checked_in", "completed"]},
     }, {"_id": 0}).to_list(1000)
     total_visits = len(visits)
 
@@ -1329,7 +1329,7 @@ async def get_target_progress(request: Request, month_year: Optional[str] = None
 
     visits_done = await db.field_visits.count_documents({
         "sales_person_email": user["email"],
-        "status": "visited",
+        "status": {"$in": ["checked_in", "completed"]},
         "visit_date": {"$regex": f"^{my}"},
     })
     plans_done = await db.visit_plans.count_documents({

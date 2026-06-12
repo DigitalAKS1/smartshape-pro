@@ -769,6 +769,65 @@ async def _sales_lead_scope(email: str) -> list:
     return [{"assigned_to": email}, {"school_id": {"$in": owned}}]
 
 
+async def _user_can_access_school(user: dict, school: dict) -> bool:
+    """Mirror GET /schools sales scope: admin sees all; accounts/store none;
+    sales sees owned/created schools + schools holding their leads."""
+    if not school:
+        return False
+    team = get_team(user)
+    if team == "admin":
+        return True
+    if team in ("accounts", "store"):
+        return False
+    email = user["email"]
+    if school.get("assigned_to") == email or school.get("created_by") == email:
+        return True
+    sid = school.get("school_id")
+    if sid:
+        lead = await db.leads.find_one(
+            {"school_id": sid, "assigned_to": email}, {"_id": 0, "lead_id": 1}
+        )
+        if lead:
+            return True
+    return False
+
+
+async def _user_can_mutate_lead(user: dict, lead: dict) -> bool:
+    """admin all; accounts/store none; sales if assigned or under an owned school."""
+    if not lead:
+        return False
+    team = get_team(user)
+    if team == "admin":
+        return True
+    if team in ("accounts", "store"):
+        return False
+    email = user["email"]
+    if lead.get("assigned_to") == email:
+        return True
+    sid = lead.get("school_id")
+    if sid and sid in (await _owned_school_ids(email)):
+        return True
+    return False
+
+
+async def _user_can_mutate_contact(user: dict, contact: dict) -> bool:
+    """admin all; accounts/store none; sales if creator/assignee or under an owned school."""
+    if not contact:
+        return False
+    team = get_team(user)
+    if team == "admin":
+        return True
+    if team in ("accounts", "store"):
+        return False
+    email = user["email"]
+    if contact.get("created_by") == email or contact.get("assigned_to") == email:
+        return True
+    sid = contact.get("school_id")
+    if sid and sid in (await _owned_school_ids(email)):
+        return True
+    return False
+
+
 async def _assign_school_cascade(school_id: str, assigned_to: str, assigned_name: str, actor: dict) -> dict:
     """Set a school's owner and cascade that owner onto ALL its contacts and leads."""
     now_iso = datetime.now(timezone.utc).isoformat()
@@ -875,7 +934,12 @@ async def create_school(request: Request):
 
 @router.put("/schools/{school_id}")
 async def update_school(school_id: str, request: Request):
-    await get_current_user(request)
+    user = await get_current_user(request)
+    school = await db.schools.find_one({"school_id": school_id}, {"_id": 0})
+    if not school:
+        raise HTTPException(status_code=404, detail="School not found")
+    if not await _user_can_access_school(user, school):
+        raise HTTPException(status_code=403, detail="Not authorized to edit this school")
     body = await request.json()
     allowed = {}
     for k in ("school_name", "school_type", "board", "group_id", "website", "email", "phone",
@@ -1014,10 +1078,12 @@ async def restore_school(school_id: str, request: Request):
 
 @router.get("/schools/{school_id}/profile")
 async def get_school_profile(school_id: str, request: Request):
-    await get_current_user(request)
+    user = await get_current_user(request)
     school = await db.schools.find_one({"school_id": school_id}, {"_id": 0})
     if not school:
         raise HTTPException(status_code=404, detail="School not found")
+    if not await _user_can_access_school(user, school):
+        raise HTTPException(status_code=403, detail="Not authorized to view this school")
     school_name = school.get("school_name", "")
 
     leads = await db.leads.find({"school_id": school_id}, {"_id": 0}).to_list(None)
@@ -1328,7 +1394,12 @@ async def create_contact(request: Request):
 
 @router.put("/contacts/{contact_id}")
 async def update_contact(contact_id: str, request: Request):
-    await get_current_user(request)
+    user = await get_current_user(request)
+    existing_contact = await db.contacts.find_one({"contact_id": contact_id}, {"_id": 0})
+    if not existing_contact:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    if not await _user_can_mutate_contact(user, existing_contact):
+        raise HTTPException(status_code=403, detail="Not authorized to edit this contact")
     body = await request.json()
     allowed = {}
     for k in ("name", "phone", "email", "designation", "contact_role_id", "source", "source_id", "notes", "status", "birthday", "assigned_to"):
@@ -1402,6 +1473,8 @@ async def delete_contact(contact_id: str, request: Request):
     contact = await db.contacts.find_one({"contact_id": contact_id}, {"_id": 0})
     if not contact:
         raise HTTPException(status_code=404, detail="Contact not found")
+    if not await _user_can_mutate_contact(user, contact):
+        raise HTTPException(status_code=403, detail="Not authorized to delete this contact")
     # Block deletion if contact has been converted to an active lead
     if contact.get("converted_to_lead") and contact.get("lead_id"):
         lead = await db.leads.find_one({"lead_id": contact["lead_id"], "is_deleted": {"$ne": True}}, {"_id": 0, "lead_id": 1})
@@ -1754,6 +1827,53 @@ async def get_leads(request: Request):
     return leads
 
 
+@router.get("/leads/search")
+async def search_leads(request: Request, q: str = "", limit: int = 8):
+    """Typeahead lead search, scoped like GET /leads. Placed before /leads/{lead_id}
+    routes so it isn't shadowed."""
+    user = await get_current_user(request)
+    team = get_team(user)
+    q = (q or "").strip()
+    if len(q) < 2:
+        return {"leads": []}
+
+    if team == "admin":
+        scope = {}
+    elif team in ("accounts", "store"):
+        return {"leads": []}
+    else:  # sales — assigned + everything under owned schools
+        owned = await _owned_school_ids(user["email"])
+        scope = {"$or": [
+            {"assigned_to": user["email"]},
+            {"school_id": {"$in": owned}} if owned else {"lead_id": "__none__"},
+        ]}
+
+    rx = {"$regex": re.escape(q), "$options": "i"}
+    text = {"$or": [
+        {"company_name": rx},
+        {"contact_name": rx},
+        {"contact_phone": rx},
+        {"school_name": rx},
+    ]}
+    query = {"$and": [scope, text]} if scope else text
+
+    try:
+        lim = max(1, min(25, int(limit)))
+    except (TypeError, ValueError):
+        lim = 8
+
+    rows = await db.leads.find(
+        query,
+        {"_id": 0, "lead_id": 1, "company_name": 1, "contact_name": 1, "contact_phone": 1,
+         "contact_email": 1, "school_id": 1, "school_name": 1, "stage": 1},
+    ).sort("created_at", -1).limit(lim).to_list(lim)
+
+    for r in rows:
+        if not r.get("company_name"):
+            r["company_name"] = r.get("school_name", "")
+    return {"leads": rows}
+
+
 @router.post("/leads")
 async def create_lead(request: Request):
     user = await get_current_user(request)
@@ -1860,6 +1980,8 @@ async def update_lead(lead_id: str, request: Request):
     existing = await db.leads.find_one({"lead_id": lead_id}, {"_id": 0})
     if not existing:
         raise HTTPException(status_code=404, detail="Lead not found")
+    if not await _user_can_mutate_lead(user, existing):
+        raise HTTPException(status_code=403, detail="Not authorized to edit this lead")
     allowed = {}
     for k in ("school_id", "company_name", "contact_name", "designation", "contact_role_id",
               "contact_phone", "contact_email", "source", "source_id",
@@ -2440,9 +2562,14 @@ async def lock_lead(lead_id: str, request: Request):
 @router.delete("/leads/{lead_id}")
 async def delete_lead(lead_id: str, request: Request):
     user = await get_current_user(request)
-    lead = await db.leads.find_one({"lead_id": lead_id}, {"_id": 0, "converted_from_contact": 1, "order_id": 1})
+    lead = await db.leads.find_one(
+        {"lead_id": lead_id},
+        {"_id": 0, "converted_from_contact": 1, "order_id": 1, "assigned_to": 1, "school_id": 1},
+    )
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
+    if not await _user_can_mutate_lead(user, lead):
+        raise HTTPException(status_code=403, detail="Not authorized to delete this lead")
 
     # Block deletion if a live order exists for this lead
     if lead.get("order_id"):

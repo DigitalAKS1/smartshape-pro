@@ -517,6 +517,14 @@ async def edit_quotation(quotation_id: str, request: Request):
 
     existing = await db.quotations.find_one({"quotation_id": quotation_id}, {"_id": 0}) or {}
 
+    # Enforce write access (mirrors _get_quotation_for_po): store cannot edit;
+    # sales can only edit their own quotations.
+    _team = get_team(user)
+    if _team == "store":
+        raise HTTPException(status_code=403, detail="Store team cannot edit quotations")
+    if _team == "sales" and existing.get("sales_person_email") != user.get("email"):
+        raise HTTPException(status_code=403, detail="Sales can only edit their own quotations")
+
     # Save edit history when quotation has already been sent
     prev_status = existing.get("quotation_status", "draft")
     if prev_status in ("sent", "pending", "confirmed"):
@@ -582,6 +590,18 @@ async def get_quotation_history(quotation_id: str, request: Request):
 @router.put("/quotations/{quotation_id}/status")
 async def update_quotation_status(quotation_id: str, status: str, request: Request):
     user = await get_current_user(request)
+    # Enforce write access (mirrors _get_quotation_for_po): store cannot edit;
+    # sales can only update their own quotations.
+    quot = await db.quotations.find_one(
+        {"quotation_id": quotation_id}, {"_id": 0, "sales_person_email": 1}
+    )
+    if not quot:
+        raise HTTPException(status_code=404, detail="Quotation not found")
+    _team = get_team(user)
+    if _team == "store":
+        raise HTTPException(status_code=403, detail="Store team cannot edit quotations")
+    if _team == "sales" and quot.get("sales_person_email") != user.get("email"):
+        raise HTTPException(status_code=403, detail="Sales can only edit their own quotations")
     await db.quotations.update_one(
         {"quotation_id": quotation_id},
         {"$set": {"quotation_status": status}},
@@ -875,8 +895,17 @@ async def _get_email_settings():
     return sender_email, app_password, sender_name
 
 
-def _build_cc_set(sender_email: str, customer_email: str, cc_emails=None, sp_email=None):
-    seen = {sender_email.lower(), (customer_email or "").lower()}
+def _build_cc_set(sender_email: str, customer_email, cc_emails=None, sp_email=None):
+    # customer_email may be a single address OR a list of To addresses.
+    # Seed `seen` with the sender plus EVERY To address so a recipient is never Cc'd too.
+    if isinstance(customer_email, (list, tuple, set)):
+        to_addrs = customer_email
+    else:
+        to_addrs = [customer_email]
+    seen = {sender_email.lower()}
+    for addr in to_addrs:
+        if addr:
+            seen.add(addr.lower())
     cc_set = []
     for e in (cc_emails or []):
         if e and e.lower() not in seen:
@@ -918,7 +947,7 @@ async def _send_catalogue_email(quotation_id: str, cc_emails=None, extra_to=None
     except ValueError as ve:
         return {"success": False, "error": str(ve)}
 
-    cc_set = _build_cc_set(sender_email, all_to[0], cc_emails, quot.get("sales_person_email"))
+    cc_set = _build_cc_set(sender_email, all_to, cc_emails, quot.get("sales_person_email"))
 
     # ── Generate quotation PDF to attach ───────────────────────────────────────
     company = await db.settings.find_one({"type": "company"}, {"_id": 0}) or {}
@@ -1161,7 +1190,7 @@ async def send_quotation_email(quotation_id: str, request: Request):
         raise HTTPException(status_code=400, detail=str(ve))
 
     all_cc_inputs = list({user.get("email", "")} | set(extra_cc))
-    cc_set = _build_cc_set(sender_email, all_to[0], all_cc_inputs, quot.get("sales_person_email"))
+    cc_set = _build_cc_set(sender_email, all_to, all_cc_inputs, quot.get("sales_person_email"))
 
     gst = quot.get("gst_amount", 0)
     freight = quot.get("freight_with_gst", quot.get("freight_total", 0))
@@ -1514,6 +1543,8 @@ async def submit_catalogue_selection(token: str, request: Request):
     quot = await db.quotations.find_one({"catalogue_token": token}, {"_id": 0})
     if not quot:
         raise HTTPException(status_code=404, detail="Catalogue not found")
+    if quot.get("catalogue_status") == "submitted":
+        raise HTTPException(status_code=409, detail="This catalogue has already been submitted.")
 
     selection_id = f"sel_{uuid.uuid4().hex[:12]}"
     selection_doc = {

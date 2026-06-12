@@ -189,7 +189,8 @@ async def upload_die_image(die_id: str, request: Request, file: UploadFile = Fil
 @router.post("/dies/import")
 async def import_dies_csv(file: UploadFile = File(...), request: Request = None):
     if request:
-        await get_current_user(request)
+        user = await get_current_user(request)
+        require_teams(user, "admin", "store")
     content = await file.read()
     try:
         text = content.decode("utf-8-sig")
@@ -396,6 +397,24 @@ async def create_stock_movement(movement_input: StockMovementCreate, request: Re
             {"sales_person_id": movement_input.sales_person_id, "die_id": movement_input.die_id},
             {"$inc": {"allocated_qty": movement_input.quantity, "current_holding": movement_input.quantity}},
             upsert=True,
+        )
+        # Allocating to a sales person removes those units from warehouse stock.
+        await db.dies.update_one(
+            {"die_id": movement_input.die_id},
+            {"$inc": {"stock_qty": -movement_input.quantity}},
+        )
+    elif movement_input.movement_type == "returned_from_sales":
+        if not movement_input.sales_person_id:
+            raise HTTPException(status_code=400, detail="sales_person_id required for returned_from_sales")
+        await db.sales_person_stock.update_one(
+            {"sales_person_id": movement_input.sales_person_id, "die_id": movement_input.die_id},
+            {"$inc": {"current_holding": -movement_input.quantity}},
+            upsert=True,
+        )
+        # Returned units go back into warehouse stock.
+        await db.dies.update_one(
+            {"die_id": movement_input.die_id},
+            {"$inc": {"stock_qty": movement_input.quantity}},
         )
 
     await db.stock_movements.insert_one(movement_doc)

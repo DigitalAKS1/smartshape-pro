@@ -544,8 +544,8 @@ async def complete_stage(stage_id: str, request: Request):
     stage = await db.fms_stages.find_one({"stage_id": stage_id})
     if not stage: raise HTTPException(404, "Stage not found")
     _require_stage_team(user, stage)
-    if stage["status"] not in ("active", "waiting"):
-        raise HTTPException(400, "Stage already completed")
+    if stage["status"] != "active":
+        raise HTTPException(400, "Only the active stage can be completed")
 
     now = now_utc()
     plan_start = datetime.fromisoformat(stage["plan_start"]) if stage.get("plan_start") else now
@@ -773,6 +773,8 @@ async def submit_qc(body: QCSubmit, request: Request):
     stage = await db.fms_stages.find_one({"stage_id": body.stage_id}, {"_id": 0})
     if not stage: raise HTTPException(404, "Stage not found")
     _require_stage_team(user, stage)
+    if stage.get("status") != "active":
+        raise HTTPException(400, "QC can only be submitted on the active stage")
     qc_id = gen_id("qc")
     doc = {
         "qc_id": qc_id, "flow_id": body.flow_id, "stage_id": body.stage_id,

@@ -153,7 +153,7 @@ async def get_leave_balance(request: Request):
         lt = lv.get("leave_type", "casual")
         if lv.get("half_day"):
             used["half_day"] += 1
-        elif lt in used:
+        if lt in used and lt != "half_day":
             used[lt] += lv.get("days", 0)
 
     total = {"casual": 12, "sick": 6, "earned": 15}
@@ -168,7 +168,7 @@ async def get_leave_balance(request: Request):
 async def get_reimbursements(request: Request, month_year: Optional[str] = None):
     user = await get_current_user(request)
     query = {}
-    if user.get("role") != "admin":
+    if get_team(user) not in ("admin", "accounts"):
         query["sales_person_email"] = user["email"]
     if month_year:
         query["month_year"] = month_year

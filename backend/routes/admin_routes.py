@@ -111,6 +111,9 @@ async def admin_create_user(request: Request):
     if sales_role not in ("manager", "executive", "trainee"):
         sales_role = "executive"
     assigned_modules = body.get("assigned_modules", [])
+    module_permissions = body.get("module_permissions")
+    if isinstance(module_permissions, dict) and not assigned_modules:
+        assigned_modules = [m for m, p in module_permissions.items() if (p or {}).get("level", "none") != "none"]
 
     if not email or not password or not name:
         raise HTTPException(status_code=400, detail="Email, password, and name are required")
@@ -133,6 +136,8 @@ async def admin_create_user(request: Request):
         "is_active": True,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
+    if isinstance(module_permissions, dict):
+        user_doc["module_permissions"] = module_permissions
     await db.users.insert_one(user_doc)
 
     sp_existing = await db.salespersons.find_one({"email": email})
@@ -226,7 +231,7 @@ async def get_dashboard_analytics(request: Request):
         "created_at": {"$regex": f"^{current_month}"},
         "quotation_status": {"$in": ["confirmed", "sent", "pending"]},
     }, {"_id": 0}).to_list(1000)
-    monthly_revenue = sum(q["grand_total"] for q in quotations)
+    monthly_revenue = sum((q.get("grand_total", 0) or 0) for q in quotations)
 
     return {
         "total_dies": total_dies,
@@ -624,17 +629,19 @@ async def get_activity_logs(
     user = await get_current_user(request)
     if user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Admin only")
+    import re
     query = {}
     if entity_type:
         query["entity_type"] = entity_type
     if user_email:
-        query["user_email"] = {"$regex": user_email, "$options": "i"}
+        query["user_email"] = {"$regex": re.escape(user_email), "$options": "i"}
     if search:
+        safe_search = re.escape(search)
         query["$or"] = [
-            {"action": {"$regex": search, "$options": "i"}},
-            {"user_email": {"$regex": search, "$options": "i"}},
-            {"details": {"$regex": search, "$options": "i"}},
-            {"entity_id": {"$regex": search, "$options": "i"}},
+            {"action": {"$regex": safe_search, "$options": "i"}},
+            {"user_email": {"$regex": safe_search, "$options": "i"}},
+            {"details": {"$regex": safe_search, "$options": "i"}},
+            {"entity_id": {"$regex": safe_search, "$options": "i"}},
         ]
     if from_date or to_date:
         ts_filter = {}
