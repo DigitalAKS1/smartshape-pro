@@ -89,6 +89,12 @@ export default function SchoolLogin() {
             </Button>
           )}
 
+          {methods && !methods.email_link && !methods.magic_link && !methods.google && (
+            <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-[var(--text-secondary)]">
+              Portal access isn’t enabled for your account yet. Please contact SmartShape and we’ll switch it on for you.
+            </div>
+          )}
+
           <p className="text-center text-xs text-[var(--text-muted)]">
             Admin? <a href="/login" className="text-[#e94560] hover:underline">Login here</a>
           </p>
