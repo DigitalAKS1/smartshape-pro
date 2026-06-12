@@ -4,6 +4,8 @@ from datetime import datetime, timezone, timedelta
 import uuid
 import os
 import jwt
+import time
+import hashlib
 
 from database import db
 from auth_utils import get_current_school, get_current_user, hash_password, verify_password, JWT_SECRET, JWT_ALGORITHM
@@ -430,3 +432,277 @@ async def teacher_me(request: Request):
     teacher = await get_current_teacher(request)
     teacher["role"] = "teacher"
     return teacher
+
+
+# ==================== PHASE 2 / MODULE B — SHARED HELPERS ====================
+
+async def _admin_notify(title: str, message: str, ntype: str = "teacher_content", extra: dict = None):
+    doc = {"notification_id": f"an_{uuid.uuid4().hex[:12]}", "type": ntype,
+           "title": title, "message": message, "read": False,
+           "created_at": datetime.now(timezone.utc).isoformat()}
+    if extra:
+        doc.update(extra)
+    await db.admin_notifications.insert_one(doc)
+
+
+async def _notify_teacher(teacher_id: str, title: str, message: str):
+    await db.teacher_notifications.insert_one({
+        "notification_id": f"tn_{uuid.uuid4().hex[:12]}", "teacher_id": teacher_id,
+        "title": title, "message": message, "read": False,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+
+
+async def _require_admin(request: Request) -> dict:
+    user = await get_current_user(request)
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return user
+
+
+async def _portal_user(request: Request):
+    """Accept either a teacher or a school portal session (for read-only shared surfaces)."""
+    try:
+        return await get_current_teacher(request)
+    except HTTPException:
+        return await get_current_school(request)
+
+
+# ==================== MODULE B2 — TEACHER VIDEOS (Cloudinary signed upload) ====================
+
+@router.post("/teacher/videos/sign")
+async def teacher_video_sign(request: Request):
+    await get_current_teacher(request)
+    from services.storage import _cloudinary_config
+    cfg = await _cloudinary_config()
+    if not cfg:
+        raise HTTPException(status_code=400,
+                            detail="Video uploads need Cloudinary — ask your admin to set it up in App Settings.")
+    timestamp = int(time.time())
+    folder = "smartshape/teacher_videos"
+    to_sign = f"folder={folder}&timestamp={timestamp}{cfg['api_secret']}"
+    signature = hashlib.sha1(to_sign.encode("utf-8")).hexdigest()
+    return {"cloud_name": cfg["cloud_name"], "api_key": cfg["api_key"],
+            "timestamp": timestamp, "signature": signature, "folder": folder, "resource_type": "video"}
+
+
+@router.post("/teacher/videos")
+async def teacher_create_video(request: Request):
+    teacher = await get_current_teacher(request)
+    body = await request.json()
+    cl = body.get("cloudinary") or {}
+    if not cl.get("secure_url"):
+        raise HTTPException(status_code=400, detail="Missing uploaded video")
+    if cl.get("bytes") and int(cl["bytes"]) > 200 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Video too large (max 200MB)")
+    vtype = body.get("type") if body.get("type") in ("review", "workshop", "competition") else "review"
+    comp_id = body.get("competition_id")
+    if vtype == "competition":
+        if not comp_id:
+            raise HTTPException(status_code=400, detail="competition_id required for a competition entry")
+        comp = await db.competitions.find_one({"competition_id": comp_id})
+        if not comp:
+            raise HTTPException(status_code=404, detail="Competition not found")
+        end = comp.get("end_date")
+        if end and str(end) < datetime.now(timezone.utc).strftime("%Y-%m-%d"):
+            raise HTTPException(status_code=400, detail="This competition has closed")
+    title = (body.get("title") or "").strip() or "Untitled"
+    video_id = f"vid_{uuid.uuid4().hex[:12]}"
+    now = datetime.now(timezone.utc).isoformat()
+    doc = {
+        "video_id": video_id, "teacher_id": teacher["teacher_id"], "school_id": teacher.get("school_id"),
+        "teacher_name": teacher.get("name", ""), "type": vtype, "competition_id": comp_id if vtype == "competition" else None,
+        "title": title, "description": (body.get("description") or "").strip(),
+        "machine_used": (body.get("machine_used") or "").strip(), "dies_used": (body.get("dies_used") or "").strip(),
+        "public_id": cl.get("public_id"), "video_url": cl.get("secure_url"),
+        "thumbnail_url": cl.get("thumbnail_url") or "", "duration": cl.get("duration"), "bytes": cl.get("bytes"),
+        "status": "pending", "review_note": None, "reviewed_by": None, "reviewed_at": None, "created_at": now,
+    }
+    await db.teacher_videos.insert_one(doc)
+    await _admin_notify("New teacher video to review",
+                        f"{teacher.get('name', 'A teacher')} uploaded a {vtype} video: {title}",
+                        ntype="teacher_video", extra={"video_id": video_id, "school_id": teacher.get("school_id")})
+    return await db.teacher_videos.find_one({"video_id": video_id}, {"_id": 0})
+
+
+@router.get("/teacher/videos")
+async def teacher_list_videos(request: Request):
+    teacher = await get_current_teacher(request)
+    return await db.teacher_videos.find({"teacher_id": teacher["teacher_id"]}, {"_id": 0}).sort("created_at", -1).to_list(500)
+
+
+@router.delete("/teacher/videos/{video_id}")
+async def teacher_delete_video(video_id: str, request: Request):
+    teacher = await get_current_teacher(request)
+    v = await db.teacher_videos.find_one({"video_id": video_id, "teacher_id": teacher["teacher_id"]})
+    if not v:
+        raise HTTPException(status_code=404, detail="Video not found")
+    if v.get("status") == "approved":
+        raise HTTPException(status_code=400, detail="Approved videos can't be deleted")
+    await db.teacher_videos.delete_one({"video_id": video_id})
+    return {"message": "Deleted"}
+
+
+@router.get("/teacher/notifications")
+async def teacher_notifications(request: Request):
+    teacher = await get_current_teacher(request)
+    return await db.teacher_notifications.find({"teacher_id": teacher["teacher_id"]}, {"_id": 0}).sort("created_at", -1).to_list(50)
+
+
+# ==================== MODULE B3 — ADMIN REVIEW QUEUE ====================
+
+@router.get("/admin/teacher-videos")
+async def admin_list_teacher_videos(request: Request, status: str = "pending"):
+    await _require_admin(request)
+    q = {} if status == "all" else {"status": status}
+    return await db.teacher_videos.find(q, {"_id": 0}).sort("created_at", -1).to_list(1000)
+
+
+@router.post("/admin/teacher-videos/{video_id}/approve")
+async def admin_approve_video(video_id: str, request: Request):
+    user = await _require_admin(request)
+    v = await db.teacher_videos.find_one({"video_id": video_id})
+    if not v:
+        raise HTTPException(status_code=404, detail="Video not found")
+    await db.teacher_videos.update_one({"video_id": video_id}, {"$set": {
+        "status": "approved", "review_note": None, "reviewed_by": user.get("email"),
+        "reviewed_at": datetime.now(timezone.utc).isoformat()}})
+    await _notify_teacher(v["teacher_id"], "Your video was approved", f'"{v.get("title")}" is now live in the gallery.')
+    return await db.teacher_videos.find_one({"video_id": video_id}, {"_id": 0})
+
+
+@router.post("/admin/teacher-videos/{video_id}/reject")
+async def admin_reject_video(video_id: str, request: Request):
+    user = await _require_admin(request)
+    body = await request.json()
+    reason = (body.get("reason") or "").strip() or "Not approved"
+    v = await db.teacher_videos.find_one({"video_id": video_id})
+    if not v:
+        raise HTTPException(status_code=404, detail="Video not found")
+    await db.teacher_videos.update_one({"video_id": video_id}, {"$set": {
+        "status": "rejected", "review_note": reason, "reviewed_by": user.get("email"),
+        "reviewed_at": datetime.now(timezone.utc).isoformat()}})
+    await _notify_teacher(v["teacher_id"], "Your video needs changes", f'"{v.get("title")}": {reason}')
+    return await db.teacher_videos.find_one({"video_id": video_id}, {"_id": 0})
+
+
+# ==================== MODULE B4 — CENTRAL GALLERY ====================
+
+@router.get("/gallery")
+async def gallery(request: Request, type: str = None, competition_id: str = None, school_id: str = None):
+    await _portal_user(request)
+    q = {"status": "approved"}
+    if type:
+        q["type"] = type
+    if competition_id:
+        q["competition_id"] = competition_id
+    if school_id:
+        q["school_id"] = school_id
+    vids = await db.teacher_videos.find(
+        q, {"_id": 0, "video_id": 1, "title": 1, "description": 1, "type": 1, "teacher_name": 1,
+            "school_id": 1, "machine_used": 1, "dies_used": 1, "video_url": 1, "thumbnail_url": 1,
+            "competition_id": 1, "reviewed_at": 1}
+    ).sort("reviewed_at", -1).to_list(500)
+    return vids
+
+
+# ==================== MODULE B5 — COMPETITIONS ====================
+
+def _comp_status(comp: dict) -> str:
+    if comp.get("status") in ("draft", "results", "closed"):
+        return comp["status"]
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if comp.get("start_date") and today < str(comp["start_date"]):
+        return "upcoming"
+    if comp.get("end_date") and today > str(comp["end_date"]):
+        return "closed"
+    return "open"
+
+
+@router.post("/admin/competitions")
+async def admin_create_competition(request: Request):
+    user = await _require_admin(request)
+    body = await request.json()
+    title = (body.get("title") or "").strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Title is required")
+    comp_id = f"comp_{uuid.uuid4().hex[:12]}"
+    now = datetime.now(timezone.utc).isoformat()
+    doc = {
+        "competition_id": comp_id, "title": title, "theme": (body.get("theme") or "").strip(),
+        "description": (body.get("description") or "").strip(), "banner_url": (body.get("banner_url") or "").strip(),
+        "start_date": body.get("start_date") or "", "end_date": body.get("end_date") or "",
+        "rules": (body.get("rules") or "").strip(), "prizes": (body.get("prizes") or "").strip(),
+        "status": "open", "winner_video_ids": [], "created_by": user.get("email"), "created_at": now,
+    }
+    await db.competitions.insert_one(doc)
+    return await db.competitions.find_one({"competition_id": comp_id}, {"_id": 0})
+
+
+@router.get("/admin/competitions")
+async def admin_list_competitions(request: Request):
+    await _require_admin(request)
+    comps = await db.competitions.find({}, {"_id": 0}).sort("created_at", -1).to_list(500)
+    for c in comps:
+        c["computed_status"] = _comp_status(c)
+    return comps
+
+
+@router.put("/admin/competitions/{competition_id}")
+async def admin_update_competition(competition_id: str, request: Request):
+    await _require_admin(request)
+    body = await request.json()
+    update = {k: body[k] for k in ("title", "theme", "description", "banner_url", "start_date",
+                                   "end_date", "rules", "prizes", "status") if k in body}
+    if not await db.competitions.find_one({"competition_id": competition_id}):
+        raise HTTPException(status_code=404, detail="Competition not found")
+    if update:
+        await db.competitions.update_one({"competition_id": competition_id}, {"$set": update})
+    return await db.competitions.find_one({"competition_id": competition_id}, {"_id": 0})
+
+
+@router.get("/admin/competitions/{competition_id}/entries")
+async def admin_competition_entries(competition_id: str, request: Request):
+    await _require_admin(request)
+    return await db.teacher_videos.find({"competition_id": competition_id}, {"_id": 0}).sort("created_at", -1).to_list(1000)
+
+
+@router.post("/admin/competitions/{competition_id}/winners")
+async def admin_set_winners(competition_id: str, request: Request):
+    await _require_admin(request)
+    body = await request.json()
+    winners = body.get("winner_video_ids") or []
+    comp = await db.competitions.find_one({"competition_id": competition_id})
+    if not comp:
+        raise HTTPException(status_code=404, detail="Competition not found")
+    await db.competitions.update_one({"competition_id": competition_id},
+                                     {"$set": {"winner_video_ids": winners, "status": "results"}})
+    for vid in winners:
+        v = await db.teacher_videos.find_one({"video_id": vid})
+        if v:
+            await _notify_teacher(v["teacher_id"], "🏆 You won!", f'"{v.get("title")}" won {comp.get("title")}!')
+    return await db.competitions.find_one({"competition_id": competition_id}, {"_id": 0})
+
+
+@router.get("/competitions")
+async def portal_list_competitions(request: Request):
+    await _portal_user(request)
+    comps = await db.competitions.find({"status": {"$ne": "draft"}}, {"_id": 0}).sort("created_at", -1).to_list(200)
+    for c in comps:
+        c["computed_status"] = _comp_status(c)
+    return comps
+
+
+@router.get("/competitions/{competition_id}")
+async def portal_competition_detail(competition_id: str, request: Request):
+    await _portal_user(request)
+    comp = await db.competitions.find_one({"competition_id": competition_id}, {"_id": 0})
+    if not comp or comp.get("status") == "draft":
+        raise HTTPException(status_code=404, detail="Competition not found")
+    comp["computed_status"] = _comp_status(comp)
+    comp["entries"] = await db.teacher_videos.find(
+        {"competition_id": competition_id, "status": "approved"},
+        {"_id": 0, "video_id": 1, "title": 1, "teacher_name": 1, "school_id": 1,
+         "video_url": 1, "thumbnail_url": 1, "machine_used": 1, "dies_used": 1}
+    ).sort("reviewed_at", -1).to_list(500)
+    return comp
