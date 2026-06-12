@@ -432,16 +432,9 @@ async def startup():
                 }}
             )
 
-    # Seed sales persons
-    sample_sp = [
-        {"sales_person_id": "sp_001", "name": "Rajesh Kumar", "email": "rajesh@smartshape.com", "phone": "+91-9876543210", "is_active": True},
-        {"sales_person_id": "sp_002", "name": "Priya Sharma", "email": "priya@smartshape.com", "phone": "+91-9876543211", "is_active": True},
-        {"sales_person_id": "sp_003", "name": "Amit Patel", "email": "amit@smartshape.com", "phone": "+91-9876543212", "is_active": True}
-    ]
-    for sp in sample_sp:
-        existing = await db.salespersons.find_one({"sales_person_id": sp["sales_person_id"]})
-        if not existing:
-            await db.salespersons.insert_one(sp)
+    # (Removed) demo sales persons (Rajesh/Priya/Amit @smartshape.com) were re-seeded on
+    # every startup; dropped for the commercial launch. Real salespersons are synced from
+    # the users collection above.
 
     # Seed company settings with logo
     company_settings = await db.settings.find_one({"type": "company"})
