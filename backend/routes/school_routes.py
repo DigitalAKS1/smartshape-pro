@@ -1,12 +1,42 @@
-from fastapi import APIRouter, HTTPException, Request, UploadFile, File
+from fastapi import APIRouter, HTTPException, Request, Response, UploadFile, File
 from fastapi.responses import Response as FResponse
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import uuid
+import os
+import jwt
 
 from database import db
-from auth_utils import get_current_school
+from auth_utils import get_current_school, get_current_user, hash_password, verify_password, JWT_SECRET, JWT_ALGORITHM
+from services import teacher_auth
 
 router = APIRouter()
+
+# Cross-domain cookie flags (mirror auth_routes)
+_PROD = os.environ.get("FRONTEND_URL", "").startswith("https")
+_COOKIE_KWARGS = dict(httponly=True, secure=_PROD, samesite="none" if _PROD else "lax", path="/")
+
+
+async def get_current_teacher(request: Request) -> dict:
+    """Auth guard for teacher (school sub-account) sessions."""
+    token = request.cookies.get("access_token")
+    if not token:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:]
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        if payload.get("role") != "teacher":
+            raise HTTPException(status_code=403, detail="Teacher access required")
+        teacher = await db.teachers.find_one({"teacher_id": payload["sub"]}, {"_id": 0, "password_hash": 0})
+        if not teacher or teacher.get("status") == "inactive":
+            raise HTTPException(status_code=401, detail="Teacher not found or inactive")
+        return teacher
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
 
 
 async def _notify_admin_school_action(school: dict, action: str):
@@ -278,3 +308,125 @@ def _render_order_pdf(order: dict, items: list, company: dict) -> bytes:
     c.showPage()
     c.save()
     return buf.getvalue()
+
+
+# ==================== PHASE 2 / MODULE B1 — TEACHER ACCOUNTS ====================
+
+def _issue_teacher_cookie(response: Response, teacher: dict) -> dict:
+    payload = {
+        "sub": teacher["teacher_id"], "email": teacher["email"], "role": "teacher",
+        "school_id": teacher.get("school_id"),
+        "exp": datetime.now(timezone.utc) + timedelta(hours=24), "type": "access",
+    }
+    token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    response.set_cookie(key="access_token", value=token, max_age=86400, **_COOKIE_KWARGS)
+    data = {k: v for k, v in teacher.items() if k not in ("_id", "password_hash")}
+    data["role"] = "teacher"
+    return data
+
+
+# ── School manages its teachers (uses the school session) ──────────────────────
+
+@router.get("/school/teachers")
+async def school_list_teachers(request: Request):
+    school = await get_current_school(request)
+    return await db.teachers.find({"school_id": school["school_id"]},
+                                  {"_id": 0, "password_hash": 0}).sort("created_at", -1).to_list(500)
+
+
+@router.post("/school/teachers")
+async def school_create_teacher(request: Request):
+    school = await get_current_school(request)
+    body = await request.json()
+    name = (body.get("name") or "").strip()
+    email = (body.get("email") or "").lower().strip()
+    if not name or not email:
+        raise HTTPException(status_code=400, detail="Name and email are required")
+    if await db.teachers.find_one({"email": email}):
+        raise HTTPException(status_code=400, detail="A teacher with this email already exists")
+    teacher_id = f"tch_{uuid.uuid4().hex[:12]}"
+    now_iso = datetime.now(timezone.utc).isoformat()
+    doc = {
+        "teacher_id": teacher_id, "school_id": school["school_id"],
+        "name": name, "email": email, "subject": (body.get("subject") or "").strip(),
+        "status": "active", "created_by": school["school_id"], "created_at": now_iso,
+    }
+    await db.teachers.insert_one(doc)
+    try:
+        await teacher_auth.send_teacher_invite(doc, school.get("school_name", ""))
+    except Exception as e:
+        import logging
+        logging.error(f"teacher invite failed for {teacher_id}: {e}")
+    return await db.teachers.find_one({"teacher_id": teacher_id}, {"_id": 0, "password_hash": 0})
+
+
+@router.put("/school/teachers/{teacher_id}")
+async def school_update_teacher(teacher_id: str, request: Request):
+    school = await get_current_school(request)
+    teacher = await db.teachers.find_one({"teacher_id": teacher_id, "school_id": school["school_id"]})
+    if not teacher:
+        raise HTTPException(status_code=404, detail="Teacher not found")
+    body = await request.json()
+    update = {k: body[k] for k in ("name", "subject", "status") if k in body}
+    if update:
+        await db.teachers.update_one({"teacher_id": teacher_id}, {"$set": update})
+    return await db.teachers.find_one({"teacher_id": teacher_id}, {"_id": 0, "password_hash": 0})
+
+
+@router.post("/school/teachers/{teacher_id}/resend-invite")
+async def school_resend_teacher_invite(teacher_id: str, request: Request):
+    school = await get_current_school(request)
+    teacher = await db.teachers.find_one({"teacher_id": teacher_id, "school_id": school["school_id"]})
+    if not teacher:
+        raise HTTPException(status_code=404, detail="Teacher not found")
+    return await teacher_auth.send_teacher_invite(teacher, school.get("school_name", ""))
+
+
+# ── Teacher auth (the teacher's own session) ───────────────────────────────────
+
+@router.post("/teacher/auth/activate/verify")
+async def teacher_activate_verify(request: Request):
+    body = await request.json()
+    teacher = await teacher_auth.peek_token((body.get("token") or "").strip())
+    if not teacher:
+        raise HTTPException(status_code=400, detail="This link is invalid or has expired")
+    email = teacher.get("email", "")
+    masked = (email[:2] + "***" + email[email.find("@"):]) if "@" in email else "***"
+    return {"email_masked": masked, "name": teacher.get("name", "")}
+
+
+@router.post("/teacher/auth/set-password")
+async def teacher_set_password(request: Request, response: Response):
+    body = await request.json()
+    password = body.get("password") or ""
+    if len(password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+    teacher = await teacher_auth.consume_token((body.get("token") or "").strip())
+    if not teacher:
+        raise HTTPException(status_code=400, detail="This link is invalid or has expired")
+    await db.teachers.update_one({"teacher_id": teacher["teacher_id"]},
+                                 {"$set": {"password_hash": hash_password(password)}})
+    fresh = await db.teachers.find_one({"teacher_id": teacher["teacher_id"]})
+    return _issue_teacher_cookie(response, fresh)
+
+
+@router.post("/teacher/auth/login")
+async def teacher_login(request: Request, response: Response):
+    body = await request.json()
+    email = (body.get("email") or "").lower().strip()
+    password = body.get("password") or ""
+    if not email or not password:
+        raise HTTPException(status_code=400, detail="Email and password required")
+    teacher = await db.teachers.find_one({"email": email})
+    if not teacher or not teacher.get("password_hash") or teacher.get("status") == "inactive":
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    if not verify_password(password, teacher["password_hash"]):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    return _issue_teacher_cookie(response, teacher)
+
+
+@router.get("/teacher/me")
+async def teacher_me(request: Request):
+    teacher = await get_current_teacher(request)
+    teacher["role"] = "teacher"
+    return teacher
