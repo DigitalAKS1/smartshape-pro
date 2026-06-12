@@ -97,6 +97,9 @@ async def save_email_settings(request: Request):
 @router.get("/settings/email")
 async def get_email_settings(request: Request):
     user = await get_current_user(request)
+    # Returns the plaintext app password, so restrict to admins (matches the POST guard).
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
     settings = await db.settings.find_one({"type": "email"}, {"_id": 0})
     if not settings:
         return {"sender_name": "SmartShape Pro", "sender_email": "", "gmail_app_password": "", "enabled": False}
@@ -121,7 +124,10 @@ async def save_whatsapp_settings(request: Request):
 
 @router.get("/settings/whatsapp")
 async def get_whatsapp_settings(request: Request):
-    await get_current_user(request)
+    user = await get_current_user(request)
+    # Returns the plaintext WhatsApp gateway password, so restrict to admins.
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
     settings = await db.settings.find_one({"type": "whatsapp"}, {"_id": 0})
     if not settings:
         return {"username": "", "password": "", "enabled": False}

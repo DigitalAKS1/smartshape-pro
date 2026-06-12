@@ -191,6 +191,10 @@ async def login(input: LoginInput, response: Response, request: Request):
             })
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
+    # Deactivated accounts cannot log in (admin set is_active:false in User Management).
+    if user.get("is_active") is False:
+        raise HTTPException(status_code=403, detail="Account disabled. Contact your administrator.")
+
     # Clear failed attempts
     await db.login_attempts.delete_one({"identifier": identifier})
 
@@ -369,6 +373,9 @@ async def refresh_tokens(request: Request, response: Response):
         user = await db.users.find_one({"user_id": payload["sub"]}, {"_id": 0, "password_hash": 0})
         if not user:
             raise HTTPException(status_code=401, detail="User not found")
+        # Stop a deactivated account from self-renewing its session for 30 days.
+        if user.get("is_active") is False:
+            raise HTTPException(status_code=403, detail="Account disabled")
 
         access_token = create_access_token(user["user_id"], user["email"])
         new_refresh_token = create_refresh_token(user["user_id"])

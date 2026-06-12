@@ -277,7 +277,12 @@ _EXTRA_MIME = {".jfif": "image/jpeg", ".webp": "image/webp", ".avif": "image/avi
 
 @router.get("/files/{path:path}")
 async def get_file(path: str):
-    full_path = os.path.join(UPLOADS_DIR, path)
+    # Block path traversal: resolve the real path and confirm it stays inside the uploads
+    # dir, so a crafted "../" link can't read server config/secrets outside the folder.
+    base = os.path.realpath(UPLOADS_DIR)
+    full_path = os.path.realpath(os.path.join(base, path))
+    if full_path != base and not full_path.startswith(base + os.sep):
+        raise HTTPException(status_code=403, detail="Invalid path")
     if not os.path.isfile(full_path):
         raise HTTPException(status_code=404, detail="File not found")
     ext = os.path.splitext(full_path)[1].lower()

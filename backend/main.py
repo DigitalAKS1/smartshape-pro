@@ -206,25 +206,41 @@ async def startup():
 
     # Seed admin
     admin_email = os.environ.get("ADMIN_EMAIL", "admin@smartshape.com").lower()
-    admin_password = os.environ.get("ADMIN_PASSWORD", "admin123")
+    # No weak default. The admin password comes from the ADMIN_PASSWORD env var: if set, it
+    # is applied (declarative). If NOT set, we never reset an existing admin's password and we
+    # seed a brand-new admin with a strong RANDOM password (logged once) — so the master
+    # login is never the guessable 'admin123'.
+    env_admin_password = os.environ.get("ADMIN_PASSWORD")
 
     existing_admin = await db.users.find_one({"email": admin_email})
     if not existing_admin:
+        import secrets
+        seed_pw = env_admin_password or secrets.token_urlsafe(16)
         admin_doc = {
             "user_id": f"user_{uuid.uuid4().hex[:12]}",
             "email": admin_email,
-            "password_hash": hash_password(admin_password),
+            "password_hash": hash_password(seed_pw),
             "name": "Admin",
             "role": "admin",
+            "is_active": True,
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         await db.users.insert_one(admin_doc)
-        logging.info(f"Admin created: {admin_email}")
+        if env_admin_password:
+            logging.info(f"Admin created: {admin_email}")
+        else:
+            logging.warning(
+                f"Admin {admin_email} seeded with a GENERATED password (ADMIN_PASSWORD not set). "
+                f"One-time password: {seed_pw} — log in and change it immediately, or set ADMIN_PASSWORD."
+            )
     else:
-        # Ensure admin has password and correct role
         update_admin = {"role": "admin"}
-        if not existing_admin.get("password_hash") or not verify_password(admin_password, existing_admin.get("password_hash", "")):
-            update_admin["password_hash"] = hash_password(admin_password)
+        if not existing_admin.get("password_hash"):
+            import secrets
+            update_admin["password_hash"] = hash_password(env_admin_password or secrets.token_urlsafe(16))
+        elif env_admin_password and not verify_password(env_admin_password, existing_admin.get("password_hash", "")):
+            # ADMIN_PASSWORD explicitly provided → apply it so the owner can set a strong one.
+            update_admin["password_hash"] = hash_password(env_admin_password)
         await db.users.update_one({"email": admin_email}, {"$set": update_admin})
         logging.info("Admin ensured")
 
@@ -410,36 +426,9 @@ async def startup():
         })
 
 
-    # Write test credentials
-    try:
-        os.makedirs("/app/memory", exist_ok=True)
-        with open("/app/memory/test_credentials.md", "w") as f:
-            f.write(f"""# SmartShape Pro Test Credentials
-
-## Admin Account
-- Email: {admin_email}
-- Password: {admin_password}
-- Role: admin
-
-## Test Sales Persons
-- Rajesh Kumar: rajesh@smartshape.com
-- Priya Sharma: priya@smartshape.com
-- Amit Patel: amit@smartshape.com
-
-## Auth Endpoints
-- POST /api/auth/register
-- POST /api/auth/login
-- POST /api/auth/logout
-- GET /api/auth/me
-- POST /api/auth/google/session (Google Auth)
-
-## Notes
-- Default role for new registrations: sales_person
-- Admin can access all features
-- Sales persons see only their own data
-""")
-    except Exception as e:
-        logging.error(f"Failed to write test credentials: {e}")
+    # (Removed) Previously wrote the live admin password to /app/memory/test_credentials.md,
+    # leaking the master credential into a file inside the container. The credential is no
+    # longer persisted to disk.
 
     # Start auto-reminder background task
     asyncio.create_task(run_auto_reminders())
