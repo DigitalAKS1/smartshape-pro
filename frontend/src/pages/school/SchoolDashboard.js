@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { schoolAuth } from '../../lib/api';
+import { schoolAuth, schoolDocUrl } from '../../lib/api';
 import { formatCurrency, formatDate, getStatusColor } from '../../lib/utils';
 import { Button } from '../../components/ui/button';
+import { Input } from '../../components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../components/ui/dialog';
 import { toast } from 'sonner';
-import { Package, Truck, CheckCircle, Clock, Bell, LogOut, FileText, Eye, GraduationCap, ShoppingCart, XCircle } from 'lucide-react';
+import { Package, Truck, CheckCircle, Clock, Bell, LogOut, FileText, Eye, GraduationCap, ShoppingCart, XCircle, CreditCard, Download, User, Upload, Plus, RefreshCw } from 'lucide-react';
 
 const STATUS_CONFIG = {
   pending: { icon: Clock, color: 'text-yellow-400 bg-yellow-500/10 border-yellow-500/30', label: 'Pending' },
@@ -34,6 +35,12 @@ export default function SchoolDashboard() {
   const [activeTab, setActiveTab] = useState('orders');
   const [detailOrder, setDetailOrder] = useState(null);
   const [detailOpen, setDetailOpen] = useState(false);
+  const [payments, setPayments] = useState(null);
+  const [documents, setDocuments] = useState([]);
+  const [profileForm, setProfileForm] = useState({});
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [newContact, setNewContact] = useState({ name: '', phone: '', designation: '' });
+  const [reorderMsg, setReorderMsg] = useState('');
 
   const textPri = 'text-[var(--text-primary)]';
   const textSec = 'text-[var(--text-secondary)]';
@@ -44,13 +51,18 @@ export default function SchoolDashboard() {
   useEffect(() => {
     const fetchAll = async () => {
       try {
-        const [me, ord, quot, notif] = await Promise.all([
-          schoolAuth.me(), schoolAuth.orders(), schoolAuth.quotations(), schoolAuth.notifications()
+        const [me, ord, quot, notif, pay, docs] = await Promise.all([
+          schoolAuth.me(), schoolAuth.orders(), schoolAuth.quotations(), schoolAuth.notifications(),
+          schoolAuth.payments().catch(() => ({ data: null })),
+          schoolAuth.documents().catch(() => ({ data: [] })),
         ]);
         setSchool(me.data);
         setOrders(ord.data);
         setQuotations(quot.data);
         setNotifications(notif.data);
+        setPayments(pay.data);
+        setDocuments(docs.data || []);
+        setProfileForm(me.data || {});
       } catch (err) {
         if (err.response?.status === 401 || err.response?.status === 403) {
           navigate('/school/login');
@@ -71,6 +83,42 @@ export default function SchoolDashboard() {
   const markNotificationsRead = async () => {
     await schoolAuth.markRead();
     setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+  };
+
+  const saveProfile = async () => {
+    setSavingProfile(true);
+    try {
+      const r = await schoolAuth.updateProfile(profileForm);
+      setSchool(r.data);
+      toast.success('Profile saved');
+    } catch (e) { toast.error(e.response?.data?.detail || 'Save failed'); }
+    finally { setSavingProfile(false); }
+  };
+
+  const addContact = async () => {
+    if (!newContact.name.trim()) return toast.error('Contact name required');
+    try {
+      await schoolAuth.addContact(newContact);
+      setNewContact({ name: '', phone: '', designation: '' });
+      toast.success('Contact submitted — our team will verify it.');
+    } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+  };
+
+  const requestReorder = async () => {
+    if (!reorderMsg.trim()) return toast.error('Tell us what you need');
+    try {
+      await schoolAuth.reorder({ message: reorderMsg });
+      setReorderMsg('');
+      toast.success('Request sent — our team will get back to you.');
+    } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+  };
+
+  const uploadPO = async (quotationId, file) => {
+    if (!file) return;
+    try {
+      await schoolAuth.uploadPO(quotationId, file);
+      toast.success('PO uploaded — pending review.');
+    } catch (e) { toast.error(e.response?.data?.detail || 'Upload failed'); }
   };
 
   const handleLogout = () => {
@@ -118,12 +166,17 @@ export default function SchoolDashboard() {
         </div>
 
         {/* Tabs */}
-        <div className={`flex gap-1 ${card} border rounded-md p-1`}>
-          {['orders', 'quotations', 'notifications'].map(tab => (
+        <div className={`flex flex-wrap gap-1 ${card} border rounded-md p-1`}>
+          {['orders', 'quotations', 'payments', 'documents', 'profile', 'notifications'].map(tab => (
             <button key={tab} onClick={() => { setActiveTab(tab); if (tab === 'notifications') markNotificationsRead(); }}
-              className={`flex-1 px-4 py-2 rounded text-sm font-medium transition-all capitalize ${activeTab === tab ? 'bg-[#e94560] text-white' : `${textSec} hover:bg-[var(--bg-hover)]`}`}
+              className={`flex-1 min-w-[90px] px-3 py-2 rounded text-sm font-medium transition-all capitalize ${activeTab === tab ? 'bg-[#e94560] text-white' : `${textSec} hover:bg-[var(--bg-hover)]`}`}
               data-testid={`school-tab-${tab}`}>
-              {tab === 'orders' ? `Orders (${orders.length})` : tab === 'quotations' ? `Quotations (${quotations.length})` : `Notifications ${unread > 0 ? `(${unread})` : ''}`}
+              {tab === 'orders' ? `Orders (${orders.length})`
+                : tab === 'quotations' ? `Quotations (${quotations.length})`
+                : tab === 'payments' ? 'Payments'
+                : tab === 'documents' ? `Documents (${documents.length})`
+                : tab === 'profile' ? 'Profile'
+                : `Notifications ${unread > 0 ? `(${unread})` : ''}`}
             </button>
           ))}
         </div>
@@ -180,7 +233,15 @@ export default function SchoolDashboard() {
                   <p className={`text-sm ${textSec}`}>{q.package_name}</p>
                   <span className={`font-mono font-bold ${textPri}`}>{formatCurrency(q.grand_total)}</span>
                 </div>
-                <p className={`text-xs ${textMuted} mt-1`}>{formatDate(q.created_at)}</p>
+                <div className="flex items-center justify-between mt-2">
+                  <p className={`text-xs ${textMuted}`}>{formatDate(q.created_at)}</p>
+                  <label className="text-xs text-[#e94560] hover:underline cursor-pointer flex items-center gap-1">
+                    <Upload className="h-3 w-3" /> {q.po_file_url ? 'Replace PO' : 'Upload PO'}
+                    <input type="file" accept=".pdf,image/*" className="hidden"
+                      onChange={e => uploadPO(q.quotation_id, e.target.files?.[0])} />
+                  </label>
+                </div>
+                {q.po_status && <p className={`text-[10px] ${textMuted} mt-1`}>PO: {q.po_status.replace('_', ' ')}</p>}
               </div>
             ))}
           </div>
@@ -204,6 +265,98 @@ export default function SchoolDashboard() {
                 <p className={`text-xs ${textMuted} mt-1`}>{formatDate(n.created_at)}</p>
               </div>
             ))}
+          </div>
+        )}
+
+        {/* PAYMENTS TAB */}
+        {activeTab === 'payments' && (
+          <div className="space-y-3" data-testid="school-payments">
+            <div className={`${card} border rounded-md p-4 flex items-center justify-between`}>
+              <span className={`flex items-center gap-2 ${textSec}`}><CreditCard className="h-4 w-4" /> Total outstanding</span>
+              <span className="font-mono font-bold text-xl text-[#e94560]">{formatCurrency(payments?.totals?.total_outstanding || 0)}</span>
+            </div>
+            {(payments?.orders || []).length === 0 ? (
+              <div className={`${card} border rounded-md p-12 text-center`}>
+                <CreditCard className={`h-12 w-12 mx-auto mb-3 ${textMuted}`} strokeWidth={1} />
+                <p className={textMuted}>No billable orders yet</p>
+              </div>
+            ) : (payments.orders).map(o => (
+              <div key={o.order_id} className={`${card} border rounded-md p-4`}>
+                <div className="flex justify-between mb-2">
+                  <span className="font-mono text-sm text-[#e94560] font-medium">{o.order_number}</span>
+                  <span className={`text-xs px-2 py-0.5 rounded-full ${o.payment_status === 'paid' ? 'bg-green-500/15 text-green-400' : o.payment_status === 'partial' ? 'bg-yellow-500/15 text-yellow-400' : 'bg-red-500/15 text-red-400'}`}>{o.payment_status}</span>
+                </div>
+                <div className="grid grid-cols-3 gap-2 text-sm">
+                  <div><p className={`text-[10px] ${textMuted}`}>Total</p><p className={textPri}>{formatCurrency(o.grand_total)}</p></div>
+                  <div><p className={`text-[10px] ${textMuted}`}>Paid</p><p className="text-green-400">{formatCurrency(o.payment_received)}</p></div>
+                  <div><p className={`text-[10px] ${textMuted}`}>Balance</p><p className="text-[#e94560] font-medium">{formatCurrency(o.balance_due)}</p></div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* DOCUMENTS TAB */}
+        {activeTab === 'documents' && (
+          <div className="space-y-2" data-testid="school-documents">
+            {documents.length === 0 ? (
+              <div className={`${card} border rounded-md p-12 text-center`}>
+                <FileText className={`h-12 w-12 mx-auto mb-3 ${textMuted}`} strokeWidth={1} />
+                <p className={textMuted}>No documents yet</p>
+              </div>
+            ) : documents.map((d, i) => (
+              <a key={`${d.doc_type}-${d.ref_id}-${i}`} href={schoolDocUrl(d.download_url)} target="_blank" rel="noopener noreferrer"
+                className={`${card} border rounded-md p-4 flex items-center justify-between hover:border-[#e94560]/40 transition-all`}>
+                <div className="flex items-center gap-3">
+                  <FileText className="h-4 w-4 text-[#e94560]" />
+                  <div>
+                    <p className={`text-sm ${textPri}`}>{d.label}</p>
+                    <p className={`text-[10px] ${textMuted} capitalize`}>{d.doc_type} • {formatDate(d.date)}</p>
+                  </div>
+                </div>
+                <Download className={`h-4 w-4 ${textMuted}`} />
+              </a>
+            ))}
+          </div>
+        )}
+
+        {/* PROFILE TAB */}
+        {activeTab === 'profile' && (
+          <div className="space-y-4" data-testid="school-profile">
+            <div className={`${card} border rounded-md p-4 space-y-3`}>
+              <h3 className={`text-sm font-medium ${textPri} flex items-center gap-2`}><User className="h-4 w-4" /> Your details</h3>
+              {[['primary_contact_name', 'Contact name'], ['phone', 'Phone'], ['address', 'Address'], ['city', 'City'], ['state', 'State'], ['pincode', 'Pincode'], ['website', 'Website']].map(([k, label]) => (
+                <div key={k}>
+                  <label className={`text-xs ${textMuted}`}>{label}</label>
+                  <Input value={profileForm[k] || ''} onChange={e => setProfileForm({ ...profileForm, [k]: e.target.value })}
+                    className="bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]" />
+                </div>
+              ))}
+              <Button onClick={saveProfile} disabled={savingProfile} className="bg-[#e94560] hover:bg-[#f05c75] text-white">
+                {savingProfile ? 'Saving…' : 'Save profile'}
+              </Button>
+            </div>
+
+            <div className={`${card} border rounded-md p-4 space-y-3`}>
+              <h3 className={`text-sm font-medium ${textPri} flex items-center gap-2`}><Plus className="h-4 w-4" /> Add a contact</h3>
+              <Input placeholder="Name" value={newContact.name} onChange={e => setNewContact({ ...newContact, name: e.target.value })}
+                className="bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]" />
+              <div className="grid grid-cols-2 gap-2">
+                <Input placeholder="Phone" value={newContact.phone} onChange={e => setNewContact({ ...newContact, phone: e.target.value })}
+                  className="bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]" />
+                <Input placeholder="Designation" value={newContact.designation} onChange={e => setNewContact({ ...newContact, designation: e.target.value })}
+                  className="bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]" />
+              </div>
+              <Button onClick={addContact} variant="outline" className="w-full">Submit contact</Button>
+            </div>
+
+            <div className={`${card} border rounded-md p-4 space-y-3`}>
+              <h3 className={`text-sm font-medium ${textPri} flex items-center gap-2`}><RefreshCw className="h-4 w-4" /> Request a reorder / new quote</h3>
+              <textarea value={reorderMsg} onChange={e => setReorderMsg(e.target.value)} rows={3}
+                placeholder="Tell us what you'd like to reorder…"
+                className="w-full rounded-md p-2 text-sm bg-[var(--bg-primary)] border border-[var(--border-color)] text-[var(--text-primary)]" />
+              <Button onClick={requestReorder} className="bg-[#e94560] hover:bg-[#f05c75] text-white">Send request</Button>
+            </div>
           </div>
         )}
       </div>

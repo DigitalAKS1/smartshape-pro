@@ -371,6 +371,7 @@ export const tags = {
 // Leads / CRM
 export const leads = {
   getAll: () => API.get('/leads'),
+  search: (params) => API.get('/leads/search', { params }),
   create: (data) => API.post('/leads', data),
   update: (id, data) => API.put(`/leads/${id}`, data),
   delete: (id) => API.delete(`/leads/${id}`),
@@ -587,7 +588,23 @@ export const schoolAuth = {
   setPassword: (token, password) => API.post('/school/auth/set-password', { token, password }),
   requestMagic: (email) => API.post('/school/auth/magic-link/request', { email }),
   googleStartUrl: () => `${API.defaults.baseURL}/school/auth/google/start`,
+  // Phase 2 — Customer portal
+  payments: () => API.get('/school/payments'),
+  documents: () => API.get('/school/documents'),
+  getProfile: () => API.get('/school/profile'),
+  updateProfile: (data) => API.put('/school/profile', data),
+  addContact: (data) => API.post('/school/contacts', data),
+  reorder: (data) => API.post('/school/reorder', data),
+  uploadPO: (quotationId, file) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    return API.post(`/school/quotations/${quotationId}/po`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+  },
 };
+
+// Full URL for a school document download path (path already starts with /api)
+export const schoolDocUrl = (downloadUrl) =>
+  downloadUrl?.startsWith('http') ? downloadUrl : `${process.env.REACT_APP_BACKEND_URL}${downloadUrl}`;
 
 // Dispatches
 export const dispatches = {
