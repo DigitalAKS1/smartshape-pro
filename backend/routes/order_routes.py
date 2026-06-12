@@ -42,6 +42,75 @@ async def _assert_dispatchable(order, items):
         raise HTTPException(status_code=400, detail=f"Cannot dispatch — payment below threshold ({threshold}% required)")
 
 
+# ==================== STOCK AVAILABILITY ====================
+# Single source of truth for "how much of a die is promised but not yet shipped".
+# Committed = sum of open order-item quantities (on_hold + confirmed) across ALL
+# orders + quantities currently out on a returnable challan (demo/exhibition/sampling).
+# Available = stock_qty - Committed. dies.reserved_qty is a denormalized cache of
+# Committed; recompute_reservations() heals any drift between the two.
+
+# Order-item statuses that still hold stock (reserved but not yet dispatched).
+COMMITTING_ITEM_STATUSES = ["on_hold", "confirmed"]
+
+
+async def compute_committed(die_id: str, *, exclude_order_item_id: Optional[str] = None) -> int:
+    """Live committed quantity for a die from open order items + returnable-out challans.
+
+    exclude_order_item_id lets a caller ask "committed by everyone except this line",
+    which is what the Holds view needs to show a true per-line shortage.
+    """
+    match = {"die_id": die_id, "status": {"$in": COMMITTING_ITEM_STATUSES}}
+    if exclude_order_item_id:
+        match["order_item_id"] = {"$ne": exclude_order_item_id}
+    items = await db.order_items.find(match, {"_id": 0, "quantity": 1}).to_list(100000)
+    committed = sum(int(it.get("quantity", 1) or 1) for it in items)
+    # Items physically out on a returnable challan (open / partially returned) also
+    # reduce availability. Added with Step 4 (Returnable Challan); harmless before.
+    committed += await _returnable_out_qty(die_id)
+    return committed
+
+
+async def _returnable_out_qty(die_id: str) -> int:
+    """Net quantity of a die currently out on open returnable challans (qty - returned)."""
+    try:
+        challans = await db.challans.find(
+            {"type": "returnable_out", "status": {"$in": ["open", "partially_returned"]}},
+            {"_id": 0, "lines": 1},
+        ).to_list(100000)
+    except Exception:
+        return 0
+    out = 0
+    for ch in challans:
+        for ln in ch.get("lines", []):
+            if ln.get("item_ref") == die_id or ln.get("die_id") == die_id:
+                out += int(ln.get("qty", 0) or 0) - int(ln.get("returned_qty", 0) or 0)
+    return max(0, out)
+
+
+async def compute_availability(die: dict, *, exclude_order_item_id: Optional[str] = None) -> dict:
+    """Return {stock_qty, committed, available} for a die document."""
+    stock = int(die.get("stock_qty", 0) or 0)
+    committed = await compute_committed(die["die_id"], exclude_order_item_id=exclude_order_item_id)
+    return {"stock_qty": stock, "committed": committed, "available": stock - committed}
+
+
+async def recompute_reservations() -> dict:
+    """Recalculate every die's reserved_qty cache from live committed demand.
+
+    Migration/heal tool for legacy drift (e.g. the old +1-per-die bug). Returns a
+    report of every die whose cached reserved_qty disagreed with reality.
+    """
+    dies = await db.dies.find({}, {"_id": 0, "die_id": 1, "code": 1, "reserved_qty": 1}).to_list(100000)
+    fixed = []
+    for d in dies:
+        committed = await compute_committed(d["die_id"])
+        old = int(d.get("reserved_qty", 0) or 0)
+        if committed != old:
+            await db.dies.update_one({"die_id": d["die_id"]}, {"$set": {"reserved_qty": committed}})
+            fixed.append({"die_id": d["die_id"], "code": d.get("code", ""), "old": old, "new": committed})
+    return {"dies_scanned": len(dies), "dies_fixed": len(fixed), "changes": fixed}
+
+
 # ==================== ORDERS ====================
 
 @router.get("/orders")
@@ -186,7 +255,7 @@ async def create_order_for_quotation(quotation_id: str, *, created_by: str,
             "die_code": item.get("die_code"),
             "die_type": item.get("die_type"),
             "die_image_url": item.get("die_image_url"),
-            "quantity": 1,
+            "quantity": int(item.get("quantity", 1) or 1),
             "status": "on_hold",
         })
 
@@ -592,6 +661,16 @@ async def get_holds(request: Request):
     for item in items:
         order = await db.orders.find_one({"order_id": item["order_id"]}, {"_id": 0})
         die = await db.dies.find_one({"die_id": item["die_id"]}, {"_id": 0})
+        qty = int(item.get("quantity", 1) or 1)
+        if die:
+            # Availability for everyone EXCEPT this line, so "short" reflects what
+            # this line can actually be covered by once others are accounted for.
+            avail = await compute_availability(die, exclude_order_item_id=item["order_item_id"])
+            available_for_line = avail["available"]
+            committed = avail["committed"]
+            stock_qty = avail["stock_qty"]
+        else:
+            available_for_line = committed = stock_qty = 0
         holds.append({
             "order_item_id": item["order_item_id"],
             "order_id": item["order_id"],
@@ -600,11 +679,14 @@ async def get_holds(request: Request):
             "die_id": item["die_id"],
             "die_name": item.get("die_name", ""),
             "die_code": item.get("die_code", ""),
-            "quantity": item.get("quantity", 1),
+            "quantity": qty,
             "hold_date": order.get("created_at", "") if order else "",
-            "stock_qty": die.get("stock_qty", 0) if die else 0,
+            "stock_qty": stock_qty,
             "reserved_qty": die.get("reserved_qty", 0) if die else 0,
-            "available": (die.get("stock_qty", 0) - die.get("reserved_qty", 0)) if die else 0,
+            "committed": committed,
+            # available shown to the user already accounts for this line's own demand
+            "available": available_for_line - qty,
+            "short": max(0, qty - available_for_line),
             "status": item.get("status", "on_hold"),
         })
     return holds
@@ -651,3 +733,21 @@ async def confirm_hold(order_item_id: str, request: Request):
         raise HTTPException(status_code=404, detail="Hold item not found")
     await db.order_items.update_one({"order_item_id": order_item_id}, {"$set": {"status": "confirmed"}})
     return {"message": "Hold confirmed"}
+
+
+# ==================== STOCK RECONCILIATION ====================
+
+@router.post("/stock/recompute-reservations")
+async def recompute_reservations_endpoint(request: Request):
+    """Admin/accounts: heal dies.reserved_qty drift by recomputing from live demand.
+
+    Run once after deploying real-quantity reservation to correct legacy data left
+    by the old +1-per-die behaviour.
+    """
+    user = await get_current_user(request)
+    if get_team(user) not in ("admin", "accounts"):
+        raise HTTPException(status_code=403, detail="Only admin/accounts can recompute reservations")
+    report = await recompute_reservations()
+    await log_activity(user["email"], "recompute", "stock", "reservations",
+                       f"Recomputed reservations: {report['dies_fixed']}/{report['dies_scanned']} dies corrected")
+    return report

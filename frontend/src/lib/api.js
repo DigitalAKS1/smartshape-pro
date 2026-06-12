@@ -323,6 +323,9 @@ export const whatsApp = {
   // ── Proxy configuration ───────────────────────────────────────────────────
   getProxy:        (name)       => API.get(`/whatsapp/proxy/${name}`),
   setProxy:        (name, data) => API.post(`/whatsapp/proxy/${name}`, data),
+  // Persisted residential-proxy config (applied to the default instance)
+  getProxyConfig:  ()           => API.get('/whatsapp/proxy-config'),
+  saveProxyConfig: (data)       => API.post('/whatsapp/proxy-config', data),
   // ── Attachments ───────────────────────────────────────────────────────────
   uploadAttachment: (file) => {
     const fd = new FormData();
@@ -498,7 +501,8 @@ export const payroll = {
 // Catalogue (public)
 export const catalogue = {
   get: (token) => axios.get(`${process.env.REACT_APP_BACKEND_URL}/api/catalogue/${token}`),
-  submit: (token, selectedDies) => axios.post(`${process.env.REACT_APP_BACKEND_URL}/api/catalogue/${token}/submit`, { selected_dies: selectedDies }),
+  // selections: [{ die_id, quantity }]
+  submit: (token, selections) => axios.post(`${process.env.REACT_APP_BACKEND_URL}/api/catalogue/${token}/submit`, { selections }),
 };
 
 // AI
@@ -572,6 +576,7 @@ export const holds = {
   release: (itemId) => API.post(`/holds/${itemId}/release`),
   confirm: (itemId) => API.post(`/holds/${itemId}/confirm`),
   bulkRelease: (itemIds) => API.post('/holds/bulk-release', { item_ids: itemIds }),
+  recomputeReservations: () => API.post('/stock/recompute-reservations'),
 };
 
 // School Portal Auth

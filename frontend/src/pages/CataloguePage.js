@@ -2,16 +2,19 @@ import React, { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import { catalogue } from '../lib/api';
 import { Button } from '../components/ui/button';
-import { Check, Package, Image } from 'lucide-react';
+import { Check, Package, Image, Minus, Plus } from 'lucide-react';
 import { toast } from 'sonner';
 
 export default function CataloguePage() {
   const { token } = useParams();
   const [data, setData] = useState(null);
-  const [selectedDies, setSelectedDies] = useState([]);
+  // Map of die_id -> quantity for selected dies. Presence = selected.
+  const [qtyByDie, setQtyByDie] = useState({});
   const [submitted, setSubmitted] = useState(false);
   const [loading, setLoading] = useState(true);
   const backendUrl = process.env.REACT_APP_BACKEND_URL;
+
+  const selectedDies = Object.keys(qtyByDie);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -23,11 +26,21 @@ export default function CataloguePage() {
   }, [token]);
 
   const handleToggleDie = (dieId) => {
-    setSelectedDies(prev => prev.includes(dieId) ? prev.filter(id => id !== dieId) : [...prev, dieId]);
+    setQtyByDie(prev => {
+      const next = { ...prev };
+      if (next[dieId] != null) { delete next[dieId]; } else { next[dieId] = 1; }
+      return next;
+    });
+  };
+
+  const setDieQty = (dieId, qty) => {
+    const clamped = Math.max(1, parseInt(qty, 10) || 1);
+    setQtyByDie(prev => ({ ...prev, [dieId]: clamped }));
   };
 
   const handleSubmit = async () => {
-    try { await catalogue.submit(token, selectedDies); setSubmitted(true); toast.success('Selection submitted!'); }
+    const selections = Object.entries(qtyByDie).map(([die_id, quantity]) => ({ die_id, quantity }));
+    try { await catalogue.submit(token, selections); setSubmitted(true); toast.success('Selection submitted!'); }
     catch { toast.error('Failed to submit'); }
   };
 
@@ -72,8 +85,13 @@ export default function CataloguePage() {
     grouped[cat].push(d);
   });
 
-  const stdSelected = selectedDies.filter(id => { const d = dies.find(x => x.die_id === id); return d && d.type === 'standard'; }).length;
-  const largeSelected = selectedDies.filter(id => { const d = dies.find(x => x.die_id === id); return d && d.type === 'large'; }).length;
+  const sumQtyByType = (t) => selectedDies.reduce((sum, id) => {
+    const d = dies.find(x => x.die_id === id);
+    return d && d.type === t ? sum + (qtyByDie[id] || 0) : sum;
+  }, 0);
+  const stdSelected = sumQtyByType('standard');
+  const largeSelected = sumQtyByType('large');
+  const totalUnits = selectedDies.reduce((sum, id) => sum + (qtyByDie[id] || 0), 0);
 
   return (
     <div className="min-h-screen bg-[#0a0a12]">
@@ -107,10 +125,10 @@ export default function CataloguePage() {
           <div className="flex gap-4 text-sm">
             {stdLimit > 0 && <span className="text-[#a0a0b0]">Standard: <strong className={`${stdSelected >= stdLimit ? 'text-green-400' : 'text-white'}`}>{stdSelected}/{stdLimit}</strong></span>}
             {largeLimit > 0 && <span className="text-[#a0a0b0]">Large: <strong className={`${largeSelected >= largeLimit ? 'text-green-400' : 'text-white'}`}>{largeSelected}/{largeLimit}</strong></span>}
-            {!pkg && <span className="text-[#a0a0b0]">Selected: <strong className="text-white">{selectedDies.length}</strong></span>}
+            {!pkg && <span className="text-[#a0a0b0]">Selected: <strong className="text-white">{totalUnits}</strong></span>}
           </div>
           <Button onClick={handleSubmit} disabled={selectedDies.length === 0} className="bg-[#e94560] hover:bg-[#f05c75] text-white" data-testid="catalogue-submit-button">
-            Submit Selection ({selectedDies.length})
+            Submit Selection ({totalUnits})
           </Button>
         </div>
       </div>
@@ -147,6 +165,28 @@ export default function CataloguePage() {
                       <p className="font-mono text-[10px] text-[#e94560]">{die.code}</p>
                       <h3 className="text-sm font-medium text-white leading-tight mt-0.5 line-clamp-1">{die.name}</h3>
                       <p className="text-[10px] text-[#6b6b80] mt-1 capitalize">{die.type} die</p>
+                      {/* Quantity stepper — only when selected */}
+                      {isSelected && (
+                        <div className="mt-2 flex items-center justify-between" onClick={(e) => e.stopPropagation()}>
+                          <span className="text-[10px] text-[#a0a0b0] uppercase tracking-wide">Qty</span>
+                          <div className="flex items-center gap-1">
+                            <button type="button" aria-label="Decrease quantity"
+                              onClick={() => setDieQty(die.die_id, (qtyByDie[die.die_id] || 1) - 1)}
+                              className="w-6 h-6 rounded bg-[#0f0f1a] border border-[#2d2d44] text-white flex items-center justify-center hover:border-[#e94560]">
+                              <Minus className="h-3 w-3" />
+                            </button>
+                            <input type="number" min="1" value={qtyByDie[die.die_id] || 1}
+                              onChange={(e) => setDieQty(die.die_id, e.target.value)}
+                              data-testid={`die-qty-${die.code}`}
+                              className="w-12 h-6 text-center text-sm bg-[#0f0f1a] border border-[#2d2d44] rounded text-white" />
+                            <button type="button" aria-label="Increase quantity"
+                              onClick={() => setDieQty(die.die_id, (qtyByDie[die.die_id] || 1) + 1)}
+                              className="w-6 h-6 rounded bg-[#0f0f1a] border border-[#2d2d44] text-white flex items-center justify-center hover:border-[#e94560]">
+                              <Plus className="h-3 w-3" />
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
                 );
@@ -160,7 +200,7 @@ export default function CataloguePage() {
       {selectedDies.length > 0 && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40">
           <Button onClick={handleSubmit} className="bg-[#e94560] hover:bg-[#f05c75] text-white text-lg px-8 py-5 rounded-full shadow-2xl shadow-[#e94560]/30" data-testid="catalogue-floating-submit">
-            <Check className="mr-2 h-5 w-5" /> Submit {selectedDies.length} Selections
+            <Check className="mr-2 h-5 w-5" /> Submit {totalUnits} {totalUnits === 1 ? 'Unit' : 'Units'}
           </Button>
         </div>
       )}

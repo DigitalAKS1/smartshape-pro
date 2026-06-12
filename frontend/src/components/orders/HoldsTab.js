@@ -94,7 +94,7 @@ export default function HoldsTab({
                           : <Square className="h-4 w-4" />}
                       </button>
                     </th>
-                    {['Die', 'School', 'Order', 'Stock', 'Hold Date', 'Actions'].map(h => (
+                    {['Die', 'School', 'Order', 'Qty', 'Availability', 'Hold Date', 'Actions'].map(h => (
                       <th key={h} className={`text-left text-xs uppercase py-3 px-4 ${textMuted}`}>{h}</th>
                     ))}
                   </tr>
@@ -119,11 +119,16 @@ export default function HoldsTab({
                       </td>
                       <td className={`px-4 py-3 ${textSec}`}>{h.school_name}</td>
                       <td className="px-4 py-3"><span className="font-mono text-xs text-[#e94560]">{h.order_number}</span></td>
+                      <td className="px-4 py-3"><span className={`font-mono ${textPri}`}>{h.quantity}</span></td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2">
-                          <span className={`font-mono ${textPri}`}>{h.stock_qty}</span>
-                          <span className={`text-xs ${textMuted}`}>/ {h.reserved_qty} held</span>
-                          {h.available < 0 && <AlertTriangle className="h-3.5 w-3.5 text-red-400" />}
+                          <span className={`text-xs ${textMuted}`}>Stock {h.stock_qty} · Avail </span>
+                          <span className={`font-mono ${(h.available ?? 0) < 0 ? 'text-red-400' : textPri}`}>{h.available}</span>
+                          {h.short > 0 && (
+                            <span className="inline-flex items-center gap-1 rounded bg-red-500/15 text-red-400 text-[10px] font-semibold px-1.5 py-0.5">
+                              <AlertTriangle className="h-3 w-3" /> Short {h.short}
+                            </span>
+                          )}
                         </div>
                       </td>
                       <td className={`px-4 py-3 text-xs ${textMuted}`}>{formatDate(h.hold_date)}</td>
@@ -169,12 +174,17 @@ export default function HoldsTab({
                         <p className={`text-xs ${textMuted}`}>{h.school_name} • {h.order_number}</p>
                       </div>
                     </div>
-                    {h.available < 0 && <AlertTriangle className="h-4 w-4 text-red-400 flex-shrink-0" />}
+                    {h.short > 0 && <AlertTriangle className="h-4 w-4 text-red-400 flex-shrink-0" />}
                   </div>
-                  <div className={`flex items-center gap-3 text-xs ${textMuted}`}>
+                  <div className={`flex items-center gap-3 text-xs ${textMuted} flex-wrap`}>
+                    <span>Need: <span className={textPri}>{h.quantity}</span></span>
                     <span>Stock: {h.stock_qty}</span>
-                    <span>Held: {h.reserved_qty}</span>
-                    <span>Avail: <span className={h.available < 0 ? 'text-red-400' : 'text-green-400'}>{h.available}</span></span>
+                    <span>Avail: <span className={(h.available ?? 0) < 0 ? 'text-red-400' : 'text-green-400'}>{h.available}</span></span>
+                    {h.short > 0 && (
+                      <span className="inline-flex items-center gap-1 rounded bg-red-500/15 text-red-400 text-[10px] font-semibold px-1.5 py-0.5">
+                        Short {h.short}
+                      </span>
+                    )}
                   </div>
                   <div className="flex gap-2" onClick={e => e.stopPropagation()}>
                     <Button size="sm" onClick={() => handleConfirmHold(h.order_item_id)}

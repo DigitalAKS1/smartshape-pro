@@ -1538,7 +1538,21 @@ async def get_catalogue(token: str):
 @router.post("/catalogue/{token}/submit")
 async def submit_catalogue_selection(token: str, request: Request):
     body = await request.json()
-    selected_dies = body.get("selected_dies", [])
+    # Accept either the new per-die-quantity payload `selections: [{die_id, quantity}]`
+    # or the legacy `selected_dies: [die_id, ...]` (treated as quantity 1 each).
+    raw_selections = body.get("selections")
+    if raw_selections is None:
+        raw_selections = [{"die_id": d, "quantity": 1} for d in body.get("selected_dies", [])]
+
+    # Normalize + collapse duplicate die_ids into a single line with summed quantity.
+    qty_by_die = {}
+    for sel in raw_selections:
+        die_id = sel.get("die_id") if isinstance(sel, dict) else sel
+        if not die_id:
+            continue
+        qty = int(sel.get("quantity", 1) or 1) if isinstance(sel, dict) else 1
+        qty = max(1, qty)
+        qty_by_die[die_id] = qty_by_die.get(die_id, 0) + qty
 
     quot = await db.quotations.find_one({"catalogue_token": token}, {"_id": 0})
     if not quot:
@@ -1555,7 +1569,7 @@ async def submit_catalogue_selection(token: str, request: Request):
     }
     await db.catalogue_selections.insert_one(selection_doc)
 
-    for die_id in selected_dies:
+    for die_id, qty in qty_by_die.items():
         die = await db.dies.find_one({"die_id": die_id}, {"_id": 0})
         if die:
             await db.catalogue_selection_items.insert_one({
@@ -1565,8 +1579,10 @@ async def submit_catalogue_selection(token: str, request: Request):
                 "die_code": die["code"],
                 "die_type": die["type"],
                 "die_image_url": die.get("image_url"),
+                "quantity": qty,
             })
-            await db.dies.update_one({"die_id": die_id}, {"$inc": {"reserved_qty": 1}})
+            # Reserve the real quantity the customer asked for (was a +1 bug).
+            await db.dies.update_one({"die_id": die_id}, {"$inc": {"reserved_qty": qty}})
             updated_die = await db.dies.find_one({"die_id": die_id}, {"_id": 0})
             available = updated_die["stock_qty"] - updated_die["reserved_qty"]
             if available < 0:
