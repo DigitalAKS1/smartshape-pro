@@ -3,7 +3,7 @@ import { toast } from 'sonner';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Label } from '../ui/label';
-import { Save, GraduationCap } from 'lucide-react';
+import { Save, GraduationCap, AlertTriangle } from 'lucide-react';
 import { schoolPortalSettings } from '../../lib/api';
 import IntegrationStatusChip from './IntegrationStatusChip';
 
@@ -63,6 +63,17 @@ export default function SchoolPortalSection({ configured, onSaved }) {
         Choose which login methods schools can use to access their portal. These are the global defaults —
         you can override them per quote on the Create Quotation screen.
       </p>
+
+      {!cfg.email_link_enabled && !cfg.magic_link_enabled && !cfg.google_enabled && (
+        <div className="flex items-start gap-3 p-4 rounded-md border border-amber-500/40 bg-amber-500/10">
+          <AlertTriangle className="h-5 w-5 text-amber-500 flex-shrink-0 mt-0.5" />
+          <p className="text-sm text-[var(--text-secondary)]">
+            <span className="font-medium text-amber-500">Portal is off.</span> No login method is enabled,
+            so quoted schools will <span className="font-medium">not</span> get an activation invite and
+            cannot log in. Turn on at least one method below and save to start sending invites.
+          </p>
+        </div>
+      )}
 
       <div className="space-y-4">
         {METHODS.map(({ key, label, desc }) => (
