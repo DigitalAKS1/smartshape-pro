@@ -121,9 +121,15 @@ export default function SchoolFormDialog({
             </div>
           </div>
 
-          <div>
-            <Label className={`${textSec} text-xs`}>Existing Vendor</Label>
-            <Input value={editSchoolForm.existing_vendor || ''} onChange={e => setEditSchoolForm({...editSchoolForm, existing_vendor: e.target.value})} placeholder="Current supplier, if any" className={inputCls} />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <Label className={`${textSec} text-xs`}>Existing Vendor</Label>
+              <Input value={editSchoolForm.existing_vendor || ''} onChange={e => setEditSchoolForm({...editSchoolForm, existing_vendor: e.target.value})} placeholder="Current supplier, if any" className={inputCls} />
+            </div>
+            <div>
+              <Label className={`${textSec} text-xs`}>GSTIN</Label>
+              <Input value={editSchoolForm.gstin || ''} onChange={e => setEditSchoolForm({...editSchoolForm, gstin: e.target.value.toUpperCase()})} placeholder="e.g. 27ABCDE1234F1Z5" maxLength={15} className={inputCls} data-testid="school-gstin-input" />
+            </div>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

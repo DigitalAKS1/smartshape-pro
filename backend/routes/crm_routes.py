@@ -857,6 +857,7 @@ async def create_school(request: Request):
         "number_of_branches": body.get("number_of_branches", 1),
         "annual_budget_range": body.get("annual_budget_range", ""),
         "existing_vendor": body.get("existing_vendor", ""),
+        "gstin": body.get("gstin", ""),
         "social_profiles": body.get("social_profiles", {}),
         "linkedin_url": body.get("linkedin_url", ""),
         "instagram_url": body.get("instagram_url", ""),
@@ -880,7 +881,7 @@ async def update_school(school_id: str, request: Request):
     for k in ("school_name", "school_type", "board", "group_id", "website", "email", "phone",
               "city", "state", "pincode", "address", "primary_contact_name", "designation",
               "alternate_contact", "school_strength", "number_of_branches",
-              "annual_budget_range", "existing_vendor", "social_profiles",
+              "annual_budget_range", "existing_vendor", "gstin", "social_profiles",
               "linkedin_url", "instagram_url", "anniversary"):
         if k in body:
             allowed[k] = body[k]

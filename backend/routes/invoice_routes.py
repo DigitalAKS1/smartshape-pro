@@ -98,6 +98,13 @@ def _parse_xml(text: str) -> list:
 
 # ── Auto-mapping ───────────────────────────────────────────────────────────────
 async def _match_school(n: dict):
+    # GSTIN is the strongest signal — match the school directly on it first.
+    if n["gstin"]:
+        sch = await db.schools.find_one(
+            {"gstin": {"$regex": f"^{re.escape(n['gstin'])}$", "$options": "i"}, "is_deleted": {"$ne": True}},
+            {"_id": 0, "school_id": 1, "school_name": 1})
+        if sch:
+            return sch["school_id"], sch["school_name"]
     if n["school_name"]:
         sch = await db.schools.find_one(
             {"school_name": {"$regex": f"^{re.escape(n['school_name'])}$", "$options": "i"}, "is_deleted": {"$ne": True}},

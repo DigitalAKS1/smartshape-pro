@@ -83,6 +83,7 @@ export default function LeadsCRM() {
 
   // Bulk school assignment (admin): select many schools, assign all to one Sales Exec.
   const [selectedSchoolIds, setSelectedSchoolIds] = React.useState(new Set());
+  const [unassignedOnly, setUnassignedOnly] = React.useState(false);
   const toggleSchoolSelect = (id) => setSelectedSchoolIds(prev => {
     const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n;
   });
@@ -623,9 +624,23 @@ export default function LeadsCRM() {
             const s = crm.searchTerm.toLowerCase();
             schFiltered = schFiltered.filter(sc => (sc.school_name || '').toLowerCase().includes(s) || (sc.email || '').toLowerCase().includes(s) || (sc.city || '').toLowerCase().includes(s) || (sc.phone || '').includes(s) || (sc.primary_contact_name || '').toLowerCase().includes(s));
           }
+          if (unassignedOnly) schFiltered = schFiltered.filter(sc => !(sc.assigned_to || '').trim());
           schFiltered = crm.sortData(schFiltered, crm.sortConfig.key, crm.sortConfig.dir);
           return (
             <div className="space-y-3">
+              {crm.user?.role === 'admin' && (() => {
+                const unassignedCount = crm.schoolsList.filter(s => !(s.assigned_to || '').trim()).length;
+                return (
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <button onClick={() => setUnassignedOnly(v => !v)}
+                      className={`text-xs px-3 py-1 rounded-full font-semibold border transition-all ${unassignedOnly ? 'bg-[#e94560] text-white border-[#e94560]' : `border-[var(--border-color)] ${textSec} hover:border-[#e94560] hover:text-[#e94560]`}`}
+                      data-testid="filter-unassigned-schools">
+                      Unassigned{unassignedCount > 0 ? ` · ${unassignedCount}` : ''}
+                    </button>
+                    {unassignedOnly && <span className={`text-xs ${textMuted}`}>Showing {schFiltered.length} owner-less school{schFiltered.length !== 1 ? 's' : ''} — assign below</span>}
+                  </div>
+                );
+              })()}
               {crm.user?.role === 'admin' && selectedSchoolIds.size > 0 && (
                 <div className={`${card} border rounded-md p-2.5 flex items-center gap-2 flex-wrap`} data-testid="school-bulk-bar">
                   <span className={`text-xs font-medium ${textPri}`}>{selectedSchoolIds.size} school(s) selected</span>
