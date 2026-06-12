@@ -303,7 +303,7 @@ async def save_school_portal_settings(request: Request):
         raise HTTPException(status_code=403, detail="Admin access required")
     body = await request.json()
     update = {"type": "school_portal", "updated_at": datetime.now(timezone.utc).isoformat()}
-    for k in ("email_link_enabled", "magic_link_enabled", "google_enabled"):
+    for k in ("email_link_enabled", "magic_link_enabled", "google_enabled", "notify_whatsapp"):
         if k in body:
             update[k] = bool(body[k])
     if (body.get("google_client_id") or "").strip():
@@ -327,6 +327,7 @@ async def get_school_portal_settings(request: Request):
         "google_enabled": bool(cfg.get("google_enabled", False)),
         "google_client_id": cfg.get("google_client_id", ""),
         "google_client_secret_set": bool((cfg.get("google_client_secret") or "").strip()),
+        "notify_whatsapp": bool(cfg.get("notify_whatsapp", False)),
     }
 
 
