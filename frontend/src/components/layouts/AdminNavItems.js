@@ -44,9 +44,9 @@ export const MODULE_ROUTE_MAP = {
     { path: '/dispatch-tracking', icon: Package, label: 'Dispatch Tracking' },
     { path: '/customer-engagement', icon: Heart, label: 'Customer Engagement' },
     { path: '/marketing', icon: Zap, label: 'Marketing & WhatsApp' },
-    { path: '/portal-inbox', icon: Inbox, label: 'Portal Inbox' },
-    { path: '/teacher-review', icon: Video, label: 'Teacher Content' },
-    { path: '/competitions-admin', icon: Trophy, label: 'Competitions' },
+    { path: '/portal-inbox', icon: Inbox, label: 'Portal Inbox', adminOnly: true },
+    { path: '/teacher-review', icon: Video, label: 'Teacher Content', adminOnly: true },
+    { path: '/competitions-admin', icon: Trophy, label: 'Competitions', adminOnly: true },
   ],
   procurement: [
     { path: '/procurement', icon: ShoppingCart, label: 'Procurement' },

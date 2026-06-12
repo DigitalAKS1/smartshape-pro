@@ -374,7 +374,7 @@ export default function SchoolDashboard() {
               <div key={t.teacher_id} className={`${card} border rounded-md p-4 flex items-center justify-between`}>
                 <div>
                   <p className={`text-sm font-medium ${textPri}`}>{t.name}
-                    <span className={`ml-2 text-[10px] px-2 py-0.5 rounded-full ${t.status === 'inactive' ? 'bg-gray-500/15 text-gray-400' : t.password_hash === undefined && !t.activated ? 'bg-yellow-500/15 text-yellow-400' : 'bg-green-500/15 text-green-400'}`}>{t.status === 'inactive' ? 'inactive' : 'active'}</span>
+                    <span className={`ml-2 text-[10px] px-2 py-0.5 rounded-full ${t.status === 'inactive' ? 'bg-gray-500/15 text-gray-400' : t.activated ? 'bg-green-500/15 text-green-400' : 'bg-yellow-500/15 text-yellow-400'}`}>{t.status === 'inactive' ? 'inactive' : t.activated ? 'active' : 'pending'}</span>
                   </p>
                   <p className={`text-xs ${textMuted}`}>{t.email}{t.subject ? ` • ${t.subject}` : ''}</p>
                 </div>

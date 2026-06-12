@@ -30,8 +30,9 @@ export default function AdminLayout({ children }) {
     section.modules.forEach((mod) => {
       if (isAdmin || userModules.includes(mod)) {
         const entry = MODULE_ROUTE_MAP[mod];
-        if (Array.isArray(entry)) entry.forEach((item) => items.push(item));
-        else if (entry) items.push(entry);
+        const allow = (item) => !(item.adminOnly && !isAdmin);
+        if (Array.isArray(entry)) entry.forEach((item) => { if (allow(item)) items.push(item); });
+        else if (entry && allow(entry)) items.push(entry);
       }
     });
     if (items.length > 0) sidebarGroups.push({ label: section.label, items });

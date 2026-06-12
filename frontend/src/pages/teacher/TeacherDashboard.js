@@ -5,7 +5,7 @@ import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
 import { toast } from 'sonner';
-import { Presentation, LogOut, Video, Trophy, Images, Upload, Trash2, Clock, CheckCircle, XCircle } from 'lucide-react';
+import { Presentation, LogOut, Video, Trophy, Images, Upload, Trash2, Clock, CheckCircle, XCircle, Bell } from 'lucide-react';
 
 const STATUS = {
   pending: { color: 'bg-yellow-500/15 text-yellow-400', icon: Clock, label: 'Pending review' },
@@ -21,6 +21,8 @@ export default function TeacherDashboard() {
   const [videos, setVideos] = useState([]);
   const [competitions, setCompetitions] = useState([]);
   const [gallery, setGallery] = useState([]);
+  const [notifs, setNotifs] = useState([]);
+  const [showNotifs, setShowNotifs] = useState(false);
   const [form, setForm] = useState({ type: 'review', title: '', description: '', machine_used: '', dies_used: '', competition_id: '', file: null });
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -35,10 +37,16 @@ export default function TeacherDashboard() {
       .finally(() => setLoading(false));
   }, [navigate]);
 
+  // Load competitions + notifications once (competitions are also needed for the upload dropdown).
+  useEffect(() => {
+    if (loading) return;
+    portal.competitions().then(r => setCompetitions(r.data || [])).catch(() => {});
+    teacherVideos.notifications().then(r => setNotifs(r.data || [])).catch(() => {});
+  }, [loading]);
+
   useEffect(() => {
     if (loading) return;
     if (activeTab === 'videos') teacherVideos.list().then(r => setVideos(r.data || [])).catch(() => {});
-    if (activeTab === 'competitions') portal.competitions().then(r => setCompetitions(r.data || [])).catch(() => {});
     if (activeTab === 'gallery') portal.gallery().then(r => setGallery(r.data || [])).catch(() => {});
   }, [activeTab, loading]);
 
@@ -83,7 +91,25 @@ export default function TeacherDashboard() {
             <div><h1 className={`text-lg font-bold ${textPri}`} data-testid="teacher-dashboard-title">{teacher?.name || 'Teacher'}</h1>
               <p className={`text-xs ${textMuted}`}>{teacher?.email}</p></div>
           </div>
-          <Button onClick={handleLogout} variant="ghost" size="sm" className={textSec} data-testid="teacher-logout-btn"><LogOut className="h-4 w-4" /></Button>
+          <div className="flex items-center gap-1">
+            <div className="relative">
+              <button onClick={() => setShowNotifs(s => !s)} className={`relative p-2 rounded-md hover:bg-[var(--bg-hover)] ${textSec}`}>
+                <Bell className="h-5 w-5" />
+                {notifs.some(n => !n.read) && <span className="absolute top-0.5 right-0.5 w-2 h-2 bg-[#e94560] rounded-full" />}
+              </button>
+              {showNotifs && (
+                <div className={`absolute right-0 mt-2 w-72 max-h-80 overflow-y-auto ${card} border rounded-md shadow-lg z-50 p-2`}>
+                  {notifs.length === 0 ? <p className={`text-xs ${textMuted} p-3 text-center`}>No notifications</p> : notifs.map(n => (
+                    <div key={n.notification_id} className="p-2 border-b border-[var(--border-color)] last:border-0">
+                      <p className={`text-sm ${textPri}`}>{n.title}</p>
+                      <p className={`text-xs ${textMuted}`}>{n.message}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            <Button onClick={handleLogout} variant="ghost" size="sm" className={textSec} data-testid="teacher-logout-btn"><LogOut className="h-4 w-4" /></Button>
+          </div>
         </div>
       </div>
 

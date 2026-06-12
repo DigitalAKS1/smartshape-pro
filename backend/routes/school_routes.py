@@ -226,11 +226,16 @@ async def school_documents(request: Request):
                      "date": inv.get("invoice_date"),
                      "download_url": inv.get("file_url") or f"/api/school/documents/invoice/{inv.get('invoice_id')}/download"})
     try:
-        async for c in db.certificate_items.find({"school_id": sid}, {"_id": 0, "item_id": 1, "title": 1, "created_at": 1, "pdf_url": 1}):
-            if c.get("pdf_url"):
+        # Certificates are recipient-keyed (no school_id); link by the school's email.
+        sch_email = (school.get("email") or "").lower().strip()
+        if sch_email:
+            async for c in db.cert_items.find(
+                {"email": sch_email, "pdf_url": {"$nin": [None, ""]}},
+                {"_id": 0, "item_id": 1, "name": 1, "created_at": 1, "pdf_url": 1}
+            ):
                 docs.append({"doc_type": "certificate", "ref_id": c.get("item_id"),
-                             "label": c.get("title") or "Certificate", "date": c.get("created_at"),
-                             "download_url": c["pdf_url"]})
+                             "label": (f"Certificate — {c.get('name', '')}").strip(" —"),
+                             "date": c.get("created_at"), "download_url": c["pdf_url"]})
     except Exception:
         pass
     docs.sort(key=lambda d: d.get("date") or "", reverse=True)
@@ -332,8 +337,10 @@ def _issue_teacher_cookie(response: Response, teacher: dict) -> dict:
 @router.get("/school/teachers")
 async def school_list_teachers(request: Request):
     school = await get_current_school(request)
-    return await db.teachers.find({"school_id": school["school_id"]},
-                                  {"_id": 0, "password_hash": 0}).sort("created_at", -1).to_list(500)
+    rows = await db.teachers.find({"school_id": school["school_id"]}, {"_id": 0}).sort("created_at", -1).to_list(500)
+    for t in rows:
+        t["activated"] = bool(t.pop("password_hash", None))
+    return rows
 
 
 @router.post("/school/teachers")
