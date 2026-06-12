@@ -559,6 +559,21 @@ async def school_magic_verify(token: str = ""):
     return redirect
 
 
+@router.post("/school/auth/forgot")
+async def school_forgot_password(request: Request):
+    body = await request.json()
+    email = (body.get("email") or "").lower().strip()
+    generic = {"message": "If that email is registered, a password-reset link has been sent."}
+    if email:
+        school = await db.schools.find_one({"email": email})
+        if school:
+            try:
+                await school_auth.send_password_reset(school)
+            except Exception:
+                pass
+    return generic
+
+
 @router.post("/school/{school_id}/resend-invite")
 async def school_resend_invite(school_id: str, request: Request):
     user = await get_current_user(request)
