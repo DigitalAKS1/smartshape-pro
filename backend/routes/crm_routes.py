@@ -1164,6 +1164,7 @@ async def get_school_profile(school_id: str, request: Request):
     total_revenue_ordered = sum(o.get("grand_total", 0) or 0 for o in orders)
     total_paid = sum(o.get("payment_received", 0) or 0 for o in orders)
     total_invoiced = sum(i.get("total_amount", 0) or 0 for i in invoices)
+    total_outstanding = max(0, round(total_invoiced - total_paid, 2))
 
     return {
         "school": school,
@@ -1190,6 +1191,7 @@ async def get_school_profile(school_id: str, request: Request):
             "total_paid": total_paid,
             "total_invoices": len(invoices),
             "total_invoiced": total_invoiced,
+            "total_outstanding": total_outstanding,
             "total_communications": len(communications),
             "last_contacted": last_contacted,
             "days_since_last_contact": days_since,

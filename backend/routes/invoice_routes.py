@@ -192,6 +192,54 @@ async def list_invoices(request: Request, school_id: Optional[str] = None, match
     return await db.invoices.find(q, {"_id": 0, "raw": 0}).sort("created_at", -1).to_list(3000)
 
 
+@router.get("/receivables")
+async def receivables(request: Request):
+    """Per-school outstanding (invoiced − order payments) with aging, sorted by outstanding desc."""
+    from datetime import date as _date
+    user = await get_current_user(request)
+    _require_admin_accounts(user)
+    by_school = {}
+    async for inv in db.invoices.find(
+        {"school_id": {"$nin": [None, ""]}},
+        {"_id": 0, "school_id": 1, "school_name": 1, "total_amount": 1, "invoice_date": 1},
+    ):
+        sid = inv["school_id"]
+        e = by_school.setdefault(sid, {"school_id": sid, "school_name": inv.get("school_name", ""),
+                                       "invoiced": 0.0, "paid": 0.0, "invoices": 0, "oldest_date": None})
+        e["invoiced"] += float(inv.get("total_amount", 0) or 0)
+        e["invoices"] += 1
+        d = (inv.get("invoice_date") or "")[:10]
+        if d and (e["oldest_date"] is None or d < e["oldest_date"]):
+            e["oldest_date"] = d
+    if not by_school:
+        return {"rows": [], "totals": {"invoiced": 0, "paid": 0, "outstanding": 0}}
+    async for o in db.orders.find({"school_id": {"$in": list(by_school)}}, {"_id": 0, "school_id": 1, "payment_received": 1}):
+        if o["school_id"] in by_school:
+            by_school[o["school_id"]]["paid"] += float(o.get("payment_received", 0) or 0)
+    today = _date.today()
+    rows, tot = [], {"invoiced": 0.0, "paid": 0.0, "outstanding": 0.0}
+    for e in by_school.values():
+        tot["invoiced"] += e["invoiced"]
+        tot["paid"] += e["paid"]
+        outstanding = round(e["invoiced"] - e["paid"], 2)
+        if outstanding <= 0:
+            continue
+        tot["outstanding"] += outstanding
+        days, bucket = None, "—"
+        if e["oldest_date"]:
+            try:
+                days = (today - _date.fromisoformat(e["oldest_date"])).days
+                bucket = "0-30" if days <= 30 else "31-60" if days <= 60 else "61-90" if days <= 90 else "90+"
+            except Exception:
+                pass
+        rows.append({"school_id": e["school_id"], "school_name": e["school_name"],
+                     "invoiced": round(e["invoiced"], 2), "paid": round(e["paid"], 2),
+                     "outstanding": outstanding, "invoices": e["invoices"],
+                     "oldest_date": e["oldest_date"], "aging_days": days, "aging_bucket": bucket})
+    rows.sort(key=lambda r: r["outstanding"], reverse=True)
+    return {"rows": rows, "totals": {k: round(v, 2) for k, v in tot.items()}}
+
+
 @router.post("/{invoice_id}/map")
 async def map_invoice(invoice_id: str, request: Request):
     """Manually map an unmatched invoice to a school (and optionally an order)."""

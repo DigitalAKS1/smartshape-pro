@@ -540,6 +540,7 @@ export const invoices = {
   },
   map: (id, data) => API.post(`/invoices/${id}/map`, data),
   remove: (id) => API.delete(`/invoices/${id}`),
+  receivables: () => API.get('/invoices/receivables'),
   templateUrl: (fmt) => `${process.env.REACT_APP_BACKEND_URL}/api/invoices/import-template?format=${fmt}`,
 };
 

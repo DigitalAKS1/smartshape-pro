@@ -64,12 +64,13 @@ function RollupCard({ label, value, sub, tk, accent }) {
 export function SchoolSalesSection({ quotations, orders = [], invoices = [], metrics, tk }) {
   return (
     <div className="sp-tab space-y-5">
-      {/* Revenue rollup: Quoted → Ordered → Invoiced → Paid */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      {/* Money funnel: Quoted → Ordered → Invoiced → Paid → Outstanding */}
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
         <RollupCard label="Quoted" value={metrics.total_revenue_quoted} sub={`${quotations.length} quote${quotations.length !== 1 ? 's' : ''}`} tk={tk} />
-        <RollupCard label="Ordered" value={metrics.total_revenue_ordered} sub={`${orders.length} order${orders.length !== 1 ? 's' : ''}`} tk={tk} accent />
+        <RollupCard label="Ordered" value={metrics.total_revenue_ordered} sub={`${orders.length} order${orders.length !== 1 ? 's' : ''}`} tk={tk} />
         <RollupCard label="Invoiced" value={metrics.total_invoiced} sub={`${invoices.length} invoice${invoices.length !== 1 ? 's' : ''}`} tk={tk} />
-        <RollupCard label="Paid" value={metrics.total_paid} sub={`of ${fmtMoney(metrics.total_revenue_ordered)}`} tk={tk} />
+        <RollupCard label="Paid" value={metrics.total_paid} sub={`of ${fmtMoney(metrics.total_invoiced)}`} tk={tk} />
+        <RollupCard label="Outstanding" value={metrics.total_outstanding} sub={metrics.total_outstanding > 0 ? 'due' : 'clear'} tk={tk} accent={metrics.total_outstanding > 0} />
       </div>
 
       {/* Quotations */}

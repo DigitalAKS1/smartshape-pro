@@ -24,6 +24,7 @@ import HoldsTab from '../../components/orders/HoldsTab';
 import OrderDetailPanel from '../../components/orders/OrderDetailPanel';
 import InvoiceBulkImport from '../../components/crm/InvoiceBulkImport';
 import UnmatchedInvoices from '../../components/crm/UnmatchedInvoices';
+import ReceivablesPanel from '../../components/crm/ReceivablesPanel';
 
 export default function OrdersManagement() {
   const om = useOrdersManagement();
@@ -81,6 +82,7 @@ export default function OrdersManagement() {
         {/* Bulk invoice import + unmatched review (admin / accounts) */}
         {canExport && <InvoiceBulkImport onDone={() => { setInvKey(k => k + 1); (om.reload || om.fetchData)?.(); }} />}
         {canExport && <UnmatchedInvoices refreshKey={invKey} />}
+        {canExport && <ReceivablesPanel refreshKey={invKey} />}
 
         {/* Tabs */}
         <div className={`flex gap-1 ${card} border rounded-md p-1`}>
