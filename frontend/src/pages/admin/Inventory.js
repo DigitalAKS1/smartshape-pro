@@ -1,4 +1,5 @@
 import React from 'react';
+import { useNavigate } from 'react-router-dom';
 import AdminLayout from '../../components/layouts/AdminLayout';
 import { exportData } from '../../lib/api';
 import { useAuth } from '../../contexts/AuthContext';
@@ -6,7 +7,7 @@ import {
   Package, Plus, Download, Upload, Archive, MoreVertical,
   Grid3X3, List, Search, Edit2, TrendingUp, TrendingDown,
   CheckCircle2, AlertCircle, XCircle, Scissors, Filter, X,
-  CheckSquare, Square, Trash2,
+  CheckSquare, Square, Trash2, PackageOpen,
 } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
@@ -22,6 +23,7 @@ const backendUrl = process.env.REACT_APP_BACKEND_URL || '';
 
 export default function Inventory() {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const isAdmin = user?.role === 'admin';
   const canWrite = isAdmin || user?.role === 'store';
 
@@ -86,6 +88,9 @@ export default function Inventory() {
                 </DropdownMenuItem>
                 <DropdownMenuItem onClick={() => exportData.download('inventory')} className="cursor-pointer">
                   <Download className="mr-2 h-4 w-4" /> Export CSV
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => navigate('/returnable-challans')} className="cursor-pointer">
+                  <PackageOpen className="mr-2 h-4 w-4" /> Returnable Challans
                 </DropdownMenuItem>
                 {canWrite && (
                   <DropdownMenuItem onClick={() => inv.setImportOpen(true)} className="cursor-pointer">

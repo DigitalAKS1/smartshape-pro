@@ -70,28 +70,9 @@ async def compute_committed(die_id: str, *, exclude_order_item_id: Optional[str]
         match["order_item_id"] = {"$ne": exclude_order_item_id}
     items = await db.order_items.find(
         match, {"_id": 0, "quantity": 1, "dispatched_qty": 1}).to_list(100000)
-    committed = sum(_remaining_qty(it) for it in items)
-    # Items physically out on a returnable challan (open / partially returned) also
-    # reduce availability. Added with Step 4 (Returnable Challan); harmless before.
-    committed += await _returnable_out_qty(die_id)
-    return committed
-
-
-async def _returnable_out_qty(die_id: str) -> int:
-    """Net quantity of a die currently out on open returnable challans (qty - returned)."""
-    try:
-        challans = await db.challans.find(
-            {"type": "returnable_out", "status": {"$in": ["open", "partially_returned"]}},
-            {"_id": 0, "lines": 1},
-        ).to_list(100000)
-    except Exception:
-        return 0
-    out = 0
-    for ch in challans:
-        for ln in ch.get("lines", []):
-            if ln.get("item_ref") == die_id or ln.get("die_id") == die_id:
-                out += int(ln.get("qty", 0) or 0) - int(ln.get("returned_qty", 0) or 0)
-    return max(0, out)
+    # Note: dies sent out on a returnable challan (demo/exhibition/sampling) reduce
+    # physical stock_qty directly at challan time, so they need no term here.
+    return sum(_remaining_qty(it) for it in items)
 
 
 async def compute_availability(die: dict, *, exclude_order_item_id: Optional[str] = None) -> dict:

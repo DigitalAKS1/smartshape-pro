@@ -1299,6 +1299,30 @@ async def vendor_return_pdf(return_id: str, request: Request):
 # ==================== RETURNABLE CHALLANS ====================
 
 _CHALLAN_TYPES = ("returnable_out", "returnable_in", "vendor_return_delivery")
+_CHALLAN_REASONS = ("demo", "exhibition", "sampling", "other")
+
+
+async def _adjust_die_stock_for_lines(lines, sign: int):
+    """Move physical die stock when goods leave/return on a returnable challan.
+
+    sign=-1 when items go OUT (stock leaves the building), +1 when they come back.
+    Only lines that reference a die ({source:'die'}) affect inventory; purchase-item
+    or vendor lines are ignored. `lines` is a list of (die_id, qty) pairs.
+    """
+    for die_id, qty in lines:
+        q = int(round(float(qty or 0)))
+        if die_id and q > 0:
+            await db.dies.update_one({"die_id": die_id}, {"$inc": {"stock_qty": sign * q}})
+
+
+def _die_line_pairs(lines):
+    """Extract (die_id, qty) pairs from challan lines that reference a die."""
+    pairs = []
+    for ln in lines or []:
+        ref = ln.get("item_ref") or {}
+        if ref.get("source") == "die" and ref.get("id"):
+            pairs.append((ref["id"], ln.get("qty", 0)))
+    return pairs
 
 
 async def _build_challan_lines(raw_lines):
@@ -1347,21 +1371,29 @@ async def create_challan(request: Request):
         raise HTTPException(status_code=400, detail="At least one line is required")
     cid = _new_id("chal")
     cno = await next_number("challan", "DC")
+    reason = body.get("reason")
+    if reason is not None and reason not in _CHALLAN_REASONS:
+        raise HTTPException(status_code=400, detail="invalid reason")
+    built_lines = await _build_challan_lines(body.get("lines", []))
     doc = {
         "challan_id": cid, "challan_no": cno, "type": ctype,
         "direction": body.get("direction", "outbound"),
         "party_type": body.get("party_type", "vendor"),
+        "reason": reason,  # demo | exhibition | sampling | other (for returnable_out)
         "vendor_id": body.get("vendor_id"), "party_name": body.get("party_name", ""),
         "ref_type": body.get("ref_type"), "ref_id": body.get("ref_id"),
         "challan_date": body.get("challan_date") or _now()[:10],
         "expected_return_date": body.get("expected_return_date"),
         "notes": body.get("notes", ""),
-        "lines": await _build_challan_lines(body.get("lines", [])),
+        "lines": built_lines,
         "status": "open",
         "timeline": [_timeline_entry("created", user["email"])],
         "created_by": user["email"], "created_at": _now(), "updated_at": _now(),
     }
     await db.challans.insert_one(doc)
+    # Goods leaving on a returnable challan reduce physical die stock.
+    if ctype == "returnable_out":
+        await _adjust_die_stock_for_lines(_die_line_pairs(built_lines), sign=-1)
     return await db.challans.find_one({"challan_id": cid}, {"_id": 0})
 
 
@@ -1383,11 +1415,19 @@ async def record_challan_return(challan_id: str, request: Request):
         except (KeyError, ValueError, TypeError):
             continue  # ignore malformed line entries rather than 500
     lines = c.get("lines", [])
+    restored = []  # (die_id, applied_qty) for stock restoration on returnable_out
     for idx, qty in add.items():
         if 0 <= idx < len(lines):
             prev = float(lines[idx].get("returned_qty", 0) or 0)
             cap = float(lines[idx].get("qty", 0) or 0)
-            lines[idx]["returned_qty"] = round2(min(cap, prev + qty))
+            new_val = round2(min(cap, prev + qty))
+            applied = new_val - prev  # actual delta after clamping
+            lines[idx]["returned_qty"] = new_val
+            ref = lines[idx].get("item_ref") or {}
+            if applied > 0 and ref.get("source") == "die" and ref.get("id"):
+                restored.append((ref["id"], applied))
+    if c.get("type") == "returnable_out" and restored:
+        await _adjust_die_stock_for_lines(restored, sign=+1)
     fully = all(float(l.get("returned_qty", 0) or 0) >= float(l.get("qty", 0) or 0) for l in lines)
     any_ret = any(float(l.get("returned_qty", 0) or 0) > 0 for l in lines)
     status = "closed" if fully else ("partially_returned" if any_ret else "open")

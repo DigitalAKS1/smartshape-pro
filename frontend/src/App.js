@@ -26,6 +26,7 @@ import ModuleMaster from './pages/admin/ModuleMaster';
 import CRMMasters from './pages/admin/CRMMasters';
 import ProcurementMasters from './pages/admin/ProcurementMasters';
 import Procurement from './pages/admin/Procurement';
+import ReturnableChallans from './pages/admin/ReturnableChallans';
 import AdminControl from './pages/admin/AdminControl';
 import TodayDashboard from './pages/TodayDashboard';
 import Accounts from './pages/admin/Accounts';
@@ -190,6 +191,7 @@ function AppRouter() {
       <Route path="/crm-masters" element={<ProtectedRoute><CRMMasters /></ProtectedRoute>} />
       <Route path="/procurement" element={<ProtectedRoute><Procurement /></ProtectedRoute>} />
       <Route path="/procurement-masters" element={<ProtectedRoute><ProcurementMasters /></ProtectedRoute>} />
+      <Route path="/returnable-challans" element={<ProtectedRoute><ReturnableChallans /></ProtectedRoute>} />
       <Route path="/admin-control" element={<ProtectedRoute><AdminControl /></ProtectedRoute>} />
       <Route path="/accounts" element={<ProtectedRoute><Accounts /></ProtectedRoute>} />
       <Route path="/hr" element={<ProtectedRoute><HR /></ProtectedRoute>} />
