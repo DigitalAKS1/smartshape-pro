@@ -9,6 +9,21 @@ import logging
 import os
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s: %(message)s")
+
+# Optional error tracking: set SENTRY_DSN on the server to capture backend errors.
+# No-op if the package isn't installed or the DSN isn't set, so it never blocks boot.
+if os.environ.get("SENTRY_DSN"):
+    try:
+        import sentry_sdk
+        sentry_sdk.init(
+            dsn=os.environ["SENTRY_DSN"],
+            traces_sample_rate=0.1,
+            environment=os.environ.get("ENVIRONMENT", "production"),
+        )
+        logging.info("Sentry error tracking enabled")
+    except Exception as _e:
+        logging.warning(f"Sentry not initialised: {_e}")
+
 import uuid
 from datetime import datetime, timezone
 from typing import Set
@@ -179,23 +194,39 @@ async def ws_today_actions(websocket: WebSocket):
 
 @app.on_event("startup")
 async def startup():
-    # Unique / critical indexes first
-    await db.users.create_index("email", unique=True)
-    await db.dies.create_index("code", unique=True)
+    # Unique indexes — wrapped so pre-existing duplicate data can't crash startup
+    # (a failure is logged and the app still boots; clean the dupes, then it takes).
+    _unique = [(db.users, "email"), (db.dies, "code"), (db.contacts, "contact_id")]
+    for coll, field in _unique:
+        try:
+            await coll.create_index(field, unique=True)
+        except Exception as e:
+            logging.warning(f"unique index on {field} not created (likely existing duplicates): {e}")
     await db.login_attempts.create_index("identifier")
-    await db.contacts.create_index("contact_id", unique=True)
 
-    # Performance indexes (non-blocking background build)
+    # Performance + lookup indexes (non-blocking background build). Business numbers
+    # (order/quote/invoice) are NON-unique for now — existing data may contain duplicates
+    # and generation is single-worker; a true unique constraint needs a dedup pass first.
     _idx = [
-        (db.schools,           [("school_name", 1), ("is_deleted", 1)]),
-        (db.contacts,          [("school_id", 1), ("phone", 1), ("email", 1), ("is_deleted", 1)]),
-        (db.quotations,        [("school_name", 1), ("customer_phone", 1), ("customer_email", 1), ("created_at", -1)]),
-        (db.leads,             [("school_id", 1), ("assigned_to", 1), ("stage", 1)]),
-        (db.visit_plans,       [("school_id", 1), ("visit_date", -1), ("status", 1)]),
-        (db.trusted_devices,   [("user_email", 1), ("device_token", 1), ("status", 1)]),
-        (db.salespersons,      [("email", 1), ("user_id", 1)]),
-        (db.stock_movements,   [("die_id", 1), ("movement_date", -1)]),
-        (db.activity_logs,     [("entity_id", 1), ("timestamp", -1)]),
+        (db.schools,            [("school_name", 1), ("is_deleted", 1), ("assigned_to", 1)]),
+        (db.contacts,           [("school_id", 1), ("phone", 1), ("email", 1), ("is_deleted", 1)]),
+        (db.quotations,         [("school_name", 1), ("customer_phone", 1), ("customer_email", 1), ("created_at", -1), ("quote_number", 1), ("sales_person_email", 1)]),
+        (db.leads,              [("school_id", 1), ("assigned_to", 1), ("stage", 1), ("company_name", 1)]),
+        (db.orders,             [("order_number", 1), ("quotation_id", 1), ("school_id", 1), ("order_status", 1), ("created_at", -1)]),
+        (db.invoices,           [("invoice_number", 1), ("gstin", 1), ("school_id", 1), ("order_id", 1), ("match_status", 1)]),
+        (db.payments,           [("order_id", 1)]),
+        (db.dispatches,         [("order_id", 1), ("dispatch_number", 1)]),
+        (db.order_items,        [("order_id", 1)]),
+        (db.sales_person_stock, [("sales_person_id", 1), ("die_id", 1)]),
+        (db.visit_plans,        [("school_id", 1), ("visit_date", -1), ("status", 1), ("assigned_to", 1)]),
+        (db.field_visits,       [("sales_person_email", 1), ("visit_date", 1), ("status", 1)]),
+        (db.trusted_devices,    [("user_email", 1), ("device_token", 1), ("status", 1)]),
+        (db.salespersons,       [("email", 1), ("user_id", 1)]),
+        (db.stock_movements,    [("die_id", 1), ("movement_date", -1)]),
+        (db.activity_logs,      [("entity_id", 1), ("timestamp", -1), ("user_email", 1)]),
+        (db.cal_events,         [("date", 1), ("created_by_emp_id", 1), ("status", 1)]),
+        (db.whatsapp_scheduled, [("status", 1)]),
+        (db.greeting_logs,      [("rule_id", 1), ("contact_id", 1), ("year", 1)]),
     ]
     for coll, fields in _idx:
         for field in fields:
