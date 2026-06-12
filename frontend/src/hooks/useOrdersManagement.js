@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { orders as ordersApi, holds as holdsApi, quotations as quotApi, dispatches as dispatchesApi, dispatchApi, downloadBlob } from '../lib/api';
+import { orders as ordersApi, holds as holdsApi, quotations as quotApi, dispatches as dispatchesApi, dispatchApi, dies as diesApi, downloadBlob } from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
 import { toast } from 'sonner';
 
@@ -11,6 +11,7 @@ export default function useOrdersManagement() {
   const [ordersList,   setOrdersList]   = useState([]);
   const [holdsList,    setHoldsList]    = useState([]);
   const [dispatchList, setDispatchList] = useState([]);
+  const [diesList,     setDiesList]     = useState([]);
   const [loading,      setLoading]      = useState(true);
 
   // ── Search / filter ──────────────────────────────────────────────────────
@@ -64,14 +65,51 @@ export default function useOrdersManagement() {
   // ── Data fetching ────────────────────────────────────────────────────────
   const fetchData = async () => {
     try {
-      const [or, hr, dr] = await Promise.all([
-        ordersApi.getAll(), holdsApi.getAll(), dispatchesApi.getAll(),
+      const [or, hr, dr, di] = await Promise.all([
+        ordersApi.getAll(), holdsApi.getAll(), dispatchesApi.getAll(), diesApi.getAll(),
       ]);
       setOrdersList(or.data);
       setHoldsList(hr.data);
       setDispatchList(dr.data);
+      setDiesList((di.data || []).filter(d => d.is_active !== false));
     } catch { toast.error('Failed to load orders'); }
     finally { setLoading(false); }
+  };
+
+  // Refetch a single open order's detail (after a Manage Selection edit).
+  const reloadDetail = async (orderId) => {
+    try {
+      const res = await ordersApi.get(orderId);
+      setDetailOrder(res.data);
+    } catch { /* keep stale detail on failure */ }
+  };
+
+  // ── Manage Selection (add/remove/change qty on a submitted order) ──────────
+  const handleAddItem = async (orderId, dieId, quantity) => {
+    try {
+      await ordersApi.addItem(orderId, { die_id: dieId, quantity });
+      toast.success('Item added');
+      await reloadDetail(orderId);
+      fetchData();
+    } catch (err) { toast.error(err.response?.data?.detail || 'Failed to add item'); }
+  };
+
+  const handleUpdateItemQty = async (orderId, itemId, quantity) => {
+    try {
+      await ordersApi.updateItemQty(orderId, itemId, quantity);
+      await reloadDetail(orderId);
+      fetchData();
+    } catch (err) { toast.error(err.response?.data?.detail || 'Failed to update quantity'); }
+  };
+
+  const handleRemoveItem = async (orderId, itemId) => {
+    if (!window.confirm('Remove this die from the order? Its reserved stock will be released.')) return;
+    try {
+      await ordersApi.removeItem(orderId, itemId);
+      toast.success('Item removed');
+      await reloadDetail(orderId);
+      fetchData();
+    } catch (err) { toast.error(err.response?.data?.detail || 'Failed to remove item'); }
   };
 
   useEffect(() => { fetchData(); }, []);
@@ -311,6 +349,8 @@ export default function useOrdersManagement() {
     pendingQuots, selectedQuotId, setSelectedQuotId,
     // detail
     detailOrder, detailOpen, setDetailOpen,
+    diesList,
+    handleAddItem, handleUpdateItemQty, handleRemoveItem,
     // status
     statusOpen, setStatusOpen,
     statusTarget,

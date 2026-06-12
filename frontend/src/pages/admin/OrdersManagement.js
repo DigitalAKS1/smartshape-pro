@@ -30,6 +30,7 @@ export default function OrdersManagement() {
   const om = useOrdersManagement();
   const { user } = useAuth();
   const canExport = user?.role === 'admin' || user?.role === 'accounts';
+  const canManageSelection = ['admin', 'accounts', 'store'].includes(user?.role);
   const [invKey, setInvKey] = React.useState(0);
 
   const inputCls = 'bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]';
@@ -471,7 +472,12 @@ export default function OrdersManagement() {
           detailOrder={om.detailOrder}
           detailOpen={om.detailOpen}
           setDetailOpen={om.setDetailOpen}
-          textPri={textPri} textSec={textSec} textMuted={textMuted} dlgCls={dlgCls}
+          canManage={canManageSelection}
+          diesList={om.diesList}
+          onAddItem={om.handleAddItem}
+          onUpdateQty={om.handleUpdateItemQty}
+          onRemoveItem={om.handleRemoveItem}
+          textPri={textPri} textSec={textSec} textMuted={textMuted} dlgCls={dlgCls} inputCls={inputCls}
         />
 
         {/* Status Change */}

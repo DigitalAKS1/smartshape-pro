@@ -530,6 +530,10 @@ export const orders = {
   updateProductionStage: (id, stage, note) => API.put(`/orders/${id}/production-stage`, { production_stage: stage, note }),
   recordPayment: (id, data) => API.post(`/orders/${id}/payment`, data),
   getPayments: (id) => API.get(`/orders/${id}/payments`),
+  // Manage Selection (staff, pre-dispatch)
+  addItem: (id, data) => API.post(`/orders/${id}/items`, data),
+  updateItemQty: (id, itemId, quantity) => API.put(`/orders/${id}/items/${itemId}`, { quantity }),
+  removeItem: (id, itemId) => API.delete(`/orders/${id}/items/${itemId}`),
   exportOne: (id, fmt) => API.get(`/orders/${id}/export`, { params: { format: fmt }, responseType: 'blob' }),
   exportBulk: (ids, fmt) => API.post('/orders/export', { order_ids: ids, format: fmt }, { responseType: 'blob' }),
 };

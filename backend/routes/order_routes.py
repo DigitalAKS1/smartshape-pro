@@ -133,7 +133,8 @@ async def get_order(order_id: str, request: Request):
     order = await db.orders.find_one({"order_id": order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
-    items = await db.order_items.find({"order_id": order_id}, {"_id": 0}).to_list(1000)
+    items = await db.order_items.find(
+        {"order_id": order_id, "status": {"$ne": "removed"}}, {"_id": 0}).to_list(1000)
     order["items"] = items
     timeline = await db.order_timeline.find({"order_id": order_id}, {"_id": 0}).sort("timestamp", 1).to_list(100)
     order["timeline"] = timeline
@@ -339,7 +340,9 @@ async def update_order_status(order_id: str, request: Request):
                 })
                 await db.order_items.update_one({"order_item_id": item["order_item_id"]}, {"$set": {"status": "dispatched"}})
     elif new_status == "delivered":
-        await db.order_items.update_many({"order_id": order_id}, {"$set": {"status": "delivered"}})
+        await db.order_items.update_many(
+            {"order_id": order_id, "status": {"$nin": ["removed", "cancelled", "released"]}},
+            {"$set": {"status": "delivered"}})
     elif new_status == "cancelled":
         items = await db.order_items.find({"order_id": order_id}, {"_id": 0}).to_list(1000)
         for item in items:
@@ -389,6 +392,135 @@ async def update_order_production_stage(order_id: str, request: Request):
     })
     await log_activity(user["email"], "update_production_stage", "order", order_id, f"-> {new_stage}")
     return await db.orders.find_one({"order_id": order_id}, {"_id": 0})
+
+
+# ==================== MANAGE SELECTION (order line items) ====================
+# Staff (admin/store/accounts) may add/remove dies and change quantities on a
+# submitted order until it begins dispatching. Reservations adjust automatically.
+
+EDITABLE_ORDER_STATUSES = ("pending", "confirmed")
+EDITABLE_ITEM_STATUSES = ("on_hold", "confirmed")
+
+
+def _assert_can_edit_selection(user, order):
+    if get_team(user) == "sales":
+        raise HTTPException(status_code=403, detail="Sales cannot edit order selections")
+    if order.get("order_status") not in EDITABLE_ORDER_STATUSES:
+        raise HTTPException(status_code=400,
+            detail=f"Selection is locked once the order is {order.get('order_status')}")
+
+
+async def _refresh_total_items(order_id: str):
+    """Keep order.total_items in sync with its live (non-removed) lines."""
+    count = await db.order_items.count_documents(
+        {"order_id": order_id, "status": {"$in": list(EDITABLE_ITEM_STATUSES)}})
+    await db.orders.update_one({"order_id": order_id},
+        {"$set": {"total_items": count, "updated_at": datetime.now(timezone.utc).isoformat()}})
+
+
+async def _maybe_alert_shortage(die: dict, selection_ref: str):
+    """Raise a purchase alert if a die's live availability went negative."""
+    avail = await compute_availability(die)
+    if avail["available"] < 0:
+        short = abs(avail["available"])
+        await db.purchase_alerts.insert_one({
+            "alert_id": f"alert_{uuid.uuid4().hex[:12]}",
+            "die_id": die["die_id"], "die_code": die.get("code", ""),
+            "die_name": die.get("name", ""), "die_type": die.get("type", ""),
+            "triggered_by_selection_edit": selection_ref,
+            "current_stock": avail["stock_qty"], "required_qty": avail["committed"],
+            "shortage_qty": short, "priority": "urgent" if short > 10 else "high",
+            "status": "pending", "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+
+
+@router.post("/orders/{order_id}/items")
+async def add_order_item(order_id: str, request: Request):
+    """Add a new die line to a submitted order (staff only, before dispatch)."""
+    user = await get_current_user(request)
+    order = await db.orders.find_one({"order_id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    _assert_can_edit_selection(user, order)
+
+    body = await request.json()
+    die_id = body.get("die_id")
+    qty = max(1, int(body.get("quantity", 1) or 1))
+    if not die_id:
+        raise HTTPException(status_code=400, detail="die_id required")
+    die = await db.dies.find_one({"die_id": die_id}, {"_id": 0})
+    if not die:
+        raise HTTPException(status_code=404, detail="Die not found")
+
+    existing = await db.order_items.find_one(
+        {"order_id": order_id, "die_id": die_id, "status": {"$in": list(EDITABLE_ITEM_STATUSES)}})
+    if existing:
+        raise HTTPException(status_code=409,
+            detail="Die already on this order — change its quantity instead")
+
+    order_item_id = f"oi_{uuid.uuid4().hex[:8]}"
+    await db.order_items.insert_one({
+        "order_item_id": order_item_id, "order_id": order_id,
+        "die_id": die_id, "die_name": die["name"], "die_code": die["code"],
+        "die_type": die["type"], "die_image_url": die.get("image_url"),
+        "quantity": qty, "status": "on_hold",
+    })
+    await db.dies.update_one({"die_id": die_id}, {"$inc": {"reserved_qty": qty}})
+    await _maybe_alert_shortage({**die, "die_id": die_id}, order_item_id)
+    await _refresh_total_items(order_id)
+    await log_activity(user["email"], "add_item", "order", order_id, f"+{qty} x {die['code']}")
+    return {"message": "Item added", "order_item_id": order_item_id}
+
+
+@router.put("/orders/{order_id}/items/{order_item_id}")
+async def update_order_item_qty(order_id: str, order_item_id: str, request: Request):
+    """Change a line's quantity; reservation adjusts by the delta (staff, pre-dispatch)."""
+    user = await get_current_user(request)
+    order = await db.orders.find_one({"order_id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    _assert_can_edit_selection(user, order)
+
+    item = await db.order_items.find_one({"order_item_id": order_item_id, "order_id": order_id})
+    if not item:
+        raise HTTPException(status_code=404, detail="Order item not found")
+    if item.get("status") not in EDITABLE_ITEM_STATUSES:
+        raise HTTPException(status_code=400, detail=f"Cannot edit a {item.get('status')} item")
+
+    new_qty = max(1, int((await request.json()).get("quantity", 1) or 1))
+    delta = new_qty - int(item.get("quantity", 1) or 1)
+    if delta != 0:
+        await db.order_items.update_one({"order_item_id": order_item_id}, {"$set": {"quantity": new_qty}})
+        await db.dies.update_one({"die_id": item["die_id"]}, {"$inc": {"reserved_qty": delta}})
+        die = await db.dies.find_one({"die_id": item["die_id"]}, {"_id": 0})
+        if die:
+            await _maybe_alert_shortage(die, order_item_id)
+        await log_activity(user["email"], "update_item_qty", "order", order_id,
+                           f"{item.get('die_code','')} -> {new_qty}")
+    return {"message": "Quantity updated", "quantity": new_qty}
+
+
+@router.delete("/orders/{order_id}/items/{order_item_id}")
+async def remove_order_item(order_id: str, order_item_id: str, request: Request):
+    """Remove a die line and release its reservation (staff, pre-dispatch)."""
+    user = await get_current_user(request)
+    order = await db.orders.find_one({"order_id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    _assert_can_edit_selection(user, order)
+
+    item = await db.order_items.find_one({"order_item_id": order_item_id, "order_id": order_id})
+    if not item:
+        raise HTTPException(status_code=404, detail="Order item not found")
+    if item.get("status") not in EDITABLE_ITEM_STATUSES:
+        raise HTTPException(status_code=400, detail=f"Cannot remove a {item.get('status')} item")
+
+    await db.dies.update_one({"die_id": item["die_id"]},
+                             {"$inc": {"reserved_qty": -int(item.get("quantity", 1) or 1)}})
+    await db.order_items.update_one({"order_item_id": order_item_id}, {"$set": {"status": "removed"}})
+    await _refresh_total_items(order_id)
+    await log_activity(user["email"], "remove_item", "order", order_id, f"-{item.get('die_code','')}")
+    return {"message": "Item removed"}
 
 
 # ==================== PAYMENTS ====================
