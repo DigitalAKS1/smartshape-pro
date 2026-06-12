@@ -22,6 +22,19 @@ The order flow currently lies about stock. Specifically:
 - **Oversell rule:** *soft at reservation* (allow, show "short by N", raise a purchase/production alert) and *hard at dispatch* (can only ship physical stock; remainder waits — that is what Partial Dispatch is for).
 - **Manage Selection edit rights:** staff only (admin/store/accounts), allowed until the order begins dispatching. Shipped lines lock.
 
+## Status — ALL 4 STEPS SHIPPED on `feat/honest-stock` (2026-06-12)
+
+| Step | Commit | State |
+|---|---|---|
+| 1 Honest Stock | a00de41 | done, frontend builds, backend compiles |
+| 2 Manage Selection | cf5d777 | done |
+| 3 Partial Dispatch | 12991bc | done |
+| 4 Returnable Challan UI | 9a6af1c | done |
+
+**Not yet run:** integration tests (they hit the prod DB — must run against staging).
+**Migration after deploy:** call `POST /api/stock/recompute-reservations` once to heal
+legacy `reserved_qty` drift from the old +1-per-die bug.
+
 ## Build Sequence (each its own spec → plan → build)
 
 | Step | Feature | Outcome |
