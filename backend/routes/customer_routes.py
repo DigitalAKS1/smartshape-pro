@@ -273,8 +273,9 @@ async def update_customer_selection(token: str, request: Request):
                     {"catalogue_selection_id": selection["selection_id"], "die_id": old_die_id},
                     {"$set": {"status": "removed_by_admin", "admin_note": note, "updated_at": now, "updated_by": user["email"]}}
                 )
-                # Release reserved stock
-                await db.dies.update_one({"die_id": old_die_id}, {"$inc": {"reserved_qty": -1}})
+                # NOTE: reservation is NOT touched here. The change is only a proposal
+                # until the customer approves; approve-changes reconciles the order
+                # (the single owner of reservation). See reconcile_order_to_selection.
                 removed_dies.append(old_item)
 
         # Add new item
@@ -293,12 +294,13 @@ async def update_customer_selection(token: str, request: Request):
                         "die_code": new_die["code"],
                         "die_type": new_die["type"],
                         "die_image_url": new_die.get("image_url"),
+                        "quantity": 1,
                         "status": "added_by_admin",
                         "admin_note": note,
                         "updated_at": now,
                         "updated_by": user["email"],
                     })
-                    await db.dies.update_one({"die_id": new_die_id}, {"$inc": {"reserved_qty": 1}})
+                    # Reservation handled at approval (reconcile_order_to_selection), not here.
                     added_dies.append(new_die)
 
     # Flag the selection as awaiting customer approval (the removed_by_admin /
@@ -385,12 +387,29 @@ async def approve_selection_changes(token: str):
     now = datetime.now(timezone.utc).isoformat()
     selection = await db.catalogue_selections.find_one(
         {"quotation_id": quot["quotation_id"]}, {"_id": 0})
+    reconcile_summary = None
     if selection:
         # Added items become normal selected items (highlight clears); removed items
         # stay removed (already excluded from the active selection everywhere).
         await db.catalogue_selection_items.update_many(
             {"catalogue_selection_id": selection["selection_id"], "status": "added_by_admin"},
             {"$set": {"status": "selected", "approved_at": now}})
+
+        # Commit point: make the approved selection real on the order. The order is
+        # the single owner of reservation, so this is the ONLY place stock moves for
+        # these changes (the edit path deliberately leaves reservation untouched).
+        active = await db.catalogue_selection_items.find(
+            {"catalogue_selection_id": selection["selection_id"], "status": {"$ne": "removed_by_admin"}},
+            {"_id": 0, "die_id": 1, "quantity": 1}).to_list(1000)
+        desired = {it["die_id"]: int(it.get("quantity", 1) or 1) for it in active if it.get("die_id")}
+        order = await db.orders.find_one({"quotation_id": quot["quotation_id"]}, {"_id": 0})
+        if order and desired:
+            try:
+                from routes.order_routes import reconcile_order_to_selection
+                reconcile_summary = await reconcile_order_to_selection(
+                    order["order_id"], desired, actor="customer")
+            except Exception as e:
+                logging.error(f"Order reconcile after approval failed for {quot['quotation_id']}: {e}")
 
     await db.quotations.update_one(
         {"quotation_id": quot["quotation_id"]},
@@ -420,7 +439,7 @@ async def approve_selection_changes(token: str):
         "timestamp": now,
     })
     return {"message": "Changes approved", "selection_change_status": "approved",
-            "selection_approved_at": now}
+            "selection_approved_at": now, "order_sync": reconcile_summary}
 
 
 # ── Catalogue submission confirmation email (called from quotation_routes) ────
