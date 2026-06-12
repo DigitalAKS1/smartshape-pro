@@ -73,6 +73,10 @@ import ZoomJoin from './pages/ZoomJoin';
 import SchoolLogin from './pages/SchoolLogin';
 import SchoolActivate from './pages/SchoolActivate';
 import SchoolDashboard from './pages/school/SchoolDashboard';
+// Teacher Portal
+import TeacherLogin from './pages/TeacherLogin';
+import TeacherActivate from './pages/TeacherActivate';
+import TeacherDashboard from './pages/teacher/TeacherDashboard';
 
 import { ThemeProvider } from './contexts/ThemeContext';
 import GeofenceGuard from './components/GeofenceGuard';
@@ -150,6 +154,9 @@ function AppRouter() {
       <Route path="/school/login" element={<SchoolLogin />} />
       <Route path="/school/activate" element={<SchoolActivate />} />
       <Route path="/school" element={<SchoolDashboard />} />
+      <Route path="/teacher/login" element={<TeacherLogin />} />
+      <Route path="/teacher/activate" element={<TeacherActivate />} />
+      <Route path="/teacher" element={<TeacherDashboard />} />
       <Route path="/get-app" element={<GetApp />} />
       <Route path="/zoom/:eventId" element={<ZoomJoin />} />
       

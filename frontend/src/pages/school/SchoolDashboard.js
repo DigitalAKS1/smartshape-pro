@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { schoolAuth, schoolDocUrl } from '../../lib/api';
+import { schoolAuth, schoolDocUrl, schoolTeachers } from '../../lib/api';
 import { formatCurrency, formatDate, getStatusColor } from '../../lib/utils';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../components/ui/dialog';
 import { toast } from 'sonner';
-import { Package, Truck, CheckCircle, Clock, Bell, LogOut, FileText, Eye, GraduationCap, ShoppingCart, XCircle, CreditCard, Download, User, Upload, Plus, RefreshCw } from 'lucide-react';
+import { Package, Truck, CheckCircle, Clock, Bell, LogOut, FileText, Eye, GraduationCap, ShoppingCart, XCircle, CreditCard, Download, User, Upload, Plus, RefreshCw, Users, Send } from 'lucide-react';
 
 const STATUS_CONFIG = {
   pending: { icon: Clock, color: 'text-yellow-400 bg-yellow-500/10 border-yellow-500/30', label: 'Pending' },
@@ -41,6 +41,8 @@ export default function SchoolDashboard() {
   const [savingProfile, setSavingProfile] = useState(false);
   const [newContact, setNewContact] = useState({ name: '', phone: '', designation: '' });
   const [reorderMsg, setReorderMsg] = useState('');
+  const [teachers, setTeachers] = useState([]);
+  const [newTeacher, setNewTeacher] = useState({ name: '', email: '', subject: '' });
 
   const textPri = 'text-[var(--text-primary)]';
   const textSec = 'text-[var(--text-secondary)]';
@@ -121,6 +123,32 @@ export default function SchoolDashboard() {
     } catch (e) { toast.error(e.response?.data?.detail || 'Upload failed'); }
   };
 
+  const loadTeachers = async () => {
+    try { const r = await schoolTeachers.list(); setTeachers(r.data || []); } catch { /* noop */ }
+  };
+
+  const addTeacher = async () => {
+    if (!newTeacher.name.trim() || !newTeacher.email.trim()) return toast.error('Name and email required');
+    try {
+      await schoolTeachers.create(newTeacher);
+      setNewTeacher({ name: '', email: '', subject: '' });
+      toast.success('Teacher invited — they\'ll get an activation email.');
+      loadTeachers();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+  };
+
+  const toggleTeacher = async (t) => {
+    try {
+      await schoolTeachers.update(t.teacher_id, { status: t.status === 'inactive' ? 'active' : 'inactive' });
+      loadTeachers();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+  };
+
+  const resendTeacherInvite = async (t) => {
+    try { await schoolTeachers.resendInvite(t.teacher_id); toast.success('Invite re-sent.'); }
+    catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+  };
+
   const handleLogout = () => {
     document.cookie = 'access_token=; path=/; max-age=0';
     document.cookie = 'refresh_token=; path=/; max-age=0';
@@ -167,14 +195,15 @@ export default function SchoolDashboard() {
 
         {/* Tabs */}
         <div className={`flex flex-wrap gap-1 ${card} border rounded-md p-1`}>
-          {['orders', 'quotations', 'payments', 'documents', 'profile', 'notifications'].map(tab => (
-            <button key={tab} onClick={() => { setActiveTab(tab); if (tab === 'notifications') markNotificationsRead(); }}
+          {['orders', 'quotations', 'payments', 'documents', 'teachers', 'profile', 'notifications'].map(tab => (
+            <button key={tab} onClick={() => { setActiveTab(tab); if (tab === 'notifications') markNotificationsRead(); if (tab === 'teachers') loadTeachers(); }}
               className={`flex-1 min-w-[90px] px-3 py-2 rounded text-sm font-medium transition-all capitalize ${activeTab === tab ? 'bg-[#e94560] text-white' : `${textSec} hover:bg-[var(--bg-hover)]`}`}
               data-testid={`school-tab-${tab}`}>
               {tab === 'orders' ? `Orders (${orders.length})`
                 : tab === 'quotations' ? `Quotations (${quotations.length})`
                 : tab === 'payments' ? 'Payments'
                 : tab === 'documents' ? `Documents (${documents.length})`
+                : tab === 'teachers' ? 'Teachers'
                 : tab === 'profile' ? 'Profile'
                 : `Notifications ${unread > 0 ? `(${unread})` : ''}`}
             </button>
@@ -316,6 +345,44 @@ export default function SchoolDashboard() {
                 </div>
                 <Download className={`h-4 w-4 ${textMuted}`} />
               </a>
+            ))}
+          </div>
+        )}
+
+        {/* TEACHERS TAB */}
+        {activeTab === 'teachers' && (
+          <div className="space-y-4" data-testid="school-teachers">
+            <div className={`${card} border rounded-md p-4 space-y-3`}>
+              <h3 className={`text-sm font-medium ${textPri} flex items-center gap-2`}><Users className="h-4 w-4" /> Invite a teacher</h3>
+              <p className={`text-xs ${textMuted}`}>They'll get an email to set a password, then they can upload workshop videos and enter competitions.</p>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <Input placeholder="Name" value={newTeacher.name} onChange={e => setNewTeacher({ ...newTeacher, name: e.target.value })}
+                  className="bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]" />
+                <Input placeholder="Email" value={newTeacher.email} onChange={e => setNewTeacher({ ...newTeacher, email: e.target.value })}
+                  className="bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]" />
+                <Input placeholder="Subject (optional)" value={newTeacher.subject} onChange={e => setNewTeacher({ ...newTeacher, subject: e.target.value })}
+                  className="bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]" />
+              </div>
+              <Button onClick={addTeacher} className="bg-[#e94560] hover:bg-[#f05c75] text-white"><Plus className="mr-2 h-4 w-4" /> Invite teacher</Button>
+            </div>
+            {teachers.length === 0 ? (
+              <div className={`${card} border rounded-md p-10 text-center`}>
+                <Users className={`h-12 w-12 mx-auto mb-3 ${textMuted}`} strokeWidth={1} />
+                <p className={textMuted}>No teachers yet</p>
+              </div>
+            ) : teachers.map(t => (
+              <div key={t.teacher_id} className={`${card} border rounded-md p-4 flex items-center justify-between`}>
+                <div>
+                  <p className={`text-sm font-medium ${textPri}`}>{t.name}
+                    <span className={`ml-2 text-[10px] px-2 py-0.5 rounded-full ${t.status === 'inactive' ? 'bg-gray-500/15 text-gray-400' : t.password_hash === undefined && !t.activated ? 'bg-yellow-500/15 text-yellow-400' : 'bg-green-500/15 text-green-400'}`}>{t.status === 'inactive' ? 'inactive' : 'active'}</span>
+                  </p>
+                  <p className={`text-xs ${textMuted}`}>{t.email}{t.subject ? ` • ${t.subject}` : ''}</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button onClick={() => resendTeacherInvite(t)} title="Resend invite" className={`p-2 rounded hover:bg-[var(--bg-hover)] ${textSec}`}><Send className="h-4 w-4" /></button>
+                  <button onClick={() => toggleTeacher(t)} className={`text-xs px-2 py-1 rounded border border-[var(--border-color)] ${textSec} hover:bg-[var(--bg-hover)]`}>{t.status === 'inactive' ? 'Activate' : 'Deactivate'}</button>
+                </div>
+              </div>
             ))}
           </div>
         )}

@@ -606,6 +606,22 @@ export const schoolAuth = {
 export const schoolDocUrl = (downloadUrl) =>
   downloadUrl?.startsWith('http') ? downloadUrl : `${process.env.REACT_APP_BACKEND_URL}${downloadUrl}`;
 
+// School manages its teacher sub-accounts (uses the school session)
+export const schoolTeachers = {
+  list: () => API.get('/school/teachers'),
+  create: (data) => API.post('/school/teachers', data),
+  update: (id, data) => API.put(`/school/teachers/${id}`, data),
+  resendInvite: (id) => API.post(`/school/teachers/${id}/resend-invite`),
+};
+
+// Teacher (school sub-account) auth + session
+export const teacherAuth = {
+  login: (data) => API.post('/teacher/auth/login', data),
+  activateVerify: (token) => API.post('/teacher/auth/activate/verify', { token }),
+  setPassword: (token, password) => API.post('/teacher/auth/set-password', { token, password }),
+  me: () => API.get('/teacher/me'),
+};
+
 // Dispatches
 export const dispatches = {
   getAll: () => API.get('/dispatches'),
