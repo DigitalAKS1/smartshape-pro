@@ -471,6 +471,7 @@ async def create_quotation(request: Request):
         "customer_email": body.get("customer_email", ""),
         "customer_phone": body.get("customer_phone", ""),
         "customer_gst": body.get("customer_gst", ""),
+        "lead_id": body.get("lead_id") or None,
         "sales_person_id": sp.get("sales_person_id"),
         "sales_person_name": sp["name"],
         "sales_person_email": sp["email"],

@@ -23,11 +23,13 @@ import WaPickerButton from '../../components/orders/WaPickerButton';
 import HoldsTab from '../../components/orders/HoldsTab';
 import OrderDetailPanel from '../../components/orders/OrderDetailPanel';
 import InvoiceBulkImport from '../../components/crm/InvoiceBulkImport';
+import UnmatchedInvoices from '../../components/crm/UnmatchedInvoices';
 
 export default function OrdersManagement() {
   const om = useOrdersManagement();
   const { user } = useAuth();
   const canExport = user?.role === 'admin' || user?.role === 'accounts';
+  const [invKey, setInvKey] = React.useState(0);
 
   const inputCls = 'bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]';
   const textPri  = 'text-[var(--text-primary)]';
@@ -76,8 +78,9 @@ export default function OrdersManagement() {
           ))}
         </div>
 
-        {/* Bulk invoice import */}
-        <InvoiceBulkImport onDone={om.reload || om.fetchData} />
+        {/* Bulk invoice import + unmatched review (admin / accounts) */}
+        {canExport && <InvoiceBulkImport onDone={() => { setInvKey(k => k + 1); (om.reload || om.fetchData)?.(); }} />}
+        {canExport && <UnmatchedInvoices refreshKey={invKey} />}
 
         {/* Tabs */}
         <div className={`flex gap-1 ${card} border rounded-md p-1`}>

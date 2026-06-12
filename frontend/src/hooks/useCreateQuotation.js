@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { packages, salesPersons, quotations, companySettings, contacts as contactsApi, schools as schoolsApi, schoolPortalSettings } from '../lib/api';
 
@@ -44,7 +44,7 @@ export default function useCreateQuotation() {
   // ── Main form ────────────────────────────────────────────────────────────
   const [formData, setFormData] = useState({
     package_id: '', principal_name: '', school_name: '', address: '',
-    city: '', state: '', pincode: '',
+    city: '', state: '', pincode: '', lead_id: '',
     customer_email: '', customer_phone: '', customer_gst: '',
     sales_person_id: '', discount1_pct: 0, discount2_pct: 0,
     freight_amount: 0, lines: [],
@@ -94,6 +94,34 @@ export default function useCreateQuotation() {
     };
     fetchData();
   }, []);
+
+  // Prefill from ?school_id=&lead_id= (e.g. "Create Quote" launched from a School profile)
+  const [searchParams] = useSearchParams();
+  const prefillDone = useRef(false);
+  useEffect(() => {
+    if (prefillDone.current) return;
+    const sid = searchParams.get('school_id');
+    const lid = searchParams.get('lead_id');
+    if (!sid && !lid) return;
+    if (sid && schoolsList.length) {
+      const sch = schoolsList.find(s => s.school_id === sid);
+      if (sch) {
+        prefillDone.current = true;
+        setFormData(prev => ({
+          ...prev,
+          school_name: sch.school_name || prev.school_name,
+          city: sch.city || prev.city, state: sch.state || prev.state, pincode: sch.pincode || prev.pincode,
+          address: sch.address || prev.address,
+          customer_phone: sch.phone || prev.customer_phone,
+          principal_name: sch.primary_contact_name || prev.principal_name,
+          lead_id: lid || prev.lead_id,
+        }));
+      }
+    } else if (lid && !sid) {
+      prefillDone.current = true;
+      setFormData(prev => ({ ...prev, lead_id: lid }));
+    }
+  }, [schoolsList, searchParams]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Close school dropdown on outside click
   useEffect(() => {

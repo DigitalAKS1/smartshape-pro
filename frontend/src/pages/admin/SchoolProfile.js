@@ -292,7 +292,7 @@ export default function SchoolProfile() {
             <SchoolLeadsSection
               leads={leads} filteredLeads={sp.filteredLeads}
               stageFilter={sp.stageFilter} setStageFilter={sp.setStageFilter}
-              tk={tk}
+              tk={tk} schoolId={school.school_id}
               onCreate={() => setLeadCreateOpen(true)}
               onEnroll={() => setEnrollOpen(true)} />
           )}

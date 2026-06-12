@@ -1,6 +1,6 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { Users, Clock, Eye, TrendingUp } from 'lucide-react';
+import { Users, Clock, Eye, TrendingUp, FileText } from 'lucide-react';
 import { Button } from '../ui/button';
 
 const STAGE_CLS = {
@@ -38,7 +38,7 @@ function fmt(d) {
   catch { return d; }
 }
 
-export default function SchoolLeadsSection({ leads, filteredLeads, stageFilter, setStageFilter, tk, onCreate, onEnroll }) {
+export default function SchoolLeadsSection({ leads, filteredLeads, stageFilter, setStageFilter, tk, onCreate, onEnroll, schoolId }) {
   return (
     <div className="sp-tab space-y-4">
       {/* Stage chips + Create Lead button */}
@@ -58,6 +58,11 @@ export default function SchoolLeadsSection({ leads, filteredLeads, stageFilter, 
         <div className="flex items-center gap-2">
           {onEnroll && (
             <Button onClick={onEnroll} size="sm" variant="outline" className="border-[var(--border-color)] text-[var(--text-secondary)]" data-testid="enroll-drip-btn">Enroll in Drip</Button>
+          )}
+          {schoolId && (
+            <Link to={`/create-quotation?school_id=${schoolId}`}>
+              <Button size="sm" variant="outline" className="border-[#e94560]/40 text-[#e94560] hover:bg-[#e94560]/10" data-testid="create-quote-school"><FileText className="mr-1 h-3 w-3" /> Create Quote</Button>
+            </Link>
           )}
           {onCreate && (
             <Button onClick={onCreate} size="sm" className="bg-[#e94560] hover:bg-[#f05c75] text-white" data-testid="create-lead-on-profile">+ Create Lead</Button>
@@ -90,11 +95,18 @@ export default function SchoolLeadsSection({ leads, filteredLeads, stageFilter, 
                   {lead.next_followup_date && <span className="flex items-center gap-1"><Clock className="h-3 w-3" />Followup {fmt(lead.next_followup_date)}</span>}
                 </div>
               </div>
-              <Link to={`/leads?lead=${lead.lead_id}`}>
-                <Button size="sm" variant="ghost" className={`${tk.tm} hover:text-[#e94560] h-8 w-8 p-0`}>
-                  <Eye className="h-4 w-4" />
-                </Button>
-              </Link>
+              <div className="flex items-center gap-1 flex-shrink-0">
+                <Link to={`/create-quotation?school_id=${lead.school_id}&lead_id=${lead.lead_id}`} title="Create Quote for this lead">
+                  <Button size="sm" variant="ghost" className={`${tk.tm} hover:text-[#e94560] h-8 w-8 p-0`} data-testid={`quote-lead-${lead.lead_id}`}>
+                    <FileText className="h-4 w-4" />
+                  </Button>
+                </Link>
+                <Link to={`/leads?lead=${lead.lead_id}`} title="View lead">
+                  <Button size="sm" variant="ghost" className={`${tk.tm} hover:text-[#e94560] h-8 w-8 p-0`}>
+                    <Eye className="h-4 w-4" />
+                  </Button>
+                </Link>
+              </div>
             </div>
           ))}
         </div>
