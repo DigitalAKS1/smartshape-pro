@@ -622,6 +622,57 @@ export const teacherAuth = {
   me: () => API.get('/teacher/me'),
 };
 
+// Teacher videos + portal-shared gallery/competitions
+export const teacherVideos = {
+  sign: (data) => API.post('/teacher/videos/sign', data),
+  create: (data) => API.post('/teacher/videos', data),
+  list: () => API.get('/teacher/videos'),
+  remove: (id) => API.delete(`/teacher/videos/${id}`),
+  notifications: () => API.get('/teacher/notifications'),
+};
+export const portal = {
+  gallery: (params = {}) => API.get('/gallery', { params }),
+  competitions: () => API.get('/competitions'),
+  competition: (id) => API.get(`/competitions/${id}`),
+};
+
+// Admin: teacher-content review + competitions
+export const adminContent = {
+  videos: (status = 'pending') => API.get('/admin/teacher-videos', { params: { status } }),
+  approve: (id) => API.post(`/admin/teacher-videos/${id}/approve`),
+  reject: (id, reason) => API.post(`/admin/teacher-videos/${id}/reject`, { reason }),
+  createCompetition: (data) => API.post('/admin/competitions', data),
+  listCompetitions: () => API.get('/admin/competitions'),
+  updateCompetition: (id, data) => API.put(`/admin/competitions/${id}`, data),
+  competitionEntries: (id) => API.get(`/admin/competitions/${id}/entries`),
+  setWinners: (id, winner_video_ids) => API.post(`/admin/competitions/${id}/winners`, { winner_video_ids }),
+};
+
+/**
+ * Upload a video file straight to Cloudinary using a backend-issued signature.
+ * Returns { public_id, secure_url, thumbnail_url, duration, bytes }.
+ */
+export async function uploadVideoToCloudinary(file, onProgress) {
+  const { data: sig } = await teacherVideos.sign({});
+  const url = `https://api.cloudinary.com/v1_1/${sig.cloud_name}/${sig.resource_type}/upload`;
+  const fd = new FormData();
+  fd.append('file', file);
+  fd.append('api_key', sig.api_key);
+  fd.append('timestamp', sig.timestamp);
+  fd.append('signature', sig.signature);
+  fd.append('folder', sig.folder);
+  const res = await new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', url);
+    xhr.upload.onprogress = (e) => { if (e.lengthComputable && onProgress) onProgress(Math.round((e.loaded / e.total) * 100)); };
+    xhr.onload = () => (xhr.status >= 200 && xhr.status < 300 ? resolve(JSON.parse(xhr.responseText)) : reject(new Error(xhr.responseText)));
+    xhr.onerror = () => reject(new Error('Upload failed'));
+    xhr.send(fd);
+  });
+  const thumb = res.secure_url ? res.secure_url.replace(/\.[^./]+$/, '.jpg') : '';
+  return { public_id: res.public_id, secure_url: res.secure_url, thumbnail_url: thumb, duration: res.duration, bytes: res.bytes };
+}
+
 // Dispatches
 export const dispatches = {
   getAll: () => API.get('/dispatches'),
