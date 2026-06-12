@@ -255,18 +255,41 @@ export default function useOrdersManagement() {
     catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
   };
 
-  // ── Dispatch ─────────────────────────────────────────────────────────────
-  const openDispatchDialog = (order) => {
+  // ── Dispatch (supports partial — per-line quantities) ─────────────────────
+  const [dispatchItems,   setDispatchItems]   = useState([]); // [{order_item_id, die_name, die_code, remaining}]
+  const [dispatchLineQty, setDispatchLineQty] = useState({});  // order_item_id -> qty to ship now
+
+  const openDispatchDialog = async (order) => {
     setDispatchTarget(order);
     setDispatchForm({ courier_name: '', tracking_number: '', notes: '' });
+    setDispatchItems([]);
+    setDispatchLineQty({});
     setDispatchOpen(true);
+    try {
+      const res = await ordersApi.get(order.order_id);
+      const open = (res.data.items || [])
+        .filter(i => ['on_hold', 'confirmed', 'partially_dispatched'].includes(i.status))
+        .map(i => ({
+          order_item_id: i.order_item_id,
+          die_name: i.die_name, die_code: i.die_code,
+          remaining: Math.max(0, (i.quantity || 1) - (i.dispatched_qty || 0)),
+        }))
+        .filter(i => i.remaining > 0);
+      setDispatchItems(open);
+      setDispatchLineQty(Object.fromEntries(open.map(i => [i.order_item_id, i.remaining])));
+    } catch { toast.error('Failed to load order items'); }
   };
 
   const handleCreateDispatch = async () => {
     if (!dispatchTarget) return;
+    const lines = dispatchItems
+      .map(i => ({ order_item_id: i.order_item_id, quantity: Math.max(0, parseInt(dispatchLineQty[i.order_item_id], 10) || 0) }))
+      .filter(l => l.quantity > 0);
+    if (dispatchItems.length > 0 && lines.length === 0) { toast.error('Enter a quantity to dispatch'); return; }
     try {
-      await dispatchesApi.create({ order_id: dispatchTarget.order_id, ...dispatchForm });
-      toast.success('Dispatch created! Stock auto-deducted.');
+      await dispatchesApi.create({ order_id: dispatchTarget.order_id, ...dispatchForm, lines });
+      const total = lines.reduce((s, l) => s + l.quantity, 0);
+      toast.success(`Dispatch created — ${total} unit(s) shipped, stock deducted.`);
       setDispatchOpen(false);
       fetchData();
     } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
@@ -374,6 +397,7 @@ export default function useOrdersManagement() {
     dispatchOpen, setDispatchOpen,
     dispatchTarget,
     dispatchForm, setDispatchForm,
+    dispatchItems, dispatchLineQty, setDispatchLineQty,
     // payment
     paymentOpen, setPaymentOpen,
     paymentTarget,

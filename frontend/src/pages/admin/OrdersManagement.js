@@ -214,7 +214,7 @@ export default function OrdersManagement() {
                             data-testid={`view-order-${order.order_number}`} title="View details">
                             <Eye className="h-3.5 w-3.5" />
                           </Button>
-                          {(order.order_status === 'confirmed' || order.order_status === 'pending') && (
+                          {['confirmed', 'pending', 'partially_dispatched'].includes(order.order_status) && (
                             <Button size="sm" onClick={() => om.openDispatchDialog(order)}
                               className="bg-purple-600 hover:bg-purple-700 text-white h-8 w-8 p-0 sm:h-9 sm:w-auto sm:px-3"
                               data-testid={`dispatch-order-${order.order_number}`} title="Create dispatch">
@@ -358,6 +358,33 @@ export default function OrdersManagement() {
             {om.dispatchTarget && (
               <div className="space-y-3 py-2">
                 <p className={`text-sm ${textSec}`}>{om.dispatchTarget.order_number} — {om.dispatchTarget.school_name}</p>
+
+                {/* Per-line quantities — ship all, or reduce any line for a partial dispatch */}
+                {om.dispatchItems.length > 0 && (
+                  <div className="border border-[var(--border-color)] rounded-md p-2 space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <Label className={`${textSec} text-xs`}>Quantities to ship now</Label>
+                      <span className={`text-[10px] ${textMuted}`}>defaults to full remaining</span>
+                    </div>
+                    {om.dispatchItems.map(it => (
+                      <div key={it.order_item_id} className="flex items-center gap-2">
+                        <div className="flex-1 min-w-0">
+                          <p className={`text-xs ${textPri} truncate`}>{it.die_name}</p>
+                          <p className={`text-[10px] font-mono ${textMuted}`}>{it.die_code} • {it.remaining} pending</p>
+                        </div>
+                        <Input type="number" min="0" max={it.remaining}
+                          value={om.dispatchLineQty[it.order_item_id] ?? it.remaining}
+                          onChange={e => {
+                            const v = Math.max(0, Math.min(it.remaining, parseInt(e.target.value, 10) || 0));
+                            om.setDispatchLineQty(prev => ({ ...prev, [it.order_item_id]: v }));
+                          }}
+                          data-testid={`dispatch-qty-${it.die_code}`}
+                          className={`w-20 h-8 text-center font-mono ${inputCls}`} />
+                      </div>
+                    ))}
+                  </div>
+                )}
+
                 <div><Label className={`${textSec} text-xs`}>Courier Name</Label><Input value={om.dispatchForm.courier_name} onChange={e => om.setDispatchForm({...om.dispatchForm, courier_name: e.target.value})} className={inputCls} placeholder="e.g. BlueDart, FedEx" /></div>
                 <div><Label className={`${textSec} text-xs`}>Tracking Number</Label><Input value={om.dispatchForm.tracking_number} onChange={e => om.setDispatchForm({...om.dispatchForm, tracking_number: e.target.value})} className={inputCls} placeholder="Tracking ID" /></div>
                 <div><Label className={`${textSec} text-xs`}>Notes</Label><Input value={om.dispatchForm.notes} onChange={e => om.setDispatchForm({...om.dispatchForm, notes: e.target.value})} className={inputCls} placeholder="Optional notes" /></div>

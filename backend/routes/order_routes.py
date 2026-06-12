@@ -49,21 +49,28 @@ async def _assert_dispatchable(order, items):
 # Available = stock_qty - Committed. dies.reserved_qty is a denormalized cache of
 # Committed; recompute_reservations() heals any drift between the two.
 
-# Order-item statuses that still hold stock (reserved but not yet dispatched).
-COMMITTING_ITEM_STATUSES = ["on_hold", "confirmed"]
+# Order-item statuses that still hold stock (reserved but not yet fully dispatched).
+COMMITTING_ITEM_STATUSES = ["on_hold", "confirmed", "partially_dispatched"]
+
+
+def _remaining_qty(it: dict) -> int:
+    """Undispatched remainder of a line = ordered quantity - already dispatched."""
+    return max(0, int(it.get("quantity", 1) or 1) - int(it.get("dispatched_qty", 0) or 0))
 
 
 async def compute_committed(die_id: str, *, exclude_order_item_id: Optional[str] = None) -> int:
     """Live committed quantity for a die from open order items + returnable-out challans.
 
-    exclude_order_item_id lets a caller ask "committed by everyone except this line",
-    which is what the Holds view needs to show a true per-line shortage.
+    Counts only the undispatched remainder of each line, so a partially dispatched
+    order keeps reserving exactly what is still owed. exclude_order_item_id lets a
+    caller ask "committed by everyone except this line" (used by the Holds view).
     """
     match = {"die_id": die_id, "status": {"$in": COMMITTING_ITEM_STATUSES}}
     if exclude_order_item_id:
         match["order_item_id"] = {"$ne": exclude_order_item_id}
-    items = await db.order_items.find(match, {"_id": 0, "quantity": 1}).to_list(100000)
-    committed = sum(int(it.get("quantity", 1) or 1) for it in items)
+    items = await db.order_items.find(
+        match, {"_id": 0, "quantity": 1, "dispatched_qty": 1}).to_list(100000)
+    committed = sum(_remaining_qty(it) for it in items)
     # Items physically out on a returnable challan (open / partially returned) also
     # reduce availability. Added with Step 4 (Returnable Challan); harmless before.
     committed += await _returnable_out_qty(die_id)
@@ -321,7 +328,7 @@ async def update_order_status(order_id: str, request: Request):
     user = await get_current_user(request)
     body = await request.json()
     new_status = body.get("status")
-    if new_status not in ("pending", "confirmed", "dispatched", "delivered", "cancelled"):
+    if new_status not in ("pending", "confirmed", "partially_dispatched", "dispatched", "delivered", "cancelled"):
         raise HTTPException(status_code=400, detail="Invalid status")
 
     order = await db.orders.find_one({"order_id": order_id}, {"_id": 0})
@@ -334,11 +341,17 @@ async def update_order_status(order_id: str, request: Request):
         items = await db.order_items.find({"order_id": order_id}, {"_id": 0}).to_list(1000)
         await _assert_dispatchable(order, items)
         for item in items:
-            if item.get("status") == "on_hold":
+            if item.get("status") in ("on_hold", "confirmed", "partially_dispatched"):
+                remaining = _remaining_qty(item)
+                if remaining <= 0:
+                    continue
                 await db.dies.update_one({"die_id": item["die_id"]}, {
-                    "$inc": {"stock_qty": -item.get("quantity", 1), "reserved_qty": -item.get("quantity", 1)}
+                    "$inc": {"stock_qty": -remaining, "reserved_qty": -remaining}
                 })
-                await db.order_items.update_one({"order_item_id": item["order_item_id"]}, {"$set": {"status": "dispatched"}})
+                await db.order_items.update_one({"order_item_id": item["order_item_id"]}, {"$set": {
+                    "status": "dispatched",
+                    "dispatched_qty": int(item.get("quantity", 1) or 1),
+                }})
     elif new_status == "delivered":
         await db.order_items.update_many(
             {"order_id": order_id, "status": {"$nin": ["removed", "cancelled", "released"]}},
@@ -346,8 +359,10 @@ async def update_order_status(order_id: str, request: Request):
     elif new_status == "cancelled":
         items = await db.order_items.find({"order_id": order_id}, {"_id": 0}).to_list(1000)
         for item in items:
-            if item.get("status") == "on_hold":
-                await db.dies.update_one({"die_id": item["die_id"]}, {"$inc": {"reserved_qty": -item.get("quantity", 1)}})
+            if item.get("status") in ("on_hold", "confirmed", "partially_dispatched"):
+                remaining = _remaining_qty(item)
+                if remaining > 0:
+                    await db.dies.update_one({"die_id": item["die_id"]}, {"$inc": {"reserved_qty": -remaining}})
                 await db.order_items.update_one({"order_item_id": item["order_item_id"]}, {"$set": {"status": "cancelled"}})
 
     await db.orders.update_one({"order_id": order_id}, {"$set": update_data})
@@ -578,15 +593,48 @@ async def create_dispatch(request: Request):
     order = await db.orders.find_one({"order_id": order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
-    if order["order_status"] not in ("confirmed", "pending"):
+    if order["order_status"] not in ("confirmed", "pending", "partially_dispatched"):
         raise HTTPException(status_code=400, detail=f"Cannot dispatch order in '{order['order_status']}' status")
 
-    items = await db.order_items.find({"order_id": order_id}, {"_id": 0}).to_list(1000)
+    items = await db.order_items.find(
+        {"order_id": order_id, "status": {"$ne": "removed"}}, {"_id": 0}).to_list(1000)
     await _assert_dispatchable(order, items)
+
+    dispatchable = [it for it in items if it.get("status") in COMMITTING_ITEM_STATUSES and _remaining_qty(it) > 0]
+    by_id = {it["order_item_id"]: it for it in dispatchable}
+
+    # Partial dispatch: body.lines = [{order_item_id, quantity}]. Omit lines to ship
+    # every remaining unit (full dispatch — preserves old behaviour).
+    requested = body.get("lines")
+    if requested:
+        plan = []
+        for ln in requested:
+            it = by_id.get(ln.get("order_item_id"))
+            if not it:
+                continue
+            want = max(0, int(ln.get("quantity", 0) or 0))
+            ship = min(want, _remaining_qty(it))
+            if ship <= 0:
+                continue
+            stock = int((await db.dies.find_one({"die_id": it["die_id"]}, {"_id": 0, "stock_qty": 1}) or {}).get("stock_qty", 0))
+            if ship > stock:
+                raise HTTPException(status_code=400,
+                    detail=f"Only {stock} in physical stock for {it.get('die_code','')} — reduce dispatch quantity")
+            plan.append((it, ship))
+    else:
+        plan = [(it, _remaining_qty(it)) for it in dispatchable]
+
+    if not plan:
+        raise HTTPException(status_code=400, detail="Nothing to dispatch")
 
     dispatch_id = f"dsp_{uuid.uuid4().hex[:12]}"
     dispatch_count = await db.dispatches.count_documents({})
     dispatch_number = f"DSP-{datetime.now(timezone.utc).year}-{dispatch_count + 1:04d}"
+    dispatch_lines = [{
+        "order_item_id": it["order_item_id"], "die_id": it["die_id"],
+        "die_code": it.get("die_code", ""), "die_name": it.get("die_name", ""),
+        "quantity": ship,
+    } for it, ship in plan]
     dispatch_doc = {
         "dispatch_id": dispatch_id,
         "dispatch_number": dispatch_number,
@@ -598,28 +646,41 @@ async def create_dispatch(request: Request):
         "courier_name": body.get("courier_name", ""),
         "tracking_number": body.get("tracking_number", ""),
         "notes": body.get("notes", ""),
+        "lines": dispatch_lines,
         "status": "dispatched",
         "created_by": user["email"],
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.dispatches.insert_one(dispatch_doc)
 
-    for item in items:
-        if item.get("status") in ("on_hold", "confirmed"):
-            await db.dies.update_one({"die_id": item["die_id"]}, {
-                "$inc": {"stock_qty": -item.get("quantity", 1), "reserved_qty": -item.get("quantity", 1)}
-            })
-            await db.order_items.update_one({"order_item_id": item["order_item_id"]}, {"$set": {"status": "dispatched"}})
+    for it, ship in plan:
+        new_dispatched = int(it.get("dispatched_qty", 0) or 0) + ship
+        fully = new_dispatched >= int(it.get("quantity", 1) or 1)
+        await db.dies.update_one({"die_id": it["die_id"]}, {
+            "$inc": {"stock_qty": -ship, "reserved_qty": -ship}
+        })
+        await db.order_items.update_one({"order_item_id": it["order_item_id"]}, {"$set": {
+            "dispatched_qty": new_dispatched,
+            "status": "dispatched" if fully else "partially_dispatched",
+        }})
+
+    # Order is fully dispatched only when every live line is fully shipped.
+    live = await db.order_items.find(
+        {"order_id": order_id, "status": {"$nin": ["removed", "cancelled", "released"]}}, {"_id": 0}).to_list(1000)
+    all_done = all(_remaining_qty(it) <= 0 for it in live) if live else True
+    order_new_status = "dispatched" if all_done else "partially_dispatched"
     await db.orders.update_one({"order_id": order_id}, {"$set": {
-        "order_status": "dispatched",
+        "order_status": order_new_status,
         "dispatch_date": dispatch_doc["dispatch_date"],
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }})
+    shipped_units = sum(ship for _, ship in plan)
     await db.order_timeline.insert_one({
         "timeline_id": f"tl_{uuid.uuid4().hex[:8]}",
         "order_id": order_id,
-        "status": "dispatched",
-        "note": f"Dispatch {dispatch_number} created. {body.get('courier_name', '')} {body.get('tracking_number', '')}".strip(),
+        "status": order_new_status,
+        "note": f"Dispatch {dispatch_number}: {shipped_units} unit(s){'' if all_done else ' (partial)'}. "
+                f"{body.get('courier_name', '')} {body.get('tracking_number', '')}".strip(),
         "updated_by": user["email"],
         "timestamp": datetime.now(timezone.utc).isoformat(),
     })
@@ -663,15 +724,30 @@ async def mark_dispatch_delivered(dispatch_id: str, request: Request):
         "$set": {"status": "delivered", "delivered_at": datetime.now(timezone.utc).isoformat()}
     })
     order_id = dispatch["order_id"]
-    await db.orders.update_one({"order_id": order_id}, {
-        "$set": {"order_status": "delivered", "updated_at": datetime.now(timezone.utc).isoformat()}
-    })
-    await db.order_items.update_many({"order_id": order_id}, {"$set": {"status": "delivered"}})
+
+    # The order is delivered only when every shipment is delivered AND nothing is
+    # still owed. Until then, record the partial delivery without closing the order.
+    order = await db.orders.find_one({"order_id": order_id}, {"_id": 0}) or {}
+    live = await db.order_items.find(
+        {"order_id": order_id, "status": {"$nin": ["removed", "cancelled", "released"]}}, {"_id": 0}).to_list(1000)
+    fully_dispatched = all(_remaining_qty(it) <= 0 for it in live) if live else True
+    other_pending = await db.dispatches.count_documents(
+        {"order_id": order_id, "status": {"$ne": "delivered"}, "dispatch_id": {"$ne": dispatch_id}})
+    fully_delivered = fully_dispatched and other_pending == 0
+
+    if fully_delivered:
+        await db.orders.update_one({"order_id": order_id}, {
+            "$set": {"order_status": "delivered", "updated_at": datetime.now(timezone.utc).isoformat()}
+        })
+        await db.order_items.update_many(
+            {"order_id": order_id, "status": {"$nin": ["removed", "cancelled", "released"]}},
+            {"$set": {"status": "delivered"}})
     await db.order_timeline.insert_one({
         "timeline_id": f"tl_{uuid.uuid4().hex[:8]}",
         "order_id": order_id,
-        "status": "delivered",
-        "note": f"Delivery confirmed for dispatch {dispatch['dispatch_number']}",
+        "status": "delivered" if fully_delivered else (order.get("order_status") or "partially_dispatched"),
+        "note": (f"Delivery confirmed for dispatch {dispatch['dispatch_number']}"
+                 + ("" if fully_delivered else " (partial — order still has pending shipments)")),
         "updated_by": user["email"],
         "timestamp": datetime.now(timezone.utc).isoformat(),
     })
@@ -708,7 +784,15 @@ async def dispatch_slip_pdf(dispatch_id: str, request: Request):
     if not dispatch:
         raise HTTPException(status_code=404, detail="Dispatch not found")
     order = await db.orders.find_one({"order_id": dispatch["order_id"]}, {"_id": 0})
-    items = await db.order_items.find({"order_id": dispatch["order_id"]}, {"_id": 0}).to_list(1000)
+    # Prefer the shipment's own lines (what was actually shipped in this dispatch);
+    # fall back to all order items for legacy dispatches created before partial support.
+    if dispatch.get("lines"):
+        items = [{
+            "die_code": ln.get("die_code", ""), "die_name": ln.get("die_name", ""),
+            "die_type": "", "quantity": ln.get("quantity", 1), "status": "dispatched",
+        } for ln in dispatch["lines"]]
+    else:
+        items = await db.order_items.find({"order_id": dispatch["order_id"]}, {"_id": 0}).to_list(1000)
     company = await db.settings.find_one({"type": "company"}, {"_id": 0}) or {}
 
     from reportlab.lib.pagesizes import A4
