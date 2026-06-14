@@ -17,12 +17,37 @@ export const CAT_LABELS = {
 export const TYPES = ['standard','large','machine'];
 export const BLANK_DIE = { code:'', name:'', type:'standard', category:'decorative', min_level:5, description:'', stock_qty:0 };
 
+// Sort options for the inventory list. 'code' is the default (natural code order).
+export const SORT_OPTIONS = [
+  { value: 'code',       label: 'Code (A→Z)'       },
+  { value: 'code_desc',  label: 'Code (Z→A)'       },
+  { value: 'name',       label: 'Name (A→Z)'       },
+  { value: 'name_desc',  label: 'Name (Z→A)'       },
+  { value: 'stock_desc', label: 'Stock (High→Low)' },
+  { value: 'stock_asc',  label: 'Stock (Low→High)' },
+];
+
+const nameOf = (d) => String(d?.name ?? '').trim().toLowerCase();
+function applySort(items, sortBy) {
+  const list = [...(items || [])];
+  switch (sortBy) {
+    case 'code_desc':  return list.sort((a, b) => compareCodes(b.code, a.code));
+    case 'name':       return list.sort((a, b) => nameOf(a).localeCompare(nameOf(b)) || compareCodes(a.code, b.code));
+    case 'name_desc':  return list.sort((a, b) => nameOf(b).localeCompare(nameOf(a)) || compareCodes(a.code, b.code));
+    case 'stock_desc': return list.sort((a, b) => (b.stock_qty || 0) - (a.stock_qty || 0) || compareCodes(a.code, b.code));
+    case 'stock_asc':  return list.sort((a, b) => (a.stock_qty || 0) - (b.stock_qty || 0) || compareCodes(a.code, b.code));
+    case 'code':
+    default:           return sortByCode(list);
+  }
+}
+
 export default function useInventory() {
   const [dies, setDies] = useState([]);
   const [filteredDies, setFilteredDies] = useState([]);
   const [typeFilter, setTypeFilter] = useState('all');
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
+  const [sortBy, setSortBy] = useState('code');
   const [showArchived, setShowArchived] = useState(false);
   const [viewMode, setViewMode] = useState('catalogue');
   const [quickFilter, setQuickFilter] = useState(null);
@@ -80,20 +105,21 @@ export default function useInventory() {
       d.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
       d.code.toLowerCase().includes(searchTerm.toLowerCase())
     );
-    // For shortage views, surface the most urgent first (biggest gap below min);
-    // otherwise keep natural code order.
-    if (quickFilter === 'low' || quickFilter === 'out' || quickFilter === 'reorder') {
+    // For shortage views, default to surfacing the most urgent first (biggest gap
+    // below min); the user can still override with an explicit sort choice.
+    const isShortageView = quickFilter === 'low' || quickFilter === 'out' || quickFilter === 'reorder';
+    if (isShortageView && sortBy === 'code') {
       f = [...f].sort((a, b) =>
         ((b.min_level || 0) - b.stock_qty) - ((a.min_level || 0) - a.stock_qty) ||
         compareCodes(a.code, b.code)
       );
       setFilteredDies(f);
     } else {
-      setFilteredDies(sortByCode(f));
+      setFilteredDies(applySort(f, sortBy));
     }
-  }, [quickFilter, typeFilter, categoryFilter, searchTerm, dies]);
+  }, [quickFilter, typeFilter, categoryFilter, searchTerm, sortBy, dies]);
 
-  const clearFilters = () => { setQuickFilter(null); setTypeFilter('all'); setCategoryFilter('all'); setSearchTerm(''); };
+  const clearFilters = () => { setQuickFilter(null); setTypeFilter('all'); setCategoryFilter('all'); setSearchTerm(''); setSortBy('code'); };
   const isFiltered = quickFilter || typeFilter !== 'all' || categoryFilter !== 'all' || searchTerm;
 
   const handleCreateDie = async (e) => {
@@ -292,7 +318,9 @@ export default function useInventory() {
     loading,
     // filters
     typeFilter, setTypeFilter, categoryFilter, setCategoryFilter,
-    searchTerm, setSearchTerm, showArchived, setShowArchived,
+    searchTerm, setSearchTerm, sortBy, setSortBy,
+    sortLabel: (SORT_OPTIONS.find(o => o.value === sortBy) || SORT_OPTIONS[0]).label,
+    showArchived, setShowArchived,
     viewMode, setViewMode, quickFilter, setQuickFilter,
     isFiltered, clearFilters,
     // create dialog

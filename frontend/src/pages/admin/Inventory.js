@@ -7,13 +7,13 @@ import {
   Package, Plus, Download, Upload, Archive, MoreVertical,
   Grid3X3, List, Search, Edit2, TrendingUp, TrendingDown,
   CheckCircle2, AlertCircle, XCircle, Scissors, Filter, X,
-  CheckSquare, Square, Trash2, PackageOpen,
+  CheckSquare, Square, Trash2, PackageOpen, ArrowUpDown,
 } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from '../../components/ui/dropdown-menu';
 
-import useInventory, { CATEGORIES, CAT_LABELS, TYPES } from '../../hooks/useInventory';
+import useInventory, { CATEGORIES, CAT_LABELS, TYPES, SORT_OPTIONS } from '../../hooks/useInventory';
 import DieCard from '../../components/inventory/DieCard';
 import { CreateDieDialog, EditDieDialog } from '../../components/inventory/DieFormDialog';
 import StockMovementDialog from '../../components/inventory/StockMovementDialog';
@@ -35,6 +35,21 @@ export default function Inventory() {
   const textSec   = 'text-[var(--text-secondary)]';
   const textMuted = 'text-[var(--text-muted)]';
   const dlgCls    = 'bg-[var(--bg-card)] border-[var(--border-color)] text-[var(--text-primary)]';
+
+  const renderDieCard = (die) => (
+    <DieCard key={die.die_id} die={die} uploading={inv.uploading}
+      onUpload={inv.handleImageUpload} onArchive={inv.handleArchive}
+      onEdit={inv.openEdit}
+      onDeleteRequest={d => { inv.setDeleteTarget(d); inv.setDeleteConfirmOpen(true); }}
+      onStockIn={d => inv.openStockAdj(d, 'stock_in')}
+      onStockOut={d => inv.openStockAdj(d, 'stock_out')}
+      isAdmin={isAdmin} canWrite={canWrite}
+      selectMode={isAdmin && inv.selectMode}
+      selected={inv.isSelected(die.die_id)}
+      onToggleSelect={() => inv.toggleSelect(die.die_id)}
+      textPri={textPri} textMuted={textMuted} textSec={textSec}
+      card={card} backendUrl={backendUrl} />
+  );
 
   const KPI_ITEMS = [
     { label: 'Total',    value: inv.stats.total,      Icon: Package,      cls: textPri,          bg: 'bg-[var(--bg-primary)]', filter: null   },
@@ -217,6 +232,14 @@ export default function Inventory() {
               <option value="all">All Types</option>
               {TYPES.map(t => <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>)}
             </select>
+            <div className="relative shrink-0">
+              <ArrowUpDown className={`absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 pointer-events-none ${textMuted}`} />
+              <select value={inv.sortBy} onChange={e => inv.setSortBy(e.target.value)}
+                title="Sort by"
+                className={`h-10 pl-8 pr-2 rounded-md text-sm ${inputCls} w-full`}>
+                {SORT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            </div>
           </div>
           {!inv.quickFilter && (
             <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar -mx-4 px-4 sm:mx-0 sm:px-0">
@@ -238,45 +261,46 @@ export default function Inventory() {
           </div>
         ) : inv.viewMode === 'catalogue' ? (
           <div className="space-y-6">
-            {Object.keys(inv.grouped).length === 0
-              ? <div className={`${card} border rounded-xl p-16 text-center`}>
-                  <Scissors className={`h-12 w-12 mx-auto mb-3 ${textMuted} opacity-20`} strokeWidth={1} />
-                  <p className={`${textSec} font-medium mb-1`}>No dies found</p>
-                  {inv.isFiltered
-                    ? <button onClick={inv.clearFilters} className="text-xs text-[#e94560] hover:underline">Clear filters to see all</button>
-                    : <p className={`text-xs ${textMuted}`}>Add your first die to get started</p>}
+            {inv.filteredDies.length === 0 ? (
+              <div className={`${card} border rounded-xl p-16 text-center`}>
+                <Scissors className={`h-12 w-12 mx-auto mb-3 ${textMuted} opacity-20`} strokeWidth={1} />
+                <p className={`${textSec} font-medium mb-1`}>No dies found</p>
+                {inv.isFiltered
+                  ? <button onClick={inv.clearFilters} className="text-xs text-[#e94560] hover:underline">Clear filters to see all</button>
+                  : <p className={`text-xs ${textMuted}`}>Add your first die to get started</p>}
+              </div>
+            ) : inv.sortBy !== 'code' ? (
+              /* Explicit sort active → flat sorted grid so the chosen order is visible
+                 (category grouping would otherwise re-bucket and hide the sort). */
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <span className={`text-xs ${textMuted} font-mono`}>
+                    {inv.filteredDies.length} item{inv.filteredDies.length !== 1 ? 's' : ''} · sorted by {inv.sortLabel}
+                  </span>
                 </div>
-              : Object.entries(inv.grouped).map(([cat, catDies]) => {
-                  const catTotal = catDies.reduce((s, d) => s + (d.stock_qty || 0), 0);
-                  return (
-                    <div key={cat}>
-                      <div className="flex items-center justify-between mb-3">
-                        <div className="flex items-center gap-2">
-                          <h2 className={`text-base sm:text-lg font-semibold ${textPri}`}>{CAT_LABELS[cat] || cat}</h2>
-                          <span className={`text-xs px-2 py-0.5 rounded-full ${card} border ${textMuted} font-mono`}>{catDies.length}</span>
-                        </div>
-                        <span className={`text-xs ${textMuted} font-mono`}>{catTotal} in stock</span>
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
+                  {inv.filteredDies.map(renderDieCard)}
+                </div>
+              </div>
+            ) : (
+              Object.entries(inv.grouped).map(([cat, catDies]) => {
+                const catTotal = catDies.reduce((s, d) => s + (d.stock_qty || 0), 0);
+                return (
+                  <div key={cat}>
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="flex items-center gap-2">
+                        <h2 className={`text-base sm:text-lg font-semibold ${textPri}`}>{CAT_LABELS[cat] || cat}</h2>
+                        <span className={`text-xs px-2 py-0.5 rounded-full ${card} border ${textMuted} font-mono`}>{catDies.length}</span>
                       </div>
-                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
-                        {catDies.map(die => (
-                          <DieCard key={die.die_id} die={die} uploading={inv.uploading}
-                            onUpload={inv.handleImageUpload} onArchive={inv.handleArchive}
-                            onEdit={inv.openEdit}
-                            onDeleteRequest={d => { inv.setDeleteTarget(d); inv.setDeleteConfirmOpen(true); }}
-                            onStockIn={d => inv.openStockAdj(d, 'stock_in')}
-                            onStockOut={d => inv.openStockAdj(d, 'stock_out')}
-                            isAdmin={isAdmin} canWrite={canWrite}
-                            selectMode={isAdmin && inv.selectMode}
-                            selected={inv.isSelected(die.die_id)}
-                            onToggleSelect={() => inv.toggleSelect(die.die_id)}
-                            textPri={textPri} textMuted={textMuted} textSec={textSec}
-                            card={card} backendUrl={backendUrl} />
-                        ))}
-                      </div>
+                      <span className={`text-xs ${textMuted} font-mono`}>{catTotal} in stock</span>
                     </div>
-                  );
-                })
-            }
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
+                      {catDies.map(renderDieCard)}
+                    </div>
+                  </div>
+                );
+              })
+            )}
           </div>
         ) : (
           <div className={`${card} border rounded-xl overflow-hidden`}>
