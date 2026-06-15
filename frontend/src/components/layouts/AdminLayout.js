@@ -6,6 +6,7 @@ import GuidedTour from '../GuidedTour';
 import KeyboardShortcuts from '../KeyboardShortcuts';
 import AdminSidebar from './AdminSidebar';
 import AdminTopbar from './AdminTopbar';
+import TaskReminderPopup from '../notifications/TaskReminderPopup';
 import { MODULE_ROUTE_MAP, SIDEBAR_SECTIONS, BOTTOM_NAV_ITEMS, MORE_ITEM } from './AdminNavItems';
 
 export default function AdminLayout({ children }) {
@@ -135,6 +136,7 @@ export default function AdminLayout({ children }) {
       <HelpButton />
       <GuidedTour />
       <KeyboardShortcuts />
+      <TaskReminderPopup />
     </div>
   );
 }
