@@ -2,8 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import { catalogue } from '../lib/api';
 import { Button } from '../components/ui/button';
-import { Check, Package, Image, Minus, Plus } from 'lucide-react';
+import { Check, Minus, Plus, PlayCircle } from 'lucide-react';
 import { toast } from 'sonner';
+import MediaGallery from '../components/media/MediaGallery';
+import VideoModal from '../components/media/VideoModal';
 
 export default function CataloguePage() {
   const { token } = useParams();
@@ -12,6 +14,8 @@ export default function CataloguePage() {
   const [qtyByDie, setQtyByDie] = useState({});
   const [submitted, setSubmitted] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [typeTab, setTypeTab] = useState('all');
+  const [videoDie, setVideoDie] = useState(null);
   const backendUrl = process.env.REACT_APP_BACKEND_URL;
 
   const selectedDies = Object.keys(qtyByDie);
@@ -77,9 +81,20 @@ export default function CataloguePage() {
   );
   const packageLabel = isCustom ? 'CUSTOM PACKAGE' : (pkg?.display_name || '');
 
+  // Product-type tabs (built from what the server published to this school)
+  const typeTabs = [];
+  const seenTypes = new Set();
+  dies.forEach(d => {
+    const id = d.product_type_id || 'ptype_dies';
+    if (!seenTypes.has(id)) { seenTypes.add(id); typeTabs.push({ id, name: d.product_type || 'Dies' }); }
+  });
+  const visibleDies = typeTab === 'all'
+    ? dies
+    : dies.filter(d => (d.product_type_id || 'ptype_dies') === typeTab);
+
   // Group dies by category
   const grouped = {};
-  dies.forEach(d => {
+  visibleDies.forEach(d => {
     const cat = d.category || d.type || 'standard';
     if (!grouped[cat]) grouped[cat] = [];
     grouped[cat].push(d);
@@ -133,6 +148,24 @@ export default function CataloguePage() {
         </div>
       </div>
 
+      {/* Product-type tabs */}
+      {typeTabs.length > 1 && (
+        <div className="max-w-6xl mx-auto px-4 pt-6">
+          <div className="flex gap-2 overflow-x-auto no-scrollbar">
+            <button onClick={() => setTypeTab('all')}
+              className={`shrink-0 px-4 py-2 rounded-full text-sm font-semibold transition-colors ${typeTab === 'all' ? 'bg-[#e94560] text-white' : 'bg-[#1a1a2e] text-[#a0a0b0] border border-[#2d2d44]'}`}>
+              All
+            </button>
+            {typeTabs.map(t => (
+              <button key={t.id} onClick={() => setTypeTab(t.id)}
+                className={`shrink-0 px-4 py-2 rounded-full text-sm font-semibold transition-colors ${typeTab === t.id ? 'bg-[#e94560] text-white' : 'bg-[#1a1a2e] text-[#a0a0b0] border border-[#2d2d44]'}`}>
+                {t.name}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Dies Grid - grouped by category */}
       <div className="max-w-6xl mx-auto px-4 py-8 space-y-10">
         {Object.entries(grouped).map(([cat, catDies]) => (
@@ -149,15 +182,14 @@ export default function CataloguePage() {
                     {isSelected && (
                       <div className="absolute top-2 right-2 z-10 bg-[#e94560] text-white rounded-full w-6 h-6 flex items-center justify-center"><Check className="h-4 w-4" /></div>
                     )}
-                    {/* Die Image */}
-                    <div className="aspect-square bg-[#0f0f1a] flex items-center justify-center p-2">
-                      {die.image_url ? (
-                        <img src={`${backendUrl}${die.image_url}`} alt={die.name} className="w-full h-full object-contain" loading="lazy" />
-                      ) : (
-                        <div className="flex flex-col items-center text-[#3d3d55]">
-                          <Package className="h-10 w-10 mb-1" strokeWidth={1} />
-                          <span className="text-[10px]">{die.code}</span>
-                        </div>
+                    {/* Die Image — tapping the photo opens the zoom lightbox (not select) */}
+                    <div className="relative aspect-square bg-[#0f0f1a]" onClick={(e) => e.stopPropagation()}>
+                      <MediaGallery images={die.images} alt={die.name} backendUrl={backendUrl} />
+                      {die.video_url && (
+                        <button type="button" onClick={(e) => { e.stopPropagation(); setVideoDie(die); }}
+                          className="absolute bottom-1.5 left-1.5 z-10 flex items-center gap-1 px-2 py-0.5 rounded-full bg-black/60 text-white text-[10px] font-medium">
+                          <PlayCircle className="h-3.5 w-3.5" /> Video
+                        </button>
                       )}
                     </div>
                     {/* Info */}
@@ -165,6 +197,7 @@ export default function CataloguePage() {
                       <p className="font-mono text-[10px] text-[#e94560]">{die.code}</p>
                       <h3 className="text-sm font-medium text-white leading-tight mt-0.5 line-clamp-1">{die.name}</h3>
                       <p className="text-[10px] text-[#6b6b80] mt-1 capitalize">{die.type} die</p>
+                      {die.description && <p className="text-[10px] text-[#8a8aa0] mt-1 line-clamp-2">{die.description}</p>}
                       {/* Quantity stepper — only when selected */}
                       {isSelected && (
                         <div className="mt-2 flex items-center justify-between" onClick={(e) => e.stopPropagation()}>
@@ -195,6 +228,8 @@ export default function CataloguePage() {
           </div>
         ))}
       </div>
+
+      <VideoModal url={videoDie?.video_url} title={videoDie?.name} open={!!videoDie} onClose={() => setVideoDie(null)} />
 
       {/* Floating Submit */}
       {selectedDies.length > 0 && (
