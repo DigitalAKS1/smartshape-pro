@@ -12,7 +12,9 @@ import CloudinarySection from '../../components/settings/CloudinarySection';
 import SheetsSection from '../../components/settings/SheetsSection';
 import NotificationsSection from '../../components/settings/NotificationsSection';
 import DailyDigestSection from '../../components/settings/DailyDigestSection';
+import OrdersReportSection from '../../components/settings/OrdersReportSection';
 import SchoolPortalSection from '../../components/settings/SchoolPortalSection';
+import WhatsAppConnectionSection from '../../components/settings/WhatsAppConnectionSection';
 import SecurityTab from '../../components/settings/SecurityTab';
 import IntegrationsOverview from '../../components/settings/IntegrationsOverview';
 
@@ -125,6 +127,12 @@ export default function AppSettings() {
               />
             )}
 
+            {s.activeTab === 'whatsapp' && (
+              <div className="mb-4">
+                <WhatsAppConnectionSection />
+              </div>
+            )}
+
             {(s.activeTab === 'email' || s.activeTab === 'whatsapp' || s.activeTab === 'scheduled') && (
               <SecuritySection
                 activeTab={s.activeTab}
@@ -217,6 +225,7 @@ export default function AppSettings() {
               <div className="space-y-4">
                 <NotificationsSection prefs={s.notifPrefs} setPrefs={s.setNotifPrefs} save={s.saveNotifPrefs} />
                 <DailyDigestSection />
+                <OrdersReportSection />
               </div>
             )}
 
