@@ -12,6 +12,7 @@ from database import db
 from auth_utils import get_current_user
 from rbac import get_team, require_teams
 from routes.drip_routes import _auto_enroll_quotation_sent
+from media_utils import gate_die_for_customer
 
 router = APIRouter()
 
@@ -1525,6 +1526,7 @@ async def get_catalogue(token: str):
     if package_id:
         package = await db.packages.find_one({"package_id": package_id}, {"_id": 0})
     dies = await db.dies.find({"is_active": True}, {"_id": 0}).to_list(1000)
+    dies = [gate_die_for_customer(d) for d in dies]
 
     # Attach company logo for catalogue header
     company_s = await db.settings.find_one({"type": "company"}, {"_id": 0}) or {}
