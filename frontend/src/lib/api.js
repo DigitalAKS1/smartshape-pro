@@ -565,6 +565,9 @@ export const orders = {
   removeItem: (id, itemId) => API.delete(`/orders/${id}/items/${itemId}`),
   exportOne: (id, fmt) => API.get(`/orders/${id}/export`, { params: { format: fmt }, responseType: 'blob' }),
   exportBulk: (ids, fmt) => API.post('/orders/export', { order_ids: ids, format: fmt }, { responseType: 'blob' }),
+  // Soft cancel / reopen (admin + accounts) — 'not finalising', reversible
+  cancel: (id, reason = '') => API.post(`/orders/${id}/cancel`, { reason }),
+  reopen: (id) => API.post(`/orders/${id}/reopen`),
   // Owner-only (info@smartshape.in): permanent delete
   delete: (id, reason = '') => API.delete(`/orders/${id}`, { params: { reason } }),
 };

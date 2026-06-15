@@ -2,10 +2,15 @@ import React, { useState } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/dialog';
 import { Button } from '../ui/button';
 import { formatCurrency, formatDate } from '../../lib/utils';
-import { Package, Plus, Minus, Trash2 } from 'lucide-react';
+import { Package, Plus, Minus, Trash2, Ban, RotateCcw } from 'lucide-react';
 import { ORDER_STATUSES } from '../../lib/ordersUtils';
 import OwnerDeleteButton from '../common/OwnerDeleteButton';
 import { useIsOwner } from '../../hooks/usePermission';
+import { useAuth } from '../../contexts/AuthContext';
+import { orders as ordersApi } from '../../lib/api';
+import { toast } from 'sonner';
+
+const CANCEL_BLOCK = ['cancelled', 'dispatched', 'delivered'];
 
 const EDITABLE_ORDER_STATUSES = ['pending', 'confirmed'];
 const EDITABLE_ITEM_STATUSES = ['on_hold', 'confirmed'];
@@ -23,7 +28,38 @@ export default function OrderDetailPanel({
   const [addDieId, setAddDieId] = useState('');
   const [addQty, setAddQty] = useState(1);
   const [dieFilter, setDieFilter] = useState('');
+  const [busy, setBusy] = useState(false);
   const isOwner = useIsOwner();
+  const { user } = useAuth();
+
+  const canCancelOrder = ['admin', 'accounts'].includes(user?.role);
+  const status = detailOrder?.order_status;
+  const isCancelled = status === 'cancelled';
+  const cancellable = status && !CANCEL_BLOCK.includes(status);
+
+  const handleCancel = async () => {
+    if (!window.confirm('Cancel this order (not finalising)? Held stock will be released. You can re-open it later.')) return;
+    const reason = window.prompt('Reason (optional):', '') || '';
+    setBusy(true);
+    try {
+      await ordersApi.cancel(detailOrder.order_id, reason);
+      toast.success('Order cancelled — held stock released');
+      onDeleted?.(); setDetailOpen(false);
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Cancel failed');
+    } finally { setBusy(false); }
+  };
+
+  const handleReopen = async () => {
+    setBusy(true);
+    try {
+      await ordersApi.reopen(detailOrder.order_id);
+      toast.success('Order re-opened — stock reserved again');
+      onDeleted?.(); setDetailOpen(false);
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Re-open failed');
+    } finally { setBusy(false); }
+  };
 
   const editable = canManage && detailOrder && EDITABLE_ORDER_STATUSES.includes(detailOrder.order_status);
   const items = detailOrder?.items || [];
@@ -180,6 +216,23 @@ export default function OrderDetailPanel({
                       </div>
                     ))}
                   </div>
+                </div>
+              )}
+
+              {/* Soft cancel / reopen (admin + accounts) — reversible, keeps the order */}
+              {canCancelOrder && (isCancelled || cancellable) && (
+                <div className="flex justify-end border-t border-[var(--border-color)] pt-3">
+                  {isCancelled ? (
+                    <Button variant="outline" disabled={busy} onClick={handleReopen}
+                      className="border-[var(--border-color)] text-green-500">
+                      <RotateCcw className="mr-1.5 h-4 w-4" /> Re-open order
+                    </Button>
+                  ) : (
+                    <Button variant="outline" disabled={busy} onClick={handleCancel}
+                      className="border-[var(--border-color)] text-amber-500">
+                      <Ban className="mr-1.5 h-4 w-4" /> Cancel (not finalising)
+                    </Button>
+                  )}
                 </div>
               )}
 

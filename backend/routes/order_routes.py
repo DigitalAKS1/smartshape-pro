@@ -180,6 +180,102 @@ async def delete_order(order_id: str, request: Request, reason: str = ""):
     return {"message": "Order permanently deleted", **result}
 
 
+# ==================== ORDER CANCEL / REOPEN (soft, reversible) ====================
+# A staff-facing alternative to the superadmin hard-delete: mark an order
+# "not finalising" without losing it. Held stock is released and the source
+# quotation/lead are freed — all reversible via /reopen.
+
+CANCEL_BLOCK_STATUSES = {"cancelled", "dispatched", "delivered"}
+
+
+def can_cancel(order_status: str) -> bool:
+    """True unless the order is already cancelled or its goods have shipped."""
+    return (order_status or "") not in CANCEL_BLOCK_STATUSES
+
+
+def can_reopen(order_status: str) -> bool:
+    """Only a cancelled order can be re-opened."""
+    return (order_status or "") == "cancelled"
+
+
+@router.post("/orders/{order_id}/cancel")
+async def cancel_order(order_id: str, request: Request):
+    """Soft-cancel an order ('not finalising'): keep it visible, release held
+    stock, free the quotation/lead. Reversible via /reopen. Admin & accounts."""
+    user = await get_current_user(request)
+    require_teams(user, "admin", "accounts")
+    order = await db.orders.find_one({"order_id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if not can_cancel(order.get("order_status")):
+        raise HTTPException(status_code=400,
+                            detail="This order can't be cancelled — it's already cancelled or dispatched.")
+    try:
+        reason = (await request.json()).get("reason", "")
+    except Exception:
+        reason = ""
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    # Undispatched lines leave the committing statuses so their hold is released.
+    await db.order_items.update_many(
+        {"order_id": order_id, "status": {"$in": COMMITTING_ITEM_STATUSES}},
+        {"$set": {"status": "cancelled"}})
+    await db.orders.update_one({"order_id": order_id}, {"$set": {
+        "order_status": "cancelled", "updated_at": now_iso,
+        "cancelled_by": user["email"], "cancelled_at": now_iso, "cancel_reason": reason}})
+    await db.order_timeline.insert_one({
+        "timeline_id": f"tl_{uuid.uuid4().hex[:8]}", "order_id": order_id,
+        "status": "cancelled",
+        "note": "Order cancelled (not finalising)." + (f" Reason: {reason}" if reason else ""),
+        "updated_by": user["email"], "timestamp": now_iso})
+    # Recompute is authoritative — releases exactly the freed holds.
+    await recompute_reservations()
+    # Free the source quotation (re-convertible) and unlock the won lead.
+    if order.get("quotation_id"):
+        await db.quotations.update_one(
+            {"quotation_id": order["quotation_id"]}, {"$set": {"quotation_status": "sent"}})
+    if order.get("lead_id"):
+        await db.leads.update_one({"lead_id": order["lead_id"]}, {
+            "$set": {"is_locked": False, "stage": "negotiation", "updated_at": now_iso}})
+    await log_activity(user["email"], "cancel", "order", order_id,
+                       f"Order {order.get('order_number', order_id)} cancelled. {reason}".strip())
+    return await db.orders.find_one({"order_id": order_id}, {"_id": 0})
+
+
+@router.post("/orders/{order_id}/reopen")
+async def reopen_order(order_id: str, request: Request):
+    """Re-open a cancelled order: re-reserve its stock and re-lock the lead. Admin & accounts."""
+    user = await get_current_user(request)
+    require_teams(user, "admin", "accounts")
+    order = await db.orders.find_one({"order_id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if not can_reopen(order.get("order_status")):
+        raise HTTPException(status_code=400, detail="Only a cancelled order can be re-opened.")
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    # Lines we cancelled come back on hold (re-reserves the undispatched remainder).
+    await db.order_items.update_many(
+        {"order_id": order_id, "status": "cancelled"}, {"$set": {"status": "on_hold"}})
+    await db.orders.update_one({"order_id": order_id}, {
+        "$set": {"order_status": "pending", "updated_at": now_iso},
+        "$unset": {"cancelled_by": "", "cancelled_at": "", "cancel_reason": ""}})
+    await db.order_timeline.insert_one({
+        "timeline_id": f"tl_{uuid.uuid4().hex[:8]}", "order_id": order_id,
+        "status": "pending", "note": "Order re-opened.",
+        "updated_by": user["email"], "timestamp": now_iso})
+    await recompute_reservations()
+    if order.get("quotation_id"):
+        await db.quotations.update_one(
+            {"quotation_id": order["quotation_id"]}, {"$set": {"quotation_status": "confirmed"}})
+    if order.get("lead_id"):
+        await db.leads.update_one({"lead_id": order["lead_id"]}, {
+            "$set": {"is_locked": True, "stage": "won", "updated_at": now_iso}})
+    await log_activity(user["email"], "reopen", "order", order_id,
+                       f"Order {order.get('order_number', order_id)} re-opened.")
+    return await db.orders.find_one({"order_id": order_id}, {"_id": 0})
+
+
 # ==================== TALLY EXPORT (Sales Order → XML / JSON) ====================
 
 class BulkExportInput(BaseModel):
