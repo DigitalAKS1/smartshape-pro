@@ -7,7 +7,7 @@ import {
   Package, Plus, Download, Upload, Archive, MoreVertical,
   Grid3X3, List, Search, Edit2, TrendingUp, TrendingDown,
   CheckCircle2, AlertCircle, XCircle, Scissors, Filter, X,
-  CheckSquare, Square, Trash2, PackageOpen, ArrowUpDown, Layers,
+  CheckSquare, Square, Trash2, PackageOpen, ArrowUpDown, Layers, RefreshCw,
 } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
@@ -43,6 +43,7 @@ export default function Inventory() {
       onDeleteRequest={d => { inv.setDeleteTarget(d); inv.setDeleteConfirmOpen(true); }}
       onStockIn={d => inv.openStockAdj(d, 'stock_in')}
       onStockOut={d => inv.openStockAdj(d, 'stock_out')}
+      onSetPhysical={d => inv.openStockAdj(d, 'physical_set')}
       isAdmin={isAdmin} canWrite={canWrite}
       selectMode={isAdmin && inv.selectMode}
       selected={inv.isSelected(die.die_id)}
@@ -245,6 +246,10 @@ export default function Inventory() {
                 {SORT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
               </select>
             </div>
+            <button onClick={() => inv.refresh()} title="Refresh latest stock"
+              className={`h-10 px-3 rounded-md text-sm flex items-center gap-1.5 shrink-0 ${inputCls} hover:border-[#e94560]/50`}>
+              <RefreshCw className={`h-3.5 w-3.5 ${inv.loading ? 'animate-spin' : ''}`} /> Refresh
+            </button>
           </div>
           {inv.productTypes.length > 1 && (
             <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar -mx-4 px-4 sm:mx-0 sm:px-0">
@@ -398,6 +403,11 @@ export default function Inventory() {
                                 <button className={`p-1.5 rounded-md hover:bg-[var(--bg-hover)] ${textMuted}`}><MoreVertical className="h-4 w-4" /></button>
                               </DropdownMenuTrigger>
                               <DropdownMenuContent align="end" className={dlgCls}>
+                                {canWrite && (
+                                  <DropdownMenuItem onClick={() => inv.openStockAdj(die, 'physical_set')} className="cursor-pointer">
+                                    Set physical qty
+                                  </DropdownMenuItem>
+                                )}
                                 <DropdownMenuItem onClick={() => inv.handleArchive(die)} className="cursor-pointer">
                                   {die.is_active === false ? 'Restore' : 'Archive'}
                                 </DropdownMenuItem>

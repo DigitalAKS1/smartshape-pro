@@ -1,5 +1,5 @@
 import React from 'react';
-import { TrendingUp, TrendingDown, AlertTriangle } from 'lucide-react';
+import { TrendingUp, TrendingDown, AlertTriangle, ClipboardCheck } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../ui/dialog';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
@@ -13,15 +13,18 @@ export default function StockMovementDialog({
   handleStockAdj,
   inputCls, textPri, textSec, textMuted, dlgCls,
 }) {
+  const isPhysical = stockAdjType === 'physical_set';
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className={`${dlgCls} w-[calc(100vw-1.5rem)] sm:max-w-sm`}>
         <DialogHeader>
           <DialogTitle className={`${textPri} flex items-center gap-2`}>
-            {stockAdjType === 'stock_in'
-              ? <TrendingUp className="h-5 w-5 text-green-500" />
-              : <TrendingDown className="h-5 w-5 text-red-400" />}
-            {stockAdjType === 'stock_in' ? 'Stock In' : 'Stock Out'}
+            {isPhysical
+              ? <ClipboardCheck className="h-5 w-5 text-[#e94560]" />
+              : stockAdjType === 'stock_in'
+                ? <TrendingUp className="h-5 w-5 text-green-500" />
+                : <TrendingDown className="h-5 w-5 text-red-400" />}
+            {isPhysical ? 'Set Physical Count' : stockAdjType === 'stock_in' ? 'Stock In' : 'Stock Out'}
           </DialogTitle>
           <p className={`text-sm ${textSec} truncate`}>{stockAdjTarget?.name}</p>
         </DialogHeader>
@@ -46,9 +49,16 @@ export default function StockMovementDialog({
             </div>
           </div>
           <div>
-            <Label className={`${textSec} text-xs mb-1 block`}>Quantity *</Label>
-            <Input type="number" min={1} value={stockAdjQty} onChange={e => setStockAdjQty(e.target.value)}
+            <Label className={`${textSec} text-xs mb-1 block`}>
+              {isPhysical ? 'Counted physical quantity *' : 'Quantity *'}
+            </Label>
+            <Input type="number" min={isPhysical ? 0 : 1} value={stockAdjQty} onChange={e => setStockAdjQty(e.target.value)}
               className={`h-12 text-center text-lg font-mono ${inputCls}`} autoFocus />
+            {isPhysical && (
+              <p className={`text-[11px] ${textMuted} mt-1`}>
+                Sets the system stock to this exact number and re-syncs reserved/available.
+              </p>
+            )}
           </div>
           <div>
             <Label className={`${textSec} text-xs mb-1 block`}>Note (optional)</Label>
@@ -65,8 +75,10 @@ export default function StockMovementDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)}
             className={`flex-1 h-11 border-[var(--border-color)] ${textSec}`}>Cancel</Button>
           <Button onClick={handleStockAdj}
-            className={`flex-1 h-11 text-white font-medium ${stockAdjType === 'stock_in' ? 'bg-green-600 hover:bg-green-700' : 'bg-red-600 hover:bg-red-700'}`}>
-            {stockAdjType === 'stock_in' ? 'Add Stock' : 'Remove Stock'}
+            className={`flex-1 h-11 text-white font-medium ${
+              isPhysical ? 'bg-[#e94560] hover:bg-[#f05c75]'
+              : stockAdjType === 'stock_in' ? 'bg-green-600 hover:bg-green-700' : 'bg-red-600 hover:bg-red-700'}`}>
+            {isPhysical ? 'Save Count' : stockAdjType === 'stock_in' ? 'Add Stock' : 'Remove Stock'}
           </Button>
         </DialogFooter>
       </DialogContent>

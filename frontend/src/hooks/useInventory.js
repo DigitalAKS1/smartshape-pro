@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { dies as diesApi, stock as stockApi, productTypes as ptApi, formatApiErrorDetail } from '../lib/api';
+import { dies as diesApi, stock as stockApi, holds as holdsApi, productTypes as ptApi, formatApiErrorDetail } from '../lib/api';
 import { useDataSync, useAutoRefresh } from '../lib/dataSync';
 import { sortByCode, compareCodes } from '../lib/utils';
+import { varianceInfo } from '../lib/stockMath';
 import { toast } from 'sonner';
 
 export const CATEGORIES = [
@@ -232,11 +233,39 @@ export default function useInventory() {
 
   const openStockAdj = (die, type) => {
     setStockAdjTarget(die); setStockAdjType(type);
-    setStockAdjQty(1); setStockAdjNote('');
+    // 'physical_set' edits the absolute count → start from the current figure;
+    // stock_in/out are deltas → start at 1.
+    setStockAdjQty(type === 'physical_set' ? (die.stock_qty ?? 0) : 1);
+    setStockAdjNote('');
     setStockAdjOpen(true);
   };
 
+  // Set the absolute physical count for a single product, then re-sync the
+  // reservation cache so "available" stays correct (fixes drift after a count).
+  const setPhysicalQty = async () => {
+    const counted = Number(stockAdjQty);
+    if (!Number.isFinite(counted) || counted < 0) { toast.error('Counted quantity cannot be negative'); return; }
+    try {
+      await stockApi.createMovement({
+        die_id: stockAdjTarget.die_id,
+        movement_type: 'physical_adjustment',
+        counted_qty: counted,
+        session_notes: stockAdjNote || 'Quick physical count',
+      });
+      await holdsApi.recomputeReservations();
+      const { variance, direction } = varianceInfo(stockAdjTarget.stock_qty, counted);
+      toast.success(
+        direction === 'same'
+          ? `Physical count confirmed: ${counted}`
+          : `Physical count set to ${counted} (${variance > 0 ? '+' : ''}${variance})`);
+      setStockAdjOpen(false); fetchDies();
+    } catch (err) {
+      toast.error(err.response?.data?.detail ? formatApiErrorDetail(err.response.data.detail) : 'Failed');
+    }
+  };
+
   const handleStockAdj = async () => {
+    if (stockAdjType === 'physical_set') return setPhysicalQty();
     if (!stockAdjQty || stockAdjQty < 1) { toast.error('Quantity must be at least 1'); return; }
     try {
       await stockApi.createMovement({
@@ -347,16 +376,15 @@ export default function useInventory() {
   const grouped = {};
   filteredDies.forEach(d => { const cat = d.category || 'other'; if (!grouped[cat]) grouped[cat] = []; grouped[cat].push(d); });
 
-  const stockAfter = stockAdjTarget
-    ? stockAdjType === 'stock_in'
-      ? (stockAdjTarget.stock_qty || 0) + Number(stockAdjQty || 0)
-      : Math.max(0, (stockAdjTarget.stock_qty || 0) - Number(stockAdjQty || 0))
-    : 0;
+  const stockAfter = !stockAdjTarget ? 0
+    : stockAdjType === 'physical_set' ? Math.max(0, Number(stockAdjQty || 0))
+    : stockAdjType === 'stock_in' ? (stockAdjTarget.stock_qty || 0) + Number(stockAdjQty || 0)
+    : Math.max(0, (stockAdjTarget.stock_qty || 0) - Number(stockAdjQty || 0));
 
   return {
     // data
     dies, filteredDies, grouped, stats, activeDies, stockAfter,
-    loading,
+    loading, refresh: fetchDies,
     // filters
     typeFilter, setTypeFilter, categoryFilter, setCategoryFilter,
     searchTerm, setSearchTerm, sortBy, setSortBy,
