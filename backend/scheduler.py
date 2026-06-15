@@ -1285,6 +1285,77 @@ async def low_stock_loop():
             await asyncio.sleep(3600)
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# JOB 10 — Returnable-challan due reminders (admin / accounts / store)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _challans_due(challans, today):
+    """Open/partially-returned returnable challans whose return date is today or past."""
+    out = []
+    for c in challans or []:
+        if c.get("status") == "closed":
+            continue
+        d = c.get("expected_return_date")
+        if d and d <= today:
+            out.append(c)
+    return out
+
+
+async def run_challan_due_check():
+    """Notify admin/accounts/store about returnable challans due back today or overdue.
+
+    One notification per challan, broadcast via `target_roles` so non-admins see it
+    too (admins see all notifications)."""
+    today = datetime.now(IST).date().isoformat()
+    challans = await db.challans.find(
+        {"type": "returnable_out", "status": {"$ne": "closed"},
+         "expected_return_date": {"$ne": None}},
+        {"_id": 0}).to_list(2000)
+    due = _challans_due(challans, today)
+    if not due:
+        log.info("[challan-due] none due")
+        return {"due": 0, "notified": 0}
+    for c in due:
+        overdue = (c.get("expected_return_date") or "") < today
+        label = "overdue" if overdue else "due today"
+        party = c.get("party_name") or "party"
+        pending = sum(
+            1 for l in c.get("lines", [])
+            if float(l.get("qty", 0) or 0) > float(l.get("returned_qty", 0) or 0))
+        cno = c.get("challan_no", "")
+        await db.notifications.update_one(
+            {"type": "returnable_challan_due", "challan_id": c.get("challan_id"), "date": today},
+            {"$set": {
+                "title": f"Returnable challan {label}: {cno}",
+                "message": f"{cno} to {party} — {pending} item(s) to come back "
+                           f"(expected {c.get('expected_return_date')})",
+             },
+             "$setOnInsert": {
+                "type": "returnable_challan_due", "challan_id": c.get("challan_id"),
+                "date": today, "assigned_to": None,
+                "target_roles": ["admin", "accounts", "store"],
+                "is_read": False, "created_at": datetime.now(timezone.utc).isoformat(),
+             }},
+            upsert=True)
+    log.info(f"[challan-due] {len(due)} due, notifications upserted")
+    return {"due": len(due), "notified": len(due)}
+
+
+async def challan_due_loop():
+    log.info("[scheduler] returnable-challan due checker started (daily 08:30 IST)")
+    while True:
+        try:
+            now_ist = datetime.now(IST)
+            target = now_ist.replace(hour=8, minute=30, second=0, microsecond=0)
+            if now_ist >= target:
+                target += timedelta(days=1)
+            await asyncio.sleep(max(60, (target - now_ist).total_seconds()))
+            await run_challan_due_check()
+        except Exception as exc:
+            log.error(f"[challan-due loop] {exc}")
+            await asyncio.sleep(3600)
+
+
 async def start_scheduler():
     """Start all background automation loops. Call once from FastAPI startup."""
     asyncio.create_task(email_sender_loop())
@@ -1297,5 +1368,6 @@ async def start_scheduler():
     asyncio.create_task(low_stock_loop())
     asyncio.create_task(daily_digest_loop())
     asyncio.create_task(daily_orders_report_loop())
+    asyncio.create_task(challan_due_loop())
     log.info("[scheduler] cert loop running")
-    log.info("[scheduler] all 10 background jobs running")
+    log.info("[scheduler] all 11 background jobs running")

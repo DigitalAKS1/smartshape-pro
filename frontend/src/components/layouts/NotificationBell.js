@@ -22,6 +22,7 @@ const NOTIF_META = {
   anniversary_today:  { Icon: Zap,           color: '#a855f7', bg: 'rgba(168,85,247,0.12)',  url: '/leads' },
   delegation_overdue: { Icon: ClipboardList, color: '#e94560', bg: 'rgba(233,69,96,0.12)',   url: '/delegation' },
   low_stock_digest:   { Icon: PackageX,      color: '#ef4444', bg: 'rgba(239,68,68,0.12)',   url: '/inventory' },
+  returnable_challan_due: { Icon: PackageX,   color: '#ef4444', bg: 'rgba(239,68,68,0.12)',   url: '/returnable-challans' },
 };
 const NOTIF_DEFAULT = { Icon: Bell, color: '#6b7280', bg: 'rgba(107,114,128,0.12)' };
 

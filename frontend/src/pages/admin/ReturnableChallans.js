@@ -27,7 +27,10 @@ const STATUS_CLS = {
 export default function ReturnableChallans() {
   const { user } = useAuth();
   const navigate = useNavigate();
-  const canWrite = ['admin', 'store'].includes(user?.role);
+  // Creating new challans stays admin/store; accounts may record returns.
+  const canCreate = ['admin', 'store'].includes(user?.role);
+  const canRecordReturn = ['admin', 'store', 'accounts'].includes(user?.role);
+  const todayStr = new Date().toISOString().slice(0, 10);
 
   const card      = 'bg-[var(--bg-card)] border-[var(--border-color)]';
   const inputCls  = 'bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]';
@@ -153,7 +156,7 @@ export default function ReturnableChallans() {
               <p className={`${textMuted} text-xs mt-0.5`}>Demo · Exhibition · Sampling — items that go out and come back</p>
             </div>
           </div>
-          {canWrite && (
+          {canCreate && (
             <Button onClick={openCreate} className="bg-[#e94560] hover:bg-[#f05c75] text-white" data-testid="new-challan-btn">
               <Plus className="mr-1.5 h-4 w-4" /> New Challan
             </Button>
@@ -173,6 +176,10 @@ export default function ReturnableChallans() {
             {challans.map(c => {
               const totalOut = (c.lines || []).reduce((s, l) => s + (l.qty || 0), 0);
               const totalBack = (c.lines || []).reduce((s, l) => s + (l.returned_qty || 0), 0);
+              const dueDate = c.expected_return_date;
+              const isOutstanding = c.status !== 'closed';
+              const overdue = isOutstanding && dueDate && dueDate < todayStr;
+              const dueToday = isOutstanding && dueDate && dueDate === todayStr;
               return (
                 <div key={c.challan_id} className={`${card} border rounded-md p-3 sm:p-4`} data-testid={`challan-${c.challan_no}`}>
                   <div className="flex items-start justify-between gap-3 flex-wrap">
@@ -183,6 +190,16 @@ export default function ReturnableChallans() {
                         <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium border capitalize ${STATUS_CLS[c.status] || textMuted}`}>
                           {(c.status || '').replace('_', ' ')}
                         </span>
+                        {overdue && (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold border text-red-400 bg-red-500/10 border-red-500/30">
+                            Overdue return
+                          </span>
+                        )}
+                        {dueToday && (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold border text-amber-400 bg-amber-500/10 border-amber-500/30">
+                            Due back today
+                          </span>
+                        )}
                       </div>
                       <p className={`text-sm ${textPri} mt-1`}>{c.party_name || '—'}</p>
                       <p className={`text-xs ${textMuted}`}>
@@ -193,7 +210,7 @@ export default function ReturnableChallans() {
                       </p>
                     </div>
                     <div className="flex items-center gap-1.5 flex-shrink-0">
-                      {canWrite && c.status !== 'closed' && (
+                      {canRecordReturn && c.status !== 'closed' && (
                         <Button size="sm" variant="outline" onClick={() => openReturn(c)}
                           className={`h-8 text-xs border-[var(--border-color)] ${textSec}`} data-testid={`return-${c.challan_no}`}>
                           <Undo2 className="mr-1 h-3 w-3" /> Record Return
