@@ -1,12 +1,12 @@
 import React, { useRef, useState } from 'react';
-import { Camera, TrendingUp, TrendingDown, Edit2, Archive, ArchiveRestore, Trash2, MoreVertical, CheckSquare, Square, PlayCircle } from 'lucide-react';
+import { Camera, TrendingUp, TrendingDown, Edit2, Archive, ArchiveRestore, Trash2, MoreVertical, CheckSquare, Square, PlayCircle, ClipboardCheck } from 'lucide-react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../ui/dropdown-menu';
 import MediaGallery from '../media/MediaGallery';
 import VideoModal from '../media/VideoModal';
 
 export default function DieCard({
   die, uploading, onUpload, onArchive, onEdit,
-  onDeleteRequest, onStockIn, onStockOut,
+  onDeleteRequest, onStockIn, onStockOut, onSetPhysical,
   isAdmin, canWrite,
   selectMode, selected, onToggleSelect,
   textPri, textMuted, textSec, card, backendUrl,
@@ -118,6 +118,11 @@ export default function DieCard({
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className={dlgCls}>
+              {onSetPhysical && (
+                <DropdownMenuItem onClick={() => onSetPhysical(die)} className="cursor-pointer">
+                  <ClipboardCheck className="mr-2 h-4 w-4" />Set physical qty
+                </DropdownMenuItem>
+              )}
               <DropdownMenuItem onClick={() => onArchive(die)} className="cursor-pointer">
                 <Archive className="mr-2 h-4 w-4" />Archive
               </DropdownMenuItem>
