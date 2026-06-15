@@ -1,4 +1,5 @@
 import React from 'react';
+import MediaGallery from '../media/MediaGallery';
 
 const BACKEND = process.env.REACT_APP_BACKEND_URL || '';
 
@@ -17,11 +18,10 @@ export function DieCard({ item }) {
     } bg-[#1a1a2e]`}>
       {isRemoved && <div className="absolute top-0 inset-x-0 bg-red-600/90 text-white text-[9px] font-bold text-center py-0.5 z-10">REMOVED</div>}
       {isAdded   && <div className="absolute top-0 inset-x-0 bg-yellow-500/90 text-black text-[9px] font-bold text-center py-0.5 z-10">REPLACED</div>}
-      <div className="aspect-square bg-[#0f0f1a] flex items-center justify-center p-3 mt-4">
-        {item.die_image_url
-          ? <img src={`${BACKEND}${item.die_image_url}`} alt={item.die_name} className="w-full h-full object-contain" loading="lazy" />
-          : <div className="text-[#3d3d55] text-center"><svg className="h-8 w-8 mx-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}><rect x="3" y="3" width="18" height="18" rx="2" /></svg></div>
-        }
+      <div className="aspect-square bg-[#0f0f1a] mt-4">
+        <MediaGallery
+          images={item.die_images && item.die_images.length ? item.die_images : (item.die_image_url ? [item.die_image_url] : [])}
+          alt={item.die_name} backendUrl={BACKEND} />
       </div>
       <div className="p-2">
         <p className="font-mono text-[9px] text-[#e94560]">{item.die_code}</p>
