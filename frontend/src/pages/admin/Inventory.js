@@ -7,7 +7,7 @@ import {
   Package, Plus, Download, Upload, Archive, MoreVertical,
   Grid3X3, List, Search, Edit2, TrendingUp, TrendingDown,
   CheckCircle2, AlertCircle, XCircle, Scissors, Filter, X,
-  CheckSquare, Square, Trash2, PackageOpen, ArrowUpDown,
+  CheckSquare, Square, Trash2, PackageOpen, ArrowUpDown, Layers,
 } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
@@ -69,8 +69,8 @@ export default function Inventory() {
               <Scissors className="h-5 w-5 text-[#e94560]" />
             </div>
             <div>
-              <h1 className={`text-2xl sm:text-3xl font-semibold ${textPri} tracking-tight`}>Inventory</h1>
-              <p className={`${textMuted} text-xs mt-0.5`}>{inv.activeDies.length} dies · {inv.stats.outOfStock} out of stock</p>
+              <h1 className={`text-2xl sm:text-3xl font-semibold ${textPri} tracking-tight`}>Products</h1>
+              <p className={`${textMuted} text-xs mt-0.5`}>{inv.activeDies.length} products · {inv.stats.outOfStock} out of stock</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -107,6 +107,11 @@ export default function Inventory() {
                 <DropdownMenuItem onClick={() => navigate('/returnable-challans')} className="cursor-pointer">
                   <PackageOpen className="mr-2 h-4 w-4" /> Returnable Challans
                 </DropdownMenuItem>
+                {isAdmin && (
+                  <DropdownMenuItem onClick={() => navigate('/product-types')} className="cursor-pointer">
+                    <Layers className="mr-2 h-4 w-4" /> Manage product types
+                  </DropdownMenuItem>
+                )}
                 {canWrite && (
                   <DropdownMenuItem onClick={() => inv.setImportOpen(true)} className="cursor-pointer">
                     <Upload className="mr-2 h-4 w-4" /> Import CSV
@@ -241,6 +246,22 @@ export default function Inventory() {
               </select>
             </div>
           </div>
+          {inv.productTypes.length > 1 && (
+            <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar -mx-4 px-4 sm:mx-0 sm:px-0">
+              <button onClick={() => inv.setProductTypeFilter('all')}
+                className={`shrink-0 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors border whitespace-nowrap
+                  ${inv.productTypeFilter === 'all' ? 'bg-[#e94560] text-white border-[#e94560]' : `${card} border ${textMuted} hover:border-[#e94560]/50`}`}>
+                All Products
+              </button>
+              {inv.productTypes.map(pt => (
+                <button key={pt.product_type_id} onClick={() => inv.setProductTypeFilter(pt.product_type_id)}
+                  className={`shrink-0 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors border whitespace-nowrap
+                    ${inv.productTypeFilter === pt.product_type_id ? 'bg-[#e94560] text-white border-[#e94560]' : `${card} border ${textMuted} hover:border-[#e94560]/50`}`}>
+                  {pt.name}
+                </button>
+              ))}
+            </div>
+          )}
           {!inv.quickFilter && (
             <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar -mx-4 px-4 sm:mx-0 sm:px-0">
               {['all', ...CATEGORIES].map(c => (
@@ -470,16 +491,20 @@ export default function Inventory() {
           handleNewImageSelect={inv.handleNewImageSelect}
           handleCreateDie={inv.handleCreateDie} saving={inv.saving}
           inputCls={inputCls} textPri={textPri} textSec={textSec}
-          textMuted={textMuted} dlgCls={dlgCls} />
+          textMuted={textMuted} dlgCls={dlgCls}
+          productTypes={inv.productTypes} />
 
         <EditDieDialog
           open={inv.editOpen} onOpenChange={inv.setEditOpen}
           editTarget={inv.editTarget} editForm={inv.editForm} setEditForm={inv.setEditForm}
-          editImagePreview={inv.editImagePreview}
-          setEditImage={inv.setEditImage} setEditImagePreview={inv.setEditImagePreview}
           handleSaveEdit={inv.handleSaveEdit} saving={inv.saving}
           inputCls={inputCls} textPri={textPri} textSec={textSec}
-          textMuted={textMuted} dlgCls={dlgCls} backendUrl={backendUrl} />
+          textMuted={textMuted} dlgCls={dlgCls} backendUrl={backendUrl}
+          productTypes={inv.productTypes}
+          onUploadImages={inv.handleUploadImages}
+          onDeleteImage={inv.handleDeleteImage}
+          onReorderImages={inv.handleReorderImages}
+          uploading={inv.uploading} />
 
         <StockMovementDialog
           open={inv.stockAdjOpen} onOpenChange={inv.setStockAdjOpen}
