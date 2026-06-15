@@ -1401,7 +1401,7 @@ async def create_challan(request: Request):
 async def record_challan_return(challan_id: str, request: Request):
     """Add returned quantities per line; set status open/partially_returned/closed."""
     user = await get_current_user(request)
-    require_teams(user, "admin", "store")
+    require_teams(user, "admin", "store", "accounts")
     c = await db.challans.find_one({"challan_id": challan_id}, {"_id": 0})
     if not c:
         raise HTTPException(status_code=404, detail="Challan not found")

@@ -688,12 +688,22 @@ async def get_activity_logs(
 
 # ==================== NOTIFICATIONS ====================
 
+def _notif_scope_query(user):
+    """Notifications a non-admin may see: their own + role-broadcast ones.
+
+    Admins see everything (empty query)."""
+    if user.get("role") == "admin":
+        return {}
+    return {"$or": [
+        {"assigned_to": user["email"]},
+        {"target_roles": user.get("role")},
+    ]}
+
+
 @router.get("/notifications")
 async def get_notifications(request: Request):
     user = await get_current_user(request)
-    query = {}
-    if user.get("role") != "admin":
-        query["assigned_to"] = user["email"]
+    query = _notif_scope_query(user)
     notifications = await db.notifications.find(query, {"_id": 0}).sort("created_at", -1).limit(50).to_list(50)
     return notifications
 
@@ -701,10 +711,7 @@ async def get_notifications(request: Request):
 @router.put("/notifications/read-all")
 async def mark_all_read(request: Request):
     user = await get_current_user(request)
-    query = {}
-    if user.get("role") != "admin":
-        query["assigned_to"] = user["email"]
-    await db.notifications.update_many(query, {"$set": {"is_read": True}})
+    await db.notifications.update_many(_notif_scope_query(user), {"$set": {"is_read": True}})
     return {"message": "All notifications marked as read"}
 
 
