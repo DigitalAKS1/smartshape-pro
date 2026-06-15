@@ -125,6 +125,16 @@ export default function useInventory() {
     }
   }, [quickFilter, typeFilter, productTypeFilter, categoryFilter, searchTerm, sortBy, dies]);
 
+  // Keep the open Edit dialog's target in sync with refreshed data so the photo
+  // grid reflects uploads/deletes/reorders immediately (without reopening).
+  useEffect(() => {
+    if (!editOpen || !editTarget) return;
+    const fresh = dies.find(d => d.die_id === editTarget.die_id);
+    if (fresh && JSON.stringify(fresh.images || []) !== JSON.stringify(editTarget.images || [])) {
+      setEditTarget(fresh);
+    }
+  }, [dies, editOpen]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const clearFilters = () => { setQuickFilter(null); setTypeFilter('all'); setProductTypeFilter('all'); setCategoryFilter('all'); setSearchTerm(''); setSortBy('code'); };
   const isFiltered = quickFilter || typeFilter !== 'all' || productTypeFilter !== 'all' || categoryFilter !== 'all' || searchTerm;
 
