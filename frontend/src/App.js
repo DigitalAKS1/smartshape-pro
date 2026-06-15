@@ -15,6 +15,7 @@ import Dashboard from './pages/admin/Dashboard';
 import CreateQuotation from './pages/admin/CreateQuotation';
 import Quotations from './pages/admin/Quotations';
 import Inventory from './pages/admin/Inventory';
+import ProductTypes from './pages/admin/ProductTypes';
 import PurchaseAlerts from './pages/admin/PurchaseAlerts';
 import PackageMaster from './pages/admin/PackageMaster';
 import StockManagement from './pages/admin/StockManagement';
@@ -179,6 +180,7 @@ function AppRouter() {
       <Route path="/create-quotation" element={<ProtectedRoute><CreateQuotation /></ProtectedRoute>} />
       <Route path="/quotations" element={<ProtectedRoute><Quotations /></ProtectedRoute>} />
       <Route path="/inventory" element={<ProtectedRoute><Inventory /></ProtectedRoute>} />
+      <Route path="/product-types" element={<ProtectedRoute><ProductTypes /></ProtectedRoute>} />
       <Route path="/purchase-alerts" element={<ProtectedRoute><PurchaseAlerts /></ProtectedRoute>} />
       <Route path="/package-master" element={<ProtectedRoute><PackageMaster /></ProtectedRoute>} />
       <Route path="/stock-management" element={<ProtectedRoute><StockManagement /></ProtectedRoute>} />

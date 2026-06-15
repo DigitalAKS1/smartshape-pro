@@ -115,6 +115,15 @@ export const dies = {
   },
 };
 
+// Product Types (master)
+export const productTypes = {
+  getAll: (params = {}) => API.get('/product-types', { params }),
+  create: (data) => API.post('/product-types', data),
+  update: (id, data) => API.put(`/product-types/${id}`, data),
+  remove: (id) => API.delete(`/product-types/${id}`),
+  nextCode: (id) => API.get(`/product-types/${id}/next-code`),
+};
+
 // Visit Plans
 export const visitPlans = {
   getAll: () => API.get('/visit-plans'),
@@ -238,6 +247,9 @@ export const schools = {
   assign: (id, data) => API.post(`/schools/${id}/assign`, data),
   bulkAssign: (data) => API.post('/schools/bulk-assign', data),
   backfillOwners: () => API.post('/schools/backfill-owners'),
+  // Owner-only (info@smartshape.in): cascade hard-delete + preview
+  cascadePreview: (id) => API.get(`/schools/${id}/cascade-preview`),
+  cascadeDelete: (id, reason = '') => API.delete(`/schools/${id}/cascade`, { params: { reason } }),
 };
 
 // Contacts
@@ -246,6 +258,9 @@ export const contacts = {
   create: (data) => API.post('/contacts', data),
   update: (id, data) => API.put(`/contacts/${id}`, data),
   delete: (id) => API.delete(`/contacts/${id}`),
+  // Owner-only (info@smartshape.in): cascade hard-delete + preview
+  cascadePreview: (id) => API.get(`/contacts/${id}/cascade-preview`),
+  cascadeDelete: (id, reason = '') => API.delete(`/contacts/${id}/cascade`, { params: { reason } }),
   convertToLead: (id, data) => API.post(`/contacts/${id}/convert-to-lead`, data),
   addTag: (contactId, tagId) => API.post(`/contacts/${contactId}/tags`, { tag_id: tagId }),
   removeTag: (contactId, tagId) => API.delete(`/contacts/${contactId}/tags/${tagId}`),
@@ -543,6 +558,8 @@ export const orders = {
   removeItem: (id, itemId) => API.delete(`/orders/${id}/items/${itemId}`),
   exportOne: (id, fmt) => API.get(`/orders/${id}/export`, { params: { format: fmt }, responseType: 'blob' }),
   exportBulk: (ids, fmt) => API.post('/orders/export', { order_ids: ids, format: fmt }, { responseType: 'blob' }),
+  // Owner-only (info@smartshape.in): permanent delete
+  delete: (id, reason = '') => API.delete(`/orders/${id}`, { params: { reason } }),
 };
 
 // Invoices — bulk JSON/XML import auto-mapped to school + sales order

@@ -1,6 +1,8 @@
-import React, { useRef } from 'react';
-import { Camera, Scissors, TrendingUp, TrendingDown, Edit2, Archive, ArchiveRestore, Trash2, MoreVertical, CheckSquare, Square } from 'lucide-react';
+import React, { useRef, useState } from 'react';
+import { Camera, TrendingUp, TrendingDown, Edit2, Archive, ArchiveRestore, Trash2, MoreVertical, CheckSquare, Square, PlayCircle } from 'lucide-react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../ui/dropdown-menu';
+import MediaGallery from '../media/MediaGallery';
+import VideoModal from '../media/VideoModal';
 
 export default function DieCard({
   die, uploading, onUpload, onArchive, onEdit,
@@ -10,6 +12,7 @@ export default function DieCard({
   textPri, textMuted, textSec, card, backendUrl,
 }) {
   const fileRef = useRef(null);
+  const [videoOpen, setVideoOpen] = useState(false);
   const isUploading = uploading === die.die_id;
   const isArchived = die.is_active === false;
   const dlgCls = 'bg-[var(--bg-card)] border-[var(--border-color)] text-[var(--text-primary)]';
@@ -35,12 +38,15 @@ export default function DieCard({
               : <Square className="h-5 w-5 text-white drop-shadow" />}
           </button>
         )}
-        {die.image_url
-          ? <img src={`${backendUrl}${die.image_url}`} alt={die.name} className="w-full h-full object-contain p-2" />
-          : <div className={`w-full h-full flex flex-col items-center justify-center ${textMuted} gap-1`}>
-              <Scissors className="h-8 w-8 opacity-20" strokeWidth={1.5} />
-              <span className="text-[10px] opacity-40">No image</span>
-            </div>}
+        <MediaGallery images={die.images} alt={die.name} backendUrl={backendUrl} />
+
+        {die.video_url && !selectMode && (
+          <button onClick={(e) => { e.stopPropagation(); setVideoOpen(true); }}
+            className="absolute bottom-1.5 left-1.5 z-10 flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-black/55 text-white text-[10px] font-medium"
+            title="Play video">
+            <PlayCircle className="h-3.5 w-3.5" /> Video
+          </button>
+        )}
 
         {die.stock_qty <= die.min_level && !isArchived && (
           <div className={`absolute top-1.5 left-1.5 ${die.stock_qty === 0 ? 'bg-red-500' : 'bg-yellow-500'} text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full`}>
@@ -72,8 +78,14 @@ export default function DieCard({
       <div className="px-2.5 pt-2 pb-1.5 flex-1">
         <div className="flex items-start justify-between gap-1">
           <div className="min-w-0 flex-1">
-            <p className="font-mono text-[10px] text-[#e94560] font-semibold leading-none truncate">{die.code}</p>
+            <div className="flex items-center gap-1">
+              <p className="font-mono text-[10px] text-[#e94560] font-semibold leading-none truncate">{die.code}</p>
+              {die.product_type && die.product_type !== 'Dies' && (
+                <span className={`text-[8px] px-1 py-px rounded ${textMuted} bg-[var(--bg-primary)] shrink-0`}>{die.product_type}</span>
+              )}
+            </div>
             <h3 className={`text-[11px] font-semibold ${textPri} leading-tight mt-0.5 line-clamp-2`} title={die.name}>{die.name}</h3>
+            {die.description && <p className={`text-[9px] ${textMuted} mt-0.5 line-clamp-1`}>{die.description}</p>}
           </div>
           <span className={`font-mono text-sm font-bold shrink-0 ml-1 ${die.stock_qty === 0 ? 'text-red-500' : die.stock_qty <= die.min_level ? 'text-yellow-500' : textPri}`}>
             {die.stock_qty}
@@ -126,6 +138,8 @@ export default function DieCard({
           </button>
         </div>
       )}
+
+      <VideoModal url={die.video_url} title={die.name} open={videoOpen} onClose={() => setVideoOpen(false)} />
     </div>
   );
 }

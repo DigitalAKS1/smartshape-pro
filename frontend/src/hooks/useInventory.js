@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { dies as diesApi, stock as stockApi, formatApiErrorDetail } from '../lib/api';
+import { dies as diesApi, stock as stockApi, productTypes as ptApi, formatApiErrorDetail } from '../lib/api';
 import { useDataSync, useAutoRefresh } from '../lib/dataSync';
 import { sortByCode, compareCodes } from '../lib/utils';
 import { toast } from 'sonner';
@@ -15,7 +15,7 @@ export const CAT_LABELS = {
   fruits:'Fruits', shapes:'Shapes', other:'Other',
 };
 export const TYPES = ['standard','large','machine'];
-export const BLANK_DIE = { code:'', name:'', type:'standard', category:'decorative', min_level:5, description:'', stock_qty:0 };
+export const BLANK_DIE = { code:'', name:'', type:'standard', category:'decorative', min_level:5, description:'', stock_qty:0, product_type_id:'', video_url:'', show_video:false, show_description:false };
 
 // Sort options for the inventory list. 'code' is the default (natural code order).
 export const SORT_OPTIONS = [
@@ -46,6 +46,8 @@ export default function useInventory() {
   const [filteredDies, setFilteredDies] = useState([]);
   const [typeFilter, setTypeFilter] = useState('all');
   const [categoryFilter, setCategoryFilter] = useState('all');
+  const [productTypeFilter, setProductTypeFilter] = useState('all');
+  const [productTypes, setProductTypes] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [sortBy, setSortBy] = useState('code');
   const [showArchived, setShowArchived] = useState(false);
@@ -91,6 +93,9 @@ export default function useInventory() {
   }, [showArchived]);
 
   useEffect(() => { fetchDies(); }, [fetchDies]);
+  useEffect(() => {
+    ptApi.getAll({ active: true }).then(res => setProductTypes(res.data)).catch(() => {});
+  }, []);
   useDataSync('inventory', fetchDies);
   useAutoRefresh(fetchDies, 60000);
 
@@ -100,6 +105,7 @@ export default function useInventory() {
     else if (quickFilter === 'out') f = f.filter(d => d.stock_qty === 0 && d.is_active !== false);
     else if (quickFilter === 'reorder') f = f.filter(d => d.stock_qty <= d.min_level && d.is_active !== false);
     if (typeFilter !== 'all') f = f.filter(d => d.type === typeFilter);
+    if (productTypeFilter !== 'all') f = f.filter(d => (d.product_type_id || 'ptype_dies') === productTypeFilter);
     if (categoryFilter !== 'all') f = f.filter(d => (d.category || 'decorative') === categoryFilter);
     if (searchTerm) f = f.filter(d =>
       d.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -117,10 +123,10 @@ export default function useInventory() {
     } else {
       setFilteredDies(applySort(f, sortBy));
     }
-  }, [quickFilter, typeFilter, categoryFilter, searchTerm, sortBy, dies]);
+  }, [quickFilter, typeFilter, productTypeFilter, categoryFilter, searchTerm, sortBy, dies]);
 
-  const clearFilters = () => { setQuickFilter(null); setTypeFilter('all'); setCategoryFilter('all'); setSearchTerm(''); setSortBy('code'); };
-  const isFiltered = quickFilter || typeFilter !== 'all' || categoryFilter !== 'all' || searchTerm;
+  const clearFilters = () => { setQuickFilter(null); setTypeFilter('all'); setProductTypeFilter('all'); setCategoryFilter('all'); setSearchTerm(''); setSortBy('code'); };
+  const isFiltered = quickFilter || typeFilter !== 'all' || productTypeFilter !== 'all' || categoryFilter !== 'all' || searchTerm;
 
   const handleCreateDie = async (e) => {
     e.preventDefault();
@@ -149,6 +155,10 @@ export default function useInventory() {
       code: die.code, name: die.name, type: die.type || 'standard',
       category: die.category || 'decorative', min_level: die.min_level ?? 5,
       description: die.description || '',
+      product_type_id: die.product_type_id || '',
+      video_url: die.video_url || '',
+      show_video: !!die.show_video,
+      show_description: !!die.show_description,
     });
     setEditImage(null); setEditImagePreview('');
     setEditOpen(true);
@@ -179,6 +189,27 @@ export default function useInventory() {
     try { await diesApi.uploadImage(dieId, file); toast.success('Photo updated'); fetchDies(); }
     catch { toast.error('Upload failed'); }
     finally { setUploading(null); }
+  };
+
+  const handleUploadImages = async (dieId, files) => {
+    if (!files || !files.length) return;
+    for (const f of files) {
+      if (f.size > 5 * 1024 * 1024) { toast.error(`${f.name} is over 5 MB`); return; }
+    }
+    setUploading(dieId);
+    try { await diesApi.uploadImages(dieId, files); toast.success('Photos added'); await fetchDies(); }
+    catch (err) { toast.error(err.response?.data?.detail ? formatApiErrorDetail(err.response.data.detail) : 'Upload failed'); }
+    finally { setUploading(null); }
+  };
+
+  const handleDeleteImage = async (dieId, url) => {
+    try { await diesApi.deleteImage(dieId, url); toast.success('Photo removed'); await fetchDies(); }
+    catch (err) { toast.error(err.response?.data?.detail ? formatApiErrorDetail(err.response.data.detail) : 'Failed'); }
+  };
+
+  const handleReorderImages = async (dieId, urls) => {
+    try { await diesApi.reorderImages(dieId, urls); await fetchDies(); }
+    catch (err) { toast.error(err.response?.data?.detail ? formatApiErrorDetail(err.response.data.detail) : 'Failed'); }
   };
 
   const handleNewImageSelect = (file) => {
@@ -320,6 +351,7 @@ export default function useInventory() {
     typeFilter, setTypeFilter, categoryFilter, setCategoryFilter,
     searchTerm, setSearchTerm, sortBy, setSortBy,
     sortLabel: (SORT_OPTIONS.find(o => o.value === sortBy) || SORT_OPTIONS[0]).label,
+    productTypeFilter, setProductTypeFilter, productTypes,
     showArchived, setShowArchived,
     viewMode, setViewMode, quickFilter, setQuickFilter,
     isFiltered, clearFilters,
@@ -331,6 +363,7 @@ export default function useInventory() {
     editImage, setEditImage, editImagePreview, setEditImagePreview, openEdit, handleSaveEdit,
     // image upload
     uploading, handleImageUpload,
+    handleUploadImages, handleDeleteImage, handleReorderImages,
     // stock adj dialog
     stockAdjOpen, setStockAdjOpen, stockAdjTarget, stockAdjType,
     stockAdjQty, setStockAdjQty, stockAdjNote, setStockAdjNote,
