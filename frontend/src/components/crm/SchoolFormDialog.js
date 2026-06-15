@@ -8,6 +8,7 @@ import { toast } from 'sonner';
 import { BUDGET_RANGES } from '../../lib/crmConstants';
 import useSchoolTypes from '../../hooks/useSchoolTypes';
 import AddressFields from './AddressFields';
+import OwnerDeleteButton from '../common/OwnerDeleteButton';
 
 export default function SchoolFormDialog({
   open, onOpenChange,
@@ -15,6 +16,7 @@ export default function SchoolFormDialog({
   editSchoolForm, setEditSchoolForm,
   groupsList, designationsList,
   handleSaveSchool,
+  onCascadeDeleted,
 }) {
   const { isDark } = useTheme();
   const schoolTypeOptions = useSchoolTypes();
@@ -144,6 +146,16 @@ export default function SchoolFormDialog({
           </div>
         </div>
         <DialogFooter>
+          {editSchool && (
+            <OwnerDeleteButton
+              kind="school"
+              id={editSchool.school_id}
+              name={editSchool.school_name}
+              label="Delete + all data"
+              className="mr-auto"
+              onDeleted={() => { onOpenChange(false); setEditSchool(null); onCascadeDeleted?.(); }}
+            />
+          )}
           <Button variant="outline" onClick={() => { onOpenChange(false); setEditSchool(null); }} className="border-[var(--border-color)] text-[var(--text-secondary)]">Cancel</Button>
           <Button onClick={handleValidatedSave} className="bg-[#e94560] hover:bg-[#f05c75] text-white" data-testid="save-school-button">{editSchool ? 'Update School' : 'Add School'}</Button>
         </DialogFooter>

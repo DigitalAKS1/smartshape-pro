@@ -9,7 +9,8 @@ import json
 
 from database import db
 from auth_utils import get_current_user
-from rbac import get_team, require_teams
+from rbac import get_team, require_teams, require_superadmin
+from audit_backup import snapshot_and_delete
 from tally_export import gather_so, build_json, build_voucher_xml, build_envelope
 
 router = APIRouter()
@@ -127,6 +128,56 @@ async def get_order(order_id: str, request: Request):
     timeline = await db.order_timeline.find({"order_id": order_id}, {"_id": 0}).sort("timestamp", 1).to_list(100)
     order["timeline"] = timeline
     return order
+
+
+@router.delete("/orders/{order_id}")
+async def delete_order(order_id: str, request: Request, reason: str = ""):
+    """Owner-only: permanently delete an order (any status, including dispatched).
+
+    Backs the order + its items/timeline/payments/dispatches into audit_backups, then
+    hard-deletes them. Releases the order's reserved (undispatched) stock by recomputing
+    reservations from live demand; already-dispatched quantities stay deducted from
+    physical stock — the goods left the building. The source quotation is freed (not
+    deleted) so it can be re-converted, and any 'won' lead is unlocked.
+    """
+    user = await get_current_user(request)
+    require_superadmin(user)
+
+    order = await db.orders.find_one({"order_id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    plan = [
+        ("orders", {"order_id": order_id}),
+        ("order_items", {"order_id": order_id}),
+        ("order_timeline", {"order_id": order_id}),
+        ("payments", {"order_id": order_id}),
+        ("dispatches", {"order_id": order_id}),
+    ]
+    result = await snapshot_and_delete(
+        plan, root_type="order", root_id=order_id,
+        root_label=order.get("order_number", order_id), deleted_by=user["email"],
+        reason=reason,
+    )
+
+    # Release reserved (undispatched) stock now that this order's items are gone.
+    await recompute_reservations()
+
+    # Free the source quotation (kept, re-convertible) and unlock its won lead.
+    if order.get("quotation_id"):
+        await db.quotations.update_one(
+            {"quotation_id": order["quotation_id"]}, {"$set": {"quotation_status": "sent"}})
+    if order.get("lead_id"):
+        await db.leads.update_one({"lead_id": order["lead_id"]}, {
+            "$set": {"is_locked": False, "stage": "negotiation",
+                     "updated_at": datetime.now(timezone.utc).isoformat()},
+            "$unset": {"order_id": ""},
+        })
+
+    await log_activity(user["email"], "delete", "order", order_id,
+                       f"Order {order.get('order_number', order_id)} permanently deleted "
+                       f"(backup {result['backup_id']}, {result['total']} docs)")
+    return {"message": "Order permanently deleted", **result}
 
 
 # ==================== TALLY EXPORT (Sales Order → XML / JSON) ====================

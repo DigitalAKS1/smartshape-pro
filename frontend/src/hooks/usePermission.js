@@ -1,5 +1,19 @@
 import { useAuth } from '../contexts/AuthContext';
 
+// The single owner account allowed to perform irreversible deletes (orders, and
+// cascade-deleting a school/contact with all related data). Must match the backend
+// SUPERADMIN_EMAIL in rbac.py. The backend is the real gate; this only hides UI.
+export const OWNER_EMAIL = 'info@smartshape.in';
+
+/**
+ * True only for the owner account (info@smartshape.in). Use to show owner-only
+ * destructive actions. Server-side require_superadmin still enforces the rule.
+ */
+export function useIsOwner() {
+  const { user } = useAuth();
+  return (user?.email || '').trim().toLowerCase() === OWNER_EMAIL;
+}
+
 /**
  * Returns the logical team for the current user.
  *   'admin'    – full access to everything

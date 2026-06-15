@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import InterestedProductField from './InterestedProductField';
 import AddressFields from './AddressFields';
+import OwnerDeleteButton from '../common/OwnerDeleteButton';
 
 export default function ContactFormDialog({
   // Contact create/edit dialog
@@ -41,6 +42,7 @@ export default function ContactFormDialog({
   handleContactImport,
   resetImportDialog,
   downloadSampleCsv,
+  onCascadeDeleted,
 }) {
   const navigate = useNavigate();
   const { user } = useAuth();
@@ -187,6 +189,16 @@ export default function ContactFormDialog({
             )}
           </div>
           <DialogFooter>
+            {editContact && (
+              <OwnerDeleteButton
+                kind="contact"
+                id={editContact.contact_id}
+                name={editContact.name}
+                label="Delete + all data"
+                className="mr-auto"
+                onDeleted={() => { setContactDialogOpen(false); onCascadeDeleted?.(); }}
+              />
+            )}
             <Button variant="outline" onClick={() => setContactDialogOpen(false)} className="border-[var(--border-color)] text-[var(--text-secondary)]">Cancel</Button>
             <Button onClick={handleSaveContact} className="bg-[#e94560] hover:bg-[#f05c75] text-white" data-testid="save-contact-button">{editContact ? 'Update' : 'Add Contact'}</Button>
           </DialogFooter>

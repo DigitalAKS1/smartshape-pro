@@ -150,6 +150,13 @@ export const dailyDigest = {
   runNow: () => API.post('/admin/daily-digest/run'),
 };
 
+// Daily evening "Orders Received" report (in-app notification + WhatsApp)
+export const ordersReport = {
+  get:    () => API.get('/admin/daily-orders-report-settings'),
+  save:   (data) => API.put('/admin/daily-orders-report-settings', data),
+  runNow: () => API.post('/admin/daily-orders-report/run'),
+};
+
 // Admin field monitoring
 export const fieldAdmin = {
   geofenceAlerts: () => API.get('/admin/geofence-alerts'),
@@ -1080,6 +1087,9 @@ export const adminApi = {
   clearCache: (categories) => API.post('/admin/cache/clear', { categories }),
   backfillSchools: () => API.post('/admin/backfill-schools'),
   dbIntegrity: () => API.post('/admin/db-integrity'),
+  // Owner-only (info@smartshape.in): cascade-delete backups + restore
+  listAuditBackups: (limit = 100) => API.get('/admin/audit-backups', { params: { limit } }),
+  restoreAuditBackup: (backupId) => API.post(`/admin/audit-backups/${backupId}/restore`),
 };
 
 // In-app notifications
