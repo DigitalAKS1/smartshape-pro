@@ -9,6 +9,8 @@ export const MOVEMENT_LABELS = {
   returned_from_sales: 'Returned',
   physical_adjustment: 'Adjustment',
   purchase_in: 'Purchase In',
+  returnable_in: 'Returned to stock',
+  returnable_out: 'Out (returnable)',
 };
 
 export const MOVEMENT_COLORS = {
@@ -18,6 +20,8 @@ export const MOVEMENT_COLORS = {
   returned_from_sales: 'text-purple-400',
   physical_adjustment: 'text-yellow-500',
   purchase_in: 'text-emerald-500',
+  returnable_in: 'text-green-500',
+  returnable_out: 'text-red-400',
 };
 
 export function useStockManagement() {

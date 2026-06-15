@@ -7,6 +7,7 @@ import { Label } from '../../components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../../components/ui/dialog';
 import { Plus, TrendingUp, TrendingDown, Users, Package, AlertTriangle, ChevronDown, ChevronUp } from 'lucide-react';
 import { useStockManagement, MOVEMENT_LABELS, MOVEMENT_COLORS } from '../../hooks/useStockManagement';
+import { signedQtyLabel, STOCK_INCREASE_TYPES } from '../../lib/stockMath';
 
 export default function StockManagement() {
   const {
@@ -122,7 +123,7 @@ export default function StockManagement() {
                             </div>
                           </td>
                           <td className="px-4 py-3"><span className={`text-xs font-medium ${MOVEMENT_COLORS[m.movement_type] || textSec}`}>{MOVEMENT_LABELS[m.movement_type] || m.movement_type}</span></td>
-                          <td className={`px-4 py-3 font-mono font-bold ${textPri}`}>{m.quantity}</td>
+                          <td className={`px-4 py-3 font-mono font-bold ${MOVEMENT_COLORS[m.movement_type] || textPri}`}>{signedQtyLabel(m.movement_type, m.quantity)}</td>
                           <td className={`px-4 py-3 text-sm ${textSec}`}>{m.sales_person_name || '—'}</td>
                           <td className={`px-4 py-3 text-sm ${textMuted}`}>{formatDate(m.movement_date)}</td>
                           <td className={`px-4 py-3 text-xs ${textMuted} max-w-[200px] truncate`}>{m.notes || '—'}</td>
@@ -137,8 +138,8 @@ export default function StockManagement() {
                     <div key={m.movement_id} className="p-3 flex items-start gap-3">
                       {rowImg(m)
                         ? <Thumb url={rowImg(m)} size={36} />
-                        : <div className={`w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 ${m.movement_type === 'stock_in' || m.movement_type === 'returned_from_sales' || m.movement_type === 'purchase_in' ? 'bg-green-500/15' : 'bg-red-500/15'}`}>
-                            {m.movement_type === 'stock_in' || m.movement_type === 'returned_from_sales' || m.movement_type === 'purchase_in'
+                        : <div className={`w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 ${STOCK_INCREASE_TYPES.includes(m.movement_type) ? 'bg-green-500/15' : 'bg-red-500/15'}`}>
+                            {STOCK_INCREASE_TYPES.includes(m.movement_type)
                               ? <TrendingUp className="h-4 w-4 text-green-500" />
                               : <TrendingDown className="h-4 w-4 text-red-400" />}
                           </div>}
@@ -148,7 +149,7 @@ export default function StockManagement() {
                         {m.notes && <p className={`text-xs ${textMuted} truncate`}>{m.notes}</p>}
                       </div>
                       <div className="text-right">
-                        <p className={`font-mono font-bold ${textPri}`}>{m.quantity}</p>
+                        <p className={`font-mono font-bold ${MOVEMENT_COLORS[m.movement_type] || textPri}`}>{signedQtyLabel(m.movement_type, m.quantity)}</p>
                         <p className={`text-[10px] ${textMuted}`}>{formatDate(m.movement_date)}</p>
                       </div>
                     </div>

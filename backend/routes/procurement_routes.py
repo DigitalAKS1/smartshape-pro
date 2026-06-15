@@ -1308,11 +1308,26 @@ async def _adjust_die_stock_for_lines(lines, sign: int):
     sign=-1 when items go OUT (stock leaves the building), +1 when they come back.
     Only lines that reference a die ({source:'die'}) affect inventory; purchase-item
     or vendor lines are ignored. `lines` is a list of (die_id, qty) pairs.
+
+    Also writes a stock_movements log row so the change is visible in stock history
+    — a return shows as a '+ back to stock' entry, mirroring dispatch deductions.
     """
     for die_id, qty in lines:
         q = int(round(float(qty or 0)))
         if die_id and q > 0:
             await db.dies.update_one({"die_id": die_id}, {"$inc": {"stock_qty": sign * q}})
+            die = await db.dies.find_one({"die_id": die_id}, {"_id": 0, "code": 1, "name": 1}) or {}
+            await db.stock_movements.insert_one({
+                "movement_id": _new_id("mov"),
+                "die_id": die_id,
+                "die_code": die.get("code", ""),
+                "die_name": die.get("name", ""),
+                "movement_type": "returnable_in" if sign > 0 else "returnable_out",
+                "quantity": q,
+                "notes": "Returnable challan return" if sign > 0 else "Returnable challan out",
+                "movement_date": _now(),
+                "reference_number": None,
+            })
 
 
 def _die_line_pairs(lines):
