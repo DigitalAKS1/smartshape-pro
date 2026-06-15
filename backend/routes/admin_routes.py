@@ -9,7 +9,8 @@ import asyncio
 
 from database import db
 from auth_utils import get_current_user, hash_password
-from rbac import get_team, require_admin, require_teams
+from rbac import get_team, require_admin, require_teams, require_superadmin
+from audit_backup import list_backups, restore_bundle
 
 # Lazy import to avoid circular dependency — push_routes imports from database only
 async def _push(email, title, body, url="/today", tag="general"):
@@ -59,6 +60,36 @@ async def log_activity(user_email: str, action: str, entity_type: str, entity_id
         await touch_last_activity(entity_type, entity_id)
     except Exception:
         pass
+
+
+# ==================== AUDIT BACKUPS (owner-only restore) ====================
+
+@router.get("/admin/audit-backups")
+async def admin_list_audit_backups(request: Request, limit: int = 100):
+    """Owner-only: recent cascade-delete backups (orders, schools, contacts)."""
+    user = await get_current_user(request)
+    require_superadmin(user)
+    return await list_backups(limit=limit)
+
+
+@router.post("/admin/audit-backups/{backup_id}/restore")
+async def admin_restore_audit_backup(backup_id: str, request: Request):
+    """Owner-only: re-insert a backup's documents into their original collections.
+
+    Best effort — records that still exist are skipped, so it is safe to re-run.
+    Note: stock reservations are not auto-recomputed on restore; run
+    POST /api/stock/recompute-reservations afterward if orders were restored.
+    """
+    user = await get_current_user(request)
+    require_superadmin(user)
+    result = await restore_bundle(backup_id, restored_by=user["email"])
+    if not result.get("found"):
+        raise HTTPException(status_code=404, detail="Backup not found")
+    if result.get("already_restored"):
+        raise HTTPException(status_code=409, detail="This backup has already been restored")
+    await log_activity(user["email"], "restore", "audit_backup", backup_id,
+                       f"Restored {result['total']} doc(s) from backup {backup_id}")
+    return {"message": "Backup restored", **result}
 
 
 # ==================== MODULES ====================
@@ -1813,3 +1844,44 @@ async def run_daily_digest_now(request: Request):
     if not DAILY_DIGEST_DRY_RUN and not await _wa_cfg():
         raise HTTPException(400, "WhatsApp is not configured")
     return await build_and_enqueue_daily_digests()
+
+
+# ── Daily evening "Orders Received" report (in-app notification + WhatsApp) ─────
+
+@router.get("/admin/daily-orders-report-settings")
+async def get_daily_orders_report_settings(request: Request):
+    await get_current_user(request)
+    cfg = await db.settings.find_one({"type": "daily_orders_report"}, {"_id": 0}) or {}
+    return {
+        "enabled": bool(cfg.get("enabled", False)),
+        "send_time": cfg.get("send_time", "19:00"),
+        "recipients": cfg.get("recipients", []),
+    }
+
+
+@router.put("/admin/daily-orders-report-settings")
+async def put_daily_orders_report_settings(request: Request):
+    user = await get_current_user(request)
+    if user.get("role") != "admin":
+        raise HTTPException(403, "Admin only")
+    import re as _re
+    body = await request.json()
+    st = (body.get("send_time") or "19:00").strip()
+    if not _re.match(r"^([01]\d|2[0-3]):[0-5]\d$", st):
+        raise HTTPException(400, "send_time must be HH:MM (24-hour)")
+    enabled = bool(body.get("enabled"))
+    recipients = [str(p).strip() for p in (body.get("recipients") or []) if str(p).strip()]
+    await db.settings.update_one(
+        {"type": "daily_orders_report"},
+        {"$set": {"type": "daily_orders_report", "enabled": enabled,
+                  "send_time": st, "recipients": recipients}}, upsert=True)
+    return {"enabled": enabled, "send_time": st, "recipients": recipients}
+
+
+@router.post("/admin/daily-orders-report/run")
+async def run_daily_orders_report_now(request: Request):
+    user = await get_current_user(request)
+    if user.get("role") != "admin":
+        raise HTTPException(403, "Admin only")
+    from scheduler import build_and_enqueue_daily_orders_report
+    return await build_and_enqueue_daily_orders_report()

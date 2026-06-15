@@ -10,7 +10,9 @@ import requests as http_requests
 
 from database import db
 from auth_utils import get_current_user
-from rbac import get_team
+from rbac import get_team, require_superadmin
+from audit_backup import snapshot_and_delete, preview_counts
+from cascade_delete import build_school_plan, build_contact_plan
 
 router = APIRouter()
 
@@ -983,6 +985,49 @@ async def delete_school(school_id: str, request: Request, force: bool = False):
     return {"message": "School archived (soft-deleted)"}
 
 
+@router.get("/schools/{school_id}/cascade-preview")
+async def preview_school_cascade(school_id: str, request: Request):
+    """Owner-only: count everything a full cascade delete of this school would remove."""
+    user = await get_current_user(request)
+    require_superadmin(user)
+    school = await db.schools.find_one({"school_id": school_id}, {"_id": 0})
+    if not school:
+        raise HTTPException(status_code=404, detail="School not found")
+    plan, label, _ = await build_school_plan(school)
+    counts = await preview_counts(plan)
+    return {"root_type": "school", "root_id": school_id, "label": label,
+            "counts": counts, "total": sum(counts.values())}
+
+
+@router.delete("/schools/{school_id}/cascade")
+async def cascade_delete_school(school_id: str, request: Request, reason: str = ""):
+    """Owner-only: permanently delete a school AND every related CRM+ERP record.
+
+    Backs the entire footprint into audit_backups, hard-deletes it, then recomputes
+    stock reservations so any orders removed release their reserved (undispatched) qty.
+    Dispatched stock stays deducted.
+    """
+    user = await get_current_user(request)
+    require_superadmin(user)
+    school = await db.schools.find_one({"school_id": school_id}, {"_id": 0})
+    if not school:
+        raise HTTPException(status_code=404, detail="School not found")
+
+    plan, label, touches_orders = await build_school_plan(school)
+    result = await snapshot_and_delete(
+        plan, root_type="school", root_id=school_id, root_label=label,
+        deleted_by=user["email"], reason=reason)
+
+    if touches_orders:
+        from routes.order_routes import recompute_reservations
+        await recompute_reservations()
+
+    await log_activity(user["email"], "cascade_delete", "school", school_id,
+                       f"Deleted school '{label}' + {result['total']} related docs "
+                       f"(backup {result['backup_id']})")
+    return {"message": "School and all related data permanently deleted", **result}
+
+
 @router.post("/schools/{school_id}/assign")
 async def assign_school(school_id: str, request: Request):
     """Assign a school to a Sales Executive and cascade ownership to its
@@ -1496,6 +1541,45 @@ async def delete_contact(contact_id: str, request: Request):
         {"$unset": {"referred_by_contact_id": ""}}
     )
     return {"message": "Contact archived (soft-deleted)"}
+
+
+@router.get("/contacts/{contact_id}/cascade-preview")
+async def preview_contact_cascade(contact_id: str, request: Request):
+    """Owner-only: count what a cascade delete of this contact + its lead chain removes."""
+    user = await get_current_user(request)
+    require_superadmin(user)
+    contact = await db.contacts.find_one({"contact_id": contact_id}, {"_id": 0})
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    plan, label, _ = await build_contact_plan(contact)
+    counts = await preview_counts(plan)
+    return {"root_type": "contact", "root_id": contact_id, "label": label,
+            "counts": counts, "total": sum(counts.values())}
+
+
+@router.delete("/contacts/{contact_id}/cascade")
+async def cascade_delete_contact(contact_id: str, request: Request, reason: str = ""):
+    """Owner-only: permanently delete a contact and its lead chain (leads, quotations,
+    orders, activity). Sibling contacts / school-wide data are left intact."""
+    user = await get_current_user(request)
+    require_superadmin(user)
+    contact = await db.contacts.find_one({"contact_id": contact_id}, {"_id": 0})
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found")
+
+    plan, label, touches_orders = await build_contact_plan(contact)
+    result = await snapshot_and_delete(
+        plan, root_type="contact", root_id=contact_id, root_label=label,
+        deleted_by=user["email"], reason=reason)
+
+    if touches_orders:
+        from routes.order_routes import recompute_reservations
+        await recompute_reservations()
+
+    await log_activity(user["email"], "cascade_delete", "contact", contact_id,
+                       f"Deleted contact '{label}' + {result['total']} related docs "
+                       f"(backup {result['backup_id']})")
+    return {"message": "Contact and related data permanently deleted", **result}
 
 
 @router.post("/contacts/{contact_id}/tags")

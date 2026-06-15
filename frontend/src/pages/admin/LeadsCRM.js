@@ -1008,6 +1008,7 @@ export default function LeadsCRM() {
           groupsList={crm.groupsList}
           designationsList={crm.designationsList}
           handleSaveSchool={crm.handleSaveSchool}
+          onCascadeDeleted={crm.fetchData}
         />
 
         <ContactFormDialog
@@ -1048,6 +1049,7 @@ export default function LeadsCRM() {
           handleContactImport={crm.handleContactImport}
           resetImportDialog={crm.resetImportDialog}
           downloadSampleCsv={crm.downloadSampleCsv}
+          onCascadeDeleted={crm.fetchData}
         />
 
         {/* Lead import dialog */}

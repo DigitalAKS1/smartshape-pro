@@ -8,7 +8,14 @@ Teams / Roles:
   sales      – own data only (assigned leads, own contacts, own quotations, own orders)
 """
 
+import os
+
 from fastapi import HTTPException
+
+# The single owner account allowed to perform irreversible deletes across CRM + ERP
+# (orders, and cascade-deleting a school/contact with all related data). This is a
+# stricter gate than the 'admin' role — only this exact email qualifies.
+SUPERADMIN_EMAIL = (os.getenv("SUPERADMIN_EMAIL") or "info@smartshape.in").strip().lower()
 
 
 def get_team(user: dict) -> str:
@@ -32,3 +39,13 @@ def require_teams(user: dict, *teams: str):
     """Raise 403 if the user's team is not in the allowed set."""
     if get_team(user) not in teams:
         raise HTTPException(status_code=403, detail="Access denied for your role")
+
+
+def is_superadmin(user: dict) -> bool:
+    return (user.get("email") or "").strip().lower() == SUPERADMIN_EMAIL
+
+
+def require_superadmin(user: dict):
+    """Gate for irreversible destructive actions — only the owner account qualifies."""
+    if not is_superadmin(user):
+        raise HTTPException(status_code=403, detail="Only the owner account can perform this action")

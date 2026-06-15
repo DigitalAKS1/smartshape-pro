@@ -504,6 +504,7 @@ export default function OrdersManagement() {
           onAddItem={om.handleAddItem}
           onUpdateQty={om.handleUpdateItemQty}
           onRemoveItem={om.handleRemoveItem}
+          onDeleted={() => { om.setDetailOpen(false); om.fetchData(); }}
           textPri={textPri} textSec={textSec} textMuted={textMuted} dlgCls={dlgCls} inputCls={inputCls}
         />
 

@@ -4,6 +4,8 @@ import { Button } from '../ui/button';
 import { formatCurrency, formatDate } from '../../lib/utils';
 import { Package, Plus, Minus, Trash2 } from 'lucide-react';
 import { ORDER_STATUSES } from '../../lib/ordersUtils';
+import OwnerDeleteButton from '../common/OwnerDeleteButton';
+import { useIsOwner } from '../../hooks/usePermission';
 
 const EDITABLE_ORDER_STATUSES = ['pending', 'confirmed'];
 const EDITABLE_ITEM_STATUSES = ['on_hold', 'confirmed'];
@@ -15,12 +17,13 @@ const EDITABLE_ITEM_STATUSES = ['on_hold', 'confirmed'];
  */
 export default function OrderDetailPanel({
   detailOrder, detailOpen, setDetailOpen,
-  canManage = false, diesList = [], onAddItem, onUpdateQty, onRemoveItem,
+  canManage = false, diesList = [], onAddItem, onUpdateQty, onRemoveItem, onDeleted,
   textPri, textSec, textMuted, dlgCls, inputCls = '',
 }) {
   const [addDieId, setAddDieId] = useState('');
   const [addQty, setAddQty] = useState(1);
   const [dieFilter, setDieFilter] = useState('');
+  const isOwner = useIsOwner();
 
   const editable = canManage && detailOrder && EDITABLE_ORDER_STATUSES.includes(detailOrder.order_status);
   const items = detailOrder?.items || [];
@@ -177,6 +180,19 @@ export default function OrderDetailPanel({
                       </div>
                     ))}
                   </div>
+                </div>
+              )}
+
+              {/* Owner-only: permanently delete this order (info@smartshape.in) */}
+              {isOwner && (
+                <div className="flex justify-end border-t border-[var(--border-color)] pt-3">
+                  <OwnerDeleteButton
+                    kind="order"
+                    id={detailOrder.order_id}
+                    name={detailOrder.order_number}
+                    label="Delete order"
+                    onDeleted={onDeleted}
+                  />
                 </div>
               )}
             </div>
