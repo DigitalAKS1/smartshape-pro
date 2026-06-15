@@ -197,6 +197,27 @@ export default function OrderDetailPanel({
                 )}
               </div>
 
+              {/* What changed — readable item-by-item history (staff + school) */}
+              {(detailOrder.change_log || []).length > 0 && (
+                <div>
+                  <h3 className={`text-sm font-medium ${textPri} mb-2`}>What changed</h3>
+                  <div className="space-y-2">
+                    {[...detailOrder.change_log].reverse().map((cl, i) => (
+                      <div key={i} className="rounded-lg border border-[var(--border-color)] p-2.5">
+                        <p className={`text-[11px] ${textMuted} mb-1`}>
+                          {cl.source === 'staff' ? 'Changed by us' : 'Customer-approved change'} • {formatDate(cl.at)}
+                        </p>
+                        <ul className="space-y-0.5">
+                          {(cl.lines || []).map((ln, j) => (
+                            <li key={j} className={`text-xs ${textPri}`}>• {ln}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {/* Timeline */}
               {(detailOrder.timeline || []).length > 0 && (
                 <div>

@@ -612,6 +612,8 @@ async def add_order_item(order_id: str, request: Request):
     await _maybe_alert_shortage({**die, "die_id": die_id}, order_item_id)
     await _refresh_total_items(order_id)
     await log_activity(user["email"], "add_item", "order", order_id, f"+{qty} x {die['code']}")
+    await _log_order_change(order_id, order, user["email"], "staff",
+                           [{"action": "add", "qty": qty, "code": die["code"], "name": die["name"]}])
     return {"message": "Item added", "order_item_id": order_item_id}
 
 
@@ -630,8 +632,9 @@ async def update_order_item_qty(order_id: str, order_item_id: str, request: Requ
     if item.get("status") not in EDITABLE_ITEM_STATUSES:
         raise HTTPException(status_code=400, detail=f"Cannot edit a {item.get('status')} item")
 
+    old_qty = int(item.get("quantity", 1) or 1)
     new_qty = max(1, int((await request.json()).get("quantity", 1) or 1))
-    delta = new_qty - int(item.get("quantity", 1) or 1)
+    delta = new_qty - old_qty
     if delta != 0:
         await db.order_items.update_one({"order_item_id": order_item_id}, {"$set": {"quantity": new_qty}})
         await db.dies.update_one({"die_id": item["die_id"]}, {"$inc": {"reserved_qty": delta}})
@@ -640,6 +643,9 @@ async def update_order_item_qty(order_id: str, order_item_id: str, request: Requ
             await _maybe_alert_shortage(die, order_item_id)
         await log_activity(user["email"], "update_item_qty", "order", order_id,
                            f"{item.get('die_code','')} -> {new_qty}")
+        await _log_order_change(order_id, order, user["email"], "staff",
+                               [{"action": "adjust", "code": item.get("die_code"),
+                                 "name": item.get("die_name"), "old": old_qty, "new": new_qty}])
     return {"message": "Quantity updated", "quantity": new_qty}
 
 
@@ -663,7 +669,44 @@ async def remove_order_item(order_id: str, order_item_id: str, request: Request)
     await db.order_items.update_one({"order_item_id": order_item_id}, {"$set": {"status": "removed"}})
     await _refresh_total_items(order_id)
     await log_activity(user["email"], "remove_item", "order", order_id, f"-{item.get('die_code','')}")
+    await _log_order_change(order_id, order, user["email"], "staff",
+                           [{"action": "remove", "code": item.get("die_code"), "name": item.get("die_name")}])
     return {"message": "Item removed"}
+
+
+def build_change_lines(changes):
+    """Turn structured order changes into plain, human-readable lines.
+
+    Each change is {action: add|remove|adjust, ...}. Anything else is ignored."""
+    lines = []
+    for c in changes or []:
+        action = c.get("action")
+        name = f"{c.get('code', '')} {c.get('name', '')}".strip()
+        if action == "add":
+            lines.append(f"Added {c.get('qty')} × {name}")
+        elif action == "remove":
+            lines.append(f"Removed {name}")
+        elif action == "adjust":
+            lines.append(f"Changed {name} {c.get('old')}→{c.get('new')}")
+    return lines
+
+
+async def _log_order_change(order_id: str, order: dict, by: str, source: str, changes: list):
+    """Record a readable change set on the order (change_log + a timeline note).
+
+    source: 'staff' (changed by us) or 'customer' (customer-approved selection)."""
+    lines = build_change_lines(changes)
+    if not lines:
+        return
+    now_iso = datetime.now(timezone.utc).isoformat()
+    await db.orders.update_one({"order_id": order_id}, {"$push": {"change_log": {
+        "at": now_iso, "by": by, "source": source, "lines": lines}}})
+    heading = "Changes by us" if source == "staff" else "Customer-approved changes"
+    await db.order_timeline.insert_one({
+        "timeline_id": f"tl_{uuid.uuid4().hex[:8]}", "order_id": order_id,
+        "status": order.get("order_status", "pending"),
+        "note": f"{heading}:\n• " + "\n• ".join(lines),
+        "updated_by": by, "timestamp": now_iso})
 
 
 async def reconcile_order_to_selection(order_id: str, desired: dict, *, actor: str = "system"):
@@ -690,6 +733,7 @@ async def reconcile_order_to_selection(order_id: str, desired: dict, *, actor: s
 
     desired = {d: max(1, int(q or 1)) for d, q in desired.items()}
     added = removed = adjusted = 0
+    changes = []  # structured, for a human-readable change list
     now_iso = datetime.now(timezone.utc).isoformat()
 
     # Remove editable lines no longer desired (release their remaining reservation).
@@ -697,6 +741,7 @@ async def reconcile_order_to_selection(order_id: str, desired: dict, *, actor: s
         if die_id not in desired:
             await db.dies.update_one({"die_id": die_id}, {"$inc": {"reserved_qty": -_remaining_qty(it)}})
             await db.order_items.update_one({"order_item_id": it["order_item_id"]}, {"$set": {"status": "removed"}})
+            changes.append({"action": "remove", "code": it.get("die_code"), "name": it.get("die_name")})
             removed += 1
 
     # Add or adjust desired dies.
@@ -712,6 +757,7 @@ async def reconcile_order_to_selection(order_id: str, desired: dict, *, actor: s
                 "quantity": qty, "status": "on_hold",
             })
             await db.dies.update_one({"die_id": die_id}, {"$inc": {"reserved_qty": qty}})
+            changes.append({"action": "add", "qty": qty, "code": die["code"], "name": die["name"]})
             added += 1
         elif die_id in editable_by_die:
             cur = int(editable_by_die[die_id].get("quantity", 1) or 1)
@@ -719,6 +765,8 @@ async def reconcile_order_to_selection(order_id: str, desired: dict, *, actor: s
                 await db.order_items.update_one(
                     {"order_item_id": editable_by_die[die_id]["order_item_id"]}, {"$set": {"quantity": qty}})
                 await db.dies.update_one({"die_id": die_id}, {"$inc": {"reserved_qty": qty - cur}})
+                changes.append({"action": "adjust", "code": editable_by_die[die_id].get("die_code"),
+                                "name": editable_by_die[die_id].get("die_name"), "old": cur, "new": qty})
                 adjusted += 1
 
     if added or removed or adjusted:
@@ -726,13 +774,8 @@ async def reconcile_order_to_selection(order_id: str, desired: dict, *, actor: s
             {"order_id": order_id, "status": {"$in": list(EDITABLE_ITEM_STATUSES)}})
         await db.orders.update_one({"order_id": order_id},
             {"$set": {"total_items": count, "updated_at": now_iso}})
-        await db.order_timeline.insert_one({
-            "timeline_id": f"tl_{uuid.uuid4().hex[:8]}", "order_id": order_id,
-            "status": order.get("order_status", "pending"),
-            "note": f"Order updated from customer-approved selection changes "
-                    f"(+{added} / -{removed} / ~{adjusted}).",
-            "updated_by": actor, "timestamp": now_iso,
-        })
+        # Readable, item-by-item record (change_log + timeline note).
+        await _log_order_change(order_id, order, actor, "customer", changes)
     return {"added": added, "removed": removed, "adjusted": adjusted}
 
 
