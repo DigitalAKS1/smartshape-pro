@@ -101,6 +101,13 @@ export const dies = {
     formData.append('file', file);
     return API.post(`/dies/${id}/upload-image`, formData, { headers: { 'Content-Type': 'multipart/form-data' } });
   },
+  uploadImages: (id, files) => {
+    const formData = new FormData();
+    Array.from(files).forEach(f => formData.append('files', f));
+    return API.post(`/dies/${id}/images`, formData, { headers: { 'Content-Type': 'multipart/form-data' } });
+  },
+  deleteImage: (id, url) => API.delete(`/dies/${id}/images`, { params: { url } }),
+  reorderImages: (id, urls) => API.put(`/dies/${id}/images/reorder`, { urls }),
   importCsv: (file) => {
     const fd = new FormData();
     fd.append('file', file);
