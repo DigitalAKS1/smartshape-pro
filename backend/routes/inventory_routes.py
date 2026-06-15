@@ -12,6 +12,7 @@ import mimetypes
 from database import db
 from auth_utils import get_current_user
 from rbac import get_team, require_teams
+from media_utils import youtube_id, normalize_images, MAX_DIE_IMAGES
 
 router = APIRouter()
 
@@ -37,6 +38,9 @@ class DieCreate(BaseModel):
     min_level: int = 5
     description: Optional[str] = None
     stock_qty: int = 0
+    video_url: Optional[str] = None
+    show_video: bool = False
+    show_description: bool = False
 
 
 class StockMovementCreate(BaseModel):
@@ -79,6 +83,8 @@ async def get_dies(request: Request, include_archived: bool = False):
     await get_current_user(request)
     query = {} if include_archived else {"is_active": {"$ne": False}}
     dies = await db.dies.find(query, {"_id": 0}).to_list(1000)
+    for d in dies:
+        d["images"] = normalize_images(d)
     return dies
 
 
@@ -88,6 +94,8 @@ async def create_die(die_input: DieCreate, request: Request):
     require_teams(user, "admin", "store")
     die_id = f"die_{uuid.uuid4().hex[:12]}"
     data = die_input.model_dump()
+    if data.get("video_url") and not youtube_id(data["video_url"]):
+        raise HTTPException(status_code=400, detail="Video link must be a valid YouTube URL")
     data["code"] = clean_die_code(data.get("code", ""))
     if data.get("name"):
         data["name"] = data["name"].strip()
@@ -102,6 +110,10 @@ async def create_die(die_input: DieCreate, request: Request):
         "stock_qty": max(0, initial_qty),
         "reserved_qty": 0,
         "image_url": None,
+        "images": [],
+        "video_url": data.get("video_url"),
+        "show_video": bool(data.get("show_video", False)),
+        "show_description": bool(data.get("show_description", False)),
         "is_active": True,
     }
     await db.dies.insert_one(die_doc)
@@ -114,6 +126,15 @@ async def update_die(die_id: str, request: Request):
     require_teams(user, "admin", "store")
     updates = await request.json()
     safe = {k: v for k, v in updates.items() if k not in ("die_id", "_id")}
+    safe.pop("images", None)          # images are managed only via the image endpoints
+    safe.pop("image_url", None)       # primary is derived from images[]
+    if "video_url" in safe and safe["video_url"]:
+        if not youtube_id(safe["video_url"]):
+            raise HTTPException(status_code=400, detail="Video link must be a valid YouTube URL")
+    if "show_video" in safe:
+        safe["show_video"] = bool(safe["show_video"])
+    if "show_description" in safe:
+        safe["show_description"] = bool(safe["show_description"])
     if "code" in safe:
         safe["code"] = clean_die_code(safe["code"])
         if not safe["code"]:
@@ -168,6 +189,17 @@ async def bulk_delete_dies(payload: BulkDeleteInput, request: Request):
     return {"deleted": result.deleted_count, "requested": len(ids)}
 
 
+async def _set_images(die_id: str, images: list) -> dict:
+    """Persist the capped gallery and mirror the primary into image_url."""
+    images = [u for u in images if u][:MAX_DIE_IMAGES]
+    primary = images[0] if images else None
+    await db.dies.update_one(
+        {"die_id": die_id},
+        {"$set": {"images": images, "image_url": primary}},
+    )
+    return await db.dies.find_one({"die_id": die_id}, {"_id": 0})
+
+
 @router.post("/dies/{die_id}/upload-image")
 async def upload_die_image(die_id: str, request: Request, file: UploadFile = File(...)):
     user = await get_current_user(request)
@@ -175,15 +207,80 @@ async def upload_die_image(die_id: str, request: Request, file: UploadFile = Fil
     die = await db.dies.find_one({"die_id": die_id}, {"_id": 0})
     if not die:
         raise HTTPException(status_code=404, detail="Die not found")
-
+    current = normalize_images(die)
+    if len(current) >= MAX_DIE_IMAGES:
+        raise HTTPException(status_code=400, detail=f"A product can have at most {MAX_DIE_IMAGES} photos")
     ext = file.filename.split(".")[-1] if "." in file.filename else "bin"
     path = f"dies/{die_id}/{uuid.uuid4()}.{ext}"
-    data = await file.read()
-    save_file(path, data)
-
+    save_file(path, await file.read())
     image_url = f"/api/files/{path}"
-    await db.dies.update_one({"die_id": die_id}, {"$set": {"image_url": image_url}})
-    return {"image_url": image_url}
+    updated = await _set_images(die_id, current + [image_url])
+    return {"image_url": image_url, "images": updated.get("images", [])}
+
+
+@router.post("/dies/{die_id}/images")
+async def add_die_images(die_id: str, request: Request, files: List[UploadFile] = File(...)):
+    user = await get_current_user(request)
+    require_teams(user, "admin", "store")
+    die = await db.dies.find_one({"die_id": die_id}, {"_id": 0})
+    if not die:
+        raise HTTPException(status_code=404, detail="Die not found")
+    current = normalize_images(die)
+    if len(current) + len(files) > MAX_DIE_IMAGES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"A product can have at most {MAX_DIE_IMAGES} photos (have {len(current)}, adding {len(files)})",
+        )
+    added = []
+    for f in files:
+        ext = f.filename.split(".")[-1] if "." in f.filename else "bin"
+        path = f"dies/{die_id}/{uuid.uuid4()}.{ext}"
+        save_file(path, await f.read())
+        added.append(f"/api/files/{path}")
+    updated = await _set_images(die_id, current + added)
+    return {"images": updated.get("images", [])}
+
+
+@router.delete("/dies/{die_id}/images")
+async def delete_die_image(die_id: str, url: str, request: Request):
+    user = await get_current_user(request)
+    require_teams(user, "admin", "store")
+    die = await db.dies.find_one({"die_id": die_id}, {"_id": 0})
+    if not die:
+        raise HTTPException(status_code=404, detail="Die not found")
+    current = normalize_images(die)
+    if url not in current:
+        raise HTTPException(status_code=404, detail="Photo not found on this product")
+    remaining = [u for u in current if u != url]
+    updated = await _set_images(die_id, remaining)
+    # Best-effort local file cleanup (url form: /api/files/<path>)
+    try:
+        if url.startswith("/api/files/"):
+            rel = url[len("/api/files/"):]
+            fp = os.path.realpath(os.path.join(UPLOADS_DIR, rel))
+            if fp.startswith(os.path.realpath(UPLOADS_DIR)) and os.path.isfile(fp):
+                os.remove(fp)
+    except OSError:
+        pass
+    return {"images": updated.get("images", [])}
+
+
+class ReorderImagesInput(BaseModel):
+    urls: List[str]
+
+
+@router.put("/dies/{die_id}/images/reorder")
+async def reorder_die_images(die_id: str, payload: ReorderImagesInput, request: Request):
+    user = await get_current_user(request)
+    require_teams(user, "admin", "store")
+    die = await db.dies.find_one({"die_id": die_id}, {"_id": 0})
+    if not die:
+        raise HTTPException(status_code=404, detail="Die not found")
+    current = normalize_images(die)
+    if sorted(payload.urls) != sorted(current):
+        raise HTTPException(status_code=400, detail="Reorder list must contain exactly the product's current photos")
+    updated = await _set_images(die_id, payload.urls)
+    return {"images": updated.get("images", [])}
 
 
 @router.post("/dies/import")
