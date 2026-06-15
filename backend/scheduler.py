@@ -665,6 +665,99 @@ async def daily_digest_loop():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# JOB 4b — Daily "Orders Received" evening report (in-app notification + WhatsApp)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _format_orders_report(orders, today):
+    """Build the evening 'orders received today' summary text.
+
+    `orders` is a list of dicts with school_name / grand_total / order_number.
+    Returns None when there are no orders (nothing to send)."""
+    if not orders:
+        return None
+    total = sum(float(o.get("grand_total") or 0) for o in orders)
+    lines = [
+        f"\U0001F4E6 Orders received today ({today})", "",
+        f"Total orders: {len(orders)}",
+        f"Total value: ₹{total:,.0f}", "",
+    ]
+    for o in orders[:15]:
+        nm = o.get("school_name") or "Unknown"
+        amt = float(o.get("grand_total") or 0)
+        no = o.get("order_number") or ""
+        lines.append(f"• {nm} — ₹{amt:,.0f} ({no})".rstrip(" ()"))
+    if len(orders) > 15:
+        lines.append(f"  +{len(orders) - 15} more")
+    return "\n".join(lines).strip()
+
+
+async def build_and_enqueue_daily_orders_report():
+    """Compute today's orders and deliver as an in-app notification + WhatsApp.
+
+    In-app notification has no `assigned_to`, so it shows to admins (who see all
+    notifications). WhatsApp goes to the phones configured in settings."""
+    cfg = await db.settings.find_one({"type": "daily_orders_report"}, {"_id": 0}) or {}
+    now_ist = datetime.now(IST)
+    today = now_ist.date().isoformat()
+    # IST midnight today, expressed as UTC isoformat to match how orders store created_at.
+    start_ist = now_ist.replace(hour=0, minute=0, second=0, microsecond=0)
+    start_utc = start_ist.astimezone(timezone.utc).isoformat()
+    orders = await db.orders.find(
+        {"created_at": {"$gte": start_utc}},
+        {"_id": 0, "school_name": 1, "grand_total": 1, "order_number": 1},
+    ).to_list(1000)
+    text = _format_orders_report(orders, today)
+    if not text:
+        log.info("[orders-report] no orders today — nothing sent")
+        return {"orders": 0, "wa": 0}
+    total = sum(float(o.get("grand_total") or 0) for o in orders)
+
+    # 1) In-app notification (admins see it; keyed per-day so it stays single).
+    await db.notifications.update_one(
+        {"type": "daily_orders_report", "report_date": today},
+        {"$set": {
+            "type": "daily_orders_report",
+            "report_date": today,
+            "title": f"Orders today: {len(orders)} (₹{total:,.0f})",
+            "message": text,
+            "assigned_to": None,
+            "is_read": False,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }},
+        upsert=True,
+    )
+
+    # 2) WhatsApp to configured recipients (only if WhatsApp is set up).
+    phones = [p.strip() for p in (cfg.get("recipients") or []) if p and p.strip()]
+    wa = 0
+    if phones and await _wa_cfg():
+        for phone in phones:
+            await db.whatsapp_scheduled.insert_one({
+                "scheduled_id": f"wsch_{uuid.uuid4().hex[:12]}", "campaign_id": "daily_orders_report",
+                "status": "pending", "phone": phone, "message": text,
+                "created_at": datetime.now(timezone.utc).isoformat()})
+            wa += 1
+    log.info(f"[orders-report] {len(orders)} orders, in-app posted, {wa} WhatsApp queued")
+    return {"orders": len(orders), "wa": wa}
+
+
+async def daily_orders_report_loop():
+    log.info("[scheduler] daily orders report loop started")
+    last_fired = None
+    while True:
+        try:
+            cfg = await db.settings.find_one({"type": "daily_orders_report"}, {"_id": 0}) or {}
+            now_ist = datetime.now(IST)
+            today = now_ist.date().isoformat()
+            if cfg.get("enabled") and now_ist.strftime("%H:%M") == cfg.get("send_time", "19:00") and last_fired != today:
+                last_fired = today
+                await build_and_enqueue_daily_orders_report()
+        except Exception as exc:
+            log.error(f"[orders-report loop] {exc}")
+        await asyncio.sleep(45)   # < 60s so every target minute gets a tick
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # JOB 5 — FMS SLA Notification Engine
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -1203,5 +1296,6 @@ async def start_scheduler():
     asyncio.create_task(cert_loop())
     asyncio.create_task(low_stock_loop())
     asyncio.create_task(daily_digest_loop())
+    asyncio.create_task(daily_orders_report_loop())
     log.info("[scheduler] cert loop running")
-    log.info("[scheduler] all 9 background jobs running")
+    log.info("[scheduler] all 10 background jobs running")
