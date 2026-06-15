@@ -1526,7 +1526,13 @@ async def get_catalogue(token: str):
     if package_id:
         package = await db.packages.find_one({"package_id": package_id}, {"_id": 0})
     dies = await db.dies.find({"is_active": True}, {"_id": 0}).to_list(1000)
-    dies = [gate_die_for_customer(d) for d in dies]
+    # Only show products whose product type is published to schools. Legacy products
+    # with no product_type_id are treated as the built-in (visible) "Dies" type.
+    visible_type_ids = {t["product_type_id"] async for t in db.product_types.find(
+        {"visible_to_schools": True, "is_active": {"$ne": False}}, {"product_type_id": 1, "_id": 0})}
+    visible_type_ids.add("ptype_dies")
+    dies = [gate_die_for_customer(d) for d in dies
+            if d.get("product_type_id", "ptype_dies") in visible_type_ids]
 
     # Attach company logo for catalogue header
     company_s = await db.settings.find_one({"type": "company"}, {"_id": 0}) or {}

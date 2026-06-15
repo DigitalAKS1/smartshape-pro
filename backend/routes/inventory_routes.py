@@ -41,6 +41,7 @@ class DieCreate(BaseModel):
     video_url: Optional[str] = None
     show_video: bool = False
     show_description: bool = False
+    product_type_id: Optional[str] = None
 
 
 class StockMovementCreate(BaseModel):
@@ -67,6 +68,17 @@ def norm_die_code(raw: str) -> str:
     """Match key used to detect duplicates: no whitespace, no quotes, uppercase.
     So 'SSSD-07', 'SSSD-07 ' and '\"SSSD-07\"' all collide."""
     return re.sub(r"\s+", "", (raw or "").strip().strip('"').strip()).upper()
+
+
+async def _resolve_product_type(product_type_id: Optional[str]) -> tuple:
+    """Return (product_type_id, name) for a die. Defaults to the built-in Dies type.
+    Raises 400 if an explicit id is unknown/inactive."""
+    if not product_type_id:
+        return ("ptype_dies", "Dies")
+    pt = await db.product_types.find_one({"product_type_id": product_type_id}, {"_id": 0})
+    if not pt or pt.get("is_active") is False:
+        raise HTTPException(status_code=400, detail="Unknown or inactive product type")
+    return (product_type_id, pt.get("name", ""))
 
 
 async def _code_in_use(norm: str, exclude_die_id: str = None) -> bool:
@@ -96,6 +108,9 @@ async def create_die(die_input: DieCreate, request: Request):
     data = die_input.model_dump()
     if data.get("video_url") and not youtube_id(data["video_url"]):
         raise HTTPException(status_code=400, detail="Video link must be a valid YouTube URL")
+    pt_id, pt_name = await _resolve_product_type(data.pop("product_type_id", None))
+    data["product_type_id"] = pt_id
+    data["product_type"] = pt_name
     data["code"] = clean_die_code(data.get("code", ""))
     if data.get("name"):
         data["name"] = data["name"].strip()
@@ -135,6 +150,10 @@ async def update_die(die_id: str, request: Request):
         safe["show_video"] = bool(safe["show_video"])
     if "show_description" in safe:
         safe["show_description"] = bool(safe["show_description"])
+    if "product_type_id" in safe:
+        pt_id, pt_name = await _resolve_product_type(safe["product_type_id"])
+        safe["product_type_id"] = pt_id
+        safe["product_type"] = pt_name
     if "code" in safe:
         safe["code"] = clean_die_code(safe["code"])
         if not safe["code"]:

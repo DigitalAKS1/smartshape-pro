@@ -40,6 +40,7 @@ from routes.auth_routes import router as auth_router
 from routes.crm_routes import router as crm_router
 from routes.quotation_routes import router as quotation_router
 from routes.inventory_routes import router as inventory_router
+from routes.product_type_routes import router as product_type_router
 from routes.order_routes import router as order_router
 from routes.invoice_routes import router as invoice_router
 from routes.field_routes import router as field_router
@@ -88,6 +89,7 @@ app.include_router(auth_router, prefix="/api")
 app.include_router(crm_router, prefix="/api")
 app.include_router(quotation_router, prefix="/api")
 app.include_router(inventory_router, prefix="/api")
+app.include_router(product_type_router, prefix="/api")
 app.include_router(order_router, prefix="/api")
 app.include_router(invoice_router, prefix="/api")
 app.include_router(field_router, prefix="/api")
@@ -322,6 +324,26 @@ async def startup():
     if await db.dies.count_documents({}) == 0:
         for die in sample_dies:
             await db.dies.insert_one(die)
+
+    # Seed the built-in "Dies" product type and backfill existing products onto it.
+    # Idempotent: the upsert + the {$exists: false} filter make this a no-op once applied.
+    await db.product_types.update_one(
+        {"product_type_id": "ptype_dies"},
+        {"$setOnInsert": {
+            "product_type_id": "ptype_dies",
+            "name": "Dies",
+            "code_prefix": "SSSD",
+            "visible_to_schools": True,
+            "uses_quota": True,
+            "sort_order": 0,
+            "is_active": True,
+        }},
+        upsert=True,
+    )
+    await db.dies.update_many(
+        {"product_type_id": {"$exists": False}},
+        {"$set": {"product_type_id": "ptype_dies", "product_type": "Dies"}},
+    )
 
     # Seed modules
     default_modules = [
