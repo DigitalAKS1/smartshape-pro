@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="none">
+  <!-- Subtle arc trail behind the plane -->
+  <path d="M 18 85 Q 30 55 55 42"
+    stroke="#F5C518" stroke-width="2.2" stroke-dasharray="4,3"
+    stroke-linecap="round" fill="none" opacity="0.85"/>
+
+  <!-- Paper plane body (pointing upper-right, folded origami look) -->
+  <!-- Tip is at top-right, tail at lower-left -->
+  <polygon points="80,14 18,55 35,72" fill="#F59040"/>
+  <!-- Left dark face -->
+  <polygon points="80,14 18,55 32,40" fill="#E07820"/>
+  <!-- Bottom wing -->
+  <polygon points="80,14 35,72 54,52" fill="#C85C14"/>
+  <!-- Fold crease bottom -->
+  <polygon points="18,55 35,72 26,60" fill="#D06818"/>
+</svg>
