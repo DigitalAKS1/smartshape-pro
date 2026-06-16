@@ -5,6 +5,8 @@ import {
   Lock, Unlock, ShieldCheck, AlertTriangle,
   Layers, Square, CheckSquare,
 } from 'lucide-react';
+import { ProductThumb } from '../inventory/ShortfallDetailModal';
+import { groupHoldsBySchool } from '../../lib/holdsUtils';
 
 /**
  * Full holds-monitor tab — school filter, bulk-select toolbar, desktop table, mobile cards.
@@ -28,6 +30,124 @@ export default function HoldsTab({
   const filtered   = holdSchoolFilter === 'all' ? holdsList : holdsList.filter(h => h.school_name === holdSchoolFilter);
   const filteredIds = filtered.map(h => h.order_item_id);
   const allFilteredSelected = filteredIds.length > 0 && filteredIds.every(id => selectedHolds.has(id));
+  // When "All Schools" is selected, show per-school groups with subtotals.
+  const grouped = holdSchoolFilter === 'all';
+  const groups = grouped ? groupHoldsBySchool(filtered) : null;
+
+  const DesktopRow = (h) => (
+    <tr key={h.order_item_id}
+      className={`border-t border-[var(--border-color)] hover:bg-[var(--bg-hover)] cursor-pointer ${selectedHolds.has(h.order_item_id) ? 'bg-red-500/5' : ''}`}
+      data-testid={`hold-row-${h.order_item_id}`}
+      onClick={() => toggleHoldSelect(h.order_item_id)}
+    >
+      <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
+        <button onClick={() => toggleHoldSelect(h.order_item_id)} className={textMuted}>
+          {selectedHolds.has(h.order_item_id)
+            ? <CheckSquare className="h-4 w-4 text-[#e94560]" />
+            : <Square className="h-4 w-4" />}
+        </button>
+      </td>
+      <td className="px-4 py-3">
+        <div className="flex items-center gap-2.5">
+          <ProductThumb url={h.die_image_url} size={34} />
+          <div>
+            <p className={`${textPri} font-medium`}>{h.die_name}</p>
+            <p className={`text-xs font-mono ${textMuted}`}>{h.die_code}</p>
+          </div>
+        </div>
+      </td>
+      <td className={`px-4 py-3 ${textSec}`}>{h.school_name}</td>
+      <td className="px-4 py-3"><span className="font-mono text-xs text-[#e94560]">{h.order_number}</span></td>
+      <td className="px-4 py-3"><span className={`font-mono ${textPri}`}>{h.quantity}</span></td>
+      <td className="px-4 py-3">
+        <div className="flex items-center gap-2">
+          <span className={`text-xs ${textMuted}`}>Stock {h.stock_qty} · Avail </span>
+          <span className={`font-mono ${(h.available ?? 0) < 0 ? 'text-red-400' : textPri}`}>{h.available}</span>
+          {h.short > 0 && (
+            <span className="inline-flex items-center gap-1 rounded bg-red-500/15 text-red-400 text-[10px] font-semibold px-1.5 py-0.5">
+              <AlertTriangle className="h-3 w-3" /> Short {h.short}
+            </span>
+          )}
+        </div>
+      </td>
+      <td className={`px-4 py-3 text-xs ${textMuted}`}>{formatDate(h.hold_date)}</td>
+      <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
+        <div className="flex gap-1">
+          <Button size="sm" variant="outline"
+            onClick={() => handleConfirmHold(h.order_item_id)}
+            className="border-green-500/30 text-green-400 hover:bg-green-500/10 h-7 text-xs"
+            data-testid={`confirm-hold-${h.order_item_id}`}>
+            <ShieldCheck className="mr-1 h-3 w-3" /> Confirm
+          </Button>
+          <Button size="sm" variant="outline"
+            onClick={() => handleReleaseHold(h.order_item_id)}
+            className="border-red-500/30 text-red-400 hover:bg-red-500/10 h-7 text-xs"
+            data-testid={`release-hold-${h.order_item_id}`}>
+            <Unlock className="mr-1 h-3 w-3" /> Release
+          </Button>
+        </div>
+      </td>
+    </tr>
+  );
+
+  const SchoolHeaderRow = (g) => (
+    <tr key={`hdr-${g.school_name}`} className="bg-[var(--bg-primary)]">
+      <td className="px-4 py-2" />
+      <td colSpan={7} className="px-4 py-2">
+        <span className={`text-xs font-semibold ${textPri}`}>{g.school_name}</span>
+        <span className={`text-[11px] ${textMuted} ml-2`}>{g.items.length} item{g.items.length !== 1 ? 's' : ''} · {g.totalQty} qty</span>
+        {g.shortCount > 0 && (
+          <span className="ml-2 inline-flex items-center gap-1 rounded bg-red-500/15 text-red-400 text-[10px] font-semibold px-1.5 py-0.5">
+            <AlertTriangle className="h-3 w-3" /> {g.shortCount} short
+          </span>
+        )}
+      </td>
+    </tr>
+  );
+
+  const MobileCard = (h) => (
+    <div key={h.order_item_id}
+      className={`p-4 space-y-2 ${selectedHolds.has(h.order_item_id) ? 'bg-red-500/5' : ''}`}
+      data-testid={`hold-card-${h.order_item_id}`}
+      onClick={() => toggleHoldSelect(h.order_item_id)}
+    >
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2 flex-1 min-w-0">
+          <button onClick={e => { e.stopPropagation(); toggleHoldSelect(h.order_item_id); }} className={`flex-shrink-0 ${textMuted}`}>
+            {selectedHolds.has(h.order_item_id)
+              ? <CheckSquare className="h-4 w-4 text-[#e94560]" />
+              : <Square className="h-4 w-4" />}
+          </button>
+          <ProductThumb url={h.die_image_url} size={36} />
+          <div className="min-w-0">
+            <p className={`${textPri} font-medium text-sm`}>{h.die_name} <span className={`font-mono text-xs ${textMuted}`}>({h.die_code})</span></p>
+            <p className={`text-xs ${textMuted}`}>{h.school_name} • {h.order_number}</p>
+          </div>
+        </div>
+        {h.short > 0 && <AlertTriangle className="h-4 w-4 text-red-400 flex-shrink-0" />}
+      </div>
+      <div className={`flex items-center gap-3 text-xs ${textMuted} flex-wrap`}>
+        <span>Need: <span className={textPri}>{h.quantity}</span></span>
+        <span>Stock: {h.stock_qty}</span>
+        <span>Avail: <span className={(h.available ?? 0) < 0 ? 'text-red-400' : 'text-green-400'}>{h.available}</span></span>
+        {h.short > 0 && (
+          <span className="inline-flex items-center gap-1 rounded bg-red-500/15 text-red-400 text-[10px] font-semibold px-1.5 py-0.5">
+            Short {h.short}
+          </span>
+        )}
+      </div>
+      <div className="flex gap-2" onClick={e => e.stopPropagation()}>
+        <Button size="sm" onClick={() => handleConfirmHold(h.order_item_id)}
+          className="flex-1 bg-green-600 hover:bg-green-700 text-white text-xs h-8">
+          <ShieldCheck className="mr-1 h-3 w-3" /> Confirm
+        </Button>
+        <Button size="sm" variant="outline" onClick={() => handleReleaseHold(h.order_item_id)}
+          className="flex-1 border-red-500/30 text-red-400 text-xs h-8">
+          <Unlock className="mr-1 h-3 w-3" /> Release
+        </Button>
+      </div>
+    </div>
+  );
 
   return (
     <div className="space-y-3" data-testid="holds-list">
@@ -51,7 +171,7 @@ export default function HoldsTab({
                 className={`h-8 px-2 rounded-md text-xs ${inputCls}`}
                 data-testid="hold-school-filter"
               >
-                <option value="all">All Schools ({holdsList.length})</option>
+                <option value="all">All Schools ({holdsList.length} items · {holdsList.reduce((s, h) => s + Number(h.quantity || 0), 0)} qty)</option>
                 {schools.map(s => {
                   const cnt = holdsList.filter(h => h.school_name === s).length;
                   return <option key={s} value={s}>{s} ({cnt})</option>;
@@ -100,104 +220,36 @@ export default function HoldsTab({
                   </tr>
                 </thead>
                 <tbody>
-                  {filtered.map(h => (
-                    <tr key={h.order_item_id}
-                      className={`border-t border-[var(--border-color)] hover:bg-[var(--bg-hover)] cursor-pointer ${selectedHolds.has(h.order_item_id) ? 'bg-red-500/5' : ''}`}
-                      data-testid={`hold-row-${h.order_item_id}`}
-                      onClick={() => toggleHoldSelect(h.order_item_id)}
-                    >
-                      <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
-                        <button onClick={() => toggleHoldSelect(h.order_item_id)} className={textMuted}>
-                          {selectedHolds.has(h.order_item_id)
-                            ? <CheckSquare className="h-4 w-4 text-[#e94560]" />
-                            : <Square className="h-4 w-4" />}
-                        </button>
-                      </td>
-                      <td className="px-4 py-3">
-                        <p className={`${textPri} font-medium`}>{h.die_name}</p>
-                        <p className={`text-xs font-mono ${textMuted}`}>{h.die_code}</p>
-                      </td>
-                      <td className={`px-4 py-3 ${textSec}`}>{h.school_name}</td>
-                      <td className="px-4 py-3"><span className="font-mono text-xs text-[#e94560]">{h.order_number}</span></td>
-                      <td className="px-4 py-3"><span className={`font-mono ${textPri}`}>{h.quantity}</span></td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-2">
-                          <span className={`text-xs ${textMuted}`}>Stock {h.stock_qty} · Avail </span>
-                          <span className={`font-mono ${(h.available ?? 0) < 0 ? 'text-red-400' : textPri}`}>{h.available}</span>
-                          {h.short > 0 && (
-                            <span className="inline-flex items-center gap-1 rounded bg-red-500/15 text-red-400 text-[10px] font-semibold px-1.5 py-0.5">
-                              <AlertTriangle className="h-3 w-3" /> Short {h.short}
-                            </span>
-                          )}
-                        </div>
-                      </td>
-                      <td className={`px-4 py-3 text-xs ${textMuted}`}>{formatDate(h.hold_date)}</td>
-                      <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
-                        <div className="flex gap-1">
-                          <Button size="sm" variant="outline"
-                            onClick={() => handleConfirmHold(h.order_item_id)}
-                            className="border-green-500/30 text-green-400 hover:bg-green-500/10 h-7 text-xs"
-                            data-testid={`confirm-hold-${h.order_item_id}`}>
-                            <ShieldCheck className="mr-1 h-3 w-3" /> Confirm
-                          </Button>
-                          <Button size="sm" variant="outline"
-                            onClick={() => handleReleaseHold(h.order_item_id)}
-                            className="border-red-500/30 text-red-400 hover:bg-red-500/10 h-7 text-xs"
-                            data-testid={`release-hold-${h.order_item_id}`}>
-                            <Unlock className="mr-1 h-3 w-3" /> Release
-                          </Button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                  {grouped
+                    ? groups.map(g => (
+                        <React.Fragment key={g.school_name}>
+                          {SchoolHeaderRow(g)}
+                          {g.items.map(DesktopRow)}
+                        </React.Fragment>
+                      ))
+                    : filtered.map(DesktopRow)}
                 </tbody>
               </table>
             </div>
 
             {/* Mobile cards */}
             <div className="md:hidden divide-y divide-[var(--border-color)]">
-              {filtered.map(h => (
-                <div key={h.order_item_id}
-                  className={`p-4 space-y-2 ${selectedHolds.has(h.order_item_id) ? 'bg-red-500/5' : ''}`}
-                  data-testid={`hold-card-${h.order_item_id}`}
-                  onClick={() => toggleHoldSelect(h.order_item_id)}
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2 flex-1 min-w-0">
-                      <button onClick={e => { e.stopPropagation(); toggleHoldSelect(h.order_item_id); }} className={`flex-shrink-0 ${textMuted}`}>
-                        {selectedHolds.has(h.order_item_id)
-                          ? <CheckSquare className="h-4 w-4 text-[#e94560]" />
-                          : <Square className="h-4 w-4" />}
-                      </button>
-                      <div className="min-w-0">
-                        <p className={`${textPri} font-medium text-sm`}>{h.die_name} <span className={`font-mono text-xs ${textMuted}`}>({h.die_code})</span></p>
-                        <p className={`text-xs ${textMuted}`}>{h.school_name} • {h.order_number}</p>
+              {grouped
+                ? groups.map(g => (
+                    <div key={g.school_name}>
+                      <div className="px-4 py-2 bg-[var(--bg-primary)] flex items-center gap-2 flex-wrap">
+                        <span className={`text-xs font-semibold ${textPri}`}>{g.school_name}</span>
+                        <span className={`text-[11px] ${textMuted}`}>{g.items.length} item{g.items.length !== 1 ? 's' : ''} · {g.totalQty} qty</span>
+                        {g.shortCount > 0 && (
+                          <span className="inline-flex items-center gap-1 rounded bg-red-500/15 text-red-400 text-[10px] font-semibold px-1.5 py-0.5">
+                            <AlertTriangle className="h-3 w-3" /> {g.shortCount} short
+                          </span>
+                        )}
                       </div>
+                      <div className="divide-y divide-[var(--border-color)]">{g.items.map(MobileCard)}</div>
                     </div>
-                    {h.short > 0 && <AlertTriangle className="h-4 w-4 text-red-400 flex-shrink-0" />}
-                  </div>
-                  <div className={`flex items-center gap-3 text-xs ${textMuted} flex-wrap`}>
-                    <span>Need: <span className={textPri}>{h.quantity}</span></span>
-                    <span>Stock: {h.stock_qty}</span>
-                    <span>Avail: <span className={(h.available ?? 0) < 0 ? 'text-red-400' : 'text-green-400'}>{h.available}</span></span>
-                    {h.short > 0 && (
-                      <span className="inline-flex items-center gap-1 rounded bg-red-500/15 text-red-400 text-[10px] font-semibold px-1.5 py-0.5">
-                        Short {h.short}
-                      </span>
-                    )}
-                  </div>
-                  <div className="flex gap-2" onClick={e => e.stopPropagation()}>
-                    <Button size="sm" onClick={() => handleConfirmHold(h.order_item_id)}
-                      className="flex-1 bg-green-600 hover:bg-green-700 text-white text-xs h-8">
-                      <ShieldCheck className="mr-1 h-3 w-3" /> Confirm
-                    </Button>
-                    <Button size="sm" variant="outline" onClick={() => handleReleaseHold(h.order_item_id)}
-                      className="flex-1 border-red-500/30 text-red-400 text-xs h-8">
-                      <Unlock className="mr-1 h-3 w-3" /> Release
-                    </Button>
-                  </div>
-                </div>
-              ))}
+                  ))
+                : filtered.map(MobileCard)}
             </div>
           </div>
         </>

@@ -1136,6 +1136,7 @@ async def get_holds(request: Request):
             "die_id": item["die_id"],
             "die_name": item.get("die_name", ""),
             "die_code": item.get("die_code", ""),
+            "die_image_url": (die.get("image_url") if die else None) or item.get("die_image_url"),
             "quantity": qty,
             "hold_date": order.get("created_at", "") if order else "",
             "stock_qty": stock_qty,
