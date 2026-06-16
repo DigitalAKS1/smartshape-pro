@@ -27,7 +27,8 @@ next-env.d.ts
 
 # Production builds
 /build
-frontend/build/
+# frontend/build is intentionally COMMITTED — prebuilt off-box and shipped to the
+# low-RAM prod VPS (which cannot run webpack without OOM). See scripts/build-frontend.sh.
 dist/
 dist
 

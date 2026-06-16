@@ -23,9 +23,21 @@ git reset --hard origin/main
 NEW_COMMIT="$(git rev-parse HEAD)"
 echo "==> Deploying commit: $NEW_COMMIT"
 
+# The frontend is prebuilt OFF the VPS and committed under frontend/build (this box
+# OOM-thrashes if it runs webpack). Fail fast if the bundle is missing so we never
+# ship an empty frontend.
+if [ ! -f frontend/build/index.html ]; then
+  echo "!! frontend/build/index.html is missing on $NEW_COMMIT."
+  echo "   Build it off-box first:  bash scripts/build-frontend.sh  (then commit frontend/build & push)."
+  exit 1
+fi
+
+# Layer-cached build: backend reuses its pip layer (only changed code re-copies),
+# frontend is a static-file copy into nginx. No --no-cache -> light + fast, so the
+# host's resource monitor is never tripped.
 build_and_up() {
   REACT_APP_BACKEND_URL="${REACT_APP_BACKEND_URL:-https://app.smartshape.in}" \
-    docker compose -f docker-compose.prod.yml build --no-cache backend frontend
+    docker compose -f docker-compose.prod.yml build backend frontend
   REACT_APP_BACKEND_URL="${REACT_APP_BACKEND_URL:-https://app.smartshape.in}" \
     docker compose -f docker-compose.prod.yml up -d backend frontend
 }

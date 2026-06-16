@@ -9,7 +9,9 @@
 /coverage
 
 # production
-/build
+# NOTE: frontend/build IS committed on purpose — the low-RAM prod VPS cannot run
+# webpack/craco without OOM-thrashing, so the bundle is built off-box and shipped.
+# Build it with scripts/build-frontend.sh, then commit frontend/build.
 
 # misc
 .DS_Store

@@ -1,0 +1,3 @@
+# Committed prebuilt frontend artifacts: store/check out verbatim (no EOL conversion),
+# so the bundle the VPS serves is byte-identical to what was built off-box.
+frontend/build/** -text
