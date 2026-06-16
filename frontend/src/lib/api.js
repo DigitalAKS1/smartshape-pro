@@ -1130,6 +1130,7 @@ export const procurement = {
   summary: () => API.get('/procurement/summary'),
   poReport: (onlyOpen = true) => API.get('/procurement/po-report', { params: { only_open: onlyOpen } }),
   demand: (shortfallOnly = false) => API.get('/procurement/demand', { params: { shortfall_only: shortfallOnly } }),
+  demandDetail: (dieId) => API.get(`/procurement/demand/${dieId}`),
   // Vendor price list
   vendorItems: {
     getAll: (params = {}) => API.get('/vendor-items', { params }),
