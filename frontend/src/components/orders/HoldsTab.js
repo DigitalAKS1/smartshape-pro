@@ -1,12 +1,15 @@
-import React from 'react';
+import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Button } from '../ui/button';
+import { Input } from '../ui/input';
 import { formatDate } from '../../lib/utils';
 import {
   Lock, Unlock, ShieldCheck, AlertTriangle,
-  Layers, Square, CheckSquare,
+  Layers, Square, CheckSquare, Building2, Package, ShoppingCart,
 } from 'lucide-react';
 import { ProductThumb } from '../inventory/ShortfallDetailModal';
-import { groupHoldsBySchool } from '../../lib/holdsUtils';
+import { groupHoldsBySchool, groupHoldsByItem } from '../../lib/holdsUtils';
+import CreatePoFromHoldsDialog from './CreatePoFromHoldsDialog';
 
 /**
  * Full holds-monitor tab — school filter, bulk-select toolbar, desktop table, mobile cards.
@@ -26,6 +29,39 @@ export default function HoldsTab({
   // tokens
   textPri, textSec, textMuted, inputCls, card,
 }) {
+  const navigate = useNavigate();
+  // View mode: 'school' (per-school holds) or 'item' (item-wise totals → procure).
+  const [holdView, setHoldView] = useState('school');
+  const [itemSel, setItemSel] = useState(new Set());
+  const [itemQty, setItemQty] = useState({});
+  const [poOpen, setPoOpen] = useState(false);
+  const [poLines, setPoLines] = useState([]);
+
+  const itemGroups = groupHoldsByItem(holdsList);
+  const qtyFor = (it) => (itemQty[it.die_id] ?? it.suggestedQty);
+  const toggleItem = (it) => {
+    setItemSel(prev => {
+      const next = new Set(prev);
+      if (next.has(it.die_id)) next.delete(it.die_id);
+      else { next.add(it.die_id); setItemQty(q => ({ ...q, [it.die_id]: q[it.die_id] ?? it.suggestedQty })); }
+      return next;
+    });
+  };
+  const allItemsSelected = itemGroups.length > 0 && itemGroups.every(it => itemSel.has(it.die_id));
+  const toggleAllItems = () => {
+    if (allItemsSelected) { setItemSel(new Set()); return; }
+    const next = new Set(itemGroups.map(it => it.die_id));
+    setItemSel(next);
+    setItemQty(q => { const m = { ...q }; itemGroups.forEach(it => { if (m[it.die_id] == null) m[it.die_id] = it.suggestedQty; }); return m; });
+  };
+  const openPo = () => {
+    const lines = itemGroups
+      .filter(it => itemSel.has(it.die_id))
+      .map(it => ({ die_id: it.die_id, die_name: it.die_name, die_code: it.die_code, die_image_url: it.die_image_url, qty: qtyFor(it) }));
+    setPoLines(lines);
+    setPoOpen(true);
+  };
+
   const schools    = [...new Set(holdsList.map(h => h.school_name).filter(Boolean))].sort();
   const filtered   = holdSchoolFilter === 'all' ? holdsList : holdsList.filter(h => h.school_name === holdSchoolFilter);
   const filteredIds = filtered.map(h => h.order_item_id);
@@ -158,6 +194,17 @@ export default function HoldsTab({
         </div>
       ) : (
         <>
+          {/* View toggle: per-school vs item-wise totals */}
+          <div className="flex items-center gap-1 bg-[var(--bg-primary)] rounded-lg p-1 w-fit">
+            {[['school', 'By School', Building2], ['item', 'By Item', Package]].map(([v, label, Icon]) => (
+              <button key={v} onClick={() => setHoldView(v)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${holdView === v ? 'bg-[#e94560] text-white' : textSec}`}>
+                <Icon className="h-3.5 w-3.5" /> {label}
+              </button>
+            ))}
+          </div>
+
+          {holdView === 'school' && (<>
           {/* Toolbar */}
           <div className="flex flex-col sm:flex-row gap-2 items-start sm:items-center">
             <div className="flex items-center gap-2 flex-1 flex-wrap">
@@ -252,6 +299,105 @@ export default function HoldsTab({
                 : filtered.map(MobileCard)}
             </div>
           </div>
+          </>)}
+
+          {holdView === 'item' && (
+            <>
+              {/* Item-wise toolbar */}
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <span className={`text-xs ${textMuted}`}>Item-wise totals across all schools — pick items, set quantities, and raise a PO.</span>
+                {itemSel.size > 0 && (
+                  <Button size="sm" onClick={openPo} className="h-8 text-xs bg-[#e94560] hover:bg-[#f05c75] text-white" data-testid="create-po-from-holds">
+                    <ShoppingCart className="mr-1.5 h-3.5 w-3.5" /> Create Purchase Order ({itemSel.size})
+                  </Button>
+                )}
+              </div>
+
+              <div className={`${card} border rounded-md overflow-hidden`}>
+                {/* Desktop */}
+                <div className="hidden md:block overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="bg-[var(--bg-primary)]">
+                        <th className="py-3 px-4 w-10">
+                          <button onClick={toggleAllItems} className={textMuted}>
+                            {allItemsSelected ? <CheckSquare className="h-4 w-4 text-[#e94560]" /> : <Square className="h-4 w-4" />}
+                          </button>
+                        </th>
+                        {['Item', 'Spread', 'Held Qty', 'Available', 'Short', 'Order Qty'].map(h => (
+                          <th key={h} className={`text-left text-xs uppercase py-3 px-4 ${textMuted}`}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {itemGroups.map(it => {
+                        const sel = itemSel.has(it.die_id);
+                        return (
+                          <tr key={it.die_id} className={`border-t border-[var(--border-color)] ${sel ? 'bg-[#e94560]/5' : ''}`}>
+                            <td className="px-4 py-3" onClick={() => toggleItem(it)}>
+                              <button className={textMuted}>
+                                {sel ? <CheckSquare className="h-4 w-4 text-[#e94560]" /> : <Square className="h-4 w-4" />}
+                              </button>
+                            </td>
+                            <td className="px-4 py-3">
+                              <div className="flex items-center gap-2.5">
+                                <ProductThumb url={it.die_image_url} size={34} />
+                                <div>
+                                  <p className={`${textPri} font-medium`}>{it.die_name}</p>
+                                  <p className={`text-xs font-mono ${textMuted}`}>{it.die_code}</p>
+                                </div>
+                              </div>
+                            </td>
+                            <td className={`px-4 py-3 text-xs ${textMuted}`}>{it.schoolCount} school{it.schoolCount !== 1 ? 's' : ''} · {it.orderCount} order{it.orderCount !== 1 ? 's' : ''}</td>
+                            <td className={`px-4 py-3 font-mono ${textPri}`}>{it.totalQty}</td>
+                            <td className={`px-4 py-3 font-mono ${it.available < 0 ? 'text-red-400' : textSec}`}>{it.available}</td>
+                            <td className="px-4 py-3">
+                              {it.short > 0
+                                ? <span className="inline-flex items-center gap-1 rounded bg-amber-500/15 text-amber-400 text-[11px] font-semibold px-1.5 py-0.5">{it.short}</span>
+                                : <span className={textMuted}>0</span>}
+                            </td>
+                            <td className="px-4 py-3">
+                              <Input type="number" min={1} value={qtyFor(it)}
+                                onChange={e => setItemQty(q => ({ ...q, [it.die_id]: e.target.value }))}
+                                className={`h-8 w-20 text-center font-mono ${inputCls}`} />
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                {/* Mobile */}
+                <div className="md:hidden divide-y divide-[var(--border-color)]">
+                  {itemGroups.map(it => {
+                    const sel = itemSel.has(it.die_id);
+                    return (
+                      <div key={it.die_id} className={`p-3 ${sel ? 'bg-[#e94560]/5' : ''}`}>
+                        <div className="flex items-center gap-2">
+                          <button onClick={() => toggleItem(it)} className={`shrink-0 ${textMuted}`}>
+                            {sel ? <CheckSquare className="h-4 w-4 text-[#e94560]" /> : <Square className="h-4 w-4" />}
+                          </button>
+                          <ProductThumb url={it.die_image_url} size={36} />
+                          <div className="min-w-0 flex-1">
+                            <p className={`${textPri} font-medium text-sm`}>{it.die_name} <span className={`font-mono text-xs ${textMuted}`}>({it.die_code})</span></p>
+                            <p className={`text-xs ${textMuted}`}>{it.schoolCount} school{it.schoolCount !== 1 ? 's' : ''} · held {it.totalQty}{it.short > 0 ? ` · short ${it.short}` : ''}</p>
+                          </div>
+                          <Input type="number" min={1} value={qtyFor(it)}
+                            onChange={e => setItemQty(q => ({ ...q, [it.die_id]: e.target.value }))}
+                            className={`h-8 w-16 text-center font-mono ${inputCls}`} />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </>
+          )}
+
+          <CreatePoFromHoldsDialog
+            open={poOpen} onClose={() => setPoOpen(false)} initialLines={poLines}
+            onCreated={() => { setItemSel(new Set()); setItemQty({}); navigate('/procurement'); }}
+          />
         </>
       )}
     </div>
