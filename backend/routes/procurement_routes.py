@@ -1279,6 +1279,72 @@ async def sales_order_demand(request: Request, shortfall_only: bool = False):
     return rows
 
 
+def group_demand_by_school(lines):
+    """Group per-order demand lines into per-school buckets.
+
+    `lines` is a list of {school_name, order_number, order_id, quantity}.
+    Returns a list of {school_name, total_qty, order_count, orders[...]} sorted
+    by total_qty descending."""
+    buckets = {}
+    for ln in lines or []:
+        school = ln.get("school_name") or "—"
+        b = buckets.setdefault(school, {"school_name": school, "total_qty": 0.0, "orders": []})
+        qty = float(ln.get("quantity", 0) or 0)
+        b["total_qty"] += qty
+        b["orders"].append({
+            "order_id": ln.get("order_id"),
+            "order_number": ln.get("order_number"),
+            "quantity": qty,
+        })
+    out = list(buckets.values())
+    for b in out:
+        b["total_qty"] = round2(b["total_qty"])
+        b["order_count"] = len(b["orders"])
+    out.sort(key=lambda b: -b["total_qty"])
+    return out
+
+
+@router.get("/procurement/demand/{die_id}")
+async def sales_order_demand_detail(die_id: str, request: Request):
+    """Drill-down for one die: which schools/orders need it, plus the stock summary.
+
+    Powers the "click the shortfall to see why" detail on Procurement and Store."""
+    await get_current_user(request)
+    d = await db.dies.find_one({"die_id": die_id}, {"_id": 0})
+    if not d:
+        raise HTTPException(status_code=404, detail="Item not found")
+    open_orders = await db.orders.find(
+        {"order_status": {"$in": list(_OPEN_ORDER_STATUSES)}},
+        {"_id": 0, "order_id": 1, "order_number": 1, "school_name": 1}).to_list(20000)
+    omap = {o["order_id"]: o for o in open_orders}
+    lines = []
+    if omap:
+        async for it in db.order_items.find(
+                {"die_id": die_id, "order_id": {"$in": list(omap)}},
+                {"_id": 0, "order_id": 1, "quantity": 1, "status": 1}):
+            if it.get("status") in _DEAD_ITEM_STATUSES:
+                continue
+            o = omap.get(it.get("order_id"), {})
+            lines.append({
+                "school_name": o.get("school_name"),
+                "order_number": o.get("order_number"),
+                "order_id": it.get("order_id"),
+                "quantity": float(it.get("quantity", 0) or 0),
+            })
+    schools = group_demand_by_school(lines)
+    phys = float(d.get("stock_qty", 0) or 0)
+    reserved = float(d.get("reserved_qty", 0) or 0)
+    avail = phys - reserved
+    required = round2(sum(float(l["quantity"]) for l in lines))
+    return {
+        "die_id": die_id, "name": d.get("name", die_id), "code": d.get("code", ""),
+        "image_url": d.get("image_url"),
+        "physical_qty": phys, "reserved_qty": reserved, "available_qty": round2(avail),
+        "required_qty": required, "shortfall_qty": max(0.0, round2(required - avail)),
+        "schools": schools,
+    }
+
+
 @router.get("/vendor-returns/{return_id}/pdf")
 async def vendor_return_pdf(return_id: str, request: Request):
     await get_current_user(request)
