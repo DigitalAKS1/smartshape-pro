@@ -424,7 +424,11 @@ async def create_order_for_quotation(quotation_id: str, *, created_by: str,
 @router.post("/orders")
 async def create_order_from_quotation(request: Request):
     user = await get_current_user(request)
-    require_module(user, "orders", "read_write")
+    # Order creation is a quotation-side action (convert my quotation to an order):
+    # gate on quotations write so sales keep this (store stays blocked), matching
+    # the prior "store cannot create orders" rule. Lifecycle actions below use the
+    # orders module.
+    require_module(user, "quotations", "read_write")
     body = await request.json()
     quotation_id = body.get("quotation_id")
     if not quotation_id:
