@@ -4,7 +4,7 @@ import uuid
 
 from database import db
 from auth_utils import get_current_user
-from rbac import get_team
+from rbac import get_team, require_module
 from routes.crm_routes import create_physical_from_drip
 
 router = APIRouter()
@@ -289,7 +289,8 @@ async def _enrich(seq: dict) -> dict:
 
 @router.get("/drip/sequences")
 async def list_sequences(request: Request):
-    await get_current_user(request)
+    user = await get_current_user(request)
+    require_module(user, "leads", "read")
     await _seed_defaults()
     seqs = await db.drip_sequences.find({}, {"_id": 0}).sort("created_at", 1).to_list(200)
     return [await _enrich(s) for s in seqs]
@@ -298,6 +299,7 @@ async def list_sequences(request: Request):
 @router.post("/drip/sequences")
 async def create_sequence(request: Request):
     user = await get_current_user(request)
+    require_module(user, "leads", "read_write")
     body = await request.json()
     if not body.get("name"):
         raise HTTPException(400, "name is required")
@@ -321,7 +323,8 @@ async def create_sequence(request: Request):
 
 @router.put("/drip/sequences/{sequence_id}")
 async def update_sequence(sequence_id: str, request: Request):
-    await get_current_user(request)
+    user = await get_current_user(request)
+    require_module(user, "leads", "read_write")
     if not await db.drip_sequences.find_one({"sequence_id": sequence_id}):
         raise HTTPException(404, "Sequence not found")
     body = await request.json()
@@ -338,7 +341,8 @@ async def update_sequence(sequence_id: str, request: Request):
 
 @router.delete("/drip/sequences/{sequence_id}")
 async def delete_sequence(sequence_id: str, request: Request):
-    await get_current_user(request)
+    user = await get_current_user(request)
+    require_module(user, "leads", "read_write_delete")
     if not await db.drip_sequences.find_one({"sequence_id": sequence_id}):
         raise HTTPException(404, "Sequence not found")
     await db.drip_sequences.delete_one({"sequence_id": sequence_id})
@@ -386,6 +390,7 @@ async def _auto_enroll_quotation_sent(lead_doc: dict):
 @router.post("/drip/enroll")
 async def enroll_lead(request: Request):
     user = await get_current_user(request)
+    require_module(user, "leads", "read_write")
     body = await request.json()
     sequence_id = body.get("sequence_id")
     lead_id = body.get("lead_id")
@@ -422,7 +427,8 @@ async def enroll_lead(request: Request):
 
 @router.get("/drip/enrollments")
 async def list_enrollments(request: Request):
-    await get_current_user(request)
+    user = await get_current_user(request)
+    require_module(user, "leads", "read")
     params = dict(request.query_params)
     filt = {}
     if params.get("lead_id"):      filt["lead_id"] = params["lead_id"]
@@ -433,7 +439,8 @@ async def list_enrollments(request: Request):
 
 @router.put("/drip/enrollments/{enrollment_id}/cancel")
 async def cancel_enrollment(enrollment_id: str, request: Request):
-    await get_current_user(request)
+    user = await get_current_user(request)
+    require_module(user, "leads", "read_write")
     if not await db.drip_enrollments.find_one({"enrollment_id": enrollment_id}):
         raise HTTPException(404, "Enrollment not found")
     await db.drip_enrollments.update_one(
