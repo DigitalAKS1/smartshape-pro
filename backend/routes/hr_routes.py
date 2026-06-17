@@ -5,7 +5,7 @@ import uuid
 
 from database import db
 from auth_utils import get_current_user
-from rbac import get_team
+from rbac import get_team, require_module
 
 router = APIRouter()
 
@@ -74,6 +74,7 @@ async def get_leaves(request: Request):
 @router.post("/leaves")
 async def apply_leave(request: Request):
     user = await get_current_user(request)
+    require_module(user, "leave_management", "read_write")
     body = await request.json()
     leave_id = f"lv_{uuid.uuid4().hex[:12]}"
     leave_doc = {
@@ -108,8 +109,7 @@ async def apply_leave(request: Request):
 @router.put("/leaves/{leave_id}/approve")
 async def approve_leave(leave_id: str, request: Request):
     user = await get_current_user(request)
-    if get_team(user) != "admin":
-        raise HTTPException(status_code=403, detail="Only Admin/HR can approve leaves")
+    require_module(user, "leave_management", "read_write")
     body = await request.json()
     status = body.get("status", "approved")
     remarks = body.get("remarks", "")
@@ -167,6 +167,7 @@ async def get_leave_balance(request: Request):
 @router.get("/payroll/reimbursements")
 async def get_reimbursements(request: Request, month_year: Optional[str] = None):
     user = await get_current_user(request)
+    require_module(user, "payroll", "read")
     query = {}
     if get_team(user) not in ("admin", "accounts"):
         query["sales_person_email"] = user["email"]
@@ -180,8 +181,7 @@ async def get_reimbursements(request: Request, month_year: Optional[str] = None)
 @router.put("/payroll/reimbursements/{reimbursement_id}/approve")
 async def approve_reimbursement(reimbursement_id: str, request: Request):
     user = await get_current_user(request)
-    if get_team(user) not in ("admin", "accounts"):
-        raise HTTPException(status_code=403, detail="Admin or Accounts access required")
+    require_module(user, "payroll", "read_write")
 
     await db.payroll_reimbursements.update_one(
         {"reimbursement_id": reimbursement_id},
@@ -197,8 +197,7 @@ async def approve_reimbursement(reimbursement_id: str, request: Request):
 @router.put("/payroll/reimbursements/{reimbursement_id}/reject")
 async def reject_reimbursement(reimbursement_id: str, notes: str, request: Request):
     user = await get_current_user(request)
-    if get_team(user) not in ("admin", "accounts"):
-        raise HTTPException(status_code=403, detail="Admin or Accounts access required")
+    require_module(user, "payroll", "read_write")
 
     await db.payroll_reimbursements.update_one(
         {"reimbursement_id": reimbursement_id},
@@ -216,7 +215,8 @@ async def reject_reimbursement(reimbursement_id: str, notes: str, request: Reque
 
 @router.get("/designations")
 async def get_designations(request: Request):
-    await get_current_user(request)
+    user = await get_current_user(request)
+    require_module(user, "user_management", "read")
     # Always upsert system designations so role_level changes are applied immediately
     for d in DEFAULT_DESIGNATIONS:
         d_copy = {**d, "created_at": datetime.now(timezone.utc).isoformat()}
@@ -232,8 +232,7 @@ async def get_designations(request: Request):
 @router.post("/designations")
 async def create_designation(request: Request):
     user = await get_current_user(request)
-    if user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Admin only")
+    require_module(user, "user_management", "read_write")
     body = await request.json()
     if not body.get("name") or not body.get("code"):
         raise HTTPException(status_code=400, detail="name and code required")
@@ -259,8 +258,7 @@ async def create_designation(request: Request):
 @router.put("/designations/{designation_id}")
 async def update_designation(designation_id: str, request: Request):
     user = await get_current_user(request)
-    if user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Admin only")
+    require_module(user, "user_management", "read_write")
     body = await request.json()
     allowed = {}
     for k in ("name", "description", "default_modules", "role_level", "is_active"):
@@ -273,8 +271,7 @@ async def update_designation(designation_id: str, request: Request):
 @router.delete("/designations/{designation_id}")
 async def delete_designation(designation_id: str, request: Request):
     user = await get_current_user(request)
-    if user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Admin only")
+    require_module(user, "user_management", "read_write")
     desg = await db.designations.find_one({"designation_id": designation_id})
     if not desg:
         raise HTTPException(status_code=404, detail="Not found")
