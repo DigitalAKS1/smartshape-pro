@@ -30,6 +30,8 @@ const ROUTE_MODULE_MAP = {
   '/marketing': 'leads',
   '/school-profile': 'leads',
   '/orders': 'quotations',
+  '/procurement': 'procurement',
+  '/procurement-masters': 'procurement',
   '/settings': 'settings',
   '/app-settings': 'settings',
   '/import-center': 'settings',
