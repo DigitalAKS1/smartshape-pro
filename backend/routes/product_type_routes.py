@@ -5,7 +5,7 @@ import uuid
 
 from database import db
 from auth_utils import get_current_user
-from rbac import require_teams
+from rbac import require_teams, require_module
 from product_type_utils import slugify_prefix, next_code
 
 router = APIRouter()
@@ -45,7 +45,7 @@ async def get_product_types(request: Request, active: bool = False, for_schools:
 @router.post("/product-types")
 async def create_product_type(payload: ProductTypeCreate, request: Request):
     user = await get_current_user(request)
-    require_teams(user, "admin")
+    require_module(user, "inventory", "read_write")
     name = (payload.name or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="Name is required")
@@ -67,7 +67,7 @@ async def create_product_type(payload: ProductTypeCreate, request: Request):
 @router.put("/product-types/{product_type_id}")
 async def update_product_type(product_type_id: str, request: Request):
     user = await get_current_user(request)
-    require_teams(user, "admin")
+    require_module(user, "inventory", "read_write")
     updates = await request.json()
     safe = {k: v for k, v in updates.items() if k in (
         "name", "code_prefix", "visible_to_schools", "uses_quota", "sort_order", "is_active")}
@@ -96,7 +96,7 @@ async def update_product_type(product_type_id: str, request: Request):
 @router.delete("/product-types/{product_type_id}")
 async def delete_product_type(product_type_id: str, request: Request):
     user = await get_current_user(request)
-    require_teams(user, "admin")
+    require_module(user, "inventory", "read_write_delete")
     in_use = await db.dies.count_documents({"product_type_id": product_type_id})
     if in_use:
         raise HTTPException(
@@ -110,7 +110,7 @@ async def delete_product_type(product_type_id: str, request: Request):
 @router.get("/product-types/{product_type_id}/next-code")
 async def suggest_next_code(product_type_id: str, request: Request):
     user = await get_current_user(request)
-    require_teams(user, "admin", "store")
+    require_module(user, "inventory", "read")
     pt = await db.product_types.find_one({"product_type_id": product_type_id}, {"_id": 0})
     if not pt:
         raise HTTPException(status_code=404, detail="Product type not found")
