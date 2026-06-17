@@ -378,6 +378,15 @@ async def startup():
             # Update category if changed
             await db.modules.update_one({"module_id": mod["module_id"]}, {"$set": {"category": mod["category"], "sort_order": mod["sort_order"]}})
 
+    # Backfill module permissions so module-based capability gates match prior
+    # role-based access (idempotent; never lowers an existing grant).
+    try:
+        from migrations.backfill_module_permissions import backfill_module_permissions
+        _bf = await backfill_module_permissions(db)
+        print(f"[startup] module-permission backfill: {_bf}")
+    except Exception as _e:
+        print(f"[startup] module-permission backfill skipped: {_e}")
+
     # Ensure admin has all modules assigned
     all_mod_names = [m["name"] for m in default_modules]
     admin_user = await db.users.find_one({"email": admin_email})
