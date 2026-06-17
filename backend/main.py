@@ -366,6 +366,9 @@ async def startup():
         {"module_id": "mod_leads", "name": "leads", "display_name": "Leads & CRM", "category": "sales", "sort_order": 17, "is_active": True},
         {"module_id": "mod_sales", "name": "sales_portal", "display_name": "Sales Portal", "category": "sales", "sort_order": 18, "is_active": True},
         {"module_id": "mod_delegation", "name": "delegation", "display_name": "Delegation System", "category": "admin", "sort_order": 19, "is_active": True},
+        {"module_id": "mod_orders", "name": "orders", "display_name": "Orders", "category": "store", "sort_order": 20, "is_active": True},
+        {"module_id": "mod_procurement", "name": "procurement", "display_name": "Procurement", "category": "store", "sort_order": 21, "is_active": True},
+        {"module_id": "mod_invoices", "name": "invoices", "display_name": "Invoices", "category": "accounts", "sort_order": 22, "is_active": True},
     ]
     for mod in default_modules:
         existing_mod = await db.modules.find_one({"module_id": mod["module_id"]})
