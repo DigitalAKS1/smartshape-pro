@@ -13,6 +13,10 @@ router = APIRouter()
 JWT_SECRET = os.environ.get("JWT_SECRET", "default-secret-key")
 JWT_ALGORITHM = "HS256"
 
+# Central inbox that receives selection-change / approval / submission notifications
+# (instead of CC-ing the individual owning sales person). Overridable via env.
+NOTIFY_INBOX = os.environ.get("NOTIFY_INBOX", "care@smartshape.in")
+
 
 def _customer_token(account_id: str, email: str) -> str:
     payload = {
@@ -355,7 +359,7 @@ For any queries please contact:
 Best regards,
 SmartShape Pro Team"""
 
-            cc = [quot.get("sales_person_email", ""), user["email"]]
+            cc = [NOTIFY_INBOX, user["email"]]
             cc = [e for e in cc if e and e.lower() != se.lower() and e.lower() != customer_email.lower()]
             await _send_email(se, ap, sn, [customer_email], cc,
                 f"Update to your SmartShape selection – {quot.get('school_name')}", body)
@@ -417,7 +421,7 @@ async def approve_selection_changes(token: str):
     # Notify staff: owning sales + whoever proposed the change.
     try:
         se, ap, sn = await _email_cfg()
-        staff = [quot.get("sales_person_email", ""), quot.get("selection_changed_by", "")]
+        staff = [NOTIFY_INBOX, quot.get("selection_changed_by", "")]
         staff = [e for e in dict.fromkeys(staff) if e and e.lower() != se.lower()]
         if staff:
             body = (f"Good news — {quot.get('school_name', 'the customer')} has APPROVED the "
@@ -505,7 +509,7 @@ Best regards,
 SmartShape Pro Team"""
 
     try:
-        cc = [quot.get("sales_person_email", "")]
+        cc = [NOTIFY_INBOX]
         cc = [e for e in cc if e and e.lower() != se.lower() and e.lower() != customer_email.lower()]
         await _send_email(se, ap, sn, [customer_email], cc,
             f"Your SmartShape Selection Confirmed – {quot.get('school_name')}", body)
