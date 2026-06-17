@@ -9,7 +9,7 @@ import asyncio
 
 from database import db
 from auth_utils import get_current_user, hash_password
-from rbac import get_team, require_admin, require_teams, require_superadmin
+from rbac import get_team, require_admin, require_teams, require_superadmin, require_module
 from audit_backup import list_backups, restore_bundle
 
 # Lazy import to avoid circular dependency — push_routes imports from database only
@@ -371,8 +371,7 @@ async def get_conversion_analytics(request: Request):
 @router.get("/admin/funnel")
 async def admin_funnel(request: Request):
     user = await get_current_user(request)
-    if user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Admin only")
+    require_module(user, "analytics", "read")
     stage_buckets = {}
     async for doc in db.leads.aggregate([{"$group": {"_id": "$stage", "count": {"$sum": 1}}}]):
         stage_buckets[doc["_id"] or "new"] = doc["count"]
@@ -403,7 +402,7 @@ async def admin_funnel(request: Request):
 @router.get("/admin/attendance")
 async def get_all_attendance(request: Request):
     user = await get_current_user(request)
-    require_teams(user, "admin", "accounts")
+    require_module(user, "field_sales", "read")
     records = await db.attendance.find({}, {"_id": 0}).sort("date", -1).limit(200).to_list(200)
     return records
 
@@ -411,7 +410,7 @@ async def get_all_attendance(request: Request):
 @router.get("/admin/visits")
 async def get_all_visits(request: Request):
     user = await get_current_user(request)
-    require_teams(user, "admin", "accounts")
+    require_module(user, "field_sales", "read")
     visits = await db.field_visits.find({}, {"_id": 0}).sort("visit_date", -1).limit(200).to_list(200)
     return visits
 
@@ -434,7 +433,7 @@ async def get_all_expenses(request: Request):
 @router.get("/admin/field-sales/summary")
 async def get_field_sales_summary(request: Request):
     user = await get_current_user(request)
-    require_teams(user, "admin", "accounts")
+    require_module(user, "field_sales", "read")
 
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     current_month = datetime.now(timezone.utc).strftime("%Y-%m")
