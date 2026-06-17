@@ -11,7 +11,7 @@ import mimetypes
 
 from database import db
 from auth_utils import get_current_user
-from rbac import get_team, require_teams
+from rbac import get_team, require_teams, require_module
 from media_utils import youtube_id, normalize_images, MAX_DIE_IMAGES
 
 router = APIRouter()
@@ -103,7 +103,7 @@ async def get_dies(request: Request, include_archived: bool = False):
 @router.post("/dies")
 async def create_die(die_input: DieCreate, request: Request):
     user = await get_current_user(request)
-    require_teams(user, "admin", "store")
+    require_module(user, "inventory", "read_write")
     die_id = f"die_{uuid.uuid4().hex[:12]}"
     data = die_input.model_dump()
     if data.get("video_url") and not youtube_id(data["video_url"]):
@@ -138,7 +138,7 @@ async def create_die(die_input: DieCreate, request: Request):
 @router.put("/dies/{die_id}")
 async def update_die(die_id: str, request: Request):
     user = await get_current_user(request)
-    require_teams(user, "admin", "store")
+    require_module(user, "inventory", "read_write")
     updates = await request.json()
     safe = {k: v for k, v in updates.items() if k not in ("die_id", "_id")}
     safe.pop("images", None)          # images are managed only via the image endpoints
@@ -170,7 +170,7 @@ async def update_die(die_id: str, request: Request):
 @router.put("/dies/{die_id}/archive")
 async def archive_die(die_id: str, request: Request):
     user = await get_current_user(request)
-    require_teams(user, "admin", "store")
+    require_module(user, "inventory", "read_write")
     die = await db.dies.find_one({"die_id": die_id}, {"_id": 0})
     if not die:
         raise HTTPException(status_code=404, detail="Die not found")
@@ -183,7 +183,7 @@ async def archive_die(die_id: str, request: Request):
 @router.delete("/dies/{die_id}")
 async def delete_die(die_id: str, request: Request):
     user = await get_current_user(request)
-    require_teams(user, "admin")  # only admin can hard-delete
+    require_module(user, "inventory", "read_write_delete")  # only admin can hard-delete
     die = await db.dies.find_one({"die_id": die_id})
     if not die:
         raise HTTPException(status_code=404, detail="Die not found")
@@ -198,7 +198,7 @@ class BulkDeleteInput(BaseModel):
 @router.post("/dies/bulk-delete")
 async def bulk_delete_dies(payload: BulkDeleteInput, request: Request):
     user = await get_current_user(request)
-    require_teams(user, "admin")  # only admin can hard-delete
+    require_module(user, "inventory", "read_write_delete")  # only admin can hard-delete
     ids = [i for i in (payload.die_ids or []) if i]
     if not ids:
         raise HTTPException(status_code=400, detail="No items selected")
@@ -222,7 +222,7 @@ async def _set_images(die_id: str, images: list) -> dict:
 @router.post("/dies/{die_id}/upload-image")
 async def upload_die_image(die_id: str, request: Request, file: UploadFile = File(...)):
     user = await get_current_user(request)
-    require_teams(user, "admin", "store")
+    require_module(user, "inventory", "read_write")
     die = await db.dies.find_one({"die_id": die_id}, {"_id": 0})
     if not die:
         raise HTTPException(status_code=404, detail="Die not found")
@@ -240,7 +240,7 @@ async def upload_die_image(die_id: str, request: Request, file: UploadFile = Fil
 @router.post("/dies/{die_id}/images")
 async def add_die_images(die_id: str, request: Request, files: List[UploadFile] = File(...)):
     user = await get_current_user(request)
-    require_teams(user, "admin", "store")
+    require_module(user, "inventory", "read_write")
     die = await db.dies.find_one({"die_id": die_id}, {"_id": 0})
     if not die:
         raise HTTPException(status_code=404, detail="Die not found")
@@ -263,7 +263,7 @@ async def add_die_images(die_id: str, request: Request, files: List[UploadFile] 
 @router.delete("/dies/{die_id}/images")
 async def delete_die_image(die_id: str, url: str, request: Request):
     user = await get_current_user(request)
-    require_teams(user, "admin", "store")
+    require_module(user, "inventory", "read_write")
     die = await db.dies.find_one({"die_id": die_id}, {"_id": 0})
     if not die:
         raise HTTPException(status_code=404, detail="Die not found")
@@ -291,7 +291,7 @@ class ReorderImagesInput(BaseModel):
 @router.put("/dies/{die_id}/images/reorder")
 async def reorder_die_images(die_id: str, payload: ReorderImagesInput, request: Request):
     user = await get_current_user(request)
-    require_teams(user, "admin", "store")
+    require_module(user, "inventory", "read_write")
     die = await db.dies.find_one({"die_id": die_id}, {"_id": 0})
     if not die:
         raise HTTPException(status_code=404, detail="Die not found")
@@ -306,7 +306,7 @@ async def reorder_die_images(die_id: str, payload: ReorderImagesInput, request: 
 async def import_dies_csv(file: UploadFile = File(...), request: Request = None):
     if request:
         user = await get_current_user(request)
-        require_teams(user, "admin", "store")
+        require_module(user, "inventory", "read_write")
     content = await file.read()
     try:
         text = content.decode("utf-8-sig")
@@ -418,8 +418,7 @@ async def get_packages():
 @router.post("/packages")
 async def create_package(request: Request):
     user = await get_current_user(request)
-    if user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
+    require_module(user, "package_master", "read_write")
     body = await request.json()
     package_id = f"pkg_{uuid.uuid4().hex[:8]}"
     pkg_doc = {
@@ -454,8 +453,7 @@ async def update_package(package_id: str, request: Request):
 @router.delete("/packages/{package_id}")
 async def delete_package(package_id: str, request: Request):
     user = await get_current_user(request)
-    if user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
+    require_module(user, "package_master", "read_write_delete")
     await db.packages.delete_one({"package_id": package_id})
     return {"message": "Package deleted"}
 
@@ -465,7 +463,7 @@ async def delete_package(package_id: str, request: Request):
 @router.post("/stock/movement")
 async def create_stock_movement(movement_input: StockMovementCreate, request: Request):
     user = await get_current_user(request)
-    require_teams(user, "admin", "store")
+    require_module(user, "stock_management", "read_write")
 
     die = await db.dies.find_one({"die_id": movement_input.die_id}, {"_id": 0})
     if not die:
@@ -540,7 +538,7 @@ async def create_stock_movement(movement_input: StockMovementCreate, request: Re
 @router.get("/stock/movements")
 async def get_stock_movements(request: Request):
     user = await get_current_user(request)
-    require_teams(user, "admin", "store")
+    require_module(user, "stock_management", "read")
     movements = await db.stock_movements.find({}, {"_id": 0}).sort("movement_date", -1).limit(100).to_list(100)
     return movements
 
@@ -569,7 +567,7 @@ async def run_low_stock_alert_now(request: Request):
     """Admin: run the low-stock digest immediately (in-app notification + email).
     The same job runs automatically every day at 8am IST."""
     user = await get_current_user(request)
-    require_teams(user, "admin")
+    require_module(user, "purchase_alerts", "read_write")
     from scheduler import run_low_stock_check  # lazy import avoids any import cycle
     return await run_low_stock_check(trigger="manual")
 
@@ -579,7 +577,7 @@ async def run_low_stock_alert_now(request: Request):
 @router.get("/sales-person-stock")
 async def get_sales_person_stock(request: Request):
     user = await get_current_user(request)
-    require_teams(user, "admin", "store")
+    require_module(user, "stock_management", "read")
     holdings = await db.sales_person_stock.find({}, {"_id": 0}).to_list(1000)
     # Enrich with salesperson name and die info
     sp_map = {sp["sales_person_id"]: sp async for sp in db.salespersons.find({}, {"_id": 0})}
