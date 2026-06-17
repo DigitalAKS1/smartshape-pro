@@ -10,7 +10,7 @@ import requests as http_requests
 
 from database import db
 from auth_utils import get_current_user
-from rbac import get_team, require_superadmin
+from rbac import get_team, require_superadmin, require_module
 from audit_backup import snapshot_and_delete, preview_counts
 from cascade_delete import build_school_plan, build_contact_plan
 
@@ -442,8 +442,7 @@ async def get_pipeline_settings(request: Request):
 @router.put("/pipeline-settings")
 async def update_pipeline_settings(request: Request):
     user = await get_current_user(request)
-    if get_team(user) != "admin":
-        raise HTTPException(status_code=403, detail="Admin only")
+    require_module(user, "leads", "read_write")
     body = await request.json()
     allowed = {}
     for k in ("stage_probabilities", "stage_idle_limits", "lost_reasons",
@@ -1033,8 +1032,7 @@ async def assign_school(school_id: str, request: Request):
     """Assign a school to a Sales Executive and cascade ownership to its
     contacts + leads. Admin only."""
     user = await get_current_user(request)
-    if get_team(user) != "admin":
-        raise HTTPException(status_code=403, detail="Admin only")
+    require_module(user, "leads", "read_write")
     body = await request.json()
     assigned_to = (body.get("assigned_to") or "").strip()
     assigned_name = (body.get("assigned_name") or "").strip()
@@ -1053,8 +1051,7 @@ async def backfill_school_owners(request: Request):
     """One-time, idempotent: give each unowned school the Sales Exec who holds the
     most of its leads. Does not cascade (those leads are already assigned). Admin only."""
     user = await get_current_user(request)
-    if get_team(user) != "admin":
-        raise HTTPException(status_code=403, detail="Admin only")
+    require_module(user, "leads", "read_write")
     schools = await db.schools.find(
         {"is_deleted": {"$ne": True}, "$or": [{"assigned_to": {"$exists": False}}, {"assigned_to": ""}, {"assigned_to": None}]},
         {"_id": 0, "school_id": 1},
@@ -1087,8 +1084,7 @@ async def backfill_school_owners(request: Request):
 async def bulk_assign_schools(request: Request):
     """Assign many schools to one Sales Executive at once, cascading each. Admin only."""
     user = await get_current_user(request)
-    if get_team(user) != "admin":
-        raise HTTPException(status_code=403, detail="Admin only")
+    require_module(user, "leads", "read_write")
     body = await request.json()
     school_ids = body.get("school_ids") or []
     assigned_to = (body.get("assigned_to") or "").strip()
