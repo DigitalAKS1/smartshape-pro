@@ -14,7 +14,7 @@ import xml.etree.ElementTree as ET
 
 from database import db
 from auth_utils import get_current_user
-from rbac import get_team
+from rbac import get_team, require_module
 
 router = APIRouter(prefix="/invoices", tags=["invoices"])
 
@@ -148,7 +148,7 @@ async def _match_order(n: dict):
 @router.post("/bulk-import")
 async def bulk_import_invoices(request: Request, file: UploadFile = File(...)):
     user = await get_current_user(request)
-    _require_admin_accounts(user)
+    require_module(user, "invoices", "read_write")
     text = (await file.read()).decode("utf-8", errors="replace")
     is_xml = (file.filename or "").lower().endswith(".xml") or text.lstrip().startswith("<")
     fmt = "xml" if is_xml else "json"
@@ -210,7 +210,7 @@ async def bulk_import_invoices(request: Request, file: UploadFile = File(...)):
 @router.get("")
 async def list_invoices(request: Request, school_id: Optional[str] = None, match_status: Optional[str] = None):
     user = await get_current_user(request)
-    _require_admin_accounts(user)
+    require_module(user, "invoices", "read")
     q = {}
     if school_id:
         q["school_id"] = school_id
@@ -224,7 +224,7 @@ async def receivables(request: Request):
     """Per-school outstanding (invoiced − order payments) with aging, sorted by outstanding desc."""
     from datetime import date as _date
     user = await get_current_user(request)
-    _require_admin_accounts(user)
+    require_module(user, "invoices", "read")
     by_school = {}
     async for inv in db.invoices.find(
         {"school_id": {"$nin": [None, ""]}},
@@ -271,7 +271,7 @@ async def receivables(request: Request):
 async def map_invoice(invoice_id: str, request: Request):
     """Manually map an unmatched invoice to a school (and optionally an order)."""
     user = await get_current_user(request)
-    _require_admin_accounts(user)
+    require_module(user, "invoices", "read_write")
     body = await request.json()
     upd = {}
     if body.get("school_id"):
@@ -291,7 +291,7 @@ async def map_invoice(invoice_id: str, request: Request):
 @router.delete("/{invoice_id}")
 async def delete_invoice(invoice_id: str, request: Request):
     user = await get_current_user(request)
-    _require_admin_accounts(user)
+    require_module(user, "invoices", "read_write_delete")
     await db.invoices.delete_one({"invoice_id": invoice_id})
     return {"message": "Invoice deleted"}
 
