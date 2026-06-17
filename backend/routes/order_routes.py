@@ -9,7 +9,7 @@ import json
 
 from database import db
 from auth_utils import get_current_user
-from rbac import get_team, require_teams, require_superadmin
+from rbac import get_team, require_teams, require_superadmin, require_module
 from audit_backup import snapshot_and_delete
 from tally_export import gather_so, build_json, build_voucher_xml, build_envelope
 
@@ -203,7 +203,7 @@ async def cancel_order(order_id: str, request: Request):
     """Soft-cancel an order ('not finalising'): keep it visible, release held
     stock, free the quotation/lead. Reversible via /reopen. Admin & accounts."""
     user = await get_current_user(request)
-    require_teams(user, "admin", "accounts")
+    require_module(user, "orders", "read_write")
     order = await db.orders.find_one({"order_id": order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
@@ -246,7 +246,7 @@ async def cancel_order(order_id: str, request: Request):
 async def reopen_order(order_id: str, request: Request):
     """Re-open a cancelled order: re-reserve its stock and re-lock the lead. Admin & accounts."""
     user = await get_current_user(request)
-    require_teams(user, "admin", "accounts")
+    require_module(user, "orders", "read_write")
     order = await db.orders.find_one({"order_id": order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
@@ -287,7 +287,7 @@ class BulkExportInput(BaseModel):
 async def export_order(order_id: str, request: Request, format: str = "xml"):
     """Download a single Sales Order as a Tally-importable XML voucher or JSON."""
     user = await get_current_user(request)
-    require_teams(user, "admin", "accounts")
+    require_module(user, "orders", "read")
     data = await gather_so(order_id)
     if not data:
         raise HTTPException(status_code=404, detail="Order not found")
@@ -307,7 +307,7 @@ async def export_orders_bulk(payload: BulkExportInput, request: Request):
     """Download many Sales Orders at once — one combined Tally XML (multiple
     vouchers, import in one go) or a JSON array."""
     user = await get_current_user(request)
-    require_teams(user, "admin", "accounts")
+    require_module(user, "orders", "read")
     ids = [i for i in (payload.order_ids or []) if i]
     if not ids:
         raise HTTPException(status_code=400, detail="No orders selected")
@@ -424,9 +424,7 @@ async def create_order_for_quotation(quotation_id: str, *, created_by: str,
 @router.post("/orders")
 async def create_order_from_quotation(request: Request):
     user = await get_current_user(request)
-    team = get_team(user)
-    if team == "store":
-        raise HTTPException(status_code=403, detail="Store team cannot create orders")
+    require_module(user, "orders", "read_write")
     body = await request.json()
     quotation_id = body.get("quotation_id")
     if not quotation_id:
@@ -546,8 +544,7 @@ EDITABLE_ITEM_STATUSES = ("on_hold", "confirmed")
 
 
 def _assert_can_edit_selection(user, order):
-    if get_team(user) == "sales":
-        raise HTTPException(status_code=403, detail="Sales cannot edit order selections")
+    require_module(user, "orders", "read_write")
     if order.get("order_status") not in EDITABLE_ORDER_STATUSES:
         raise HTTPException(status_code=400,
             detail=f"Selection is locked once the order is {order.get('order_status')}")
@@ -1140,6 +1137,7 @@ async def get_holds(request: Request):
             "quantity": qty,
             "hold_date": order.get("created_at", "") if order else "",
             "stock_qty": stock_qty,
+            "min_level": die.get("min_level", 0) if die else 0,
             "reserved_qty": die.get("reserved_qty", 0) if die else 0,
             "committed": committed,
             # available shown to the user already accounts for this line's own demand
@@ -1203,8 +1201,7 @@ async def recompute_reservations_endpoint(request: Request):
     by the old +1-per-die behaviour.
     """
     user = await get_current_user(request)
-    if get_team(user) not in ("admin", "accounts"):
-        raise HTTPException(status_code=403, detail="Only admin/accounts can recompute reservations")
+    require_module(user, "stock_management", "read_write")
     report = await recompute_reservations()
     await log_activity(user["email"], "recompute", "stock", "reservations",
                        f"Recomputed reservations: {report['dies_fixed']}/{report['dies_scanned']} dies corrected")
