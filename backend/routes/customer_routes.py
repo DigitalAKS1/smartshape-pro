@@ -6,7 +6,7 @@ from email.mime.multipart import MIMEMultipart
 
 from database import db
 from auth_utils import get_current_user, hash_password, verify_password
-from rbac import get_team
+from rbac import get_team, require_module
 
 router = APIRouter()
 
@@ -242,12 +242,11 @@ async def update_customer_selection(token: str, request: Request):
     if not quot:
         raise HTTPException(status_code=404, detail="Quotation not found")
 
-    # Only admin/accounts, or the sales person who owns this quotation, may edit.
+    # The owning sales person may always edit; everyone else needs module access.
     team = get_team(user)
     owns = (quot.get("sales_person_email", "").lower() == user.get("email", "").lower())
-    if team not in ("admin", "accounts") and not (team == "sales" and owns):
-        raise HTTPException(status_code=403,
-            detail="Only admin/accounts or the owning sales person can edit this selection")
+    if not (team == "sales" and owns):
+        require_module(user, "quotations", "read_write")
 
     selection = await db.catalogue_selections.find_one(
         {"quotation_id": quot["quotation_id"]}, {"_id": 0}
