@@ -10,7 +10,7 @@ import logging
 
 from database import db
 from auth_utils import get_current_user
-from rbac import get_team, require_teams
+from rbac import get_team, require_teams, require_module
 from routes.drip_routes import _auto_enroll_quotation_sent
 from media_utils import gate_die_for_customer
 
@@ -434,9 +434,7 @@ async def _crm_hook_quotation(quot_doc: dict):
 async def create_quotation(request: Request):
     user = await get_current_user(request)
     team = get_team(user)
-    # store team cannot create quotations; admin, accounts, sales can
-    if team == "store":
-        raise HTTPException(status_code=403, detail="Store team cannot create quotations")
+    require_module(user, "quotations", "read_write")
 
     body = await request.json()
 
@@ -521,8 +519,7 @@ async def edit_quotation(quotation_id: str, request: Request):
     # Enforce write access (mirrors _get_quotation_for_po): store cannot edit;
     # sales can only edit their own quotations.
     _team = get_team(user)
-    if _team == "store":
-        raise HTTPException(status_code=403, detail="Store team cannot edit quotations")
+    require_module(user, "quotations", "read_write")
     if _team == "sales" and existing.get("sales_person_email") != user.get("email"):
         raise HTTPException(status_code=403, detail="Sales can only edit their own quotations")
 
@@ -599,8 +596,7 @@ async def update_quotation_status(quotation_id: str, status: str, request: Reque
     if not quot:
         raise HTTPException(status_code=404, detail="Quotation not found")
     _team = get_team(user)
-    if _team == "store":
-        raise HTTPException(status_code=403, detail="Store team cannot edit quotations")
+    require_module(user, "quotations", "read_write")
     if _team == "sales" and quot.get("sales_person_email") != user.get("email"):
         raise HTTPException(status_code=403, detail="Sales can only edit their own quotations")
     await db.quotations.update_one(
@@ -626,8 +622,7 @@ async def _get_quotation_for_po(quotation_id: str, user: dict):
     quot = await db.quotations.find_one({"quotation_id": quotation_id}, {"_id": 0})
     if not quot:
         raise HTTPException(status_code=404, detail="Quotation not found")
-    if team == "store":
-        raise HTTPException(status_code=403, detail="Store team cannot manage PO documents")
+    require_module(user, "quotations", "read_write")
     if team == "sales" and quot.get("sales_person_email") != user.get("email"):
         raise HTTPException(status_code=403, detail="Sales can only manage PO for their own quotations")
     return quot
@@ -690,8 +685,7 @@ async def update_quotation_po_status(quotation_id: str, request: Request):
     """Approve/reject an uploaded PO. Admin/Accounts only."""
     user = await get_current_user(request)
     team = get_team(user)
-    if team not in ("admin", "accounts"):
-        raise HTTPException(status_code=403, detail="Only Admin/Accounts can review PO documents")
+    require_module(user, "quotations", "read_write_delete")
     body = await request.json()
     new_status = (body.get("po_status") or "").strip()
     if new_status not in ("approved", "rejected"):
@@ -729,8 +723,7 @@ async def remove_quotation_po(quotation_id: str, request: Request):
 async def delete_quotation(quotation_id: str, request: Request):
     user = await get_current_user(request)
     team = get_team(user)
-    if team not in ("admin", "accounts"):
-        raise HTTPException(status_code=403, detail="Only Admin/Accounts team can delete quotations")
+    require_module(user, "quotations", "read_write_delete")
 
     quot = await db.quotations.find_one({"quotation_id": quotation_id}, {"_id": 0, "quotation_id": 1})
     if not quot:
