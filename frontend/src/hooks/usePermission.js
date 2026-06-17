@@ -31,51 +31,60 @@ export function useTeam() {
   return 'sales';
 }
 
+const NONE = { canView: false, canWrite: false, canDelete: false, canDownload: false };
+
 /**
  * Returns permission flags for a given module.
- * Permission level is derived first from team/role, then from explicit module_permissions.
+ *
+ * Capability is the UNION of:
+ *   1) the user's explicit per-module grant (module_permissions) — the source of
+ *      truth going forward, mirroring the backend `require_module` gate; and
+ *   2) legacy role defaults (kept additively so nothing a team sees today
+ *      disappears during rollout).
+ *
+ * This lets an admin grant any user any module (e.g. accounts → procurement) and
+ * have the UI surface it, while existing role-based menus keep working.
  */
 export function usePermission(module) {
   const { user } = useAuth();
   const team = useTeam();
 
-  if (!user) return { canView: false, canWrite: false, canDelete: false, canDownload: false };
+  if (!user) return NONE;
   if (team === 'admin') return { canView: true, canWrite: true, canDelete: true, canDownload: true };
 
-  // ── Accounts team ──
-  if (team === 'accounts') {
-    const accountsWrite = ['quotations', 'accounts', 'payroll'];
-    const accountsRead  = ['dashboard', 'analytics', 'leave_management'];
-    if (accountsWrite.includes(module))
-      return { canView: true, canWrite: true, canDelete: false, canDownload: true };
-    if (accountsRead.includes(module))
-      return { canView: true, canWrite: false, canDelete: false, canDownload: false };
-    return { canView: false, canWrite: false, canDelete: false, canDownload: false };
-  }
-
-  // ── Store team ──
-  if (team === 'store') {
-    const storeManage = ['inventory', 'stock_management', 'purchase_alerts', 'physical_count', 'store', 'package_master'];
-    const storeRead   = ['quotations', 'dashboard', 'leave_management'];
-    if (storeManage.includes(module))
-      return { canView: true, canWrite: true, canDelete: false, canDownload: true };
-    if (storeRead.includes(module))
-      return { canView: true, canWrite: false, canDelete: false, canDownload: false };
-    return { canView: false, canWrite: false, canDelete: false, canDownload: false };
-  }
-
-  // ── Sales team — read from explicit module_permissions ──
+  // 1) Explicit module grant (works for every non-admin team)
   const modulePerms = user.module_permissions?.[module];
   const isAssigned  = (user.assigned_modules || []).includes(module);
-
-  if (!isAssigned && !modulePerms)
-    return { canView: false, canWrite: false, canDelete: false, canDownload: false };
-
   const level = modulePerms?.level || (isAssigned ? 'read_write' : 'none');
-  return {
+  const grant = {
     canView:     level !== 'none',
     canWrite:    level === 'read_write' || level === 'read_write_delete',
     canDelete:   level === 'read_write_delete',
     canDownload: modulePerms?.can_download === true,
+  };
+
+  // 2) Legacy role defaults (additive — never removes existing access)
+  let roleDefault = NONE;
+  if (team === 'accounts') {
+    const accountsWrite = ['quotations', 'accounts', 'payroll'];
+    const accountsRead  = ['dashboard', 'analytics', 'leave_management'];
+    if (accountsWrite.includes(module))
+      roleDefault = { canView: true, canWrite: true, canDelete: false, canDownload: true };
+    else if (accountsRead.includes(module))
+      roleDefault = { canView: true, canWrite: false, canDelete: false, canDownload: false };
+  } else if (team === 'store') {
+    const storeManage = ['inventory', 'stock_management', 'purchase_alerts', 'physical_count', 'store', 'package_master'];
+    const storeRead   = ['quotations', 'dashboard', 'leave_management'];
+    if (storeManage.includes(module))
+      roleDefault = { canView: true, canWrite: true, canDelete: false, canDownload: true };
+    else if (storeRead.includes(module))
+      roleDefault = { canView: true, canWrite: false, canDelete: false, canDownload: false };
+  }
+
+  return {
+    canView:     grant.canView     || roleDefault.canView,
+    canWrite:    grant.canWrite    || roleDefault.canWrite,
+    canDelete:   grant.canDelete   || roleDefault.canDelete,
+    canDownload: grant.canDownload || roleDefault.canDownload,
   };
 }
