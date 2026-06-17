@@ -24,7 +24,7 @@ import os
 
 from database import db
 from auth_utils import get_current_user
-from rbac import require_teams
+from rbac import require_teams, require_module
 
 router = APIRouter()
 
@@ -149,7 +149,7 @@ async def get_vendor(vendor_id: str, request: Request):
 @router.post("/vendors")
 async def create_vendor(payload: VendorIn, request: Request):
     user = await get_current_user(request)
-    require_teams(user, "admin")
+    require_module(user, "procurement", "read_write")
     name = (payload.name or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="Vendor name is required")
@@ -169,7 +169,7 @@ async def create_vendor(payload: VendorIn, request: Request):
 @router.put("/vendors/{vendor_id}")
 async def update_vendor(vendor_id: str, request: Request):
     user = await get_current_user(request)
-    require_teams(user, "admin")
+    require_module(user, "procurement", "read_write")
     updates = await request.json()
     safe = {k: v for k, v in updates.items() if k not in ("vendor_id", "_id", "created_at")}
     safe["updated_at"] = _now()
@@ -181,7 +181,7 @@ async def update_vendor(vendor_id: str, request: Request):
 @router.delete("/vendors/{vendor_id}")
 async def delete_vendor(vendor_id: str, request: Request):
     user = await get_current_user(request)
-    require_teams(user, "admin")
+    require_module(user, "procurement", "read_write_delete")
     await db.vendors.update_one({"vendor_id": vendor_id}, {"$set": {"is_active": False, "updated_at": _now()}})
     return {"message": "Vendor deactivated"}
 
@@ -189,7 +189,7 @@ async def delete_vendor(vendor_id: str, request: Request):
 @router.post("/vendors/{vendor_id}/upload-logo")
 async def upload_vendor_logo(vendor_id: str, request: Request, file: UploadFile = File(...)):
     user = await get_current_user(request)
-    require_teams(user, "admin")
+    require_module(user, "procurement", "read_write")
     if not await db.vendors.find_one({"vendor_id": vendor_id}, {"_id": 0}):
         raise HTTPException(status_code=404, detail="Vendor not found")
     ext = file.filename.split(".")[-1] if "." in (file.filename or "") else "png"
@@ -226,7 +226,7 @@ async def list_purchase_items(request: Request, include_inactive: bool = False):
 @router.post("/purchase-items")
 async def create_purchase_item(payload: PurchaseItemIn, request: Request):
     user = await get_current_user(request)
-    require_teams(user, "admin", "store")
+    require_module(user, "procurement", "read_write")
     name = (payload.name or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="Item name is required")
@@ -246,7 +246,7 @@ async def create_purchase_item(payload: PurchaseItemIn, request: Request):
 @router.put("/purchase-items/{item_id}")
 async def update_purchase_item(item_id: str, request: Request):
     user = await get_current_user(request)
-    require_teams(user, "admin", "store")
+    require_module(user, "procurement", "read_write")
     updates = await request.json()
     # stock_qty changes only via stock-in movements, never a free-form edit.
     safe = {k: v for k, v in updates.items()
@@ -260,7 +260,7 @@ async def update_purchase_item(item_id: str, request: Request):
 @router.delete("/purchase-items/{item_id}")
 async def delete_purchase_item(item_id: str, request: Request):
     user = await get_current_user(request)
-    require_teams(user, "admin")
+    require_module(user, "procurement", "read_write_delete")
     await db.purchase_items.update_one({"purchase_item_id": item_id}, {"$set": {"is_active": False, "updated_at": _now()}})
     return {"message": "Purchase item deactivated"}
 
@@ -268,7 +268,7 @@ async def delete_purchase_item(item_id: str, request: Request):
 @router.post("/purchase-items/{item_id}/upload-image")
 async def upload_purchase_item_image(item_id: str, request: Request, file: UploadFile = File(...)):
     user = await get_current_user(request)
-    require_teams(user, "admin", "store")
+    require_module(user, "procurement", "read_write")
     if not await db.purchase_items.find_one({"purchase_item_id": item_id}, {"_id": 0}):
         raise HTTPException(status_code=404, detail="Purchase item not found")
     ext = file.filename.split(".")[-1] if "." in (file.filename or "") else "png"
@@ -456,7 +456,7 @@ async def list_vendor_items(request: Request, vendor_id: Optional[str] = None,
 @router.post("/vendor-items")
 async def create_vendor_item(payload: VendorItemIn, request: Request):
     user = await get_current_user(request)
-    require_teams(user, "admin", "store")
+    require_module(user, "procurement", "read_write")
     ref = payload.item_ref or {}
     if ref.get("source") not in ("die", "purchase_item") or not ref.get("id"):
         raise HTTPException(status_code=400, detail="item_ref must be {source, id}")
@@ -482,7 +482,7 @@ async def create_vendor_item(payload: VendorItemIn, request: Request):
 @router.put("/vendor-items/{vendor_item_id}")
 async def update_vendor_item(vendor_item_id: str, request: Request):
     user = await get_current_user(request)
-    require_teams(user, "admin", "store")
+    require_module(user, "procurement", "read_write")
     updates = await request.json()
     safe = {k: v for k, v in updates.items() if k not in ("vendor_item_id", "_id", "created_at")}
     safe["updated_at"] = _now()
@@ -494,7 +494,7 @@ async def update_vendor_item(vendor_item_id: str, request: Request):
 @router.delete("/vendor-items/{vendor_item_id}")
 async def delete_vendor_item(vendor_item_id: str, request: Request):
     user = await get_current_user(request)
-    require_teams(user, "admin", "store")
+    require_module(user, "procurement", "read_write_delete")
     await db.vendor_items.delete_one({"vendor_item_id": vendor_item_id})
     return {"message": "Vendor price row removed"}
 
@@ -527,7 +527,7 @@ async def list_qc_templates(request: Request):
 @router.post("/qc-templates")
 async def create_qc_template(request: Request):
     user = await get_current_user(request)
-    require_teams(user, "admin", "store")
+    require_module(user, "procurement", "read_write")
     body = await request.json()
     name = (body.get("name") or "").strip()
     if not name:
@@ -542,7 +542,7 @@ async def create_qc_template(request: Request):
 @router.put("/qc-templates/{template_id}")
 async def update_qc_template(template_id: str, request: Request):
     user = await get_current_user(request)
-    require_teams(user, "admin", "store")
+    require_module(user, "procurement", "read_write")
     body = await request.json()
     allowed = {k: body[k] for k in ("name", "checks", "is_active") if k in body}
     if allowed:
@@ -553,7 +553,7 @@ async def update_qc_template(template_id: str, request: Request):
 @router.delete("/qc-templates/{template_id}")
 async def delete_qc_template(template_id: str, request: Request):
     user = await get_current_user(request)
-    require_teams(user, "admin", "store")
+    require_module(user, "procurement", "read_write_delete")
     await db.qc_checklist_templates.delete_one({"template_id": template_id})
     return {"message": "QC template deleted"}
 
@@ -669,7 +669,7 @@ async def _build_req_lines(raw_lines: List[dict]) -> List[dict]:
 @router.post("/requisitions")
 async def create_requisition(request: Request):
     user = await get_current_user(request)
-    require_teams(user, "admin", "store")
+    require_module(user, "procurement", "read_write")
     body = await request.json()
     rid = _new_id("req")
     req_no = await next_number("requisition", "REQ")
@@ -689,7 +689,7 @@ async def create_requisition(request: Request):
 @router.put("/requisitions/{requisition_id}")
 async def update_requisition(requisition_id: str, request: Request):
     user = await get_current_user(request)
-    require_teams(user, "admin", "store")
+    require_module(user, "procurement", "read_write")
     req = await db.requisitions.find_one({"requisition_id": requisition_id}, {"_id": 0})
     if not req:
         raise HTTPException(status_code=404, detail="Requisition not found")
@@ -727,14 +727,14 @@ async def _transition_req(requisition_id: str, user: dict, to_status: str,
 @router.post("/requisitions/{requisition_id}/submit")
 async def submit_requisition(requisition_id: str, request: Request):
     user = await get_current_user(request)
-    require_teams(user, "admin", "store")
+    require_module(user, "procurement", "read_write")
     return await _transition_req(requisition_id, user, "submitted", ("draft", "rejected"))
 
 
 @router.post("/requisitions/{requisition_id}/approve")
 async def approve_requisition(requisition_id: str, request: Request):
     user = await get_current_user(request)
-    require_teams(user, "admin")
+    require_module(user, "procurement", "read_write")
     body = await request.json() if await _has_body(request) else {}
     remark = (body or {}).get("remark", "")
     return await _transition_req(
@@ -745,7 +745,7 @@ async def approve_requisition(requisition_id: str, request: Request):
 @router.post("/requisitions/{requisition_id}/reject")
 async def reject_requisition(requisition_id: str, request: Request):
     user = await get_current_user(request)
-    require_teams(user, "admin")
+    require_module(user, "procurement", "read_write")
     body = await request.json() if await _has_body(request) else {}
     remark = (body or {}).get("remark", "")
     return await _transition_req(
@@ -765,7 +765,7 @@ async def _has_body(request: Request) -> bool:
 async def convert_requisition_to_po(requisition_id: str, request: Request):
     """Create a draft PO from an approved requisition for a chosen vendor."""
     user = await get_current_user(request)
-    require_teams(user, "admin", "store")
+    require_module(user, "procurement", "read_write")
     req = await db.requisitions.find_one({"requisition_id": requisition_id}, {"_id": 0})
     if not req:
         raise HTTPException(status_code=404, detail="Requisition not found")
@@ -852,7 +852,7 @@ async def get_purchase_order(po_id: str, request: Request):
 async def create_purchase_order(request: Request):
     """Direct Order Planning entry point (origin='direct')."""
     user = await get_current_user(request)
-    require_teams(user, "admin", "store")
+    require_module(user, "procurement", "read_write")
     body = await request.json()
     vendor = await db.vendors.find_one({"vendor_id": body.get("vendor_id")}, {"_id": 0})
     if not vendor:
@@ -868,7 +868,7 @@ async def create_purchase_order(request: Request):
 @router.put("/purchase-orders/{po_id}")
 async def update_purchase_order(po_id: str, request: Request):
     user = await get_current_user(request)
-    require_teams(user, "admin", "store")
+    require_module(user, "procurement", "read_write")
     po = await db.purchase_orders.find_one({"po_id": po_id}, {"_id": 0})
     if not po:
         raise HTTPException(status_code=404, detail="Purchase order not found")
@@ -910,7 +910,7 @@ async def _transition_po(po_id: str, user: dict, to_status: str, allowed_from: t
 @router.post("/purchase-orders/{po_id}/approve")
 async def approve_po(po_id: str, request: Request):
     user = await get_current_user(request)
-    require_teams(user, "admin")
+    require_module(user, "procurement", "read_write")
     return await _transition_po(po_id, user, "approved", ("draft",),
                                 extra={"approval": {"by": user["email"], "at": _now()}})
 
@@ -918,14 +918,14 @@ async def approve_po(po_id: str, request: Request):
 @router.post("/purchase-orders/{po_id}/send")
 async def send_po(po_id: str, request: Request):
     user = await get_current_user(request)
-    require_teams(user, "admin", "store")
+    require_module(user, "procurement", "read_write")
     return await _transition_po(po_id, user, "sent", ("approved",))
 
 
 @router.post("/purchase-orders/{po_id}/cancel")
 async def cancel_po(po_id: str, request: Request):
     user = await get_current_user(request)
-    require_teams(user, "admin")
+    require_module(user, "procurement", "read_write")
     return await _transition_po(po_id, user, "cancelled",
                                 ("draft", "approved", "sent", "partially_received"))
 
@@ -969,7 +969,7 @@ async def purchase_order_packing_list(po_id: str, request: Request):
 async def create_goods_receipt(po_id: str, request: Request):
     """Open a Goods Receipt (GRN) pre-filled from the PO lines for verification."""
     user = await get_current_user(request)
-    require_teams(user, "admin", "store")
+    require_module(user, "procurement", "read_write")
     po = await db.purchase_orders.find_one({"po_id": po_id}, {"_id": 0})
     if not po:
         raise HTTPException(status_code=404, detail="Purchase order not found")
@@ -1037,7 +1037,7 @@ async def get_goods_receipt(grn_id: str, request: Request):
 async def update_goods_receipt(grn_id: str, request: Request):
     """Save received quantities / remarks before QC submission."""
     user = await get_current_user(request)
-    require_teams(user, "admin", "store")
+    require_module(user, "procurement", "read_write")
     g = await db.goods_receipts.find_one({"grn_id": grn_id}, {"_id": 0})
     if not g:
         raise HTTPException(status_code=404, detail="Goods receipt not found")
@@ -1112,7 +1112,7 @@ async def submit_qc(grn_id: str, request: Request):
     OK lines are stocked-in; hold/return lines are recorded but kept out of stock.
     """
     user = await get_current_user(request)
-    require_teams(user, "admin", "store")
+    require_module(user, "procurement", "read_write")
     body = await request.json()
     # Atomically claim the receipt so QC (and its stock-in) can run exactly once,
     # even under double-click / retry / concurrent tabs.
@@ -1196,7 +1196,7 @@ async def _advance_po_after_qc(po_id: str, qc_lines: List[dict], user: dict, grn
 async def close_po(po_id: str, request: Request):
     """Settle a partially-received PO without receiving the remainder."""
     user = await get_current_user(request)
-    require_teams(user, "admin")
+    require_module(user, "procurement", "read_write")
     return await _transition_po(po_id, user, "closed", ("partially_received", "received"))
 
 
@@ -1206,7 +1206,7 @@ async def close_po(po_id: str, request: Request):
 async def create_return(grn_id: str, request: Request):
     """Create a vendor return (debit note) from the GRN lines flagged 'return'."""
     user = await get_current_user(request)
-    require_teams(user, "admin", "store")
+    require_module(user, "procurement", "read_write")
     g = await db.goods_receipts.find_one({"grn_id": grn_id}, {"_id": 0})
     if not g:
         raise HTTPException(status_code=404, detail="Goods receipt not found")
@@ -1443,7 +1443,7 @@ async def get_challan(challan_id: str, request: Request):
 @router.post("/challans")
 async def create_challan(request: Request):
     user = await get_current_user(request)
-    require_teams(user, "admin", "store")
+    require_module(user, "procurement", "read_write")
     body = await request.json()
     ctype = body.get("type")
     if ctype not in _CHALLAN_TYPES:
@@ -1482,7 +1482,7 @@ async def create_challan(request: Request):
 async def record_challan_return(challan_id: str, request: Request):
     """Add returned quantities per line; set status open/partially_returned/closed."""
     user = await get_current_user(request)
-    require_teams(user, "admin", "store", "accounts")
+    require_module(user, "procurement", "read_write")
     c = await db.challans.find_one({"challan_id": challan_id}, {"_id": 0})
     if not c:
         raise HTTPException(status_code=404, detail="Challan not found")
@@ -1538,7 +1538,7 @@ async def challan_pdf(challan_id: str, request: Request):
 async def challan_from_vendor_return(return_id: str, request: Request):
     """Create a delivery challan for the rejected goods of a vendor return."""
     user = await get_current_user(request)
-    require_teams(user, "admin", "store")
+    require_module(user, "procurement", "read_write")
     ret = await db.vendor_returns.find_one({"return_id": return_id}, {"_id": 0})
     if not ret:
         raise HTTPException(status_code=404, detail="Return not found")
