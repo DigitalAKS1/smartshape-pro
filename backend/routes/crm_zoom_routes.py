@@ -11,7 +11,7 @@ import uuid, re
 
 from database import db
 from auth_utils import get_current_user
-from rbac import get_team
+from rbac import get_team, require_module
 
 router = APIRouter(prefix="/crm-zoom")
 
@@ -33,6 +33,7 @@ async def _load_roles() -> List[Dict[str, Any]]:
 @router.get("/fetch")
 async def zoom_crm_fetch(request: Request, meeting_id: str = ""):
     user = await get_current_user(request)
+    require_module(user, "leads", "read")
     import zoom_service
     if not await zoom_service.is_configured():
         raise HTTPException(400, "Zoom is not configured. Add your Zoom API credentials first.")
@@ -53,7 +54,8 @@ async def zoom_crm_fetch(request: Request, meeting_id: str = ""):
 
 @router.post("/suggest")
 async def zoom_crm_suggest(request: Request):
-    await get_current_user(request)
+    user = await get_current_user(request)
+    require_module(user, "leads", "read")
     from crm_zoom import suggest_rows
     body = await request.json()
     rows = body.get("rows", []) or []
@@ -89,6 +91,7 @@ async def _find_or_create_school(name: str, owner: str, owner_name: str, created
 @router.post("/import")
 async def zoom_crm_import(request: Request):
     user = await get_current_user(request)
+    require_module(user, "leads", "read_write")
     body = await request.json()
     theme = (body.get("theme") or "").strip()
     rows = body.get("rows", []) or []
