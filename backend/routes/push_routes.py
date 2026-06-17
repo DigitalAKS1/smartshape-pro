@@ -64,6 +64,12 @@ async def send_push_to_user(email: str, title: str, body: str, url: str = "/toda
             return 0
 
         from pywebpush import webpush, WebPushException
+        from py_vapid import Vapid01
+
+        # pywebpush 2.x rejects a multiline PEM *string* for vapid_private_key
+        # (it base64-decodes it as raw DER and raises "Could not deserialize key
+        # data"). Build a Vapid object from the PEM and pass that instead.
+        vapid_obj = Vapid01.from_pem(private_pem.encode())
 
         payload = json.dumps({"title": title, "body": body, "url": url, "tag": tag})
         sent = 0
@@ -76,7 +82,7 @@ async def send_push_to_user(email: str, title: str, body: str, url: str = "/toda
                     lambda s=sub: webpush(
                         subscription_info=s["subscription"],
                         data=payload,
-                        vapid_private_key=private_pem,
+                        vapid_private_key=vapid_obj,
                         vapid_claims={"sub": "mailto:info@smartshape.in"},
                     ),
                 )

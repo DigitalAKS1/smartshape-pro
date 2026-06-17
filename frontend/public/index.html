@@ -127,14 +127,21 @@
                     }),
                     (e.__SV = 1));
             })(document, window.posthog || []);
-            posthog.init("phc_xAvL2Iq4tFmANRE7kzbKwaSqp1HJjN7x48s3vr0CMjs", {
-                api_host: "https://us.i.posthog.com",
-                person_profiles: "identified_only", // or 'always' to create profiles for anonymous users as well,
-                session_recording: {
-                    recordCrossOriginIframes: true,
-                    capturePerformance: false,
-                },
-            });
+            // PostHog is OFF by default: session-replay/autocapture add heavy JS
+            // and the recorder retries forever when the network blocks posthog.com.
+            // Flip ANALYTICS_ENABLED to true to re-enable lightweight product analytics.
+            // (array.js only loads when posthog.init() is called, so leaving this off
+            //  means zero PostHog network requests / recorder weight.)
+            var ANALYTICS_ENABLED = false;
+            if (ANALYTICS_ENABLED) {
+                posthog.init("phc_xAvL2Iq4tFmANRE7kzbKwaSqp1HJjN7x48s3vr0CMjs", {
+                    api_host: "https://us.i.posthog.com",
+                    person_profiles: "identified_only",
+                    autocapture: false,
+                    disable_session_recording: true,
+                    capture_performance: false,
+                });
+            }
         </script>
     </body>
 </html>

@@ -1,95 +1,104 @@
-import React from 'react';
+import React, { Suspense, lazy } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { Toaster } from './components/ui/sonner';
 import ProtectedRoute from './components/ProtectedRoute';
 import OfflineBanner from './components/OfflineBanner';
+import { ThemeProvider } from './contexts/ThemeContext';
+import GeofenceGuard from './components/GeofenceGuard';
+import './App.css';
 
-// Auth pages
+// Auth pages — kept eager (first paint, tiny, avoid spinner flash on login/OAuth)
 import Login from './pages/Login';
 import Register from './pages/Register';
 import AuthCallback from './pages/AuthCallback';
 
+// Every other page is code-split via React.lazy so the initial bundle stays
+// small and each screen loads its own chunk on demand.
 // Admin pages
-import Dashboard from './pages/admin/Dashboard';
-import CreateQuotation from './pages/admin/CreateQuotation';
-import Quotations from './pages/admin/Quotations';
-import Inventory from './pages/admin/Inventory';
-import ProductTypes from './pages/admin/ProductTypes';
-import PurchaseAlerts from './pages/admin/PurchaseAlerts';
-import PackageMaster from './pages/admin/PackageMaster';
-import StockManagement from './pages/admin/StockManagement';
-import PhysicalCount from './pages/admin/PhysicalCount';
-import Analytics from './pages/admin/Analytics';
-import Payroll from './pages/admin/Payroll';
-import UserManagement from './pages/admin/UserManagement';
-import ModuleMaster from './pages/admin/ModuleMaster';
-import CRMMasters from './pages/admin/CRMMasters';
-import ProcurementMasters from './pages/admin/ProcurementMasters';
-import Procurement from './pages/admin/Procurement';
-import ReturnableChallans from './pages/admin/ReturnableChallans';
-import AdminControl from './pages/admin/AdminControl';
-import TodayDashboard from './pages/TodayDashboard';
-import Accounts from './pages/admin/Accounts';
-import HR from './pages/admin/HR';
-import Store from './pages/admin/Store';
-import FieldSales from './pages/admin/FieldSales';
-import LeadsCRM from './pages/admin/LeadsCRM';
-import EditQuotation from './pages/admin/EditQuotation';
-import ConversionTracking from './pages/admin/ConversionTracking';
-import ViewQuotation from './pages/admin/ViewQuotation';
-import CustomerEngagement from './pages/admin/CustomerEngagement';
-import LeaveManagement from './pages/admin/LeaveManagement';
-import VisitPlanning from './pages/admin/VisitPlanning';
-import VisitCalendar from './pages/admin/VisitCalendar';
-import OrdersManagement from './pages/admin/OrdersManagement';
-import AppSettings from './pages/admin/AppSettings';
-import ImportCenter from './pages/admin/ImportCenter';
-import ActivityLogsPage from './pages/admin/ActivityLogs';
-import DispatchTracking from './pages/admin/DispatchTracking';
-import SchoolProfile from './pages/admin/SchoolProfile';
-import MarketingHub from './pages/admin/MarketingHub';
-import DelegationApp from './pages/admin/DelegationApp';
-import FlowManagement from './pages/admin/FlowManagement';
-import Certificates from './pages/admin/Certificates';
+const Dashboard = lazy(() => import('./pages/admin/Dashboard'));
+const CreateQuotation = lazy(() => import('./pages/admin/CreateQuotation'));
+const Quotations = lazy(() => import('./pages/admin/Quotations'));
+const Inventory = lazy(() => import('./pages/admin/Inventory'));
+const ProductTypes = lazy(() => import('./pages/admin/ProductTypes'));
+const PurchaseAlerts = lazy(() => import('./pages/admin/PurchaseAlerts'));
+const PackageMaster = lazy(() => import('./pages/admin/PackageMaster'));
+const StockManagement = lazy(() => import('./pages/admin/StockManagement'));
+const PhysicalCount = lazy(() => import('./pages/admin/PhysicalCount'));
+const Analytics = lazy(() => import('./pages/admin/Analytics'));
+const Payroll = lazy(() => import('./pages/admin/Payroll'));
+const UserManagement = lazy(() => import('./pages/admin/UserManagement'));
+const ModuleMaster = lazy(() => import('./pages/admin/ModuleMaster'));
+const CRMMasters = lazy(() => import('./pages/admin/CRMMasters'));
+const ProcurementMasters = lazy(() => import('./pages/admin/ProcurementMasters'));
+const Procurement = lazy(() => import('./pages/admin/Procurement'));
+const ReturnableChallans = lazy(() => import('./pages/admin/ReturnableChallans'));
+const AdminControl = lazy(() => import('./pages/admin/AdminControl'));
+const TodayDashboard = lazy(() => import('./pages/TodayDashboard'));
+const Accounts = lazy(() => import('./pages/admin/Accounts'));
+const HR = lazy(() => import('./pages/admin/HR'));
+const Store = lazy(() => import('./pages/admin/Store'));
+const FieldSales = lazy(() => import('./pages/admin/FieldSales'));
+const LeadsCRM = lazy(() => import('./pages/admin/LeadsCRM'));
+const EditQuotation = lazy(() => import('./pages/admin/EditQuotation'));
+const ConversionTracking = lazy(() => import('./pages/admin/ConversionTracking'));
+const ViewQuotation = lazy(() => import('./pages/admin/ViewQuotation'));
+const CustomerEngagement = lazy(() => import('./pages/admin/CustomerEngagement'));
+const LeaveManagement = lazy(() => import('./pages/admin/LeaveManagement'));
+const VisitPlanning = lazy(() => import('./pages/admin/VisitPlanning'));
+const VisitCalendar = lazy(() => import('./pages/admin/VisitCalendar'));
+const OrdersManagement = lazy(() => import('./pages/admin/OrdersManagement'));
+const AppSettings = lazy(() => import('./pages/admin/AppSettings'));
+const ImportCenter = lazy(() => import('./pages/admin/ImportCenter'));
+const ActivityLogsPage = lazy(() => import('./pages/admin/ActivityLogs'));
+const DispatchTracking = lazy(() => import('./pages/admin/DispatchTracking'));
+const SchoolProfile = lazy(() => import('./pages/admin/SchoolProfile'));
+const MarketingHub = lazy(() => import('./pages/admin/MarketingHub'));
+const DelegationApp = lazy(() => import('./pages/admin/DelegationApp'));
+const FlowManagement = lazy(() => import('./pages/admin/FlowManagement'));
+const Certificates = lazy(() => import('./pages/admin/Certificates'));
 
 // Sales pages
-import SalesHome from './pages/sales/SalesHome';
-import SalesLeads from './pages/sales/SalesLeads';
-import SalesAttendance from './pages/sales/SalesAttendance';
-import SalesVisits from './pages/sales/SalesVisits';
-import SalesQuotations from './pages/sales/SalesQuotations';
-import SalesExpenses from './pages/sales/SalesExpenses';
+const SalesHome = lazy(() => import('./pages/sales/SalesHome'));
+const SalesLeads = lazy(() => import('./pages/sales/SalesLeads'));
+const SalesAttendance = lazy(() => import('./pages/sales/SalesAttendance'));
+const SalesVisits = lazy(() => import('./pages/sales/SalesVisits'));
+const SalesQuotations = lazy(() => import('./pages/sales/SalesQuotations'));
+const SalesExpenses = lazy(() => import('./pages/sales/SalesExpenses'));
 
 // Error pages
-import NotFound from './pages/NotFound';
+const NotFound = lazy(() => import('./pages/NotFound'));
 
 // Public page
-import CataloguePage from './pages/CataloguePage';
-import CustomerPortal from './pages/CustomerPortal';
-import CustomerLogin from './pages/CustomerLogin';
-import GetApp from './pages/GetApp';
-import ZoomJoin from './pages/ZoomJoin';
+const CataloguePage = lazy(() => import('./pages/CataloguePage'));
+const CustomerPortal = lazy(() => import('./pages/CustomerPortal'));
+const CustomerLogin = lazy(() => import('./pages/CustomerLogin'));
+const GetApp = lazy(() => import('./pages/GetApp'));
+const ZoomJoin = lazy(() => import('./pages/ZoomJoin'));
 
 // School Portal
-import SchoolLogin from './pages/SchoolLogin';
-import SchoolActivate from './pages/SchoolActivate';
-import Privacy from './pages/Privacy';
-import Terms from './pages/Terms';
-import SchoolDashboard from './pages/school/SchoolDashboard';
+const SchoolLogin = lazy(() => import('./pages/SchoolLogin'));
+const SchoolActivate = lazy(() => import('./pages/SchoolActivate'));
+const Privacy = lazy(() => import('./pages/Privacy'));
+const Terms = lazy(() => import('./pages/Terms'));
+const SchoolDashboard = lazy(() => import('./pages/school/SchoolDashboard'));
 // Teacher Portal
-import TeacherLogin from './pages/TeacherLogin';
-import TeacherActivate from './pages/TeacherActivate';
-import TeacherDashboard from './pages/teacher/TeacherDashboard';
-import ContentReview from './pages/admin/ContentReview';
-import CompetitionsAdmin from './pages/admin/CompetitionsAdmin';
-import PortalInbox from './pages/admin/PortalInbox';
-import MeetingsAdmin from './pages/admin/MeetingsAdmin';
+const TeacherLogin = lazy(() => import('./pages/TeacherLogin'));
+const TeacherActivate = lazy(() => import('./pages/TeacherActivate'));
+const TeacherDashboard = lazy(() => import('./pages/teacher/TeacherDashboard'));
+const ContentReview = lazy(() => import('./pages/admin/ContentReview'));
+const CompetitionsAdmin = lazy(() => import('./pages/admin/CompetitionsAdmin'));
+const PortalInbox = lazy(() => import('./pages/admin/PortalInbox'));
+const MeetingsAdmin = lazy(() => import('./pages/admin/MeetingsAdmin'));
 
-import { ThemeProvider } from './contexts/ThemeContext';
-import GeofenceGuard from './components/GeofenceGuard';
-
-import './App.css';
+// Lightweight fallback shown while a route chunk loads.
+function RouteFallback() {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '60vh' }}>
+      <div className="animate-spin rounded-full h-8 w-8 border-2 border-gray-300 border-t-gray-600" />
+    </div>
+  );
+}
 
 function SmartRedirect() {
   const { user } = useAuth();
@@ -152,6 +161,7 @@ function AppRouter() {
   return (
     <>
       <GeofenceGuard />
+      <Suspense fallback={<RouteFallback />}>
       <Routes>
       {/* Public Routes */}
       <Route path="/login" element={<Login />} />
@@ -230,6 +240,7 @@ function AppRouter() {
       <Route path="/" element={<ProtectedRoute><SmartRedirect /></ProtectedRoute>} />
       <Route path="*" element={<NotFound />} />
     </Routes>
+      </Suspense>
     </>
   );
 }
