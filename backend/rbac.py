@@ -49,3 +49,81 @@ def require_superadmin(user: dict):
     """Gate for irreversible destructive actions — only the owner account qualifies."""
     if not is_superadmin(user):
         raise HTTPException(status_code=403, detail="Only the owner account can perform this action")
+
+
+# ====================================================================
+# Module-based CAPABILITY gating
+# --------------------------------------------------------------------
+# Role decides WHAT DATA you can see (get_team + data-scope filters).
+# Module grant decides WHAT YOU CAN DO. This lets a small team work
+# cross-functionally: grant a module in User Management and the
+# capability follows the grant — no code change required.
+# ====================================================================
+
+import logging
+
+LEVELS = {"none": 0, "read": 1, "read_write": 2, "read_write_delete": 3}
+
+# Live-rollout switch: "shadow" logs would-be denials but blocks no one;
+# "enforce" (default) actually returns 403. First prod deploy sets shadow.
+MODULE_RBAC_MODE = (os.getenv("MODULE_RBAC_MODE") or "enforce").strip().lower()
+_rbac_shadow_log = logging.getLogger("rbac.shadow")
+
+
+def require_module(user: dict, module: str, level: str = "read") -> None:
+    """Gate an ACTION by the user's per-module permission grant, not their role.
+
+    Admin always passes. In MODULE_RBAC_MODE="shadow" a would-be 403 is logged,
+    not raised, so a live deploy can surface who'd be locked out before
+    enforcement is turned on. Data VISIBILITY (which rows) stays role-based via
+    get_team() and is untouched by this gate.
+    """
+    if get_team(user) == "admin":
+        return
+    perms = (user.get("module_permissions") or {}).get(module) or {}
+    have = LEVELS.get(perms.get("level", "none"), 0)
+    if have < LEVELS.get(level, 99):
+        if MODULE_RBAC_MODE == "shadow":
+            _rbac_shadow_log.warning(
+                "[SHADOW] would 403: email=%s module=%s need=%s have=%s",
+                user.get("email"), module, level, perms.get("level", "none"),
+            )
+            return
+        raise HTTPException(
+            status_code=403,
+            detail=f"You don't have '{level}' access to '{module}'",
+        )
+
+
+# Per-role default capability grants. These REPRODUCE today's role-based access
+# so flipping route gates to module-based changes nothing for existing users
+# until an admin edits a grant. Admin is omitted (bypasses all checks).
+_RW = {"level": "read_write", "can_download": True}
+_RWD = {"level": "read_write_delete", "can_download": True}
+_R = {"level": "read", "can_download": True}
+
+ROLE_DEFAULT_PERMISSIONS = {
+    "accounts": {
+        "dashboard": _R, "quotations": _RWD, "orders": _RW, "procurement": _RW,
+        "invoices": _RWD, "accounts": _RW, "payroll": _RW, "analytics": _R,
+        "field_sales": _R, "hr": _R, "leave_management": _RW, "settings": _R,
+    },
+    "store": {
+        "dashboard": _R, "quotations": _R, "orders": _RW, "procurement": _RW,
+        "inventory": _RWD, "stock_management": _RW, "purchase_alerts": _RW,
+        "package_master": _RW, "physical_count": _RW, "store": _RW,
+        "leave_management": _RW, "analytics": _R,
+    },
+    "sales_person": {
+        "dashboard": _R, "quotations": _RW, "leads": _RW, "field_sales": _RW,
+        "sales_portal": _RW, "leave_management": _RW, "analytics": _R,
+    },
+}
+
+
+def default_permissions_for_role(role: str) -> dict:
+    """Complete module_permissions for a role. Admin returns {} (bypasses checks)."""
+    if role == "admin":
+        return {}
+    # deep-copy so callers can't mutate the shared template
+    return {k: dict(v) for k, v in ROLE_DEFAULT_PERMISSIONS.get(role, {}).items()}
