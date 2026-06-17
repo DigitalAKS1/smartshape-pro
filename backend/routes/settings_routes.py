@@ -10,7 +10,7 @@ from email.mime.multipart import MIMEMultipart
 
 from database import db
 from auth_utils import get_current_user
-from rbac import get_team
+from rbac import get_team, require_module
 
 router = APIRouter()
 
@@ -29,8 +29,7 @@ def _save_file(path: str, data: bytes) -> None:
 @router.post("/settings/company")
 async def save_company_settings(request: Request):
     user = await get_current_user(request)
-    if user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
+    require_module(user, "settings", "read_write")
     body = await request.json()
     await db.settings.update_one(
         {"type": "company"},
@@ -63,8 +62,7 @@ async def get_company_settings():
 async def upload_company_logo(file: UploadFile = File(...), request: Request = None):
     if request:
         user = await get_current_user(request)
-        if user.get("role") != "admin":
-            raise HTTPException(status_code=403, detail="Admin access required")
+        require_module(user, "settings", "read_write")
     from services.storage import save_upload
     ext = file.filename.split(".")[-1] if "." in file.filename else "png"
     path = f"company/logo_{uuid.uuid4().hex[:8]}.{ext}"
@@ -79,8 +77,7 @@ async def upload_company_logo(file: UploadFile = File(...), request: Request = N
 @router.post("/settings/email")
 async def save_email_settings(request: Request):
     user = await get_current_user(request)
-    if user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
+    require_module(user, "settings", "read_write")
 
     settings = await request.json()
     # Auto-enable if credentials are present so admins don't need a separate toggle
@@ -97,9 +94,8 @@ async def save_email_settings(request: Request):
 @router.get("/settings/email")
 async def get_email_settings(request: Request):
     user = await get_current_user(request)
-    # Returns the plaintext app password, so restrict to admins (matches the POST guard).
-    if user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
+    # Returns the plaintext app password, so restrict to settings-readers (matches the POST guard).
+    require_module(user, "settings", "read")
     settings = await db.settings.find_one({"type": "email"}, {"_id": 0})
     if not settings:
         return {"sender_name": "SmartShape Pro", "sender_email": "", "gmail_app_password": "", "enabled": False}
@@ -111,8 +107,7 @@ async def get_email_settings(request: Request):
 @router.post("/settings/whatsapp")
 async def save_whatsapp_settings(request: Request):
     user = await get_current_user(request)
-    if user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
+    require_module(user, "settings", "read_write")
     body = await request.json()
     await db.settings.update_one(
         {"type": "whatsapp"},
@@ -125,9 +120,8 @@ async def save_whatsapp_settings(request: Request):
 @router.get("/settings/whatsapp")
 async def get_whatsapp_settings(request: Request):
     user = await get_current_user(request)
-    # Returns the plaintext WhatsApp gateway password, so restrict to admins.
-    if user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
+    # Returns the plaintext WhatsApp gateway password, so restrict to settings-readers.
+    require_module(user, "settings", "read")
     settings = await db.settings.find_one({"type": "whatsapp"}, {"_id": 0})
     if not settings:
         return {"username": "", "password": "", "enabled": False}
@@ -139,8 +133,7 @@ async def get_whatsapp_settings(request: Request):
 @router.post("/settings/sheets")
 async def save_sheets_settings(request: Request):
     user = await get_current_user(request)
-    if user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
+    require_module(user, "settings", "read_write")
 
     settings = await request.json()
     await db.settings.update_one(
@@ -164,8 +157,7 @@ async def get_ai_settings(request: Request):
 @router.post("/settings/ai")
 async def save_ai_settings(request: Request):
     user = await get_current_user(request)
-    if user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
+    require_module(user, "settings", "read_write")
     body = await request.json()
     key = (body.get("gemini_api_key") or "").strip()
     if not key:
@@ -212,8 +204,7 @@ async def get_dialler_settings(request: Request):
 @router.put("/settings/ai-dialler")
 async def save_dialler_settings(request: Request):
     user = await get_current_user(request)
-    if user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
+    require_module(user, "settings", "read_write")
     body = await request.json()
     safe = {k: v for k, v in body.items() if k in (
         "enabled", "caller_phone", "modules", "customer_calls"
@@ -231,8 +222,7 @@ async def save_dialler_settings(request: Request):
 @router.post("/settings/notifications")
 async def save_notification_settings(request: Request):
     user = await get_current_user(request)
-    if user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
+    require_module(user, "settings", "read_write")
 
     settings = await request.json()
     await db.settings.update_one(
@@ -271,8 +261,7 @@ async def get_notification_settings(request: Request):
 @router.post("/settings/cloudinary")
 async def save_cloudinary_settings(request: Request):
     user = await get_current_user(request)
-    if user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
+    require_module(user, "settings", "read_write")
     body = await request.json()
     update = {"type": "cloudinary", "updated_at": datetime.now(timezone.utc).isoformat()}
     if (body.get("cloud_name") or "").strip():
@@ -290,8 +279,7 @@ async def save_cloudinary_settings(request: Request):
 @router.get("/settings/cloudinary")
 async def get_cloudinary_settings(request: Request):
     user = await get_current_user(request)
-    if user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
+    require_module(user, "settings", "read")
     cfg = await db.settings.find_one({"type": "cloudinary"}, {"_id": 0}) or {}
     return {
         "cloud_name": cfg.get("cloud_name", ""),
@@ -305,8 +293,7 @@ async def get_cloudinary_settings(request: Request):
 @router.post("/settings/school-portal")
 async def save_school_portal_settings(request: Request):
     user = await get_current_user(request)
-    if user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
+    require_module(user, "settings", "read_write")
     body = await request.json()
     update = {"type": "school_portal", "updated_at": datetime.now(timezone.utc).isoformat()}
     for k in ("email_link_enabled", "magic_link_enabled", "google_enabled", "notify_whatsapp"):
@@ -324,8 +311,7 @@ async def save_school_portal_settings(request: Request):
 @router.get("/settings/school-portal")
 async def get_school_portal_settings(request: Request):
     user = await get_current_user(request)
-    if user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
+    require_module(user, "settings", "read")
     cfg = await db.settings.find_one({"type": "school_portal"}, {"_id": 0}) or {}
     return {
         "email_link_enabled": bool(cfg.get("email_link_enabled", False)),
@@ -342,8 +328,7 @@ async def get_school_portal_settings(request: Request):
 @router.get("/settings/integrations/status")
 async def integrations_status(request: Request):
     user = await get_current_user(request)
-    if user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
+    require_module(user, "settings", "read")
 
     def _has(doc, *fields):
         return bool(doc) and all((doc.get(f) or "").strip() for f in fields)
@@ -370,8 +355,7 @@ async def integrations_status(request: Request):
 @router.post("/settings/integrations/cloudinary/test")
 async def test_cloudinary(request: Request):
     user = await get_current_user(request)
-    if user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
+    require_module(user, "settings", "read_write")
     from services.storage import _cloudinary_config
     cfg = await _cloudinary_config()
     if not cfg:
@@ -389,8 +373,7 @@ async def test_cloudinary(request: Request):
 @router.post("/settings/integrations/gmail/test")
 async def test_gmail(request: Request):
     user = await get_current_user(request)
-    if user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
+    require_module(user, "settings", "read_write")
     cfg = await db.settings.find_one({"type": "email"}, {"_id": 0}) or {}
     sender = (cfg.get("sender_email") or "").strip()
     pwd = (cfg.get("gmail_app_password") or "").strip()
@@ -408,8 +391,7 @@ async def test_gmail(request: Request):
 @router.post("/settings/integrations/zoom/test")
 async def test_zoom(request: Request):
     user = await get_current_user(request)
-    if user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
+    require_module(user, "settings", "read_write")
     import zoom_service
     if not await zoom_service.is_configured():
         return {"ok": False, "detail": "Zoom not configured"}
@@ -425,9 +407,7 @@ async def test_zoom(request: Request):
 @router.post("/zoom/meetings")
 async def create_zoom_meeting(request: Request):
     user = await get_current_user(request)
-    team = get_team(user)
-    if team not in ("admin", "accounts", "sales"):
-        raise HTTPException(status_code=403, detail="Not allowed")
+    require_module(user, "sales_portal", "read_write")
     import zoom_service
     if not await zoom_service.is_configured():
         raise HTTPException(status_code=400, detail="Zoom is not configured")
