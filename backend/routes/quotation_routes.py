@@ -16,6 +16,10 @@ from media_utils import gate_die_for_customer
 
 router = APIRouter()
 
+# Central inbox CC'd on outgoing customer emails instead of the individual sales
+# person (same env var as customer_routes.NOTIFY_INBOX so they stay in sync).
+NOTIFY_INBOX = os.environ.get("NOTIFY_INBOX", "care@smartshape.in")
+
 UPLOADS_DIR = os.environ.get("UPLOADS_DIR", "/app/uploads")
 
 
@@ -993,7 +997,7 @@ async def _send_catalogue_email(quotation_id: str, cc_emails=None, extra_to=None
     except ValueError as ve:
         return {"success": False, "error": str(ve)}
 
-    cc_set = _build_cc_set(sender_email, all_to, cc_emails, quot.get("sales_person_email"))
+    cc_set = _build_cc_set(sender_email, all_to, cc_emails, NOTIFY_INBOX)
 
     # ── Generate quotation PDF to attach ───────────────────────────────────────
     company = await db.settings.find_one({"type": "company"}, {"_id": 0}) or {}
@@ -1236,7 +1240,7 @@ async def send_quotation_email(quotation_id: str, request: Request):
         raise HTTPException(status_code=400, detail=str(ve))
 
     all_cc_inputs = list({user.get("email", "")} | set(extra_cc))
-    cc_set = _build_cc_set(sender_email, all_to, all_cc_inputs, quot.get("sales_person_email"))
+    cc_set = _build_cc_set(sender_email, all_to, all_cc_inputs, NOTIFY_INBOX)
 
     gst = quot.get("gst_amount", 0)
     freight = quot.get("freight_with_gst", quot.get("freight_total", 0))
