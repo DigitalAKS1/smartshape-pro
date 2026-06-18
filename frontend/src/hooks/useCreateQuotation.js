@@ -144,26 +144,58 @@ export default function useCreateQuotation() {
       )
     : contactsList.slice(0, 12);
 
+  // Resolve the School record behind a contact: first by the linked school_id,
+  // then (fallback) by matching the contact's company text to a school name —
+  // so a contact that was never formally linked still inherits the address.
+  const findSchoolForContact = (contact) => {
+    if (!contact) return null;
+    if (contact.school_id) {
+      const byId = schoolsList.find(s => s.school_id === contact.school_id);
+      if (byId) return byId;
+    }
+    const name = (contact.company || '').trim().toLowerCase();
+    if (name) {
+      return schoolsList.find(s => (s.school_name || '').trim().toLowerCase() === name) || null;
+    }
+    return null;
+  };
+
+  // Pull address/email/phone/gst from a School record into the main quote form.
+  // Only fills BLANK fields so a user's manual edits are never clobbered.
+  const applySchoolToForm = (sch) => {
+    if (!sch) return;
+    setFormData(prev => ({
+      ...prev,
+      school_name:    prev.school_name    || sch.school_name          || '',
+      principal_name: prev.principal_name || sch.primary_contact_name || '',
+      address:        prev.address        || sch.address             || '',
+      city:           prev.city           || sch.city                || '',
+      state:          prev.state          || sch.state               || '',
+      pincode:        prev.pincode        || sch.pincode             || '',
+      customer_phone: prev.customer_phone || sch.phone               || '',
+      customer_email: prev.customer_email || sch.email               || '',
+      customer_gst:   prev.customer_gst   || sch.gstin               || '',
+    }));
+  };
+
   const selectContact = (contact) => {
     setSelectedContact(contact);
     // Cross-link Contact → School so the quote inherits the full address.
     // Address/city/state/pincode/gst live on the School record, not the Contact,
-    // so look the linked school up by school_id (mirrors the ?school_id= prefill).
-    const sch = contact.school_id
-      ? schoolsList.find(s => s.school_id === contact.school_id)
-      : null;
+    // so look the linked school up (by school_id, else by company name).
+    const sch = findSchoolForContact(contact);
     setFormData(prev => ({
       ...prev,
-      principal_name: contact.name || prev.principal_name,
+      principal_name: contact.name || (sch && sch.primary_contact_name) || prev.principal_name,
       school_name:    contact.company || (sch && sch.school_name) || prev.school_name,
       customer_phone: contact.phone || (sch && sch.phone) || prev.customer_phone,
       customer_email: contact.email || (sch && sch.email) || prev.customer_email,
       ...(sch ? {
-        address:      sch.address || prev.address,
-        city:         sch.city    || prev.city,
-        state:        sch.state   || prev.state,
-        pincode:      sch.pincode || prev.pincode,
-        customer_gst: sch.gstin   || prev.customer_gst,
+        address:      prev.address || sch.address || '',
+        city:         prev.city    || sch.city    || '',
+        state:        prev.state   || sch.state   || '',
+        pincode:      prev.pincode || sch.pincode || '',
+        customer_gst: prev.customer_gst || sch.gstin || '',
       } : {}),
     }));
     setShowNewContact(false);
@@ -174,9 +206,18 @@ export default function useCreateQuotation() {
       toast.error('Name and phone are required');
       return;
     }
+    // Root-cause guard: if the user typed a company that matches an existing
+    // school but never picked it from the dropdown, link it now so the contact
+    // (and every future quote) inherits the school's full address.
+    const payload = { ...newContactData };
+    if (!payload.school_id && payload.company) {
+      const match = schoolsList.find(
+        s => (s.school_name || '').trim().toLowerCase() === payload.company.trim().toLowerCase());
+      if (match) payload.school_id = match.school_id;
+    }
     setSavingContact(true);
     try {
-      const res = await contactsApi.create(newContactData);
+      const res = await contactsApi.create(payload);
       const created = res.data;
       setContactsList(prev => [created, ...prev]);
       selectContact(created);
@@ -203,6 +244,9 @@ export default function useCreateQuotation() {
     setSchoolQuery(name);
     setNewContactData(prev => ({ ...prev, company: name, school_id: school.school_id || null }));
     setShowSchoolDrop(false);
+    // Also pull the school's address/email/phone/gst into the quote form so the
+    // Contact step isn't left blank when a school is picked here.
+    applySchoolToForm(school);
   };
 
   const handleCreateSchool = async () => {
