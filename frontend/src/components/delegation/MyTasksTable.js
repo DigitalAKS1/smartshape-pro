@@ -13,34 +13,71 @@ const STATUS = {
   verified: 'bg-green-500/15 text-green-500',
 };
 
-export default function MyTasksTable({ myEmp, completeInst, verifyInst, onEditTask, refreshKey, isManager, card, textPri, textSec, textMuted, inputCls }) {
+export default function MyTasksTable({ myEmp, completeInst, verifyInst, onEditTask, refreshKey, isManager, presetFilter, card, textPri, textSec, textMuted, inputCls }) {
   const [dir, setDir] = useState('to');        // 'to' = assigned to me, 'by' = assigned by me
+  const [scope, setScope] = useState('mine');  // 'mine' | 'all' (all = whole team, managers only)
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState('');
+  const [extra, setExtra] = useState('');      // '' | 'overdue' | 'today' (from a KPI card)
+  const [person, setPerson] = useState('');    // filter to one teammate (relationship pivot)
   const [q, setQ] = useState('');
+
+  // A KPI card click (presetFilter = {key, n}) preloads the matching filter:
+  // pending/completed/verified set the status; overdue/today set the date filter.
+  // The {n} nonce lets the same card re-apply even after manual filter changes.
+  useEffect(() => {
+    const key = presetFilter?.key;
+    if (!key) return;
+    if (['pending', 'completed', 'verified'].includes(key)) { setStatus(key); setExtra(''); }
+    else if (key === 'overdue') { setStatus('pending'); setExtra('overdue'); }
+    else if (key === 'today') { setStatus(''); setExtra('today'); }
+    setPerson(''); setDir('to');
+  }, [presetFilter]);
+
+  const canSeeAll = isManager;                 // only admins/bosses can widen to the whole team
   const [historyInst, setHistoryInst] = useState(null);   // instance whose history is open
   const [selected, setSelected] = useState(new Set());     // selected instance_ids (manager multi-delete)
   const [delDlg, setDelDlg] = useState(null);              // { tasks: [{task_id, task_title}] }
   const [delReason, setDelReason] = useState('');
   const [delBusy, setDelBusy] = useState(false);
   const showSelect = dir === 'by' && isManager;            // admins can multi-select in "by me"
-  useEffect(() => { setSelected(new Set()); }, [dir]);
+  useEffect(() => { setSelected(new Set()); setPerson(''); }, [dir]);
+
+  const effScope = canSeeAll ? scope : 'mine';   // non-managers are always scoped to themselves
 
   const load = async () => {
     if (!myEmp?.emp_id) { setRows([]); return; }
     setLoading(true);
     try {
-      const params = dir === 'to' ? { emp_id: myEmp.emp_id } : { delegator_id: myEmp.emp_id };
+      // 'all' (managers) = whole team for this direction; 'mine' = just me.
+      const params = effScope === 'all'
+        ? (dir === 'to' ? {} : { delegator_id: myEmp.emp_id })
+        : (dir === 'to' ? { emp_id: myEmp.emp_id } : { delegator_id: myEmp.emp_id });
       const r = await delApi.instances.list(params);
       setRows(r.data || []);
     } catch { setRows([]); }
     finally { setLoading(false); }
   };
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [dir, myEmp, refreshKey]);
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [dir, effScope, myEmp, refreshKey]);
+
+  // The "other party" on each row: who assigned it (when viewing tasks to me) or
+  // who it's assigned to (when viewing tasks by me). Drives the person filter.
+  const otherId   = (t) => (dir === 'to' ? t.delegator_id : t.emp_id);
+  const otherName = (t) => (dir === 'to' ? (t.delegator_name || '—') : t.emp_name);
+
+  const personOptions = useMemo(() => {
+    const m = new Map();
+    rows.forEach(t => { const id = otherId(t); if (id) m.set(id, otherName(t)); });
+    return [...m].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
+    /* eslint-disable-next-line */
+  }, [rows, dir]);
 
   const filtered = useMemo(() => rows.filter(t => {
     if (status && t.status !== status) return false;
+    if (extra === 'overdue' && !(t.status === 'pending' && t.due_date < TODAY)) return false;
+    if (extra === 'today' && t.due_date !== TODAY) return false;
+    if (person && otherId(t) !== person) return false;
     if (q) {
       const s = q.toLowerCase();
       if (!t.task_title?.toLowerCase().includes(s) &&
@@ -48,7 +85,7 @@ export default function MyTasksTable({ myEmp, completeInst, verifyInst, onEditTa
         !t.delegator_name?.toLowerCase().includes(s)) return false;
     }
     return true;
-  }).sort((a, b) => (a.due_date || '').localeCompare(b.due_date || '')), [rows, status, q]);
+  }).sort((a, b) => (a.due_date || '').localeCompare(b.due_date || '')), [rows, status, extra, person, q, dir]);
 
   const onDone = async (inst) => { await completeInst(inst); load(); };
   const onVerify = async (inst) => { await verifyInst(inst.instance_id); load(); };
@@ -97,14 +134,40 @@ export default function MyTasksTable({ myEmp, completeInst, verifyInst, onEditTa
           <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search tasks…"
             className={`w-full pl-8 h-9 text-xs rounded-lg border px-2 focus:outline-none ${inputCls}`} />
         </div>
-        <select value={status} onChange={e => setStatus(e.target.value)}
+        {personOptions.length > 0 && (
+          <select value={person} onChange={e => setPerson(e.target.value)}
+            className={`h-9 px-2 text-xs rounded-lg border border-[var(--border-color)] ${inputCls}`}>
+            <option value="">{dir === 'to' ? 'Anyone who assigned me' : 'Anyone I assigned'}</option>
+            {personOptions.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+        )}
+        <select value={status} onChange={e => { setStatus(e.target.value); setExtra(''); }}
           className={`h-9 px-2 text-xs rounded-lg border border-[var(--border-color)] ${inputCls}`}>
           <option value="">All</option>
           <option value="pending">Pending</option>
           <option value="completed">Completed</option>
           <option value="verified">Verified</option>
         </select>
+        {canSeeAll && (
+          <div className={`${card} border rounded-xl p-1 flex gap-0.5`}>
+            {[['mine', 'Mine'], ['all', 'All team']].map(([k, label]) => (
+              <button key={k} onClick={() => setScope(k)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${scope === k ? 'text-white' : `${textSec} hover:bg-[var(--bg-hover)]`}`}
+                style={scope === k ? { background: PINK } : {}}>
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
+      {extra && (
+        <div className="flex items-center gap-2 text-[11px]">
+          <span className="px-2 py-0.5 rounded-full font-semibold" style={{ background: '#e9456012', color: PINK }}>
+            {extra === 'overdue' ? 'Overdue only' : 'Due today'}
+          </span>
+          <button onClick={() => { setExtra(''); setStatus(''); }} className={`underline ${textMuted}`}>clear</button>
+        </div>
+      )}
 
       {showSelect && selected.size > 0 && (
         <div className="flex items-center justify-between rounded-xl px-3 py-2" style={{ background: '#e9456012' }}>

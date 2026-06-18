@@ -1197,7 +1197,7 @@ async def get_report(
 # PERSONAL DAY-PLAN BLOCKS  (private to each user)
 # ══════════════════════════════════════════════════════════════════════════════
 
-PLAN_BLOCK_FIELDS = ("date", "start_time", "end_time", "title", "note", "color", "linked_event_id")
+PLAN_BLOCK_FIELDS = ("date", "start_time", "end_time", "title", "note", "color", "linked_event_id", "busy")
 
 
 @router.get("/plan-blocks")
@@ -1238,6 +1238,7 @@ async def create_plan_block(request: Request):
         "title": title, "note": body.get("note", ""),
         "color": body.get("color", "#64748b"),
         "linked_event_id": body.get("linked_event_id", ""),
+        "busy": bool(body.get("busy")),   # marks the window unavailable for assignment
         "created_at": now_iso(), "updated_at": now_iso(),
     }
     await db.del_plan_blocks.insert_one(doc)
@@ -1278,6 +1279,49 @@ async def delete_plan_block(block_id: str, request: Request):
         raise HTTPException(403, "Not your plan block")
     await db.del_plan_blocks.delete_one({"block_id": block_id})
     return {"ok": True}
+
+
+@router.get("/availability")
+async def get_availability(request: Request, emp_ids: str = "", date: str = ""):
+    """Busy windows per employee for one date — used to warn before assigning or
+    collaborating inside a teammate's blocked time. Sources: busy plan-blocks +
+    timed events they own/collaborate on. (Task instances carry no time, so they
+    don't contribute.) Returns { emp_id: [ {start, end, label, source} ] }."""
+    await get_current_user(request)
+    ids = [e.strip() for e in (emp_ids or "").split(",") if e.strip()]
+    if not ids or not date:
+        return {}
+    out = {eid: [] for eid in ids}
+
+    # 1) Busy personal blocks (lunch, focus time, etc.)
+    blocks = await db.del_plan_blocks.find(
+        {"emp_id": {"$in": ids}, "date": date, "busy": True},
+        {"_id": 0, "emp_id": 1, "start_time": 1, "end_time": 1, "title": 1}).to_list(500)
+    for b in blocks:
+        if b.get("start_time") and b.get("end_time"):
+            out[b["emp_id"]].append({"start": b["start_time"], "end": b["end_time"],
+                                     "label": b.get("title") or "Busy", "source": "block"})
+
+    # 2) Timed events they own or collaborate on.
+    evs = await db.cal_events.find(
+        {"status": "active", "date": date,
+         "$or": [{"created_by_emp_id": {"$in": ids}}, {"collaborators.emp_id": {"$in": ids}}]},
+        {"_id": 0}).to_list(500)
+    for ev in evs:
+        st, et = ev.get("start_time"), ev.get("end_time")
+        if not (st and et):
+            continue
+        on = set()
+        if ev.get("created_by_emp_id") in out:
+            on.add(ev["created_by_emp_id"])
+        for c in ev.get("collaborators", []):
+            if c.get("emp_id") in out:
+                on.add(c["emp_id"])
+        for eid in on:
+            out[eid].append({"start": st, "end": et,
+                             "label": ev.get("title") or "Event", "source": "event"})
+
+    return out
 
 
 # ══════════════════════════════════════════════════════════════════════════════

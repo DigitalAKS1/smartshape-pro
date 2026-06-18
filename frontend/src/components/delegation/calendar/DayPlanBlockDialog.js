@@ -15,6 +15,7 @@ export default function DayPlanBlockDialog({
     end_time: block?.end_time || '10:00',
     note: block?.meta?.note ?? block?.note ?? '',
     color: block?.color || PINK,
+    busy: block?.busy ?? false,
   });
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const valid = form.title.trim() && form.start_time && form.end_time && form.end_time > form.start_time;
@@ -41,6 +42,10 @@ export default function DayPlanBlockDialog({
           </div>
           <div><label className={lbl}>Note</label>
             <Input value={form.note} onChange={e => set('note', e.target.value)} className={`h-9 text-sm ${inputCls}`} /></div>
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <input type="checkbox" checked={form.busy} onChange={e => set('busy', e.target.checked)} className="h-4 w-4 accent-[#e94560]" />
+            <span className={`text-xs ${textSec}`}>Mark me <b>busy</b> — warn teammates before they assign work in this window</span>
+          </label>
         </div>
         <div className="flex items-center justify-between px-5 py-4 border-t border-[var(--border-color)]">
           {editing
@@ -48,7 +53,7 @@ export default function DayPlanBlockDialog({
             : <span />}
           <div className="flex gap-2">
             <Button variant="outline" onClick={onClose} className={`h-9 border-[var(--border-color)] ${textSec}`}>Cancel</Button>
-            <Button onClick={() => onSave({ date, title: form.title, start_time: form.start_time, end_time: form.end_time, note: form.note, color: form.color })} disabled={!valid}
+            <Button onClick={() => onSave({ date, title: form.title, start_time: form.start_time, end_time: form.end_time, note: form.note, color: form.color, busy: form.busy })} disabled={!valid}
               className="h-9 text-white font-semibold" style={{ background: PINK }}>{editing ? 'Save' : 'Add'}</Button>
           </div>
         </div>

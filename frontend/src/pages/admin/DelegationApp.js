@@ -42,6 +42,7 @@ export default function DelegationApp() {
   const s        = useDelegationApp();
   const [searchParams] = useSearchParams();
   const [mtKey, setMtKey] = React.useState(0);   // bump to refresh the My Tasks table
+  const [kpiFilter, setKpiFilter] = React.useState(null);  // {key, n} from a clicked KPI card
 
   // Deep-link: /delegation?tab=mytasks (or ?tab=calendar) opens that tab.
   React.useEffect(() => {
@@ -99,8 +100,12 @@ export default function DelegationApp() {
           })}
         </div>
 
-        {/* KPI strip */}
-        <DelegationDashboard dashboard={s.dashboard} {...sharedTheme} />
+        {/* KPI strip — clicking a card opens My Tasks pre-filtered to that status */}
+        <DelegationDashboard
+          dashboard={s.dashboard}
+          onSelect={(key) => { setKpiFilter(k => ({ key, n: (k?.n || 0) + 1 })); s.setViewTab('mytasks'); }}
+          {...sharedTheme}
+        />
 
         {/* Tab bar */}
         <div className={`${card} border rounded-xl p-1 flex gap-0.5 overflow-x-auto`}>
@@ -144,6 +149,7 @@ export default function DelegationApp() {
             onEditTask={(inst) => s.openEditTask(inst, 'delegator')}
             refreshKey={mtKey}
             isManager={user?.role === 'admin'}
+            presetFilter={kpiFilter}
             {...sharedTheme}
           />
         )}

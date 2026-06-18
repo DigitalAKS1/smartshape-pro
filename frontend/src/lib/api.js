@@ -986,6 +986,7 @@ export const delegation = {
   },
   calendar:   (p)  => API.get('/delegation/calendar', { params: p }),
   agenda:     (p)  => API.get('/delegation/agenda', { params: p }),
+  availability: (emp_ids, date) => API.get('/delegation/availability', { params: { emp_ids, date } }),
   planBlocks: {
     list:   (p)    => API.get('/delegation/plan-blocks', { params: p }),
     create: (d)    => API.post('/delegation/plan-blocks', d),

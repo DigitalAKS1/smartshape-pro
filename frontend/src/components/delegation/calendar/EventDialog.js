@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 import { Button } from '../../ui/button';
 import { Input } from '../../ui/input';
 import CollaboratorPicker from './CollaboratorPicker';
+import AvailabilityHint from '../AvailabilityHint';
 import { visitPlans as vpApi, zoomApi } from '../../../lib/api';
 
 const SKY = '#0ea5e9';
@@ -234,6 +235,11 @@ export default function EventDialog({
 
           <CollaboratorPicker value={collab} onChange={setCollab} teamOptions={teamOptions}
             textPri={textPri} textSec={textSec} textMuted={textMuted} inputCls={inputCls} />
+          {!form.all_day && (
+            <AvailabilityHint empIds={collab.emp_ids} date={form.date}
+              start={form.start_time} end={form.end_time} textMuted={textMuted}
+              nameOf={(id) => (teamOptions.find(o => o.emp_id === id) || {}).name || 'Teammate'} />
+          )}
           {editing && <p className={`text-[11px] ${textMuted}`}>Adding collaborators here appends/updates the list.</p>}
           <div><label className={lbl}>Notes</label>
             <Input value={form.description} onChange={e => set('description', e.target.value)} className={`h-9 text-sm ${inputCls}`} /></div>
