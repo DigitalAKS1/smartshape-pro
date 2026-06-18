@@ -1574,6 +1574,7 @@ async def create_event(request: Request):
         "status": "active", "ext_sync": {}, "created_at": now_iso(), "updated_at": now_iso(),
     }
     await db.cal_events.insert_one(doc)
+    await _dispatch_collab_notices(doc, prev_collaborators=None)
     return await db.cal_events.find_one({"event_id": doc["event_id"]}, {"_id": 0})
 
 
@@ -1610,10 +1611,18 @@ async def update_event(event_id: str, request: Request):
             if r:
                 c["response"] = r
         updates["collaborators"] = fresh
+    # A change to any of these re-sends an "update" invite to already-invited guests.
+    material_changed = any(k in updates and updates[k] != ev.get(k)
+                           for k in ("date", "start_time", "end_time", "location",
+                                     "meeting_link", "title"))
+    prev_collab = ev.get("collaborators", [])
     if updates:
         updates["updated_at"] = now_iso()
         await db.cal_events.update_one({"event_id": event_id}, {"$set": updates})
-    return await db.cal_events.find_one({"event_id": event_id}, {"_id": 0})
+    fresh_ev = await db.cal_events.find_one({"event_id": event_id}, {"_id": 0})
+    await _dispatch_collab_notices(fresh_ev, prev_collaborators=prev_collab,
+                                   material_changed=material_changed)
+    return fresh_ev
 
 
 @router.delete("/events/{event_id}")
@@ -1800,8 +1809,8 @@ async def event_ics(event_id: str, request: Request):
 
 
 async def _send_invite(ev, *, method, sequence, recipients):
-    """Build + send the iCalendar invite. Honors DRY_RUN / TEST_TO guards.
-    Returns {dry_run, sent, ics}."""
+    """Build + send the iCalendar invite to the real recipients. Honors DRY_RUN
+    (builds the .ics but sends nothing) for local testing. Returns {dry_run, sent, ics}."""
     ics = _wrap_vcalendar(method, [_build_vevent(ev, method=method, sequence=sequence)])
     creator = ev.get("created_by") or ""
     verb = "Cancelled" if method == "CANCEL" else "Invitation"
@@ -1818,11 +1827,9 @@ async def _send_invite(ev, *, method, sequence, recipients):
              f"{ev.get('description') or ''}\n\n"
              "Your calendar app should offer to add/update this automatically.")
 
-    test_to = os.environ.get("CALENDAR_INVITE_TEST_TO", "").strip()
-    if test_to:
-        recipients = [test_to]
-        subject = "[TEST] " + subject
-
+    # The legacy CALENDAR_INVITE_TEST_TO redirect (which sent every invite to one test
+    # inbox, so real collaborators never got emailed) has been removed. Use
+    # CALENDAR_INVITE_DRY_RUN for safe local testing — it builds the .ics but sends nothing.
     if os.environ.get("CALENDAR_INVITE_DRY_RUN", "").strip() in ("1", "true", "True"):
         return {"dry_run": True, "sent": recipients, "ics": ics}
 
@@ -1857,6 +1864,63 @@ async def _send_invite(ev, *, method, sequence, recipients):
     return {"dry_run": False, "sent": recipients, "ics": ics}
 
 
+async def _dispatch_collab_notices(ev, *, prev_collaborators=None, material_changed=False):
+    """Auto-notify collaborators when an event is created or updated.
+
+    Internal teammates (collaborator type 'user') get an in-app notification — the
+    event already shows on their Delegation calendar via the agenda query, so no email
+    is needed. External guests (type 'email') get the iCalendar invite by email.
+
+    `prev_collaborators` is None on create (everyone is new) or the pre-edit list on
+    update (so we only notify the newly added). `material_changed` is True when a
+    time/place/title field changed, which re-sends an update to already-invited guests.
+
+    Never raises: a notification failure must not block the event create/update.
+    """
+    try:
+        creator_email = (ev.get("created_by") or "").lower()
+        prev_emails = {(c.get("email") or "").lower()
+                       for c in (prev_collaborators or []) if c.get("email")}
+        is_create = prev_collaborators is None
+        actor = ev.get("created_by") or "A teammate"
+        when = (ev.get("date") or "") + ((" " + ev["start_time"]) if ev.get("start_time") else "")
+
+        # 1) In-app notice for each newly-added internal teammate.
+        for c in ev.get("collaborators", []):
+            if c.get("type") != "user" or not c.get("emp_id"):
+                continue
+            em = (c.get("email") or "").lower()
+            if em == creator_email or em in prev_emails:
+                continue
+            await _notify(c["emp_id"], "collab_invite",
+                          f"Added to: {ev.get('title') or 'Event'}",
+                          f"{actor} added you to \"{ev.get('title')}\" on {when}.")
+
+        # 2) Email the external guests (no emp_id).
+        externals = [(c.get("email") or "").strip() for c in ev.get("collaborators", [])
+                     if c.get("type") == "email" and (c.get("email") or "").strip()
+                     and (c.get("email") or "").lower() != creator_email]
+        if not externals:
+            return
+        prev_seq = (ev.get("ext_sync") or {}).get("sequence")
+        if is_create or prev_seq is None:
+            sequence, recipients = 0, externals            # first send: everyone
+        elif material_changed:
+            sequence, recipients = int(prev_seq) + 1, externals  # update: re-send to all
+        else:
+            recipients = [e for e in externals if e.lower() not in prev_emails]
+            if not recipients:
+                return                                     # nothing material changed, no new guests
+            sequence = int(prev_seq)                       # new guests join at the current sequence
+        await _email_settings()  # warm the ORGANIZER cache before building the .ics
+        result = await _send_invite(ev, method="REQUEST", sequence=sequence, recipients=recipients)
+        await db.cal_events.update_one({"event_id": ev["event_id"]}, {"$set": {"ext_sync": {
+            "ics_uid": _ev_uid(ev), "sequence": sequence, "last_method": "REQUEST",
+            "invited_emails": result["sent"], "invited_at": now_iso()}}})
+    except Exception as e:
+        print(f"[delegation] collab notice dispatch failed for {ev.get('event_id')}: {e}")
+
+
 @router.post("/events/{event_id}/invite")
 async def invite_event(event_id: str, request: Request):
     user = await get_current_user(request)
@@ -1887,14 +1951,9 @@ async def invite_event(event_id: str, request: Request):
         elif em.lower() != creator_email:
             recipients.append(em)
     result = await _send_invite(ev, method=method, sequence=sequence, recipients=recipients)
-    # When the prod CALENDAR_INVITE_TEST_TO guard is redirecting to a safe inbox, the real
-    # collaborators never received anything — so DON'T advance ext_sync. Otherwise the first
-    # true send (after the guard is removed) would carry SEQUENCE>0 as an "update" to an event
-    # the recipient's calendar has never seen. DRY_RUN (automated tests, no TEST_TO) still persists.
-    if not os.environ.get("CALENDAR_INVITE_TEST_TO", "").strip():
-        await db.cal_events.update_one({"event_id": event_id}, {"$set": {"ext_sync": {
-            "ics_uid": _ev_uid(ev), "sequence": sequence, "last_method": method,
-            "invited_emails": result["sent"], "invited_at": now_iso()}, "updated_at": now_iso()}})
+    await db.cal_events.update_one({"event_id": event_id}, {"$set": {"ext_sync": {
+        "ics_uid": _ev_uid(ev), "sequence": sequence, "last_method": method,
+        "invited_emails": result["sent"], "invited_at": now_iso()}, "updated_at": now_iso()}})
     out = {"kind": kind, "method": method, "sequence": sequence,
            "sent": result["sent"], "skipped": skipped, "dry_run": result["dry_run"]}
     if result["dry_run"]:
