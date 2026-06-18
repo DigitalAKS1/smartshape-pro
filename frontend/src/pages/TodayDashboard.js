@@ -11,6 +11,7 @@ import WhatsAppSendDialog from '../components/WhatsAppSendDialog';
 import AppShell from '../components/layouts/AppShell';
 import { useTodayDashboard } from '../hooks/useTodayDashboard';
 import TodayActionCard from '../components/today/TodayActionCard';
+import PunchClock from '../components/PunchClock';
 
 function StatChip({ count, label, color, testid }) {
   return (
@@ -88,6 +89,9 @@ export default function TodayDashboard() {
           <StatChip count={counts.calls_today}  label="Calls"   color="bg-yellow-500/15 text-yellow-400 border-yellow-500/30" testid="stat-calls" />
           <StatChip count={counts.visits_today} label="Visits"  color="bg-blue-500/15 text-blue-400 border-blue-500/30"     testid="stat-visits" />
         </div>
+
+        {/* Punch Clock — available to every user, In/Out + hours */}
+        <PunchClock />
 
         {/* Quick tiles: My Tasks + Calendar */}
         <div className="grid grid-cols-2 gap-2">
