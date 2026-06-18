@@ -33,29 +33,39 @@ export function useDelegationCalendar() {
   const [hidden, setHidden] = useState(loadHidden);        // hidden source keys (persisted)
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [teamOptions, setTeamOptions] = useState([]);
+  const [teamOptions, setTeamOptions] = useState([]);   // boss/delegator: whose calendar I can view
+  const [collabOptions, setCollabOptions] = useState([]); // everyone: teammates I can collaborate with
   const [canViewTeam, setCanViewTeam] = useState(false);
 
   useEffect(() => {
     (async () => {
-      let roles = [], targets = [];
+      let roles = [], targets = [], myEmpId = '';
       try {
         const ctx = (await delApi.myContext()).data || {};
         roles = ctx.roles || [];
         targets = ctx.target_employees || [];
+        myEmpId = ctx.emp_id || '';
       } catch { /* not linked */ }
+      const isBoss = roles.includes('boss');
       // A boss can view any teammate's calendar. Enable the picker up front so a
       // failing employees.list() can't silently hide it (it just leaves the list short).
-      if (roles.includes('boss')) {
+      if (isBoss) {
         setCanViewTeam(true);
-        try {
-          const emps = (await delApi.employees.list()).data || [];
-          setTeamOptions(emps.map(e => ({ emp_id: e.emp_id, name: e.name })));
-        } catch { /* keep picker with just "My calendar" */ }
       } else if (roles.includes('delegator') && targets.length) {
         setTeamOptions(targets.map(e => ({ emp_id: e.emp_id, name: e.name })));
         setCanViewTeam(true);
       }
+      // Collaboration is open to EVERY role — a delegatee must be able to add
+      // teammates to a shared event too. /employees is auth-only (not role-gated),
+      // so fetch the full team here and expose it as collabOptions (minus self).
+      try {
+        const emps = (await delApi.employees.list()).data || [];
+        setCollabOptions(
+          emps.filter(e => e.emp_id !== myEmpId && e.is_active !== false)
+              .map(e => ({ emp_id: e.emp_id, name: e.name }))
+        );
+        if (isBoss) setTeamOptions(emps.map(e => ({ emp_id: e.emp_id, name: e.name })));
+      } catch { /* keep pickers as-is on failure */ }
     })();
   }, []);
 
@@ -236,7 +246,7 @@ export function useDelegationCalendar() {
   return {
     view, setView, cursor, setCursor, range,
     subjectEmp, setSubjectEmp,
-    teamOptions, canViewTeam,
+    teamOptions, collabOptions, canViewTeam,
     hidden, toggleSource, ALL_SOURCES,
     events, visibleEvents, eventsByDate, loading, reload: load,
     goPrev, goNext, goToday,

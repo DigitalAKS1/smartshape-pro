@@ -295,7 +295,7 @@ export default function DelegationCalendar({ onEventClick, card, textPri, textSe
           event={c.eventDialog.event}
           defaults={c.eventDialog.defaults}
           meetingDefaults={c.meetingDefaults}
-          teamOptions={c.teamOptions}
+          teamOptions={c.collabOptions}
           onSave={async (payload, editId) => {
             const ok = editId ? await c.updateEvent(editId, payload) : await c.createEvent(payload);
             if (ok) c.setEventDialog(null);
