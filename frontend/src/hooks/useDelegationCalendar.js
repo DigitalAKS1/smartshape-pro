@@ -44,16 +44,16 @@ export function useDelegationCalendar() {
         roles = ctx.roles || [];
         targets = ctx.target_employees || [];
       } catch { /* not linked */ }
-      // A boss can view any teammate's calendar. Enable the picker up front so a
-      // failing employees.list() can't silently hide it (it just leaves the list short).
-      if (roles.includes('boss')) {
-        setCanViewTeam(true);
-        try {
-          const emps = (await delApi.employees.list()).data || [];
-          setTeamOptions(emps.map(e => ({ emp_id: e.emp_id, name: e.name })));
-        } catch { /* keep picker with just "My calendar" */ }
-      } else if (roles.includes('delegator') && targets.length) {
-        setTeamOptions(targets.map(e => ({ emp_id: e.emp_id, name: e.name })));
+      // Collaborator picker needs the full internal team for EVERY user (anyone
+      // can add a teammate as a collaborator). The /employees endpoint is open to
+      // any authenticated user and auto-seeds from SmartShape users.
+      try {
+        const emps = (await delApi.employees.list()).data || [];
+        setTeamOptions(emps.map(e => ({ emp_id: e.emp_id, name: e.name })));
+      } catch { /* leave picker external-email-only if the list fails */ }
+      // Viewing a teammate's CALENDAR (read-only boss view) stays gated to
+      // boss / delegator roles — separate capability from adding collaborators.
+      if (roles.includes('boss') || (roles.includes('delegator') && targets.length)) {
         setCanViewTeam(true);
       }
     })();
