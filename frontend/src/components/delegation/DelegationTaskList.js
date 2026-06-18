@@ -316,7 +316,7 @@ export function DelegationOverviewTab({
                     <span className={`ml-2 text-xs font-normal ${textMuted}`}>({filteredMyTasks.length})</span>
                   </p>
                   <div className="flex gap-1">
-                    {['', 'pending', 'completed', 'verified'].map(s => (
+                    {['', 'pending', 'completed', 'verified', 'overdue', 'today'].map(s => (
                       <button key={s} onClick={() => setDrawerStatus(s === drawerStatus ? '' : s)}
                         className={`px-2 py-1 rounded-md text-[10px] font-semibold transition-colors
                           ${drawerStatus === s && s ? 'text-white' : `${textMuted} hover:bg-[var(--bg-hover)]`}`}
@@ -330,12 +330,17 @@ export function DelegationOverviewTab({
                 {filteredMyTasks.length === 0 ? (
                   <div className={`${card} border rounded-xl p-10 text-center`}>
                     <CheckSquare className={`h-10 w-10 mx-auto mb-2 opacity-20 ${textMuted}`} />
-                    <p className={`text-sm ${textMuted}`}>No tasks assigned to you yet</p>
+                    <p className={`text-sm ${textMuted}`}>No tasks to show — assigned to you, assigned by you, or backed up by you</p>
                   </div>
                 ) : (
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                     {filteredMyTasks
-                      .filter(t => !drawerStatus || t.status === drawerStatus)
+                      .filter(t => {
+                        if (!drawerStatus) return true;
+                        if (drawerStatus === 'overdue') return t.status === 'pending' && (t.due_date || '') < TODAY;
+                        if (drawerStatus === 'today')   return t.due_date === TODAY;
+                        return t.status === drawerStatus;
+                      })
                       .map(inst => (
                         <TaskCard key={inst.instance_id} inst={inst}
                           onComplete={completeInst} onImageComplete={handleImageComplete}

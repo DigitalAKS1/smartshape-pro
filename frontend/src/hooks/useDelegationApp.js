@@ -113,18 +113,31 @@ export function useDelegationApp() {
   }, []);
 
   const loadInstances = useCallback(async () => {
-    const q = {};
-    if (fStatus)   q.status   = fStatus;
-    if (fPriority) q.priority = fPriority;
-    if (fEmp && activeRole === 'boss') q.emp_id = fEmp;
+    const base = {};
+    if (fStatus)   base.status   = fStatus;
+    if (fPriority) base.priority = fPriority;
+    const me = employees.find(e => e.email === user?.email);
+    // Delegatee gets a unified "all my work" view: tasks assigned TO me, tasks
+    // I assigned to others, and tasks I back up (buddy). /instances AND-filters,
+    // so we union three calls and dedupe by instance_id.
     if (activeRole === 'delegatee') {
-      const me = employees.find(e => e.email === user?.email);
-      if (me) q.emp_id = me.emp_id;
+      if (!me) { setInstances([]); return; }
+      try {
+        const [mine, byMe, buddy] = await Promise.all([
+          delApi.instances.list({ ...base, emp_id: me.emp_id }),
+          delApi.instances.list({ ...base, delegator_id: me.emp_id }),
+          delApi.instances.list({ ...base, buddy_emp_id: me.emp_id }),
+        ]);
+        const merged = {};
+        [...(mine.data || []), ...(byMe.data || []), ...(buddy.data || [])]
+          .forEach(i => { merged[i.instance_id] = i; });
+        setInstances(Object.values(merged));
+      } catch { /* */ }
+      return;
     }
-    if (activeRole === 'delegator') {
-      const me = employees.find(e => e.email === user?.email);
-      if (me) q.delegator_id = me.emp_id;
-    }
+    const q = { ...base };
+    if (fEmp && activeRole === 'boss') q.emp_id = fEmp;
+    if (activeRole === 'delegator' && me) q.delegator_id = me.emp_id;
     try { const r = await delApi.instances.list(q); setInstances(r.data || []); } catch { /* */ }
   }, [fStatus, fPriority, fEmp, activeRole, user, employees]);
 
@@ -173,6 +186,11 @@ export function useDelegationApp() {
     if (viewTab === 'overview') { loadTeamSummary(); loadInstances(); }
     if (viewTab === 'assign')   { loadTeamSummary(); }
   }, [viewTab, activeRole, loadTeamSummary, loadInstances]);
+  // Delegatee KPI strip + clickable cards need the unified instance set on every
+  // tab (not just Overview), so load it whenever the delegatee role is active.
+  useEffect(() => {
+    if (activeRole === 'delegatee' && employees.length) loadInstances();
+  }, [activeRole, employees, loadInstances]);
   useEffect(() => { if (viewTab === 'reports')  loadReport();     }, [viewTab, loadReport]);
   useEffect(() => { if (viewTab === 'visits')   loadVisitTasks(); }, [viewTab, loadVisitTasks]);
   useEffect(() => { if (viewTab === 'calendar') loadCalendar();   }, [viewTab, loadCalendar]);
@@ -453,7 +471,11 @@ export function useDelegationApp() {
   );
   const myAssignees = teamSummary.filter(e => myAssigneeIds.has(e.emp_id));
 
-  const myTasks = instances.filter(i => i.emp_id === myEmp?.emp_id);
+  // Delegatee sees the full unified set (assigned to me + assigned by me +
+  // buddy); other roles see tasks owned by them.
+  const myTasks = activeRole === 'delegatee'
+    ? instances
+    : instances.filter(i => i.emp_id === myEmp?.emp_id);
   const assignerGroups = {};
   myTasks.forEach(inst => {
     const key = inst.delegator_name || 'System';
@@ -467,12 +489,26 @@ export function useDelegationApp() {
   const delegatees = employees.filter(e => e.roles?.includes('delegatee'));
   const delegators = employees.filter(e => e.roles?.includes('delegator') || e.roles?.includes('boss'));
 
+  // For the delegatee, compute the KPI strip from the unified set so the cards
+  // and the clickable filter operate on exactly the same tasks. Other roles use
+  // the backend dashboard.
+  const dashboardView = (activeRole === 'delegatee' && myEmp)
+    ? {
+        pending:   myTasks.filter(t => t.status === 'pending').length,
+        completed: myTasks.filter(t => t.status === 'completed').length,
+        verified:  myTasks.filter(t => t.status === 'verified').length,
+        overdue:   myTasks.filter(t => t.status === 'pending' && (t.due_date || '') < TODAY).length,
+        today:     myTasks.filter(t => t.due_date === TODAY).length,
+        total_employees: dashboard?.total_employees ?? employees.length,
+      }
+    : dashboard;
+
   return {
     /* state */
     activeRole, setActiveRole,
     viewTab, setViewTab,
     departments, employees, instances, teamSummary,
-    dashboard, report, visitTasks,
+    dashboard: dashboardView, report, visitTasks,
     calendarData, calYear, setCalYear, calMonth, setCalMonth,
     loading, saving, syncing,
     reportPeriod, setRPeriod,

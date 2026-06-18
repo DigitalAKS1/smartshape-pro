@@ -99,8 +99,12 @@ export default function DelegationApp() {
           })}
         </div>
 
-        {/* KPI strip */}
-        <DelegationDashboard dashboard={s.dashboard} {...sharedTheme} />
+        {/* KPI strip — click a stat to open the matching task list */}
+        <DelegationDashboard dashboard={s.dashboard} onStatClick={(key) => {
+          if (key === 'team') { s.setViewTab('team'); return; }
+          s.setDrawerStatus(key);          // pending|completed|verified|overdue|today
+          s.setViewTab('overview');
+        }} {...sharedTheme} />
 
         {/* Tab bar */}
         <div className={`${card} border rounded-xl p-1 flex gap-0.5 overflow-x-auto`}>
