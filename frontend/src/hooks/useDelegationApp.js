@@ -372,6 +372,13 @@ export function useDelegationApp() {
   const saveAllRows = async () => {
     const valid = rows.filter(r => r.title.trim() && r.assignee_id);
     if (!valid.length) { toast.error('Add at least one row with title and assignee'); return; }
+    // A task can't be assigned in the past (today is fine). Local (IST) calendar date.
+    const todayStr = (() => { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 10); })();
+    const pastRows = valid.filter(r => {
+      const d = r.task_type === 'onetime' ? r.target_date : r.start_date;
+      return d && d < todayStr;
+    });
+    if (pastRows.length) { toast.error(`${pastRows.length} task(s) have a date in the past — pick today or a future date.`); return; }
     setSaving(true);
     try {
       const autoDelId = myEmpRef.current?.emp_id || null;

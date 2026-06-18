@@ -24,6 +24,22 @@ def now_iso():
 def today_str():
     return date.today().isoformat()
 
+# Business timezone (IST) — used to decide "today" so a task assigned for the
+# current Indian calendar day is never wrongly rejected as "past".
+IST = timezone(timedelta(hours=5, minutes=30))
+
+def today_ist():
+    return datetime.now(IST).date().isoformat()
+
+def reject_past_date(d, label="Date"):
+    """Reject a task date that is before today (today and future are allowed).
+    Dates are ISO YYYY-MM-DD strings, so a lexicographic compare is correct."""
+    if d and str(d).strip() and str(d).strip() < today_ist():
+        raise HTTPException(
+            status_code=400,
+            detail=f"{label} can't be in the past — assign it for today or a future date.",
+        )
+
 def gen_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:10]}"
 
@@ -333,6 +349,12 @@ async def create_task(body: TaskIn, request: Request):
     user = await get_current_user(request)
     today = today_str()
 
+    # A task can't be assigned in the past (today is fine).
+    if body.task_type == "onetime":
+        reject_past_date(body.target_date, "Task date")
+    else:
+        reject_past_date(body.start_date, "Start date")
+
     # Fetch assignees
     assignees = []
     for aid in body.assignee_ids:
@@ -404,8 +426,15 @@ async def bulk_create_tasks(request: Request):
     body = await request.json()
     task_defs = body if isinstance(body, list) else body.get("tasks", [])
     created = 0
+    skipped_past = 0
     for td in task_defs:
         tin = TaskIn(**{k: v for k, v in td.items() if k in TaskIn.__fields__})
+        # Skip rows assigned in the past (today/future only) instead of aborting
+        # the whole batch — mirrors the no-assignee skip below.
+        _assign_date = tin.target_date if tin.task_type == "onetime" else tin.start_date
+        if _assign_date and str(_assign_date).strip() and str(_assign_date).strip() < today_ist():
+            skipped_past += 1
+            continue
         # reuse the single-task creation logic inline
         today = today_str()
         assignees = []
@@ -463,7 +492,7 @@ async def bulk_create_tasks(request: Request):
         if instances:
             await db.del_task_instances.insert_many(instances)
         created += 1
-    return {"created": created}
+    return {"created": created, "skipped_past": skipped_past}
 
 async def _resync_pending_instances(task: dict):
     """Make PENDING instances match the task definition.
@@ -549,6 +578,13 @@ async def update_task(task_id: str, request: Request):
     updates = {k: v for k, v in body.items() if k in TASK_EDITABLE}
     if not updates:
         return task
+    # Block rescheduling a task INTO the past. Only fires when the date actually
+    # changes, so editing other fields on an already-overdue task still works.
+    _ttype = updates.get("task_type", task.get("task_type", "onetime"))
+    if _ttype == "onetime" and "target_date" in updates and updates["target_date"] != task.get("target_date"):
+        reject_past_date(updates["target_date"], "Task date")
+    if _ttype != "onetime" and "start_date" in updates and updates["start_date"] != task.get("start_date"):
+        reject_past_date(updates["start_date"], "Start date")
     updates["updated_at"] = now_iso()
     updates["updated_by"] = user.get("email")
 

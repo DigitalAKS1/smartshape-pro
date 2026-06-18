@@ -1,9 +1,12 @@
 import React, { useState } from 'react';
 import { X } from 'lucide-react';
+import { toast } from 'sonner';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 
 const PINK = '#e94560';
+// Local (IST for our users) calendar date — min for date pickers / past-date guard.
+const TODAY = (() => { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 10); })();
 
 /**
  * Edit an existing task.
@@ -41,6 +44,15 @@ export default function EditTaskDialog({
 
   const submit = () => {
     if (isOwner && !form.title.trim()) return;
+    if (isOwner) {
+      // Block moving the date into the past; leaving an already-past date as-is is fine.
+      const d = form.task_type === 'onetime' ? form.target_date : form.start_date;
+      const orig = form.task_type === 'onetime' ? (task.target_date || '') : (task.start_date || '');
+      if (d && d < TODAY && d !== orig) {
+        toast.error("Date can't be in the past — pick today or a future date.");
+        return;
+      }
+    }
     const payload = isOwner
       ? {
           title: form.title, description: form.description, priority: form.priority,
@@ -107,7 +119,7 @@ export default function EditTaskDialog({
               {form.task_type === 'onetime' ? (
                 <div>
                   <label className={lbl}>Date</label>
-                  <input type="date" value={form.target_date}
+                  <input type="date" min={TODAY} value={form.target_date}
                     onChange={e => set('target_date', e.target.value)} className={fld} />
                 </div>
               ) : (
@@ -122,12 +134,12 @@ export default function EditTaskDialog({
                   </div>
                   <div>
                     <label className={lbl}>Start</label>
-                    <input type="date" value={form.start_date}
+                    <input type="date" min={TODAY} value={form.start_date}
                       onChange={e => set('start_date', e.target.value)} className={fld} />
                   </div>
                   <div>
                     <label className={lbl}>End</label>
-                    <input type="date" value={form.end_date}
+                    <input type="date" min={form.start_date || TODAY} value={form.end_date}
                       onChange={e => set('end_date', e.target.value)} className={fld} />
                   </div>
                 </div>

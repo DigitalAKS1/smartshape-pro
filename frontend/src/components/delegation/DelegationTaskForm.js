@@ -4,7 +4,9 @@ import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 
 const PINK = '#e94560';
-const TODAY = new Date().toISOString().slice(0, 10);
+// Local (IST for our users) calendar date — used as the default and as the min for
+// date pickers so a task can't be assigned in the past.
+const TODAY = (() => { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 10); })();
 
 function empColor(id = '') {
   const n = id.split('').reduce((a, c) => a + c.charCodeAt(0), 0);
@@ -167,13 +169,13 @@ export default function DelegationTaskForm({
                 </td>
                 <td className="px-2 py-1.5 min-w-[140px]">
                   {row.task_type === 'onetime' ? (
-                    <input type="date" value={row.target_date} onChange={e => updateRow(row._id, 'target_date', e.target.value)}
+                    <input type="date" min={TODAY} value={row.target_date} onChange={e => updateRow(row._id, 'target_date', e.target.value)}
                       className={`w-full h-8 px-2 rounded text-xs ${inputCls} border border-[var(--border-color)]`} />
                   ) : (
                     <div className="space-y-1">
-                      <input type="date" value={row.start_date} onChange={e => updateRow(row._id, 'start_date', e.target.value)}
+                      <input type="date" min={TODAY} value={row.start_date} onChange={e => updateRow(row._id, 'start_date', e.target.value)}
                         className={`w-full h-7 px-2 rounded text-[10px] ${inputCls} border border-[var(--border-color)]`} />
-                      <input type="date" value={row.end_date} onChange={e => updateRow(row._id, 'end_date', e.target.value)}
+                      <input type="date" min={row.start_date || TODAY} value={row.end_date} onChange={e => updateRow(row._id, 'end_date', e.target.value)}
                         className={`w-full h-7 px-2 rounded text-[10px] ${inputCls} border border-[var(--border-color)]`} />
                     </div>
                   )}
