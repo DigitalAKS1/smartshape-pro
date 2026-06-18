@@ -47,7 +47,7 @@ export function useFlowManagement() {
   /* ── new flow form ── */
   const [selectedTemplate, setSelTmpl] = useState(null);
   const [newFlow, setNewFlow] = useState({
-    title:'', reference_id:'', customer_name:'', customer_phone:'', amount:'', notes:'', lead_id: null,
+    title:'', reference_id:'', customer_name:'', customer_phone:'', amount:'', notes:'', lead_id: null, school_id: '',
   });
   const [leadSearch, setLeadSearch]     = useState('');
   const [leadResults, setLeadResults]   = useState([]);
@@ -122,6 +122,9 @@ export function useFlowManagement() {
       customer_name: lead.contact_name || lead.company_name || '',
       customer_phone: lead.contact_phone || '',
       lead_id: lead.lead_id,
+      // Cross-link the lead's School so the flow ties back to the same school
+      // (and its contacts/visits/quotes), not just a loose lead reference.
+      school_id: lead.school_id || '',
     }));
     setLeadSearch('');
     setLeadResults([]);
@@ -140,7 +143,7 @@ export function useFlowManagement() {
       });
       toast.success('Flow created — all stages scheduled');
       setTab('board');
-      setNewFlow({ title:'', reference_id:'', customer_name:'', customer_phone:'', amount:'', notes:'', lead_id: null });
+      setNewFlow({ title:'', reference_id:'', customer_name:'', customer_phone:'', amount:'', notes:'', lead_id: null, school_id: '' });
       setSelTmpl(null);
       setSelectedLead(null);
       loadBoard();
