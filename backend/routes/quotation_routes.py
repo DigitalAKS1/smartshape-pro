@@ -430,6 +430,55 @@ async def _crm_hook_quotation(quot_doc: dict):
             logging.warning(f"Drip enroll for quotation_sent failed on {lead['lead_id']}: {e}")
 
 
+async def _resolve_school_for_quote(body: dict):
+    """Resolve the School a quote belongs to — by FK first, then via the linked
+    lead, then by a case-insensitive name match. School is the single source of
+    truth for address/identity, so every entry path resolves it the same way."""
+    sid = (body.get("school_id") or "").strip()
+    if sid:
+        sch = await db.schools.find_one({"school_id": sid}, {"_id": 0})
+        if sch:
+            return sch
+    lid = body.get("lead_id")
+    if lid:
+        lead = await db.leads.find_one({"lead_id": lid}, {"_id": 0, "school_id": 1})
+        if lead and lead.get("school_id"):
+            sch = await db.schools.find_one({"school_id": lead["school_id"]}, {"_id": 0})
+            if sch:
+                return sch
+    sname = (body.get("school_name") or "").strip()
+    if sname:
+        sch = await db.schools.find_one(
+            {"school_name": {"$regex": f"^{re.escape(sname)}$", "$options": "i"}}, {"_id": 0})
+        if sch:
+            return sch
+    return None
+
+
+# Quotation field  ->  School field it should inherit when left blank
+_QUOTE_SCHOOL_FIELDS = {
+    "address": "address", "city": "city", "state": "state", "pincode": "pincode",
+    "customer_gst": "gstin", "principal_name": "primary_contact_name",
+    "customer_phone": "phone", "customer_email": "email",
+}
+
+
+async def _enrich_quote_address(body: dict):
+    """Fill blank address/identity fields on a quotation payload from its School.
+    Fill-only — never overwrites a value the client actually supplied — so the
+    full address shows no matter which path created the quote (manual wizard,
+    catalogue submit, portal reorder, or API)."""
+    blank = lambda k: not str(body.get(k) or "").strip()
+    if not any(blank(k) for k in _QUOTE_SCHOOL_FIELDS):
+        return  # client already supplied everything — skip the lookup
+    sch = await _resolve_school_for_quote(body)
+    if not sch:
+        return
+    for qkey, skey in _QUOTE_SCHOOL_FIELDS.items():
+        if blank(qkey) and str(sch.get(skey) or "").strip():
+            body[qkey] = sch[skey]
+
+
 @router.post("/quotations")
 async def create_quotation(request: Request):
     user = await get_current_user(request)
@@ -437,6 +486,9 @@ async def create_quotation(request: Request):
     require_module(user, "quotations", "read_write")
 
     body = await request.json()
+    # Backfill any missing address/identity fields from the linked School so the
+    # quote is complete regardless of which screen/flow created it.
+    await _enrich_quote_address(body)
 
     package_id = body.get("package_id")
     package = None

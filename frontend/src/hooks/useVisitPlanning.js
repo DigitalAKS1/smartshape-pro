@@ -348,9 +348,21 @@ export default function useVisitPlanning() {
 
   const handleSelectContact = (c) => {
     setSelectedContact(c);
-    const fullName = [c.first_name, c.last_name].filter(Boolean).join(' ');
-    setForm(f => ({ ...f, lead_name: fullName }));
-    setContactQuery(fullName); setShowContactDrop(false);
+    const fullName = [c.first_name, c.last_name].filter(Boolean).join(' ') || c.name || '';
+    // Cross-link the contact's school so the visit isn't orphaned (carries the
+    // school_id FK), unless the user already picked a school explicitly. Also
+    // carry the contact's name/phone into the visit payload.
+    const sch = c.school_id ? schoolsList.find(s => s.school_id === c.school_id) : null;
+    setForm(f => ({
+      ...f,
+      lead_name: fullName,
+      contact_person: fullName,
+      contact_phone: c.phone || f.contact_phone || '',
+      ...(sch && !f.school_id ? { school_id: sch.school_id, school_name: sch.school_name } : {}),
+    }));
+    setContactQuery(fullName);
+    if (sch && !schoolQuery) setSchoolQuery(sch.school_name);
+    setShowContactDrop(false);
   };
 
   const clearContact = () => {

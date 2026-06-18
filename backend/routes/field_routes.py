@@ -3,6 +3,7 @@ from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime, timezone
 import math
+import re
 import uuid
 import requests
 
@@ -145,6 +146,7 @@ class AttendanceCheckIn(BaseModel):
 
 class FieldVisitCreate(BaseModel):
     school_name: str
+    school_id: Optional[str] = None
     contact_person: str
     contact_phone: str
     visit_date: str
@@ -541,11 +543,22 @@ async def create_visit(visit_input: FieldVisitCreate, request: Request):
     address = None
     if visit_input.lat is not None and visit_input.lng is not None:
         address = reverse_geocode(visit_input.lat, visit_input.lng)
+    # Resolve the School FK so the visit cross-links to School (and to its leads/
+    # contacts/address) instead of being orphaned by a bare name string. Prefer an
+    # explicit school_id from the client; fall back to a case-insensitive name match.
+    school_id = (visit_input.school_id or "").strip()
+    if not school_id and visit_input.school_name:
+        _sch = await db.schools.find_one(
+            {"school_name": {"$regex": f"^{re.escape(visit_input.school_name.strip())}$", "$options": "i"}},
+            {"_id": 0, "school_id": 1})
+        if _sch:
+            school_id = _sch["school_id"]
     visit_doc = {
         "visit_id":           visit_id,
         "sales_person_email": user["email"],
         "sales_person_name":  user["name"],
         "school_name":        visit_input.school_name,
+        "school_id":          school_id,
         "contact_person":     visit_input.contact_person,
         "contact_phone":      visit_input.contact_phone,
         "visit_date":         visit_input.visit_date,

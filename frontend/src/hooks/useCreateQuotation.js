@@ -146,12 +146,25 @@ export default function useCreateQuotation() {
 
   const selectContact = (contact) => {
     setSelectedContact(contact);
+    // Cross-link Contact → School so the quote inherits the full address.
+    // Address/city/state/pincode/gst live on the School record, not the Contact,
+    // so look the linked school up by school_id (mirrors the ?school_id= prefill).
+    const sch = contact.school_id
+      ? schoolsList.find(s => s.school_id === contact.school_id)
+      : null;
     setFormData(prev => ({
       ...prev,
       principal_name: contact.name || prev.principal_name,
-      school_name:    contact.company || prev.school_name,
-      customer_phone: contact.phone || prev.customer_phone,
-      customer_email: contact.email || prev.customer_email,
+      school_name:    contact.company || (sch && sch.school_name) || prev.school_name,
+      customer_phone: contact.phone || (sch && sch.phone) || prev.customer_phone,
+      customer_email: contact.email || (sch && sch.email) || prev.customer_email,
+      ...(sch ? {
+        address:      sch.address || prev.address,
+        city:         sch.city    || prev.city,
+        state:        sch.state   || prev.state,
+        pincode:      sch.pincode || prev.pincode,
+        customer_gst: sch.gstin   || prev.customer_gst,
+      } : {}),
     }));
     setShowNewContact(false);
   };

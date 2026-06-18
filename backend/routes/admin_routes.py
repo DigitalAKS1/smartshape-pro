@@ -982,7 +982,9 @@ async def export_users(request: Request):
 
 @router.get("/export/contacts")
 async def export_contacts(request: Request):
-    await get_current_user(request)
+    user = await get_current_user(request)
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
     contacts_list = await db.contacts.find({}, {"_id": 0}).sort("created_at", -1).to_list(10000)
     # Batch-fetch tag names for export
     all_tag_ids = list({tid for c in contacts_list for tid in (c.get("tag_ids") or [])})
