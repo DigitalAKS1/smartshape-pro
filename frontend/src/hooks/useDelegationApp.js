@@ -51,6 +51,10 @@ export function useDelegationApp() {
   const [editTask,   setEditTask]   = useState(null);   // task being edited, or null
   const [savingEdit, setSavingEdit] = useState(false);
 
+  /* ── complete-with-remarks dialog ── */
+  const [completeDialog, setCompleteDialog] = useState(null);  // instance awaiting a completion remark
+  const [completing,     setCompleting]     = useState(false);
+
   /* ── reassignment + approvals + notifications ── */
   const [reassignInst,     setReassignInst]     = useState(null);  // instance to reassign
   const [reassignRequests, setReassignRequests] = useState([]);
@@ -218,11 +222,25 @@ export function useDelegationApp() {
   });
 
   /* ─────────────── task actions ──────────────────────────────────────── */
-  const completeInst = async (inst) => {
-    await delApi.instances.complete(inst.instance_id, { note: '' });
-    toast.success('Marked done');
-    loadInstances(); loadDash();
-    if (drawer) openDrawer(drawer);
+  // Opening the remarks dialog IS the "mark done" action everywhere — every
+  // card/list calls completeInst(inst), so remarks are captured uniformly.
+  const completeInst = (inst) => setCompleteDialog(inst);
+
+  const confirmComplete = async (note) => {
+    const inst = completeDialog;
+    if (!inst) return;
+    setCompleting(true);
+    try {
+      await delApi.instances.complete(inst.instance_id, { note: note || '' });
+      toast.success('Marked done');
+      setCompleteDialog(null);
+      loadInstances(); loadDash();
+      if (drawer) openDrawer(drawer);
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Could not complete');
+    } finally {
+      setCompleting(false);
+    }
   };
 
   const verifyInst = async (id) => {
@@ -533,6 +551,8 @@ export function useDelegationApp() {
     notifications, loadNotifications, markNotifRead, markAllNotifsRead,
     /* planner */
     plannerTasks, buddyTasks, plannerLoading, loadPlanner,
+    /* complete-with-remarks dialog */
+    completeDialog, setCompleteDialog, confirmComplete, completing,
     /* handlers */
     openDrawer, completeInst, verifyInst, reopenInst, bulkClose,
     handleImageComplete, toggleRole, saveEmp, saveDept, syncUsersNow,

@@ -7,6 +7,7 @@ import DelegationDashboard from '../../components/delegation/DelegationDashboard
 import DelegationTaskForm from '../../components/delegation/DelegationTaskForm';
 import DelegationDepartmentManager from '../../components/delegation/DelegationDepartmentManager';
 import EditTaskDialog from '../../components/delegation/EditTaskDialog';
+import CompleteRemarksDialog from '../../components/delegation/CompleteRemarksDialog';
 import ReassignTaskDialog from '../../components/delegation/ReassignTaskDialog';
 import ApprovalsInbox from '../../components/delegation/ApprovalsInbox';
 import NotificationsBell from '../../components/delegation/NotificationsBell';
@@ -241,6 +242,15 @@ export default function DelegationApp() {
         onEditTask={(inst) => s.openEditTask(inst, s.activeRole)}
         onReassign={(inst) => s.setReassignInst(inst)}
         TODAY={s.TODAY} {...sharedTheme}
+      />
+
+      {/* Complete-with-remarks dialog */}
+      <CompleteRemarksDialog
+        instance={s.completeDialog}
+        onConfirm={s.confirmComplete}
+        onClose={() => s.setCompleteDialog(null)}
+        saving={s.completing}
+        {...sharedTheme}
       />
 
       {/* Reassign dialog */}

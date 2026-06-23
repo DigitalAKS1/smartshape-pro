@@ -2,7 +2,7 @@ import React, { useRef } from 'react';
 import {
   Check, Camera, Calendar, AlertTriangle, Users, ClipboardList,
   UserCheck, MapPin, RefreshCw, Link2, User, RotateCcw, Eye,
-  CheckSquare, ChevronRight, Pencil, ArrowRightLeft,
+  CheckSquare, ChevronRight, Pencil, ArrowRightLeft, Clock,
 } from 'lucide-react';
 
 const PINK = '#e94560';
@@ -131,6 +131,11 @@ function TaskCard({ inst, onComplete, onImageComplete, card, textPri, textMuted,
             </span>
           )}
         </div>
+        {inst.created_at && (
+          <p className={`text-[10px] ${textMuted} flex items-center gap-1`}>
+            <Clock className="h-2.5 w-2.5" /> Assigned {new Date(inst.created_at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+          </p>
+        )}
       </div>
       {inst.status === 'pending' && (
         <div className="border-t border-[var(--border-color)] flex">
@@ -153,9 +158,12 @@ function TaskCard({ inst, onComplete, onImageComplete, card, textPri, textMuted,
         </div>
       )}
       {inst.status === 'completed' && (
-        <div className="border-t border-[var(--border-color)] px-4 py-2.5 flex items-center gap-2">
-          <Check className="h-3.5 w-3.5 text-blue-500" />
-          <span className={`text-xs ${textSec}`}>Completed{inst.completed_at ? ` · ${new Date(inst.completed_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}` : ''}</span>
+        <div className="border-t border-[var(--border-color)] px-4 py-2.5">
+          <div className="flex items-center gap-2">
+            <Check className="h-3.5 w-3.5 text-blue-500" />
+            <span className={`text-xs ${textSec}`}>Completed{inst.completed_at ? ` · ${new Date(inst.completed_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}` : ''}</span>
+          </div>
+          {inst.completion_note && <p className={`text-[11px] ${textMuted} mt-1 pl-5 italic`}>“{inst.completion_note}”</p>}
         </div>
       )}
       {inst.status === 'verified' && (

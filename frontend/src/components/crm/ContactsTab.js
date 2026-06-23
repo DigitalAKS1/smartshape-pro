@@ -148,9 +148,11 @@ export default function ContactsTab({
 
       {/* Action bar */}
       <div className="flex flex-wrap items-center gap-2">
-        <Button onClick={handleContactExport} variant="outline" size="sm" className="border-[var(--border-color)] text-[var(--text-secondary)]" data-testid="export-contacts-btn">
-          <Download className="mr-1 h-3 w-3" /> Export CSV
-        </Button>
+        {user?.role === 'admin' && (
+          <Button onClick={handleContactExport} variant="outline" size="sm" className="border-[var(--border-color)] text-[var(--text-secondary)]" data-testid="export-contacts-btn">
+            <Download className="mr-1 h-3 w-3" /> Export CSV
+          </Button>
+        )}
         <Button onClick={() => setContactImportOpen(true)} variant="outline" size="sm" className="border-[var(--border-color)] text-[var(--text-secondary)]" data-testid="import-contacts-btn">
           <Upload className="mr-1 h-3 w-3" /> Import CSV
         </Button>

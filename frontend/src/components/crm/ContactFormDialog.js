@@ -130,22 +130,15 @@ export default function ContactFormDialog({
                     : null}
               </div>
               <div>
-                <Label className={`${textSec} text-xs`}>Contact Role</Label>
-                <select value={contactForm.contact_role_id || ''} onChange={e => setContactForm({...contactForm, contact_role_id: e.target.value})} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`} data-testid="contact-role-select">
-                  <option value="">{rolesList.length ? 'Select role' : 'Loading...'}</option>
-                  {rolesList.map(r => <option key={r.role_id} value={r.role_id}>{r.name}</option>)}
-                </select>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
                 <Label className={`${textSec} text-xs`}>Job Designation</Label>
                 <select value={contactForm.designation || ''} onChange={e => setContactForm({...contactForm, designation: e.target.value})} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`} data-testid="contact-designation-select">
                   <option value="">{designationsList.length ? 'Select designation' : 'Loading...'}</option>
                   {designationsList.filter(d => d.is_active !== false).map(d => <option key={d.designation_id} value={d.name}>{d.name}{d.department ? ` (${d.department})` : ''}</option>)}
                 </select>
               </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <Label className={`${textSec} text-xs`}>Source</Label>
                 <select value={contactForm.source_id || ''} onChange={e => { const src = sourcesList.find(s => s.source_id === e.target.value); setContactForm({...contactForm, source_id: e.target.value, source: src?.name || ''}); }} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`} data-testid="contact-source-select">
