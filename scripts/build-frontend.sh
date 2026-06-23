@@ -17,6 +17,9 @@ cd "$ROOT/frontend"
 export REACT_APP_BACKEND_URL="${REACT_APP_BACKEND_URL:-https://app.smartshape.in}"
 export DISABLE_ESLINT_PLUGIN=true
 export CI=false
+# No source maps in prod: they expose source and add ~15MB to every committed
+# bundle, which stalls the git push on a slow uplink. Debug-only artifact.
+export GENERATE_SOURCEMAP=false
 export NODE_OPTIONS="--max_old_space_size=4096"
 
 echo "==> Clean previous build"

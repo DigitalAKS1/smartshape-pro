@@ -1,7 +1,7 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { Phone, CheckCircle2, MapPin, AlertTriangle, Loader2, RefreshCw, ClipboardList, ChevronRight, ListChecks } from 'lucide-react';
+import { Phone, CheckCircle2, MapPin, AlertTriangle, Loader2, RefreshCw, ClipboardList, ChevronRight, ListChecks, CalendarDays } from 'lucide-react';
 import AgendaWeekWidget from '../components/delegation/AgendaWeekWidget';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -12,6 +12,7 @@ import AppShell from '../components/layouts/AppShell';
 import { useTodayDashboard } from '../hooks/useTodayDashboard';
 import TodayActionCard from '../components/today/TodayActionCard';
 import PunchClock from '../components/PunchClock';
+import OnLeaveTodayBanner from '../components/today/OnLeaveTodayBanner';
 
 function StatChip({ count, label, color, testid }) {
   return (
@@ -83,6 +84,12 @@ export default function TodayDashboard() {
           </button>
         </div>
 
+        {/* Daily Attendance — every user marks In/Out here, with auto-detected location */}
+        <PunchClock />
+
+        {/* Who's on leave today — team availability for everyone */}
+        <OnLeaveTodayBanner />
+
         {/* Stat strip */}
         <div className="grid grid-cols-3 gap-2">
           <StatChip count={counts.overdue}      label="Overdue" color="bg-red-500/15 text-red-400 border-red-500/30"       testid="stat-overdue" />
@@ -90,11 +97,8 @@ export default function TodayDashboard() {
           <StatChip count={counts.visits_today} label="Visits"  color="bg-blue-500/15 text-blue-400 border-blue-500/30"     testid="stat-visits" />
         </div>
 
-        {/* Punch Clock — available to every user, In/Out + hours */}
-        <PunchClock />
-
-        {/* Quick tiles: My Tasks + Calendar */}
-        <div className="grid grid-cols-2 gap-2">
+        {/* Quick tiles: My Tasks + Calendar + Apply Leave */}
+        <div className="grid grid-cols-3 gap-2">
           <button onClick={() => nav('/delegation?tab=mytasks')}
             className="border rounded-xl p-3 flex items-center gap-2 bg-[var(--bg-card)] border-[var(--border-color)] active:opacity-75">
             <span className="w-9 h-9 rounded-lg bg-pink-400/10 flex items-center justify-center"><ListChecks className="h-4 w-4 text-pink-400" /></span>
@@ -104,6 +108,11 @@ export default function TodayDashboard() {
             className="border rounded-xl p-3 flex items-center gap-2 bg-[var(--bg-card)] border-[var(--border-color)] active:opacity-75">
             <span className="w-9 h-9 rounded-lg bg-[#e94560]/10 flex items-center justify-center"><ClipboardList className="h-4 w-4 text-[#e94560]" /></span>
             <span className="text-xs font-semibold text-[var(--text-secondary)]">Calendar</span>
+          </button>
+          <button onClick={() => nav('/leave-management')}
+            className="border rounded-xl p-3 flex items-center gap-2 bg-[var(--bg-card)] border-[var(--border-color)] active:opacity-75">
+            <span className="w-9 h-9 rounded-lg bg-teal-400/10 flex items-center justify-center"><CalendarDays className="h-4 w-4 text-teal-400" /></span>
+            <span className="text-xs font-semibold text-[var(--text-secondary)]">Apply Leave</span>
           </button>
         </div>
 

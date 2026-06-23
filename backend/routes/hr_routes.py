@@ -71,6 +71,20 @@ async def get_leaves(request: Request):
     return leaves
 
 
+@router.get("/leaves/on-leave-today")
+async def on_leave_today(request: Request):
+    """Who is on approved leave today — visible to EVERY user so the team knows
+    who is unavailable. No module gate: this is team-availability awareness."""
+    await get_current_user(request)
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    rows = await db.leaves.find(
+        {"status": "approved", "from_date": {"$lte": today}, "to_date": {"$gte": today}},
+        {"_id": 0, "user_name": 1, "user_email": 1, "leave_type": 1,
+         "from_date": 1, "to_date": 1, "half_day": 1},
+    ).sort("user_name", 1).to_list(200)
+    return rows
+
+
 @router.post("/leaves")
 async def apply_leave(request: Request):
     user = await get_current_user(request)

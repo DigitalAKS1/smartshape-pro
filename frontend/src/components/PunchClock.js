@@ -25,6 +25,21 @@ export default function PunchClock() {
   const [tick,        setTick]        = useState(Date.now());
   const [wfhSaved,    setWfhSaved]    = useState(false);   // true if home location already set
   const [savingWfh,   setSavingWfh]   = useState(false);
+  // Auto-fetched current location, captured on open so attendance marking is one tap.
+  const [geo,         setGeo]         = useState({ status: 'idle', lat: null, lng: null });
+
+  const fetchLocation = useCallback(() => {
+    if (!navigator.geolocation) { setGeo({ status: 'unsupported', lat: null, lng: null }); return; }
+    setGeo(g => ({ ...g, status: 'locating' }));
+    navigator.geolocation.getCurrentPosition(
+      pos => setGeo({ status: 'ready', lat: pos.coords.latitude, lng: pos.coords.longitude }),
+      ()  => setGeo({ status: 'denied', lat: null, lng: null }),
+      { enableHighAccuracy: true, timeout: 10000 },
+    );
+  }, []);
+
+  // Auto-fetch current location as soon as the attendance card opens.
+  useEffect(() => { fetchLocation(); }, [fetchLocation]);
 
   // Refresh clock every minute
   useEffect(() => {
@@ -86,6 +101,7 @@ export default function PunchClock() {
   const handlePunch = async (type) => {
     setPunching(true);
     try {
+      // Prefer a fresh fix; fall back to the location auto-fetched on open.
       const pos = await new Promise((res, rej) =>
         navigator.geolocation
           ? navigator.geolocation.getCurrentPosition(res, rej, { enableHighAccuracy: true, timeout: 10000 })
@@ -94,8 +110,8 @@ export default function PunchClock() {
 
       await punchApi.punch({
         type,
-        lat: pos?.coords.latitude  ?? null,
-        lng: pos?.coords.longitude ?? null,
+        lat: pos?.coords.latitude  ?? geo.lat ?? null,
+        lng: pos?.coords.longitude ?? geo.lng ?? null,
       });
       toast.success(type === 'in' ? '✅ Punched In' : '👋 Punched Out');
       await loadPunches();
@@ -117,7 +133,7 @@ export default function PunchClock() {
       <div className="px-5 pt-4 pb-3 flex items-center justify-between border-b border-[var(--border-color)]">
         <div className="flex items-center gap-2">
           <Clock className="h-4 w-4 text-[#e94560]" />
-          <span className="text-sm font-semibold text-[var(--text-primary)]">Punch Clock</span>
+          <span className="text-sm font-semibold text-[var(--text-primary)]">Daily Attendance</span>
         </div>
         <div className="flex items-center gap-2">
           {punches.length > 0 && (
@@ -132,6 +148,16 @@ export default function PunchClock() {
       </div>
 
       <div className="p-5">
+        {/* Auto-detected current location */}
+        <div className="flex items-center gap-1.5 mb-3 text-[11px]">
+          <MapPin className={`h-3.5 w-3.5 flex-shrink-0 ${geo.status === 'ready' ? 'text-green-400' : 'text-[var(--text-muted)]'}`} />
+          {(geo.status === 'ready') && <span className="text-green-400">Current location detected — ready to mark attendance</span>}
+          {(geo.status === 'locating' || geo.status === 'idle') && <span className="text-[var(--text-muted)]">Detecting your location…</span>}
+          {(geo.status === 'denied' || geo.status === 'unsupported') && (
+            <button onClick={fetchLocation} className="text-[#e94560] underline">Location off — tap to enable &amp; retry</button>
+          )}
+        </div>
+
         {/* Status + big button */}
         <div className="flex items-center gap-4 mb-5">
           {/* Status dot */}

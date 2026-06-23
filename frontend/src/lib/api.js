@@ -857,6 +857,7 @@ export const leaves = {
   approve: (id, data) => API.put(`/leaves/${id}/approve`, data),
   cancel: (id) => API.delete(`/leaves/${id}`),
   getBalance: (email) => API.get('/leaves/balance', { params: { email } }),
+  onLeaveToday: () => API.get('/leaves/on-leave-today'),
 };
 
 // Modules
