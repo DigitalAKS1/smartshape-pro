@@ -179,6 +179,9 @@ export default function DelegationTaskForm({
                         className={`w-full h-7 px-2 rounded text-[10px] ${inputCls} border border-[var(--border-color)]`} />
                     </div>
                   )}
+                  <input type="time" value={row.due_time || ''} onChange={e => updateRow(row._id, 'due_time', e.target.value)}
+                    title="Due time (optional — blank means end of day)"
+                    className={`w-full h-7 px-2 mt-1 rounded text-[10px] ${inputCls} border border-[var(--border-color)]`} />
                 </td>
                 <td className="px-3 py-1.5 text-center w-10">
                   <button onClick={() => updateRow(row._id, 'requires_image', !row.requires_image)}

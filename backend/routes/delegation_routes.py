@@ -53,7 +53,7 @@ def _make_change(by: str, field: str, frm, to, note: str = "") -> dict:
 TASK_EDITABLE = (
     "title", "description", "priority", "score", "require_verification",
     "requires_image", "is_active", "task_type", "frequency",
-    "target_date", "start_date", "end_date", "assignee_ids", "buddy_emp_id",
+    "target_date", "start_date", "end_date", "due_time", "assignee_ids", "buddy_emp_id",
 )
 
 # fields a delegatee may soft-edit on their own instance
@@ -247,6 +247,7 @@ class TaskIn(BaseModel):
     target_date: Optional[str] = None
     start_date: Optional[str] = None
     end_date: Optional[str] = None
+    due_time: Optional[str] = None          # "HH:MM" — optional; blank = end of day
     priority: str = "medium"
     assignee_ids: List[str] = []
     buddy_emp_id: Optional[str] = ""        # backup owner (can complete if main owner is out)
@@ -283,7 +284,7 @@ def _make_instance_v2(task_id, task_number, title, priority, score,
                       require_verification, requires_image, emp,
                       delegator_id, delegator_name, due, freq,
                       linked_entity_id=None, linked_entity_type=None,
-                      buddy_emp_id="", buddy_name=""):
+                      buddy_emp_id="", buddy_name="", due_time=""):
     return {
         "instance_id": gen_id("inst"),
         "task_id": task_id, "task_title": title, "task_number": task_number,
@@ -292,7 +293,7 @@ def _make_instance_v2(task_id, task_number, title, priority, score,
         "department_name": emp.get("department_name", ""),
         "delegator_id": delegator_id, "delegator_name": delegator_name,
         "buddy_emp_id": buddy_emp_id or "", "buddy_name": buddy_name or "",
-        "due_date": due, "frequency": freq,
+        "due_date": due, "due_time": due_time or "", "frequency": freq,
         "priority": priority, "score": score,
         "require_verification": require_verification,
         "requires_image": requires_image,
@@ -302,6 +303,9 @@ def _make_instance_v2(task_id, task_number, title, priority, score,
         "completed_at": None, "verified_at": None, "verified_by": None,
         "completed_by": "",
         "completion_note": "", "completion_image_url": None,
+        # rich submission tracking — see /instances/{id}/report
+        "last_outcome": None, "submissions": [],
+        "reassignment_count": 0,
         "created_at": now_iso(),
     }
 
@@ -380,7 +384,8 @@ async def create_task(body: TaskIn, request: Request):
         "title": body.title, "description": body.description,
         "task_type": body.task_type, "frequency": body.frequency,
         "target_date": body.target_date, "start_date": body.start_date,
-        "end_date": body.end_date, "priority": body.priority,
+        "end_date": body.end_date, "due_time": body.due_time or "",
+        "priority": body.priority,
         "assignee_ids": body.assignee_ids, "assignees": assignees,
         "buddy_emp_id": body.buddy_emp_id or "", "buddy_name": buddy_name,
         "delegator_id": body.delegator_id, "delegator_name": delegator_name,
@@ -399,6 +404,7 @@ async def create_task(body: TaskIn, request: Request):
               requires_image=body.requires_image,
               delegator_id=body.delegator_id, delegator_name=delegator_name,
               buddy_emp_id=body.buddy_emp_id or "", buddy_name=buddy_name,
+              due_time=body.due_time or "",
               linked_entity_id=body.linked_entity_id,
               linked_entity_type=body.linked_entity_type)
 
@@ -459,7 +465,8 @@ async def bulk_create_tasks(request: Request):
             "title": tin.title, "description": tin.description,
             "task_type": tin.task_type, "frequency": tin.frequency,
             "target_date": tin.target_date, "start_date": tin.start_date,
-            "end_date": tin.end_date, "priority": tin.priority,
+            "end_date": tin.end_date, "due_time": tin.due_time or "",
+            "priority": tin.priority,
             "assignee_ids": tin.assignee_ids, "assignees": assignees,
             "buddy_emp_id": tin.buddy_emp_id or "", "buddy_name": buddy_name,
             "delegator_id": tin.delegator_id, "delegator_name": delegator_name,
@@ -477,6 +484,7 @@ async def bulk_create_tasks(request: Request):
                   requires_image=tin.requires_image,
                   delegator_id=tin.delegator_id, delegator_name=delegator_name,
                   buddy_emp_id=tin.buddy_emp_id or "", buddy_name=buddy_name,
+                  due_time=tin.due_time or "",
                   linked_entity_id=tin.linked_entity_id,
                   linked_entity_type=tin.linked_entity_type)
         instances = []
@@ -534,6 +542,7 @@ async def _resync_pending_instances(task: dict):
         requires_image=task.get("requires_image", False),
         delegator_id=task.get("delegator_id"), delegator_name=task.get("delegator_name", ""),
         buddy_emp_id=task.get("buddy_emp_id", ""), buddy_name=task.get("buddy_name", ""),
+        due_time=task.get("due_time", ""),
         linked_entity_id=task.get("linked_entity_id"),
         linked_entity_type=task.get("linked_entity_type"),
     )
@@ -559,6 +568,7 @@ async def _resync_pending_instances(task: dict):
             "requires_image": task.get("requires_image", False),
             "buddy_emp_id": task.get("buddy_emp_id", ""),
             "buddy_name": task.get("buddy_name", ""),
+            "due_time": task.get("due_time", ""),
             "updated_at": now_iso(),
         }},
     )
@@ -609,7 +619,7 @@ async def update_task(task_id: str, request: Request):
     # onto every instance, since both roles view instances).
     by = user.get("email", "")
     LOG_FIELDS = ("title", "description", "priority", "task_type", "frequency",
-                  "target_date", "start_date", "end_date",
+                  "target_date", "start_date", "end_date", "due_time",
                   "require_verification", "requires_image", "buddy_emp_id")
     logs = []
     for f in LOG_FIELDS:
@@ -890,21 +900,16 @@ async def _notify(emp_id, ntype: str, title: str, body: str, link_instance_id=No
     })
 
 
-@router.post("/instances/{instance_id}/reassign-request")
-async def create_reassign_request(instance_id: str, request: Request):
-    user = await get_current_user(request)
-    actor = await _resolve_actor(user)
-    body = await request.json()
-    to_emp_id = body.get("to_emp_id")
-    reason = (body.get("reason") or "").strip()
+async def _make_reassign_request(inst: dict, to_emp_id: str, reason: str,
+                                 user: dict, actor: dict) -> dict:
+    """Create a pending reassignment request for an instance + notify approvers.
+    Shared by the explicit reassign endpoint and the 'partial' report flow.
+    Validates inputs and raises HTTPException on bad data."""
+    reason = (reason or "").strip()
     if not reason:
         raise HTTPException(400, "A reason is required")
     if not to_emp_id:
         raise HTTPException(400, "Target employee is required")
-
-    inst = await db.del_task_instances.find_one({"instance_id": instance_id}, {"_id": 0})
-    if not inst:
-        raise HTTPException(404, "Instance not found")
     if inst.get("status") in ("completed", "verified"):
         raise HTTPException(400, "Task is already done")
     if to_emp_id == inst.get("emp_id"):
@@ -916,7 +921,7 @@ async def create_reassign_request(instance_id: str, request: Request):
         raise HTTPException(400, "Target employee not found")
 
     req = {
-        "request_id": gen_id("rr"), "instance_id": instance_id,
+        "request_id": gen_id("rr"), "instance_id": inst["instance_id"],
         "task_id": inst.get("task_id"), "task_title": inst.get("task_title"),
         "delegator_id": inst.get("delegator_id"),
         "from_emp_id": inst.get("emp_id"), "from_emp_name": inst.get("emp_name"),
@@ -942,9 +947,101 @@ async def create_reassign_request(instance_id: str, request: Request):
             tid, "reassign_requested", "Reassignment requested",
             f"{actor['name']} asks to move \"{inst.get('task_title')}\" "
             f"from {inst.get('emp_name')} to {to_emp.get('name')}.",
-            instance_id)
+            inst["instance_id"])
     return await db.del_reassign_requests.find_one(
         {"request_id": req["request_id"]}, {"_id": 0})
+
+
+@router.post("/instances/{instance_id}/report")
+async def report_instance(instance_id: str, request: Request):
+    """Delegatee submission with an outcome other than a clean 'done':
+      - not_done : couldn't do it (reason required); task stays pending; delegator notified
+      - partial  : did part of it (progress note + expected finish date required); due date
+                   moves to the expected finish; optionally requests a reassignment that
+                   still needs delegator approval; delegator notified
+    A plain 'done' keeps using /complete (and /complete-with-image for photo proof)."""
+    user = await get_current_user(request)
+    actor = await _resolve_actor(user)
+    body = await request.json()
+
+    outcome = body.get("outcome")
+    note = (body.get("note") or "").strip()
+    if outcome not in ("not_done", "partial"):
+        raise HTTPException(400, "outcome must be 'not_done' or 'partial'")
+    if not note:
+        raise HTTPException(400, "A note is required")
+
+    inst = await db.del_task_instances.find_one({"instance_id": instance_id}, {"_id": 0})
+    if not inst:
+        raise HTTPException(404, "Instance not found")
+    if inst.get("status") in ("completed", "verified"):
+        raise HTTPException(400, "Task is already done")
+
+    submission = {"outcome": outcome, "note": note, "at": now_iso(),
+                  "by": actor["name"], "expected_date": None, "expected_time": None}
+    set_doc = {"last_outcome": outcome, "updated_at": now_iso()}
+    logs = []
+    expected_date = ""
+
+    if outcome == "partial":
+        expected_date = (body.get("expected_date") or "").strip()
+        if not expected_date:
+            raise HTTPException(400, "An expected finish date is required for a partial update")
+        reject_past_date(expected_date, "Expected finish date")
+        expected_time = (body.get("expected_time") or "").strip()
+        submission["expected_date"] = expected_date
+        submission["expected_time"] = expected_time
+        # roll the due date forward to the expected finish (change-logged so both
+        # the delegatee and delegator see the move)
+        if expected_date != inst.get("due_date"):
+            logs.append(_make_change(user.get("email", ""), "due_date",
+                                     inst.get("due_date"), expected_date,
+                                     "Partial — new expected finish"))
+            set_doc["due_date"] = expected_date
+        if expected_time != (inst.get("due_time") or ""):
+            set_doc["due_time"] = expected_time
+
+    update = {"$set": set_doc, "$push": {"submissions": submission}}
+    if logs:
+        update["$push"]["change_log"] = {"$each": logs}
+    await db.del_task_instances.update_one({"instance_id": instance_id}, update)
+
+    # optional teammate hand-off on a partial — still needs delegator approval
+    reassign = None
+    reassign_to = body.get("reassign_to_emp_id")
+    if outcome == "partial" and reassign_to:
+        fresh = await db.del_task_instances.find_one({"instance_id": instance_id}, {"_id": 0})
+        reassign = await _make_reassign_request(
+            fresh, reassign_to, f"Partial hand-off: {note}", user, actor)
+
+    # notify the delegator
+    if outcome == "not_done":
+        title = "Task reported not done"
+        msg = f"{actor['name']} couldn't complete \"{inst.get('task_title')}\": {note}"
+    else:
+        title = "Task partially done"
+        when = f" Expects to finish by {expected_date}." if expected_date else ""
+        msg = f"{actor['name']} made partial progress on \"{inst.get('task_title')}\": {note}.{when}"
+    await _notify(inst.get("delegator_id"), f"task_{outcome}", title, msg, instance_id)
+
+    result = await db.del_task_instances.find_one({"instance_id": instance_id}, {"_id": 0})
+    if reassign:
+        result["reassign_request"] = reassign
+    return result
+
+
+@router.post("/instances/{instance_id}/reassign-request")
+async def create_reassign_request(instance_id: str, request: Request):
+    user = await get_current_user(request)
+    actor = await _resolve_actor(user)
+    body = await request.json()
+
+    inst = await db.del_task_instances.find_one({"instance_id": instance_id}, {"_id": 0})
+    if not inst:
+        raise HTTPException(404, "Instance not found")
+
+    return await _make_reassign_request(
+        inst, body.get("to_emp_id"), body.get("reason"), user, actor)
 
 
 @router.get("/reassign-requests")

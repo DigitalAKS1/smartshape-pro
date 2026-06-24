@@ -15,7 +15,7 @@ const newRow = (delegatorId = '') => ({
   _id: Math.random().toString(36).slice(2),
   title: '', description: '', assignee_id: '', buddy_emp_id: '', priority: 'medium',
   task_type: 'onetime', frequency: 'daily', target_date: TODAY,
-  start_date: TODAY, end_date: '', delegator_id: delegatorId,
+  start_date: TODAY, end_date: '', due_time: '', delegator_id: delegatorId,
   requires_image: false, require_verification: false, score: 0,
 });
 
@@ -50,6 +50,9 @@ export function useDelegationApp() {
   /* ── edit-task dialog ── */
   const [editTask,   setEditTask]   = useState(null);   // task being edited, or null
   const [savingEdit, setSavingEdit] = useState(false);
+
+  /* ── task submission dialog (Done / Not Done / Partial) ── */
+  const [submitInst, setSubmitInst] = useState(null);   // instance being submitted, or null
 
   /* ── reassignment + approvals + notifications ── */
   const [reassignInst,     setReassignInst]     = useState(null);  // instance to reassign
@@ -205,6 +208,43 @@ export function useDelegationApp() {
     toast.success('Marked done');
     loadInstances(); loadDash();
     if (drawer) openDrawer(drawer);
+  };
+
+  // Submit dialog → "Done": optional remark, or a photo when proof is required.
+  const submitDone = async (inst, { note = '', file = null } = {}) => {
+    try {
+      if (file) {
+        const fd = new FormData();
+        fd.append('file', file);
+        await delApi.instances.completeWithImage(inst.instance_id, fd);
+      } else {
+        await delApi.instances.complete(inst.instance_id, { note });
+      }
+      toast.success('Marked done');
+      setSubmitInst(null);
+      loadInstances(); loadDash(); loadPlanner();
+      if (drawer) openDrawer(drawer);
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Failed');
+      throw e;
+    }
+  };
+
+  // Submit dialog → "Not Done" / "Partial".
+  const reportInst = async (inst, payload) => {
+    try {
+      await delApi.instances.report(inst.instance_id, payload);
+      toast.success(
+        payload.outcome === 'partial'
+          ? (payload.reassign_to_emp_id ? 'Progress saved — reassignment requested' : 'Progress saved')
+          : 'Reported — assigner notified');
+      setSubmitInst(null);
+      loadInstances(); loadDash(); loadPlanner();
+      if (drawer) openDrawer(drawer);
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Failed');
+      throw e;
+    }
   };
 
   const verifyInst = async (id) => {
@@ -388,6 +428,7 @@ export function useDelegationApp() {
         target_date: r.task_type === 'onetime' ? r.target_date : null,
         start_date:  r.task_type === 'recurring' ? r.start_date : null,
         end_date:    r.task_type === 'recurring' ? r.end_date   : null,
+        due_time: r.due_time || '',
         priority: r.priority, assignee_ids: [r.assignee_id],
         buddy_emp_id: r.buddy_emp_id || '',
         delegator_id: r.delegator_id || autoDelId,
@@ -498,6 +539,8 @@ export function useDelegationApp() {
     empOpen, setEmpOpen, editEmp, setEditEmp, empForm, setEmpForm,
     /* edit task */
     editTask, setEditTask, savingEdit, openEditTask, updateTask, patchInstance,
+    /* task submission dialog */
+    submitInst, setSubmitInst, submitDone, reportInst,
     /* reassignment + approvals + notifications */
     reassignInst, setReassignInst, submitReassign,
     reassignRequests, loadReassignRequests, decideReassign,

@@ -1,12 +1,20 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
-  Check, Camera, Pencil, ArrowRightLeft, Flame, Sun, Sparkles,
+  Check, Pencil, ArrowRightLeft, Flame, Sun, Sparkles,
   CalendarDays, LifeBuoy, ChevronLeft, ChevronRight,
 } from 'lucide-react';
 
 const PINK = '#e94560';
 const GREEN = '#10b981';
 const AMBER = '#f59e0b';
+
+// "14:30" → "2:30 PM"; blank → ''
+const fmtTime = (t) => {
+  if (!t || !/^\d{1,2}:\d{2}/.test(t)) return '';
+  const [h, m] = t.split(':');
+  const hh = +h, ap = hh >= 12 ? 'PM' : 'AM';
+  return `${((hh + 11) % 12) + 1}:${m} ${ap}`;
+};
 
 /* ── date helpers (local, no deps) ───────────────────────────────────────── */
 const iso = (d) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
@@ -68,9 +76,10 @@ function PriorityDot({ p }) {
 
 /* ── task card ───────────────────────────────────────────────────────────── */
 function TaskCard({ inst, idx, isBuddy, today, actions, card, textPri, textSec, textMuted }) {
-  const fileRef = useRef(null);
   const overdue = inst.status === 'pending' && inst.due_date < today;
   const done = DONE(inst);
+  const outcome = inst.status === 'pending' && ['not_done', 'partial'].includes(inst.last_outcome) ? inst.last_outcome : null;
+  const lastSub = outcome ? (inst.submissions || []).filter(s => s.outcome === outcome).slice(-1)[0] : null;
 
   return (
     <div className={`${card} border rounded-xl p-3 flex items-center gap-3 group`}
@@ -79,31 +88,26 @@ function TaskCard({ inst, idx, isBuddy, today, actions, card, textPri, textSec, 
       <PriorityDot p={inst.priority} />
       <div className="flex-1 min-w-0">
         <p className={`text-sm font-medium ${done ? `line-through ${textMuted}` : textPri} truncate`}>{inst.task_title}</p>
-        <div className={`flex items-center gap-2 mt-0.5 text-[11px] ${textMuted}`}>
-          <span>{inst.due_date === today ? 'Today' : inst.due_date}</span>
+        <div className={`flex items-center gap-2 mt-0.5 text-[11px] ${textMuted} flex-wrap`}>
+          <span>{inst.due_date === today ? 'Today' : inst.due_date}{inst.due_time ? ` · ${fmtTime(inst.due_time)}` : ''}</span>
           {isBuddy && <span className="px-1.5 py-0.5 rounded bg-violet-500/15 text-violet-400">backup for {inst.emp_name}</span>}
           {inst.delegator_name && <span>· from {inst.delegator_name}</span>}
           {done && <span style={{ color: GREEN }}>· done{inst.completed_by === 'buddy' ? ' by buddy' : ''}</span>}
+          {outcome && (
+            <span title={lastSub?.note || ''}
+              className={`px-1.5 py-0.5 rounded ${outcome === 'partial' ? 'bg-amber-500/15 text-amber-600' : 'bg-red-500/15 text-red-500'}`}>
+              {outcome === 'partial' ? `partial${lastSub?.expected_date ? ` · by ${lastSub.expected_date}` : ''}` : 'reported not done'}
+            </span>
+          )}
         </div>
       </div>
 
       {inst.status === 'pending' && (
         <div className="flex items-center gap-1 flex-shrink-0">
-          {inst.requires_image ? (
-            <>
-              <input type="file" accept="image/*" capture="environment" ref={fileRef} className="hidden"
-                onChange={e => e.target.files[0] && actions.onPhoto(inst, e.target.files[0])} />
-              <button onClick={() => fileRef.current?.click()} title="Complete with photo"
-                className="w-8 h-8 rounded-lg flex items-center justify-center text-white" style={{ background: PINK }}>
-                <Camera className="h-4 w-4" />
-              </button>
-            </>
-          ) : (
-            <button onClick={() => actions.onComplete(inst)} title="Mark done"
-              className="w-8 h-8 rounded-lg flex items-center justify-center text-white" style={{ background: GREEN }}>
-              <Check className="h-4 w-4" />
-            </button>
-          )}
+          <button onClick={() => actions.onSubmit(inst)} title="Submit task"
+            className="h-8 px-3 rounded-lg flex items-center justify-center gap-1 text-white text-xs font-semibold" style={{ background: GREEN }}>
+            <Check className="h-3.5 w-3.5" /> Submit
+          </button>
           {!isBuddy && (
             <>
               <button onClick={() => actions.onEdit(inst)} title="Edit"
@@ -125,15 +129,14 @@ function TaskCard({ inst, idx, isBuddy, today, actions, card, textPri, textSec, 
 /* ── main planner ────────────────────────────────────────────────────────── */
 export default function MyPlanner({
   myEmp, plannerTasks = [], buddyTasks = [], loading, TODAY,
-  completeInst, handleImageComplete, onEditTask, onReassign,
+  onSubmit, onEditTask, onReassign,
   card, textPri, textSec, textMuted,
 }) {
   const [mode, setMode] = useState('day');           // 'day' | 'week'
   const [weekStart, setWeekStart] = useState(TODAY);
 
   const actions = {
-    onComplete: completeInst,
-    onPhoto: handleImageComplete,
+    onSubmit,
     onEdit: onEditTask,
     onReassign,
   };

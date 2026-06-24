@@ -29,6 +29,7 @@ export default function EditTaskDialog({
     target_date: task.target_date || '',
     start_date: task.start_date || '',
     end_date: task.end_date || '',
+    due_time: task.due_time || '',
     assignee_ids: task.assignee_ids || [],
     buddy_emp_id: task.buddy_emp_id || '',
     require_verification: !!task.require_verification,
@@ -61,6 +62,7 @@ export default function EditTaskDialog({
           target_date: form.task_type === 'onetime' ? form.target_date : null,
           start_date: form.task_type === 'recurring' ? form.start_date : null,
           end_date: form.task_type === 'recurring' ? form.end_date : null,
+          due_time: form.due_time || '',
           assignee_ids: form.assignee_ids,
           buddy_emp_id: form.buddy_emp_id,
           require_verification: form.require_verification,
@@ -144,6 +146,12 @@ export default function EditTaskDialog({
                   </div>
                 </div>
               )}
+
+              <div>
+                <label className={lbl}>Due time <span className="font-normal normal-case opacity-70">(optional — blank means end of day)</span></label>
+                <input type="time" value={form.due_time}
+                  onChange={e => set('due_time', e.target.value)} className={fld} />
+              </div>
 
               <div>
                 <label className={lbl}>Assign To</label>
