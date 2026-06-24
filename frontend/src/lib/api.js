@@ -971,6 +971,7 @@ export const delegation = {
     patch:            (id,d) => API.patch(`/delegation/instances/${id}`, d),
     complete:         (id,d) => API.post(`/delegation/instances/${id}/complete`, d),
     completeWithImage:(id,fd)=> API.post(`/delegation/instances/${id}/complete-with-image`, fd),
+    report:           (id,d) => API.post(`/delegation/instances/${id}/report`, d),
     verify:           (id)   => API.post(`/delegation/instances/${id}/verify`, {}),
     reopen:           (id)   => API.post(`/delegation/instances/${id}/reopen`, {}),
     bulkComplete:     (data) => API.post('/delegation/instances/bulk-complete', data),

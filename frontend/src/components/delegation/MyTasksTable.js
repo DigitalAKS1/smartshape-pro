@@ -13,7 +13,31 @@ const STATUS = {
   verified: 'bg-green-500/15 text-green-500',
 };
 
-export default function MyTasksTable({ myEmp, completeInst, verifyInst, onEditTask, refreshKey, isManager, card, textPri, textSec, textMuted, inputCls }) {
+// "14:30" → "2:30 PM"; blank → ''
+const fmtTime = (t) => {
+  if (!t || !/^\d{1,2}:\d{2}/.test(t)) return '';
+  const [h, m] = t.split(':');
+  const hh = +h, ap = hh >= 12 ? 'PM' : 'AM';
+  return `${((hh + 11) % 12) + 1}:${m} ${ap}`;
+};
+
+// red "Not done" / amber "Partial" pill from the latest submission outcome.
+function OutcomeBadge({ t }) {
+  if (t.status !== 'pending' || !['not_done', 'partial'].includes(t.last_outcome)) return null;
+  const sub = (t.submissions || []).filter(s => s.outcome === t.last_outcome).slice(-1)[0];
+  const partial = t.last_outcome === 'partial';
+  const tip = sub
+    ? `${sub.note || ''}${partial && sub.expected_date ? ` (by ${sub.expected_date}${sub.expected_time ? ' ' + fmtTime(sub.expected_time) : ''})` : ''}`
+    : '';
+  return (
+    <span title={tip}
+      className={`ml-1 text-[9px] font-semibold px-1.5 py-0.5 rounded-full ${partial ? 'bg-amber-500/15 text-amber-600' : 'bg-red-500/15 text-red-500'}`}>
+      {partial ? 'Partial' : 'Not done'}
+    </span>
+  );
+}
+
+export default function MyTasksTable({ myEmp, onSubmit, verifyInst, onEditTask, refreshKey, isManager, card, textPri, textSec, textMuted, inputCls }) {
   const [dir, setDir] = useState('to');        // 'to' = assigned to me, 'by' = assigned by me
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -50,7 +74,6 @@ export default function MyTasksTable({ myEmp, completeInst, verifyInst, onEditTa
     return true;
   }).sort((a, b) => (a.due_date || '').localeCompare(b.due_date || '')), [rows, status, q]);
 
-  const onDone = async (inst) => { await completeInst(inst); load(); };
   const onVerify = async (inst) => { await verifyInst(inst.instance_id); load(); };
 
   const toggleSel = (id) => setSelected(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
@@ -157,14 +180,14 @@ export default function MyTasksTable({ myEmp, completeInst, verifyInst, onEditTa
                     )}
                     <td className={`px-3 py-2.5 font-medium ${textPri}`}>{t.task_title}</td>
                     <td className={`px-3 py-2.5 ${textSec}`}>{dir === 'to' ? (t.delegator_name || '—') : t.emp_name}</td>
-                    <td className={`px-3 py-2.5 ${overdue ? 'text-red-500 font-semibold' : textSec}`}>{t.due_date}{overdue ? ' · overdue' : ''}</td>
+                    <td className={`px-3 py-2.5 ${overdue ? 'text-red-500 font-semibold' : textSec}`}>{t.due_date}{t.due_time ? ` · ${fmtTime(t.due_time)}` : ''}{overdue ? ' · overdue' : ''}</td>
                     <td className={`px-3 py-2.5 font-semibold capitalize ${PRI[t.priority] || textSec}`}>{t.priority}</td>
-                    <td className="px-3 py-2.5"><span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${STATUS[t.status]}`}>{t.status}</span></td>
+                    <td className="px-3 py-2.5"><span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${STATUS[t.status]}`}>{t.status}</span><OutcomeBadge t={t} /></td>
                     <td className="px-3 py-2.5">
                       <div className="flex items-center justify-end gap-1.5">
                         {dir === 'to' && t.status === 'pending' && (
-                          <button onClick={() => onDone(t)} className="text-xs font-semibold px-2.5 py-1 rounded-lg text-white" style={{ background: '#10b981' }}>
-                            <Check className="h-3 w-3 inline" /> Done
+                          <button onClick={() => onSubmit(t)} className="text-xs font-semibold px-2.5 py-1 rounded-lg text-white" style={{ background: '#10b981' }}>
+                            <Check className="h-3 w-3 inline" /> Submit
                           </button>
                         )}
                         {t.status === 'completed' && (
@@ -201,16 +224,19 @@ export default function MyTasksTable({ myEmp, completeInst, verifyInst, onEditTa
                 <div key={t.instance_id} className="p-3 space-y-1.5">
                   <div className="flex items-start justify-between gap-2">
                     <p className={`text-sm font-medium ${textPri}`}>{t.task_title}</p>
-                    <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full flex-shrink-0 ${STATUS[t.status]}`}>{t.status}</span>
+                    <span className="flex-shrink-0 flex items-center">
+                      <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${STATUS[t.status]}`}>{t.status}</span>
+                      <OutcomeBadge t={t} />
+                    </span>
                   </div>
                   <div className={`flex items-center gap-3 text-[11px] ${textMuted} flex-wrap`}>
-                    <span className={`flex items-center gap-1 ${overdue ? 'text-red-500 font-semibold' : ''}`}><Calendar className="h-3 w-3" />{t.due_date}{overdue ? ' · overdue' : ''}</span>
+                    <span className={`flex items-center gap-1 ${overdue ? 'text-red-500 font-semibold' : ''}`}><Calendar className="h-3 w-3" />{t.due_date}{t.due_time ? ` · ${fmtTime(t.due_time)}` : ''}{overdue ? ' · overdue' : ''}</span>
                     <span className="flex items-center gap-1"><UserCheck className="h-3 w-3" />{dir === 'to' ? (t.delegator_name || '—') : t.emp_name}</span>
                     <span className={`capitalize ${PRI[t.priority] || ''}`}>{t.priority}</span>
                   </div>
                   {(dir === 'to' && t.status === 'pending') && (
-                    <button onClick={() => onDone(t)} className="w-full h-11 rounded-lg text-sm font-semibold text-white mt-1" style={{ background: '#10b981' }}>
-                      <Check className="h-4 w-4 inline mr-1" /> Mark Done
+                    <button onClick={() => onSubmit(t)} className="w-full h-11 rounded-lg text-sm font-semibold text-white mt-1" style={{ background: '#10b981' }}>
+                      <Check className="h-4 w-4 inline mr-1" /> Submit Task
                     </button>
                   )}
                   {t.status === 'completed' && (

@@ -7,8 +7,8 @@ import DelegationDashboard from '../../components/delegation/DelegationDashboard
 import DelegationTaskForm from '../../components/delegation/DelegationTaskForm';
 import DelegationDepartmentManager from '../../components/delegation/DelegationDepartmentManager';
 import EditTaskDialog from '../../components/delegation/EditTaskDialog';
-import CompleteRemarksDialog from '../../components/delegation/CompleteRemarksDialog';
 import ReassignTaskDialog from '../../components/delegation/ReassignTaskDialog';
+import SubmitTaskDialog from '../../components/delegation/SubmitTaskDialog';
 import ApprovalsInbox from '../../components/delegation/ApprovalsInbox';
 import NotificationsBell from '../../components/delegation/NotificationsBell';
 import MyPlanner from '../../components/delegation/MyPlanner';
@@ -134,7 +134,7 @@ export default function DelegationApp() {
             myEmp={s.myEmp}
             plannerTasks={s.plannerTasks} buddyTasks={s.buddyTasks}
             loading={s.plannerLoading} TODAY={s.TODAY}
-            completeInst={s.completeInst} handleImageComplete={s.handleImageComplete}
+            onSubmit={(inst) => s.setSubmitInst(inst)}
             onEditTask={(inst) => s.openEditTask(inst, s.activeRole)}
             onReassign={(inst) => s.setReassignInst(inst)}
             {...sharedTheme}
@@ -145,7 +145,7 @@ export default function DelegationApp() {
         {s.viewTab === 'mytasks' && (
           <MyTasksTable
             myEmp={s.myEmp}
-            completeInst={s.completeInst} verifyInst={s.verifyInst}
+            onSubmit={(inst) => s.setSubmitInst(inst)} verifyInst={s.verifyInst}
             onEditTask={(inst) => s.openEditTask(inst, 'delegator')}
             refreshKey={mtKey}
             isManager={user?.role === 'admin'}
@@ -244,14 +244,17 @@ export default function DelegationApp() {
         TODAY={s.TODAY} {...sharedTheme}
       />
 
-      {/* Complete-with-remarks dialog */}
-      <CompleteRemarksDialog
-        instance={s.completeDialog}
-        onConfirm={s.confirmComplete}
-        onClose={() => s.setCompleteDialog(null)}
-        saving={s.completing}
-        {...sharedTheme}
-      />
+      {/* Submit task dialog (Done / Not Done / Partial) */}
+      {s.submitInst && (
+        <SubmitTaskDialog
+          instance={s.submitInst}
+          employees={s.employees}
+          onDone={async (inst, payload) => { await s.submitDone(inst, payload); setMtKey(k => k + 1); }}
+          onReport={async (inst, payload) => { await s.reportInst(inst, payload); setMtKey(k => k + 1); }}
+          onClose={() => s.setSubmitInst(null)}
+          {...sharedTheme}
+        />
+      )}
 
       {/* Reassign dialog */}
       {s.reassignInst && (

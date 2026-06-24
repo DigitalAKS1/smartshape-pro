@@ -7,6 +7,14 @@ import {
 
 const PINK = '#e94560';
 
+// "14:30" → "2:30 PM"; blank → ''
+const fmtTime = (t) => {
+  if (!t || !/^\d{1,2}:\d{2}/.test(t)) return '';
+  const [h, m] = t.split(':');
+  const hh = +h, ap = hh >= 12 ? 'PM' : 'AM';
+  return `${((hh + 11) % 12) + 1}:${m} ${ap}`;
+};
+
 const PRIORITY_STYLE = {
   high:   { dot: 'bg-red-500',   badge: 'bg-red-500/15 text-red-500 border-red-500/20',       label: 'High'   },
   medium: { dot: 'bg-amber-500', badge: 'bg-amber-500/15 text-amber-500 border-amber-500/20', label: 'Medium' },
@@ -715,6 +723,7 @@ export function DelegationPersonDrawer({
                     <span className={`flex items-center gap-1 ${isOverdue ? 'text-red-500 font-semibold' : textMuted}`}>
                       <Calendar className="h-3 w-3" />
                       {inst.due_date === TODAY ? 'Today' : inst.due_date}
+                      {inst.due_time ? ` · ${fmtTime(inst.due_time)}` : ''}
                       {isOverdue && ' — Overdue'}
                     </span>
                     {inst.delegator_name && (
@@ -732,6 +741,16 @@ export function DelegationPersonDrawer({
                         done by buddy
                       </span>
                     )}
+                    {inst.status === 'pending' && ['not_done', 'partial'].includes(inst.last_outcome) && (() => {
+                      const sub = (inst.submissions || []).filter(s => s.outcome === inst.last_outcome).slice(-1)[0];
+                      const partial = inst.last_outcome === 'partial';
+                      return (
+                        <span title={sub?.note || ''}
+                          className={`text-[10px] px-1.5 py-0.5 rounded ${partial ? 'bg-amber-500/15 text-amber-600' : 'bg-red-500/15 text-red-500'}`}>
+                          {partial ? `partial${sub?.expected_date ? ` · by ${sub.expected_date}` : ''}` : 'reported not done'}
+                        </span>
+                      );
+                    })()}
                   </div>
                 </div>
                 <div className="border-t border-[var(--border-color)] flex">
