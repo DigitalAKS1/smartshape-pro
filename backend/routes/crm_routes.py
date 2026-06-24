@@ -1954,6 +1954,139 @@ async def search_leads(request: Request, q: str = "", limit: int = 8):
     return {"leads": rows}
 
 
+def _norm_phone(p):
+    """Digits-only, last 10 — used to match the same person across formatting."""
+    d = re.sub(r"\D", "", p or "")
+    return d[-10:] if len(d) >= 10 else d
+
+
+async def _upsert_lead_contact(*, school_id, name, phone, email, designation,
+                               contact_role_id, assigned_to, assigned_name,
+                               explicit_contact_id, user_email):
+    """Ensure a Contact row exists for a lead's person and return its contact_id.
+
+    - explicit_contact_id: the caller already chose an existing contact (picked
+      from the school's contact list) → link to it and propagate edited fields.
+    - otherwise dedup by normalized phone WITHIN the school; create if none match.
+    Returns the contact_id, or None when there is nothing to sync (no name/phone).
+    """
+    now_iso = datetime.now(timezone.utc).isoformat()
+    name = (name or "").strip()
+    phone = (phone or "").strip()
+
+    # 1. Explicit pick / already-linked contact — keep it in sync with the lead.
+    if explicit_contact_id:
+        exists = await db.contacts.find_one(
+            {"contact_id": explicit_contact_id, "is_deleted": {"$ne": True}},
+            {"_id": 0, "contact_id": 1})
+        if exists:
+            patch = {}
+            if name: patch["name"] = name
+            if phone: patch["phone"] = phone
+            if email: patch["email"] = email
+            if designation: patch["designation"] = designation
+            if contact_role_id: patch["contact_role_id"] = contact_role_id
+            if patch:
+                patch["last_activity_date"] = now_iso
+                await db.contacts.update_one(
+                    {"contact_id": explicit_contact_id}, {"$set": patch})
+            return explicit_contact_id
+
+    if not phone and not name:
+        return None
+
+    # Resolve the school's company name (and drop an invalid FK).
+    company = ""
+    if school_id:
+        sch = await db.schools.find_one(
+            {"school_id": school_id}, {"_id": 0, "school_name": 1})
+        if sch:
+            company = sch["school_name"]
+        else:
+            school_id = None
+
+    # 2. Dedup by normalized phone within the same school.
+    nphone = _norm_phone(phone)
+    if nphone:
+        async for c in db.contacts.find(
+            {"school_id": school_id if school_id else None, "is_deleted": {"$ne": True}},
+            {"_id": 0, "contact_id": 1, "phone": 1, "name": 1, "email": 1,
+             "designation": 1, "contact_role_id": 1},
+        ):
+            if _norm_phone(c.get("phone")) == nphone:
+                # Same person — fill in only the fields the contact is missing.
+                patch = {}
+                if name and not c.get("name"): patch["name"] = name
+                if email and not c.get("email"): patch["email"] = email
+                if designation and not c.get("designation"): patch["designation"] = designation
+                if contact_role_id and not c.get("contact_role_id"): patch["contact_role_id"] = contact_role_id
+                if patch:
+                    patch["last_activity_date"] = now_iso
+                    await db.contacts.update_one(
+                        {"contact_id": c["contact_id"]}, {"$set": patch})
+                return c["contact_id"]
+
+    # 3. No match — create a new Contact under the school.
+    contact_id = f"con_{uuid.uuid4().hex[:12]}"
+    await db.contacts.insert_one({
+        "contact_id": contact_id,
+        "name": name,
+        "phone": phone,
+        "email": email or "",
+        "company": company,
+        "school_id": school_id,
+        "designation": designation or "",
+        "contact_role_id": contact_role_id or "",
+        "source": "lead",
+        "source_id": "",
+        "notes": "",
+        "birthday": "",
+        "assigned_to": assigned_to or "",
+        "assigned_name": assigned_name or "",
+        "status": "active",
+        "converted_to_lead": False,
+        "lead_id": None,
+        "previous_schools": [],
+        "last_activity_date": now_iso,
+        "created_by": user_email,
+        "created_at": now_iso,
+    })
+    return contact_id
+
+
+@router.post("/leads/backfill-contacts")
+async def backfill_lead_contacts(request: Request):
+    """One-time (re-runnable) admin job: create/link a Contact for every lead that
+    doesn't have one yet, so historical leads show up in the Contacts directory."""
+    user = await get_current_user(request)
+    if get_team(user) != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    scanned = 0
+    linked = 0
+    async for lead in db.leads.find(
+        {"$or": [{"contact_id": {"$exists": False}}, {"contact_id": None}, {"contact_id": ""}]},
+        {"_id": 0},
+    ):
+        scanned += 1
+        cid = await _upsert_lead_contact(
+            school_id=lead.get("school_id") or None,
+            name=lead.get("contact_name", ""),
+            phone=lead.get("contact_phone", ""),
+            email=lead.get("contact_email", ""),
+            designation=lead.get("designation", ""),
+            contact_role_id=lead.get("contact_role_id", ""),
+            assigned_to=lead.get("assigned_to", ""),
+            assigned_name=lead.get("assigned_name", ""),
+            explicit_contact_id=None,
+            user_email=lead.get("created_by") or user["email"],
+        )
+        if cid:
+            await db.leads.update_one(
+                {"lead_id": lead["lead_id"]}, {"$set": {"contact_id": cid}})
+            linked += 1
+    return {"scanned": scanned, "linked": linked}
+
+
 @router.post("/leads")
 async def create_lead(request: Request):
     user = await get_current_user(request)
@@ -2046,6 +2179,19 @@ async def create_lead(request: Request):
         "created_at": now_iso,
         "updated_at": now_iso,
     }
+    # Sync the person into the Contacts directory (pick existing or create new).
+    lead_doc["contact_id"] = await _upsert_lead_contact(
+        school_id=school_id or None,
+        name=body.get("contact_name", ""),
+        phone=body.get("contact_phone", ""),
+        email=body.get("contact_email", ""),
+        designation=body.get("designation", ""),
+        contact_role_id=body.get("contact_role_id", ""),
+        assigned_to=_eff_assigned_to,
+        assigned_name=_eff_assigned_name,
+        explicit_contact_id=body.get("contact_id"),
+        user_email=user["email"],
+    )
     await db.leads.insert_one(lead_doc)
     asyncio.create_task(_auto_enroll_lead(lead_doc))
     if school_id:
@@ -2106,6 +2252,28 @@ async def update_lead(lead_id: str, request: Request):
                            details=f"From {existing.get('assigned_name', existing.get('assigned_to'))} to {body.get('assigned_name', body['assigned_to'])}")
 
     await db.leads.update_one({"lead_id": lead_id}, {"$set": allowed})
+
+    # Keep the linked Contact in sync when the person's fields change.
+    _cfields = {"contact_name", "contact_phone", "contact_email",
+                "designation", "contact_role_id", "school_id", "contact_id"}
+    if _cfields & set(body.keys()):
+        merged = {**existing, **allowed}
+        cid = await _upsert_lead_contact(
+            school_id=merged.get("school_id") or None,
+            name=merged.get("contact_name", ""),
+            phone=merged.get("contact_phone", ""),
+            email=merged.get("contact_email", ""),
+            designation=merged.get("designation", ""),
+            contact_role_id=merged.get("contact_role_id", ""),
+            assigned_to=merged.get("assigned_to", ""),
+            assigned_name=merged.get("assigned_name", ""),
+            explicit_contact_id=body.get("contact_id") or existing.get("contact_id"),
+            user_email=user["email"],
+        )
+        if cid and cid != existing.get("contact_id"):
+            await db.leads.update_one(
+                {"lead_id": lead_id}, {"$set": {"contact_id": cid}})
+
     lead = await db.leads.find_one({"lead_id": lead_id}, {"_id": 0})
     if lead and lead.get("school_id"):
         await touch_last_activity("school", lead["school_id"])

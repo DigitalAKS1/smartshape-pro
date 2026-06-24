@@ -414,6 +414,7 @@ export const leads = {
   needsAttention: () => API.get('/leads/needs-attention'),
   scheduleDemo: (id, data) => API.post(`/leads/${id}/schedule-demo`, data),
   autoAssign: (leadIds) => API.post('/leads/auto-assign', leadIds ? { lead_ids: leadIds } : {}),
+  backfillContacts: () => API.post('/leads/backfill-contacts'),
   reassign: (data) => API.post('/leads/reassign', data),
   bulkAssign: (data) => API.post('/leads/bulk-assign', data),
   bulkTag: (data) => API.post('/leads/bulk-tag', data),

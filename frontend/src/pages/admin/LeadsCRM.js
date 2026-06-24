@@ -179,6 +179,19 @@ export default function LeadsCRM() {
                 <FileText className="mr-1 h-3 w-3" /> Sync Quotes→Leads
               </Button>
             )}
+            {crm.user?.role === 'admin' && (
+              <Button onClick={async () => {
+                if (!window.confirm('Create/link a Contact for every lead that doesn’t have one yet?')) return;
+                try {
+                  const r = await leadsApiObj.backfillContacts();
+                  const d = r.data;
+                  toast.success(`Sync done — ${d.linked}/${d.scanned} leads linked to contacts`);
+                  crm.fetchData();
+                } catch { toast.error('Sync failed'); }
+              }} variant="outline" size="sm" className="border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/10" title="Create/link contacts for all leads">
+                <UserPlus className="mr-1 h-3 w-3" /> Sync Leads→Contacts
+              </Button>
+            )}
             <Button onClick={crm.openCreateLead} size="sm" className="bg-[#e94560] hover:bg-[#f05c75] text-white">
               <Plus className="mr-1 h-3 w-3" /> New Lead
             </Button>

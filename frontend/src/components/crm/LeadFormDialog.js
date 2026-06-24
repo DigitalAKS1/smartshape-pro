@@ -58,7 +58,7 @@ export default function LeadFormDialog({
                   <Input type="number" value={newSchool.school_strength} onChange={e => setNewSchool({...newSchool, school_strength: parseInt(e.target.value) || 0})} placeholder="Strength (students)" className={`${inputCls} text-sm`} />
                 </div>
               ) : (
-                <select value={leadForm.school_id} onChange={e => setLeadForm({...leadForm, school_id: e.target.value})} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`} data-testid="school-select">
+                <select value={leadForm.school_id} onChange={e => setLeadForm({...leadForm, school_id: e.target.value, contact_id: '', contact_name: '', contact_phone: '', contact_email: '', contact_role_id: '', designation: ''})} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`} data-testid="school-select">
                   <option value="">Select school</option>
                   {schoolsList.map(s => <option key={s.school_id} value={s.school_id}>{s.school_name} ({s.city})</option>)}
                 </select>
@@ -66,14 +66,49 @@ export default function LeadFormDialog({
             </div>
           )}
 
+          {/* Contact — pick a person already under this school, or add a new one */}
+          {!editLead && leadForm.school_id && !addNewSchool && (
+            <div>
+              <Label className={`${textSec} text-xs`}>Contact</Label>
+              <select
+                value={leadForm.contact_id || ''}
+                onChange={e => {
+                  const cid = e.target.value;
+                  const c = (contactsList || []).find(x => x.contact_id === cid);
+                  setLeadForm({
+                    ...leadForm,
+                    contact_id: cid,
+                    contact_name: cid ? (c?.name || '') : '',
+                    contact_phone: cid ? (c?.phone || '') : '',
+                    contact_email: cid ? (c?.email || '') : '',
+                    contact_role_id: cid ? (c?.contact_role_id || '') : '',
+                    designation: cid ? (c?.designation || '') : '',
+                  });
+                }}
+                className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`}
+                data-testid="lead-contact-picker"
+              >
+                <option value="">+ Add New Contact</option>
+                {(contactsList || []).filter(c => c.school_id === leadForm.school_id).map(c => (
+                  <option key={c.contact_id} value={c.contact_id}>
+                    {c.name}{c.designation ? ` — ${c.designation}` : ''}{c.phone ? ` (${c.phone})` : ''}
+                  </option>
+                ))}
+              </select>
+              {leadForm.contact_id && (
+                <p className={`${textMuted} text-[10px] mt-0.5`}>Using an existing contact — fields below are read-only. Choose “+ Add New Contact” to enter a new person.</p>
+              )}
+            </div>
+          )}
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <Label className={`${textSec} text-xs`}>Contact Name *</Label>
-              <Input value={leadForm.contact_name} onChange={e => setLeadForm({...leadForm, contact_name: e.target.value})} className={inputCls} data-testid="lead-contact-input" />
+              <Input value={leadForm.contact_name} onChange={e => setLeadForm({...leadForm, contact_name: e.target.value})} disabled={!editLead && !!leadForm.contact_id} className={`${inputCls} ${!editLead && leadForm.contact_id ? 'opacity-60' : ''}`} data-testid="lead-contact-input" />
             </div>
             <div>
               <Label className={`${textSec} text-xs`}>Role / Designation</Label>
-              <select value={leadForm.contact_role_id || ''} onChange={e => { const role = rolesList.find(r => r.role_id === e.target.value); setLeadForm({...leadForm, contact_role_id: e.target.value, designation: role?.name || leadForm.designation}); }} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`} data-testid="lead-role-select">
+              <select value={leadForm.contact_role_id || ''} disabled={!editLead && !!leadForm.contact_id} onChange={e => { const role = rolesList.find(r => r.role_id === e.target.value); setLeadForm({...leadForm, contact_role_id: e.target.value, designation: role?.name || leadForm.designation}); }} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls} ${!editLead && leadForm.contact_id ? 'opacity-60' : ''}`} data-testid="lead-role-select">
                 <option value="">{rolesList.length ? 'Select role' : 'Loading roles...'}</option>
                 {rolesList.map(r => <option key={r.role_id} value={r.role_id}>{r.name}</option>)}
               </select>
@@ -81,8 +116,8 @@ export default function LeadFormDialog({
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div><Label className={`${textSec} text-xs`}>Phone *</Label><Input value={leadForm.contact_phone} onChange={e => setLeadForm({...leadForm, contact_phone: e.target.value})} className={inputCls} data-testid="lead-phone-input" /></div>
-            <div><Label className={`${textSec} text-xs`}>Email</Label><Input value={leadForm.contact_email} onChange={e => setLeadForm({...leadForm, contact_email: e.target.value})} className={inputCls} /></div>
+            <div><Label className={`${textSec} text-xs`}>Phone *</Label><Input value={leadForm.contact_phone} onChange={e => setLeadForm({...leadForm, contact_phone: e.target.value})} disabled={!editLead && !!leadForm.contact_id} className={`${inputCls} ${!editLead && leadForm.contact_id ? 'opacity-60' : ''}`} data-testid="lead-phone-input" /></div>
+            <div><Label className={`${textSec} text-xs`}>Email</Label><Input value={leadForm.contact_email} onChange={e => setLeadForm({...leadForm, contact_email: e.target.value})} disabled={!editLead && !!leadForm.contact_id} className={`${inputCls} ${!editLead && leadForm.contact_id ? 'opacity-60' : ''}`} /></div>
           </div>
 
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
