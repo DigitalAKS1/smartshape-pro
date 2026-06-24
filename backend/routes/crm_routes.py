@@ -179,6 +179,16 @@ async def _send_intro_wa(phone: str, message: str) -> bool:
         return False
 
 
+def _coerce_int(val, default=0):
+    """Form fields arrive as strings (and a blank field as ''). Store numeric
+    school fields as real ints so later comparisons (e.g. strength > 1000,
+    Mongo $gte segment filters) don't crash or silently mis-sort."""
+    try:
+        return int(float(val))
+    except (TypeError, ValueError):
+        return default
+
+
 def calc_lead_score(lead, school=None):
     score = 0
     if school:
@@ -918,8 +928,8 @@ async def create_school(request: Request):
         "primary_contact_name": body.get("primary_contact_name", ""),
         "designation": body.get("designation", ""),
         "alternate_contact": body.get("alternate_contact", ""),
-        "school_strength": body.get("school_strength", 0),
-        "number_of_branches": body.get("number_of_branches", 1),
+        "school_strength": _coerce_int(body.get("school_strength"), 0),
+        "number_of_branches": _coerce_int(body.get("number_of_branches"), 1),
         "annual_budget_range": body.get("annual_budget_range", ""),
         "existing_vendor": body.get("existing_vendor", ""),
         "gstin": body.get("gstin", ""),
@@ -955,6 +965,10 @@ async def update_school(school_id: str, request: Request):
               "linkedin_url", "instagram_url", "anniversary"):
         if k in body:
             allowed[k] = body[k]
+    if "school_strength" in allowed:
+        allowed["school_strength"] = _coerce_int(allowed["school_strength"], 0)
+    if "number_of_branches" in allowed:
+        allowed["number_of_branches"] = _coerce_int(allowed["number_of_branches"], 1)
     allowed["last_activity_date"] = datetime.now(timezone.utc).isoformat()
     await db.schools.update_one({"school_id": school_id}, {"$set": allowed})
     return await db.schools.find_one({"school_id": school_id}, {"_id": 0})
@@ -1712,7 +1726,7 @@ async def convert_contact_to_lead(contact_id: str, request: Request):
             "city": new_school_data.get("city", ""),
             "state": new_school_data.get("state", ""),
             "pincode": new_school_data.get("pincode", ""),
-            "school_strength": new_school_data.get("school_strength", 0),
+            "school_strength": _coerce_int(new_school_data.get("school_strength"), 0),
             "primary_contact_name": contact["name"],
             "designation": contact.get("designation", ""),
             "created_at": now_iso,
@@ -2125,8 +2139,8 @@ async def create_lead(request: Request):
             "pincode": ns.get("pincode", ""),
             "primary_contact_name": body.get("contact_name", ""),
             "designation": body.get("designation", ""),
-            "school_strength": ns.get("school_strength", 0),
-            "number_of_branches": ns.get("number_of_branches", 1),
+            "school_strength": _coerce_int(ns.get("school_strength"), 0),
+            "number_of_branches": _coerce_int(ns.get("number_of_branches"), 1),
             "created_by": user["email"],
             "created_at": datetime.now(timezone.utc).isoformat(),
         })
