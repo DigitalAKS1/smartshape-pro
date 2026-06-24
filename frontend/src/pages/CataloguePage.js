@@ -86,7 +86,7 @@ export default function CataloguePage() {
   const seenTypes = new Set();
   dies.forEach(d => {
     const id = d.product_type_id || 'ptype_dies';
-    if (!seenTypes.has(id)) { seenTypes.add(id); typeTabs.push({ id, name: d.product_type || 'Dies' }); }
+    if (!seenTypes.has(id)) { seenTypes.add(id); typeTabs.push({ id, name: d.product_type || 'Die' }); }
   });
   const visibleDies = typeTab === 'all'
     ? dies

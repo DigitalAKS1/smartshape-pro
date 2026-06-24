@@ -135,7 +135,7 @@ export default function Inventory() {
               <Button onClick={() => { inv.setCreateOpen(true); }}
                 size="sm" className="bg-[#e94560] hover:bg-[#f05c75] text-white h-9 px-3">
                 <Plus className="h-4 w-4 sm:mr-1" />
-                <span className="hidden sm:inline">Add Die</span>
+                <span className="hidden sm:inline">Add Product</span>
               </Button>
             )}
           </div>
@@ -290,10 +290,10 @@ export default function Inventory() {
             {inv.filteredDies.length === 0 ? (
               <div className={`${card} border rounded-xl p-16 text-center`}>
                 <Scissors className={`h-12 w-12 mx-auto mb-3 ${textMuted} opacity-20`} strokeWidth={1} />
-                <p className={`${textSec} font-medium mb-1`}>No dies found</p>
+                <p className={`${textSec} font-medium mb-1`}>No products found</p>
                 {inv.isFiltered
                   ? <button onClick={inv.clearFilters} className="text-xs text-[#e94560] hover:underline">Clear filters to see all</button>
-                  : <p className={`text-xs ${textMuted}`}>Add your first die to get started</p>}
+                  : <p className={`text-xs ${textMuted}`}>Add your first product to get started</p>}
               </div>
             ) : inv.sortBy !== 'code' ? (
               /* Explicit sort active → flat sorted grid so the chosen order is visible

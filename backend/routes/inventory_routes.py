@@ -74,7 +74,7 @@ async def _resolve_product_type(product_type_id: Optional[str]) -> tuple:
     """Return (product_type_id, name) for a die. Defaults to the built-in Dies type.
     Raises 400 if an explicit id is unknown/inactive."""
     if not product_type_id:
-        return ("ptype_dies", "Dies")
+        return ("ptype_dies", "Die")
     pt = await db.product_types.find_one({"product_type_id": product_type_id}, {"_id": 0})
     if not pt or pt.get("is_active") is False:
         raise HTTPException(status_code=400, detail="Unknown or inactive product type")

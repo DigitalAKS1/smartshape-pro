@@ -16,7 +16,7 @@ export const CAT_LABELS = {
   fruits:'Fruits', shapes:'Shapes', other:'Other',
 };
 export const TYPES = ['standard','large','machine'];
-export const BLANK_DIE = { code:'', name:'', type:'standard', category:'decorative', min_level:5, description:'', stock_qty:0, product_type_id:'', video_url:'', show_video:false, show_description:false };
+export const BLANK_DIE = { code:'', name:'', type:'standard', category:'decorative', min_level:5, description:'', stock_qty:0, product_type_id:'ptype_dies', video_url:'', show_video:false, show_description:false };
 
 // Sort options for the inventory list. 'code' is the default (natural code order).
 export const SORT_OPTIONS = [
@@ -147,14 +147,14 @@ export default function useInventory() {
       const res = await diesApi.create(newDie);
       if (newDieImage && res.data.die_id) {
         try { await diesApi.uploadImage(res.data.die_id, newDieImage); }
-        catch { toast.error('Die saved but photo upload failed — try re-uploading from the card.'); }
+        catch { toast.error('Product saved but photo upload failed — try re-uploading from the card.'); }
       }
-      toast.success('Die created');
+      toast.success('Product created');
       setCreateOpen(false);
       setNewDie(BLANK_DIE); setNewDieImage(null); setNewDieImagePreview('');
       fetchDies();
     } catch (err) {
-      toast.error(err.response?.data?.detail ? formatApiErrorDetail(err.response.data.detail) : 'Failed to create die');
+      toast.error(err.response?.data?.detail ? formatApiErrorDetail(err.response.data.detail) : 'Failed to create product');
     } finally {
       setSaving(false);
     }
@@ -184,7 +184,7 @@ export default function useInventory() {
         try { await diesApi.uploadImage(editTarget.die_id, editImage); }
         catch { toast.error('Saved but photo upload failed.'); }
       }
-      toast.success('Die updated');
+      toast.success('Product updated');
       setEditOpen(false); setEditTarget(null); setEditImage(null); setEditImagePreview('');
       fetchDies();
     } catch (err) {

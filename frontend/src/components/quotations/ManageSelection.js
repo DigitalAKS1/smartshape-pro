@@ -205,7 +205,7 @@ export default function ManageSelection({ state }) {
                       </button>
                     ))}
                     {filteredDies.length === 0 && (
-                      <p className="col-span-3 text-center text-xs text-[var(--text-secondary)] py-4">No dies found</p>
+                      <p className="col-span-3 text-center text-xs text-[var(--text-secondary)] py-4">No products found</p>
                     )}
                   </div>
                 </div>
@@ -255,7 +255,7 @@ export default function ManageSelection({ state }) {
                       </button>
                     ))}
                     {filteredDies.length === 0 && (
-                      <p className="col-span-3 text-center text-xs text-[var(--text-secondary)] py-4">No dies found</p>
+                      <p className="col-span-3 text-center text-xs text-[var(--text-secondary)] py-4">No products found</p>
                     )}
                   </div>
                 </div>

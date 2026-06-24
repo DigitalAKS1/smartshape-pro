@@ -12,7 +12,7 @@ export function ImportDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className={`${dlgCls} w-[calc(100vw-1.5rem)] sm:max-w-md`}>
-        <DialogHeader><DialogTitle className={textPri}>Import Dies from CSV</DialogTitle></DialogHeader>
+        <DialogHeader><DialogTitle className={textPri}>Import Products from CSV</DialogTitle></DialogHeader>
         <div className="space-y-3 py-1">
           <div className={`bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-lg p-3 text-xs`}>
             <p className={`font-semibold ${textSec} mb-1`}>Required columns:</p>

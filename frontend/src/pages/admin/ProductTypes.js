@@ -73,7 +73,7 @@ export default function ProductTypes() {
             <div className="p-2 rounded-xl bg-[#e94560]/10"><Layers className="h-5 w-5 text-[#e94560]" /></div>
             <div>
               <h1 className={`text-2xl font-semibold ${textPri} tracking-tight`}>Product Types</h1>
-              <p className={`${textMuted} text-xs mt-0.5`}>Master list of product categories (Dies, Machine, Stamps…)</p>
+              <p className={`${textMuted} text-xs mt-0.5`}>Master list of product types (Die, Stamp, Machine, Other…)</p>
             </div>
           </div>
           <Button onClick={openNew} size="sm" className="bg-[#e94560] hover:bg-[#f05c75] text-white h-9">

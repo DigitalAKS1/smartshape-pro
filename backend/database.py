@@ -6,6 +6,8 @@ load_dotenv(ROOT_DIR / '.env')
 
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
+import re
+import uuid
 import logging
 
 # MongoDB connection
@@ -169,6 +171,74 @@ async def connect_db():
     await db.fms_action_logs.create_index([("flow_id", 1), ("at", 1)], background=True)
 
     logging.info("Database indexes created/verified (%d collections indexed)", 30)
+
+    # ── Product-type master seed (Die / Stamp / Machine / Other) ─────────────
+    await seed_product_types()
+
+
+async def seed_product_types():
+    """Ensure the product-type master exists (Die / Stamp / Machine / Other).
+
+    Idempotent and safe on every startup:
+    - The default **Die** type is always ensured and pinned to the well-known id
+      ``ptype_dies`` (the id a blank product type resolves to), and any legacy
+      "Dies" display name is migrated to "Die" on both the master row and the
+      denormalized name carried on product docs.
+    - **Stamp / Machine / Other** are seeded once only, guarded by an app_meta
+      flag, so deleting one on the admin page is permanent across restarts.
+
+    Never fatal: a failure here must not abort startup / fail the health check.
+    """
+    try:
+        # 1. Ensure the default "Die" type, pinned to id ptype_dies.
+        die = await db.product_types.find_one({"product_type_id": "ptype_dies"})
+        legacy = await db.product_types.find_one({"name": {"$regex": "^dies$", "$options": "i"}})
+        if die is None and legacy is not None:
+            # Rename the legacy "Dies" row in place and pin its id; re-tag products.
+            old_id = legacy.get("product_type_id")
+            await db.product_types.update_one(
+                {"_id": legacy["_id"]},
+                {"$set": {"name": "Die", "product_type_id": "ptype_dies", "is_active": True}})
+            if old_id and old_id != "ptype_dies":
+                await db.dies.update_many({"product_type_id": old_id},
+                                          {"$set": {"product_type_id": "ptype_dies"}})
+        elif die is None:
+            await db.product_types.insert_one({
+                "product_type_id": "ptype_dies", "name": "Die", "code_prefix": "D",
+                "visible_to_schools": True, "uses_quota": False, "sort_order": 10,
+                "is_active": True})
+        elif (die.get("name") or "").strip().lower() == "dies":
+            await db.product_types.update_one(
+                {"product_type_id": "ptype_dies"}, {"$set": {"name": "Die"}})
+
+        # Propagate the canonical "Die" name onto denormalized product docs.
+        await db.dies.update_many(
+            {"$or": [{"product_type_id": "ptype_dies"}, {"product_type": "Dies"}]},
+            {"$set": {"product_type": "Die"}})
+
+        # 2. Seed Stamp / Machine / Other once only.
+        meta = await db.app_meta.find_one({"_id": "product_types_seeded"})
+        if not meta:
+            defaults = [
+                {"name": "Stamp",   "code_prefix": "S", "visible_to_schools": True,  "sort_order": 20},
+                {"name": "Machine", "code_prefix": "M", "visible_to_schools": False, "sort_order": 30},
+                {"name": "Other",   "code_prefix": "O", "visible_to_schools": True,  "sort_order": 40},
+            ]
+            for d in defaults:
+                exists = await db.product_types.find_one(
+                    {"name": {"$regex": f"^{re.escape(d['name'])}$", "$options": "i"}})
+                if exists:
+                    continue
+                await db.product_types.insert_one({
+                    "product_type_id": f"ptype_{uuid.uuid4().hex[:12]}",
+                    "name": d["name"], "code_prefix": d["code_prefix"],
+                    "visible_to_schools": d["visible_to_schools"],
+                    "uses_quota": False, "sort_order": d["sort_order"], "is_active": True})
+            await db.app_meta.update_one(
+                {"_id": "product_types_seeded"}, {"$set": {"value": True}}, upsert=True)
+        logging.info("Product-type master seeded/verified")
+    except Exception as e:
+        logging.warning("product-type seed skipped: %s", str(e)[:180])
 
 
 async def close_db():

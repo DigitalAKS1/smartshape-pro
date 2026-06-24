@@ -80,7 +80,7 @@ export default function DieCard({
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-1">
               <p className="font-mono text-[10px] text-[#e94560] font-semibold leading-none truncate">{die.code}</p>
-              {die.product_type && die.product_type !== 'Dies' && (
+              {die.product_type && die.product_type !== 'Die' && die.product_type !== 'Dies' && (
                 <span className={`text-[8px] px-1 py-px rounded ${textMuted} bg-[var(--bg-primary)] shrink-0`}>{die.product_type}</span>
               )}
             </div>
