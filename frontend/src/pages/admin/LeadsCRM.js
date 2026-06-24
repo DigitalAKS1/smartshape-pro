@@ -8,7 +8,7 @@ import { toast } from 'sonner';
 import {
   Plus, MessageSquare, Calendar, Target, Building2, UserPlus,
   Upload, Search, ChevronRight, AlertTriangle, Clock, MoreHorizontal,
-  Edit2, Trash2, Lock, UserCog, FileText, Linkedin, Instagram, Eye,
+  Edit2, Trash2, Lock, UserCog, FileText, Linkedin, Instagram, Eye, Phone,
 } from 'lucide-react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../../components/ui/dropdown-menu';
 import WhatsAppSendDialog from '../../components/WhatsAppSendDialog';
@@ -28,6 +28,8 @@ import SchoolFormDialog from '../../components/crm/SchoolFormDialog';
 import ContactFormDialog from '../../components/crm/ContactFormDialog';
 import ContactsTab from '../../components/crm/ContactsTab';
 import TasksTab from '../../components/crm/TasksTab';
+import CallerLookup from '../../components/crm/CallerLookup';
+import CrmNotificationsBell from '../../components/crm/CrmNotificationsBell';
 
 export default function LeadsCRM() {
   const navigate = useNavigate();
@@ -53,6 +55,26 @@ export default function LeadsCRM() {
   };
 
   const getStageObj = (id) => STAGES.find(s => s.id === id) || STAGES[0];
+
+  // ── Caller Lookup (inbound-call → master directory) ──────────────────
+  const [lookupOpen, setLookupOpen] = React.useState(false);
+  // Open New Lead pre-filled from a directory match. When the account was just
+  // claimed, refresh so the now-owned school shows in the school picker.
+  const prefillLeadFromDirectory = (r, opts = {}) => {
+    crm.openCreateLead();
+    if (opts.claimed) crm.fetchData();
+    const me = crm.user?.email || '';
+    const sid = opts.claimedSchoolId || r.school_id || (r.kind === 'school' ? r.ref_id : '');
+    crm.setLeadForm(prev => ({
+      ...prev,
+      school_id: sid || prev.school_id,
+      contact_name: r.kind === 'contact' ? (r.title || '') : (r.kind === 'lead' ? (r.subtitle || '') : prev.contact_name),
+      contact_phone: r.phone || prev.contact_phone,
+      contact_email: r.email || prev.contact_email,
+      assigned_to: (opts.claimed || r.ownership === 'mine') ? me : prev.assigned_to,
+      assignment_type: opts.claimed ? 'self' : prev.assignment_type,
+    }));
+  };
 
   // School ownership: admin assigns a school to a Sales Exec; backend cascades
   // the owner onto all of that school's contacts + leads.
@@ -127,6 +149,7 @@ export default function LeadsCRM() {
                 <Button variant="outline" size="sm" className="border-[var(--border-color)] text-[var(--text-secondary)]"><MoreHorizontal className="h-4 w-4" /></Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="bg-[var(--bg-card)] border-[var(--border-color)]">
+                <DropdownMenuItem onClick={() => setLookupOpen(true)} className={textSec}><Phone className="mr-2 h-3.5 w-3.5" /> Caller Lookup</DropdownMenuItem>
                 <DropdownMenuItem onClick={crm.openCreateContact} className={textSec}><UserPlus className="mr-2 h-3.5 w-3.5" /> Add Contact</DropdownMenuItem>
                 <DropdownMenuItem onClick={() => crm.setImportDialogOpen(true)} className={textSec}><Upload className="mr-2 h-3.5 w-3.5" /> Import CSV</DropdownMenuItem>
                 <DropdownMenuItem onClick={crm.openCreateSchool} className={textSec}><Building2 className="mr-2 h-3.5 w-3.5" /> Add School</DropdownMenuItem>
@@ -143,6 +166,7 @@ export default function LeadsCRM() {
             <Button onClick={crm.openCreateLead} size="sm" className="bg-[#e94560] hover:bg-[#f05c75] text-white" data-testid="create-lead-button">
               <Plus className="mr-1 h-3 w-3" /> New Lead
             </Button>
+            <CrmNotificationsBell card={card} textPri={textPri} textSec={textSec} textMuted={textMuted} />
           </div>
           {/* Desktop header */}
           <div className="hidden sm:flex flex-wrap gap-2">
@@ -179,9 +203,13 @@ export default function LeadsCRM() {
                 <FileText className="mr-1 h-3 w-3" /> Sync Quotes→Leads
               </Button>
             )}
+            <Button onClick={() => setLookupOpen(true)} variant="outline" size="sm" className="border-[#e94560]/40 text-[#e94560] hover:bg-[#e94560]/10" data-testid="caller-lookup-btn">
+              <Phone className="mr-1 h-3 w-3" /> Caller Lookup
+            </Button>
             <Button onClick={crm.openCreateLead} size="sm" className="bg-[#e94560] hover:bg-[#f05c75] text-white">
               <Plus className="mr-1 h-3 w-3" /> New Lead
             </Button>
+            <CrmNotificationsBell card={card} textPri={textPri} textSec={textSec} textMuted={textMuted} />
           </div>
         </div>
 
@@ -1069,6 +1097,13 @@ export default function LeadsCRM() {
             </div>
           </div>
         )}
+
+        <CallerLookup
+          open={lookupOpen}
+          onClose={() => setLookupOpen(false)}
+          onPrefillLead={prefillLeadFromDirectory}
+          card={card} textPri={textPri} textSec={textSec} textMuted={textMuted} inputCls={inputCls}
+        />
 
         <WhatsAppSendDialog open={crm.waOpen} onOpenChange={crm.setWaOpen} module={crm.waCtx.module} context={crm.waCtx.context} title={crm.waCtx.title} />
 

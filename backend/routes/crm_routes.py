@@ -865,6 +865,217 @@ async def _assign_school_cascade(school_id: str, assigned_to: str, assigned_name
     return {"contacts": cres.modified_count, "leads": moved}
 
 
+# ==================== DIRECTORY / CALLER LOOKUP ====================
+# A salesperson who gets an inbound call looks the caller up across the WHOLE
+# master directory (every owner), then either claims an unassigned account or
+# forwards the call to its real owner. This is the one place sales scoping is
+# deliberately relaxed — accounts/store still have no CRM access.
+
+def _crm_rx(q: str) -> dict:
+    return {"$regex": re.escape(q), "$options": "i"}
+
+
+async def _claim_unassigned_cascade(school_id: str, assigned_to: str, assigned_name: str, actor: dict) -> dict:
+    """Claim a school and cascade ownership ONLY onto its currently-unassigned
+    contacts/leads — never steals children already owned by someone else."""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    blank = {"$or": [{"assigned_to": {"$in": ["", None]}}, {"assigned_to": {"$exists": False}}]}
+    await db.schools.update_one(
+        {"school_id": school_id},
+        {"$set": {"assigned_to": assigned_to, "assigned_name": assigned_name, "last_activity_date": now_iso}},
+    )
+    cres = await db.contacts.update_many(
+        {"school_id": school_id, "is_deleted": {"$ne": True}, **blank},
+        {"$set": {"assigned_to": assigned_to, "assigned_name": assigned_name}},
+    )
+    lres = await db.leads.update_many(
+        {"school_id": school_id, "is_deleted": {"$ne": True}, **blank},
+        {"$set": {"assigned_to": assigned_to, "assigned_name": assigned_name,
+                  "updated_at": now_iso, "last_activity_date": now_iso}},
+    )
+    return {"contacts": cres.modified_count, "leads": lres.modified_count}
+
+
+async def _crm_notify(email: str, ntype: str, title: str, body: str,
+                      ref_type: str = "", ref_id: str = "", from_name: str = ""):
+    """Insert a polled in-app CRM notification (no-op if email is falsy)."""
+    if not email:
+        return
+    await db.crm_notifications.insert_one({
+        "notif_id": f"crmn_{uuid.uuid4().hex[:10]}",
+        "email": email, "type": ntype, "title": title, "body": body,
+        "ref_type": ref_type, "ref_id": ref_id, "from_name": from_name,
+        "is_read": False, "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+
+
+@router.get("/directory/search")
+async def directory_search(request: Request, q: str = "", limit: int = 20):
+    """Cross-owner lookup over schools + contacts + leads. Each hit is tagged with
+    its ownership relative to the caller: mine | unassigned | other."""
+    user = await get_current_user(request)
+    if get_team(user) in ("accounts", "store"):
+        raise HTTPException(status_code=403, detail="No CRM access")
+    q = (q or "").strip()
+    if len(q) < 2:
+        return []
+    me = user["email"]
+    rx = _crm_rx(q)
+
+    def own(owner):
+        return "mine" if owner == me else ("other" if owner else "unassigned")
+
+    results = []
+    schools = await db.schools.find(
+        {"is_deleted": {"$ne": True}, "$or": [{"school_name": rx}, {"phone": rx}, {"city": rx}]},
+        {"_id": 0}).limit(limit).to_list(limit)
+    for s in schools:
+        owner = s.get("assigned_to") or ""
+        results.append({
+            "kind": "school", "ref_id": s["school_id"], "school_id": s["school_id"],
+            "title": s.get("school_name", ""), "subtitle": s.get("city", ""),
+            "phone": s.get("phone", ""), "email": s.get("email", ""),
+            "owner_email": owner, "owner_name": s.get("assigned_name", ""), "ownership": own(owner),
+        })
+    contacts = await db.contacts.find(
+        {"is_deleted": {"$ne": True}, "$or": [{"name": rx}, {"phone": rx}, {"email": rx}, {"company": rx}]},
+        {"_id": 0}).limit(limit).to_list(limit)
+    for c in contacts:
+        owner = c.get("assigned_to") or ""
+        results.append({
+            "kind": "contact", "ref_id": c["contact_id"], "school_id": c.get("school_id", ""),
+            "title": c.get("name", ""), "subtitle": c.get("company", ""),
+            "phone": c.get("phone", ""), "email": c.get("email", ""),
+            "owner_email": owner, "owner_name": c.get("assigned_name", ""), "ownership": own(owner),
+        })
+    leads = await db.leads.find(
+        {"is_deleted": {"$ne": True}, "$or": [{"company_name": rx}, {"contact_name": rx}, {"contact_phone": rx}]},
+        {"_id": 0}).limit(limit).to_list(limit)
+    for l in leads:
+        owner = l.get("assigned_to") or ""
+        results.append({
+            "kind": "lead", "ref_id": l["lead_id"], "school_id": l.get("school_id", ""),
+            "title": l.get("company_name") or l.get("contact_name", ""), "subtitle": l.get("contact_name", ""),
+            "phone": l.get("contact_phone", ""), "email": l.get("contact_email", ""),
+            "owner_email": owner, "owner_name": l.get("assigned_name", ""), "ownership": own(owner),
+        })
+    return results
+
+
+@router.post("/directory/claim")
+async def directory_claim(request: Request):
+    """Claim an UNASSIGNED school (or standalone contact) for the current user."""
+    user = await get_current_user(request)
+    team = get_team(user)
+    if team in ("accounts", "store"):
+        raise HTTPException(status_code=403, detail="No CRM access")
+    body = await request.json()
+    school_id = (body.get("school_id") or "").strip()
+    contact_id = (body.get("contact_id") or "").strip()
+    me, my_name = user["email"], user.get("name", "")
+
+    async def _claim_school(sid):
+        sch = await db.schools.find_one({"school_id": sid}, {"_id": 0})
+        if not sch:
+            raise HTTPException(status_code=404, detail="School not found")
+        owner = sch.get("assigned_to") or ""
+        if owner and owner != me and team != "admin":
+            raise HTTPException(status_code=409, detail=f"Already owned by {sch.get('assigned_name') or owner}")
+        counts = await _claim_unassigned_cascade(sid, me, my_name, user)
+        return {"ok": True, "school_id": sid, "assigned_to": me, "assigned_name": my_name, **counts}
+
+    if school_id:
+        return await _claim_school(school_id)
+    if contact_id:
+        c = await db.contacts.find_one({"contact_id": contact_id}, {"_id": 0})
+        if not c:
+            raise HTTPException(status_code=404, detail="Contact not found")
+        if c.get("school_id"):
+            return await _claim_school(c["school_id"])
+        owner = c.get("assigned_to") or ""
+        if owner and owner != me and team != "admin":
+            raise HTTPException(status_code=409, detail=f"Already owned by {c.get('assigned_name') or owner}")
+        await db.contacts.update_one({"contact_id": contact_id},
+                                     {"$set": {"assigned_to": me, "assigned_name": my_name}})
+        return {"ok": True, "contact_id": contact_id, "assigned_to": me, "assigned_name": my_name}
+    raise HTTPException(status_code=400, detail="school_id or contact_id required")
+
+
+@router.post("/directory/inbound-call")
+async def directory_inbound_call(request: Request):
+    """Log an inbound call against a matched record; if it's owned by another rep,
+    notify that owner (the 'forward the call' path)."""
+    user = await get_current_user(request)
+    if get_team(user) in ("accounts", "store"):
+        raise HTTPException(status_code=403, detail="No CRM access")
+    body = await request.json()
+    kind = body.get("kind") or "school"
+    ref_id = (body.get("ref_id") or "").strip()
+    school_id = (body.get("school_id") or "").strip()
+    caller_phone = (body.get("caller_phone") or "").strip()
+    note = (body.get("note") or "").strip()
+    me, my_name = user["email"], user.get("name", "")
+
+    owner_email, owner_name, school_name = "", "", ""
+    if kind == "contact":
+        c = await db.contacts.find_one({"contact_id": ref_id}, {"_id": 0}) or {}
+        owner_email, owner_name = c.get("assigned_to") or "", c.get("assigned_name") or ""
+        school_name, school_id = c.get("company") or "", c.get("school_id") or school_id
+    elif kind == "lead":
+        l = await db.leads.find_one({"lead_id": ref_id}, {"_id": 0}) or {}
+        owner_email, owner_name = l.get("assigned_to") or "", l.get("assigned_name") or ""
+        school_name, school_id = l.get("company_name") or "", l.get("school_id") or school_id
+    else:
+        sid = school_id or ref_id
+        sch = await db.schools.find_one({"school_id": sid}, {"_id": 0}) if sid else {}
+        sch = sch or {}
+        owner_email, owner_name = sch.get("assigned_to") or "", sch.get("assigned_name") or ""
+        school_name, school_id = sch.get("school_name") or "", sid
+
+    outcome = "forwarded" if (owner_email and owner_email != me) else "mine"
+    log = {
+        "log_id": f"icl_{uuid.uuid4().hex[:10]}",
+        "caller_phone": caller_phone, "kind": kind, "ref_id": ref_id, "school_id": school_id,
+        "school_name": school_name, "owner_email": owner_email, "owner_name": owner_name,
+        "received_by_email": me, "received_by_name": my_name, "outcome": outcome, "note": note,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.inbound_call_logs.insert_one(log)
+    log.pop("_id", None)
+    if outcome == "forwarded":
+        txt = (f"{my_name} took a call for \"{school_name}\""
+               + (f" from {caller_phone}" if caller_phone else "")
+               + (f". Note: {note}" if note else "."))
+        await _crm_notify(owner_email, "incoming_call", "Incoming call for your account",
+                          txt, "school", school_id, my_name)
+    return log
+
+
+@router.get("/crm/notifications")
+async def list_crm_notifications(request: Request, unread_only: bool = False):
+    user = await get_current_user(request)
+    q = {"email": user["email"]}
+    if unread_only:
+        q["is_read"] = False
+    return await db.crm_notifications.find(q, {"_id": 0}).sort("created_at", -1).to_list(100)
+
+
+@router.post("/crm/notifications/{notif_id}/read")
+async def read_crm_notification(notif_id: str, request: Request):
+    user = await get_current_user(request)
+    await db.crm_notifications.update_one(
+        {"notif_id": notif_id, "email": user["email"]}, {"$set": {"is_read": True}})
+    return {"ok": True}
+
+
+@router.post("/crm/notifications/read-all")
+async def read_all_crm_notifications(request: Request):
+    user = await get_current_user(request)
+    await db.crm_notifications.update_many(
+        {"email": user["email"], "is_read": False}, {"$set": {"is_read": True}})
+    return {"ok": True}
+
+
 @router.get("/schools")
 async def get_schools(request: Request):
     user = await get_current_user(request)
@@ -1123,7 +1334,11 @@ async def get_school_profile(school_id: str, request: Request):
     school = await db.schools.find_one({"school_id": school_id}, {"_id": 0})
     if not school:
         raise HTTPException(status_code=404, detail="School not found")
-    if not await _user_can_access_school(user, school):
+    # Read is open to any CRM user (admin + all sales) so a caller-lookup match
+    # opens the full profile read-only (the "full record" decision). Mutations on
+    # the school/leads/contacts stay owner/admin-gated elsewhere. accounts/store
+    # have no CRM access at all.
+    if get_team(user) in ("accounts", "store"):
         raise HTTPException(status_code=403, detail="Not authorized to view this school")
     school_name = school.get("school_name", "")
 

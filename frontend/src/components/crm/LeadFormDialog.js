@@ -5,7 +5,8 @@ import { Input } from '../ui/input';
 import { Label } from '../ui/label';
 import { useTheme } from '../../contexts/ThemeContext';
 import useSchoolTypes from '../../hooks/useSchoolTypes';
-import { tags as tagsApi } from '../../lib/api';
+import { AlertTriangle } from 'lucide-react';
+import { tags as tagsApi, directory } from '../../lib/api';
 import InterestedProductField from './InterestedProductField';
 import AddressFields from './AddressFields';
 
@@ -27,11 +28,37 @@ export default function LeadFormDialog({
   const textMuted = 'text-[var(--text-muted)]';
   const dlgCls = isDark ? 'bg-[var(--bg-card)] border-[var(--border-color)] text-[var(--text-primary)]' : 'bg-white border-[var(--border-color)] text-[var(--text-primary)]';
 
+  // Duplicate guard — when creating a NEW lead, warn if the typed phone already
+  // belongs to an account owned by another rep (use Caller Lookup to forward).
+  const [dirMatch, setDirMatch] = React.useState(null);
+  React.useEffect(() => {
+    if (editLead) { setDirMatch(null); return; }
+    const phone = (leadForm.contact_phone || '').trim();
+    if (phone.length < 4) { setDirMatch(null); return; }
+    const t = setTimeout(async () => {
+      try {
+        const r = await directory.search(phone);
+        setDirMatch((r.data || []).find(x => x.ownership === 'other') || null);
+      } catch { setDirMatch(null); }
+    }, 400);
+    return () => clearTimeout(t);
+  }, [leadForm.contact_phone, editLead]);
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className={`${dlgCls} w-[calc(100vw-1rem)] sm:max-w-lg max-h-[88dvh] overflow-y-auto`}>
         <DialogHeader><DialogTitle className={textPri}>{editLead ? 'Edit Lead' : 'New Lead'}</DialogTitle></DialogHeader>
         <div className="space-y-3 py-2">
+          {dirMatch && (
+            <div className="flex items-start gap-2 p-2.5 rounded-md border border-amber-500/40 bg-amber-500/10 text-xs">
+              <AlertTriangle className="h-4 w-4 text-amber-500 flex-shrink-0 mt-0.5" />
+              <span className={textSec}>
+                <strong className={textPri}>{dirMatch.title}</strong> is already owned by{' '}
+                <strong className={textPri}>{dirMatch.owner_name || 'another rep'}</strong>. Forward the call via
+                Caller Lookup instead of creating a duplicate.
+              </span>
+            </div>
+          )}
           {/* School selection — only for new leads */}
           {!editLead && (
             <div>

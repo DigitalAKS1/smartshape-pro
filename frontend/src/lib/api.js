@@ -426,6 +426,20 @@ export const leads = {
   },
 };
 
+// Master directory caller-lookup (cross-owner search + claim + inbound-call routing)
+export const directory = {
+  search: (q, limit = 20) => API.get('/directory/search', { params: { q, limit } }),
+  claim: (data) => API.post('/directory/claim', data),
+  inboundCall: (data) => API.post('/directory/inbound-call', data),
+};
+
+// CRM in-app notifications (e.g. "incoming call for your account")
+export const crmNotifications = {
+  list: (params) => API.get('/crm/notifications', { params }),
+  read: (id) => API.post(`/crm/notifications/${id}/read`),
+  readAll: () => API.post('/crm/notifications/read-all'),
+};
+
 // Pipeline settings (probabilities, idle limits, lost reasons, digest)
 export const pipelineSettings = {
   get: () => API.get('/pipeline-settings'),
