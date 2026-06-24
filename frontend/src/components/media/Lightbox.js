@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { X, ChevronLeft, ChevronRight, ZoomIn, ZoomOut } from 'lucide-react';
 
 const ZOOM_MIN = 1;
@@ -30,7 +31,10 @@ export default function Lightbox({ images, index = 0, onClose, backendUrl = '', 
   const src = `${backendUrl}${images[i]}`;
   const zoomBy = (d) => setZoom(z => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, +(z + d).toFixed(2))));
 
-  return (
+  // Render to document.body via a portal: the lightbox is position:fixed, but a
+  // transformed ancestor (e.g. a card's hover:-translate-y-1) would otherwise become
+  // its containing block and trap it inside that card instead of the viewport.
+  return createPortal(
     <div className="fixed inset-0 z-[100] bg-black/90 flex flex-col" onClick={onClose}>
       {/* Top bar */}
       <div className="flex items-center justify-between px-4 py-3 text-white/80" onClick={e => e.stopPropagation()}>
@@ -82,6 +86,7 @@ export default function Lightbox({ images, index = 0, onClose, backendUrl = '', 
           ))}
         </div>
       )}
-    </div>
+    </div>,
+    document.body
   );
 }
