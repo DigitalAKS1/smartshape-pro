@@ -181,8 +181,13 @@ async def _send_intro_wa(phone: str, message: str) -> bool:
 
 def calc_lead_score(lead, school=None):
     score = 0
-    if school and school.get("school_strength", 0) > 1000:
-        score += 10
+    if school:
+        try:
+            _strength = int(float(school.get("school_strength") or 0))
+        except (TypeError, ValueError):
+            _strength = 0  # tolerate non-numeric strengths stored as strings
+        if _strength > 1000:
+            score += 10
     desig = (lead.get("designation") or "").lower()
     if any(d in desig for d in ("principal", "trustee", "admin", "director")):
         score += 5
