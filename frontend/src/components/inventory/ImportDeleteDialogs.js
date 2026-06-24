@@ -17,6 +17,7 @@ export function ImportDialog({
           <div className={`bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-lg p-3 text-xs`}>
             <p className={`font-semibold ${textSec} mb-1`}>Required columns:</p>
             <p className={`font-mono text-[11px] ${textMuted}`}>code, name, type, category, stock_qty, min_level, description</p>
+            <p className={`${textMuted} mt-1.5`}>Optional <span className="font-mono">product_type</span> column (Die / Stamp / Machine / Other) — blank defaults to Die.</p>
           </div>
           <Button variant="outline" size="sm" onClick={downloadSample}
             className={`w-full h-10 border-[var(--border-color)] ${textSec} gap-2`}>

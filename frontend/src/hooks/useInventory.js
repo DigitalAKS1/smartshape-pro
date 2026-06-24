@@ -293,10 +293,10 @@ export default function useInventory() {
 
   const downloadSample = () => {
     const csv = [
-      'code,name,type,category,stock_qty,min_level,description',
-      'D-STD-001,Rose Flower,standard,flowers,25,5,Classic rose die',
-      'D-STD-002,Leaf Set,standard,leaf,30,5,Set of 3 leaf shapes',
-      'D-LRG-003,Giant Sunflower,large,giant_flowers,10,3,Large sunflower die',
+      'code,name,product_type,type,category,stock_qty,min_level,description',
+      'D-STD-001,Rose Flower,Die,standard,flowers,25,5,Classic rose die',
+      'S-STD-002,Star Stamp,Stamp,standard,shapes,30,5,Star-shaped stamp',
+      'D-LRG-003,Giant Sunflower,Die,large,giant_flowers,10,3,Large sunflower die',
     ].join('\r\n');
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));

@@ -329,6 +329,18 @@ async def import_dies_csv(file: UploadFile = File(...), request: Request = None)
     existing_dies = await db.dies.find({}, {"die_id": 1, "code": 1, "_id": 0}).to_list(None)
     by_norm = {_norm_code(d.get("code", "")): d["die_id"] for d in existing_dies}
 
+    # Product-type lookup by name (case-insensitive). A blank/unknown "product_type"
+    # column falls back to the built-in Die type, matching the create-form default.
+    pt_rows = await db.product_types.find(
+        {"is_active": {"$ne": False}}, {"product_type_id": 1, "name": 1, "_id": 0}).to_list(None)
+    pt_by_name = {(p.get("name", "") or "").strip().lower(): (p["product_type_id"], p["name"]) for p in pt_rows}
+
+    def _resolve_pt(raw):
+        key = (raw or "").strip().lower()
+        if not key:
+            return ("ptype_dies", "Die")
+        return pt_by_name.get(key, ("ptype_dies", "Die"))
+
     valid_categories = {"decorative","flowers","leaf","alphabets","numbers","butterfly","borders","giant_flowers","3d_flowers","animals_birds","snowflake","fruits","shapes","other"}
     for row in reader:
         try:
@@ -343,10 +355,12 @@ async def import_dies_csv(file: UploadFile = File(...), request: Request = None)
             raw_cat = row.get("category", "decorative").strip().lower().replace(" ", "_")
             category = raw_cat if raw_cat in valid_categories else "decorative"
 
+            pt_raw = (row.get("product_type", "") or "").strip()
+
             existing_id = by_norm.get(norm)
             if existing_id:
                 # Update stock + metadata; preserve image_url and reserved_qty.
-                await db.dies.update_one({"die_id": existing_id}, {"$set": {
+                fields = {
                     "code": code,
                     "name": name,
                     "type": row.get("type", "standard").strip().lower(),
@@ -354,10 +368,18 @@ async def import_dies_csv(file: UploadFile = File(...), request: Request = None)
                     "stock_qty": stock_qty,
                     "min_level": int(row.get("min_level", 5) or 5),
                     "description": row.get("description", "").strip(),
-                }})
+                }
+                # Only retag the product type when the cell actually has a value, so a
+                # blank cell (or a CSV without the column) never silently resets to Die.
+                if pt_raw:
+                    pt_id, pt_name = _resolve_pt(pt_raw)
+                    fields["product_type_id"] = pt_id
+                    fields["product_type"] = pt_name
+                await db.dies.update_one({"die_id": existing_id}, {"$set": fields})
                 updated += 1
                 continue
 
+            pt_id, pt_name = _resolve_pt(pt_raw)
             die_id = f"die_{uuid.uuid4().hex[:8]}"
             await db.dies.insert_one({
                 "die_id": die_id,
@@ -370,6 +392,8 @@ async def import_dies_csv(file: UploadFile = File(...), request: Request = None)
                 "min_level": int(row.get("min_level", 5) or 5),
                 "image_url": "",
                 "description": row.get("description", "").strip(),
+                "product_type_id": pt_id,
+                "product_type": pt_name,
                 "is_active": True,
             })
             by_norm[norm] = die_id
