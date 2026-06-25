@@ -1247,6 +1247,20 @@ async def run_low_stock_check(trigger="scheduled"):
     )
 
     # Email digest to admin + store users (only if SMTP is configured).
+    # Throttle: send the low-stock email AT MOST ONCE PER CALENDAR DAY for any
+    # automatic trigger, so it never fires on every stock update — only the first
+    # run of the day emails. A manual "Run now" (trigger="manual") always sends.
+    allow_email = True
+    if trigger != "manual":
+        guard = await db.app_meta.update_one(
+            {"_id": f"low_stock_email_{today}"},
+            {"$setOnInsert": {"sent_at": datetime.now(timezone.utc).isoformat()}},
+            upsert=True,
+        )
+        allow_email = guard.upserted_id is not None  # True only on the day's first run
+        if not allow_email:
+            log.info(f"[low_stock] email already sent today ({today}) — skipping (trigger={trigger})")
+
     recipients = await db.users.find(
         {"role": {"$in": ["admin", "store"]}, "is_active": {"$ne": False}},
         {"_id": 0, "email": 1},
@@ -1254,7 +1268,7 @@ async def run_low_stock_check(trigger="scheduled"):
     emails = sorted({u["email"] for u in recipients if u.get("email")})
     cfg = await _email_cfg()
     sent = 0
-    if cfg and emails:
+    if cfg and emails and allow_email:
         se, ap, sn = cfg
         body = _low_stock_email_body(low, out)
         subject = f"[SmartShape] Low stock — {len(low)} item(s) need reordering"
