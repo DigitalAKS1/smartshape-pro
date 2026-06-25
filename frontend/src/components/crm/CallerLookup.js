@@ -87,7 +87,6 @@ export default function CallerLookup({ open, onClose, onPrefillLead, card, textP
         <div className="p-4 border-b border-[var(--border-color)]">
           <div className="relative">
             <Search className={`absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 ${textMuted}`} />
-            {/* eslint-disable-next-line jsx-a11y/no-autofocus */}
             <input autoFocus value={q} onChange={e => setQ(e.target.value)}
               placeholder="Phone number, school, or contact name…"
               className={`w-full pl-10 h-11 text-sm rounded-lg border px-3 focus:outline-none ${inputCls}`} />

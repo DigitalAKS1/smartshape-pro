@@ -78,25 +78,17 @@ export default function ProtectedRoute({ children }) {
     if (prefix) requiredModule = ROUTE_MODULE_MAP[prefix];
   }
 
-  if (requiredModule && !isAdmin && !userModules.includes(requiredModule)) {
-    // Redirect to first accessible route
+  // Safe rollout: a user with NO modules assigned yet is treated as legacy
+  // (full access) rather than locked out — per-module gating only kicks in once
+  // an admin has granted at least one module. This prevents the "No Access"
+  // lockout during the RBAC rollout (before module grants are populated).
+  if (requiredModule && !isAdmin && userModules.length > 0 && !userModules.includes(requiredModule)) {
+    // User HAS some modules but not this one — send them to one they can use.
     if (userModules.includes('sales_portal')) return <Navigate to="/sales" replace />;
     if (userModules.includes('dashboard')) return <Navigate to="/dashboard" replace />;
     const firstMod = userModules[0];
     const fallback = Object.entries(ROUTE_MODULE_MAP).find(([, mod]) => mod === firstMod);
     if (fallback) return <Navigate to={fallback[0]} replace />;
-    // User has no modules — show access denied instead of redirect loop
-    return (
-      <div className="min-h-screen bg-[#0a0a12] flex items-center justify-center">
-        <div className="text-center max-w-md space-y-4">
-          <div className="w-16 h-16 mx-auto rounded-full bg-[#e94560]/20 flex items-center justify-center">
-            <svg className="w-8 h-8 text-[#e94560]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m0 0v2m0-2h2m-2 0H10m4-6a4 4 0 11-8 0 4 4 0 018 0z" /></svg>
-          </div>
-          <h2 className="text-2xl font-semibold text-white">No Access</h2>
-          <p className="text-[#a0a0b0]">Your account doesn't have any modules assigned yet. Please contact your administrator to get access.</p>
-        </div>
-      </div>
-    );
   }
 
   return children;
