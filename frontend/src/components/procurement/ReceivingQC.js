@@ -6,6 +6,7 @@ import { PackageCheck, ImageOff, Download, RotateCcw, ClipboardCheck, Trash2 } f
 import { toast } from 'sonner';
 import { procurement } from '../../lib/api';
 import { useAuth } from '../../contexts/AuthContext';
+import useBulkSelect from '../../hooks/useBulkSelect';
 
 const BACKEND = process.env.REACT_APP_BACKEND_URL || '';
 const imgSrc = (u) => (u ? (u.startsWith('http') ? u : `${BACKEND}${u}`) : '');
@@ -70,6 +71,18 @@ export function ReceivingTab() {
     } catch (e2) { toast.error(e2?.response?.data?.detail || 'Delete failed'); }
   };
 
+  const sel = useBulkSelect(grns, (g) => g.grn_id);
+  const bulkDeleteGrns = async () => {
+    const ids = [...sel.selectedIds];
+    if (!ids.length) return;
+    if (!window.confirm(`Delete ${ids.length} goods receipt(s)? Each reverses its stock and rolls back its PO. Restorable backups are kept.`)) return;
+    let ok = 0, fail = 0;
+    for (const id of ids) { try { await procurement.goodsReceipts.remove(id); ok++; } catch { fail++; } }
+    sel.clear(); load();
+    if (ok) toast.success(`${ok} receipt(s) deleted — stock reversed`);
+    if (fail) toast.error(`${fail} could not be deleted`);
+  };
+
   return (
     <div className="space-y-4">
       {/* POs awaiting receipt */}
@@ -93,13 +106,21 @@ export function ReceivingTab() {
 
       {/* Goods receipts */}
       <div className={`${card} border rounded-md p-5`}>
-        <h2 className={`text-lg font-medium ${textPri} mb-3`}>Goods Receipts ({grns.length})</h2>
+        <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+          <h2 className={`text-lg font-medium ${textPri}`}>Goods Receipts ({grns.length})</h2>
+          {isAdmin && sel.count > 0 && (
+            <Button size="sm" onClick={bulkDeleteGrns} className="bg-red-600 hover:bg-red-700 text-white h-7" data-testid="bulk-delete-grns">
+              <Trash2 className="h-3.5 w-3.5 mr-1" />Delete selected ({sel.count})
+            </Button>
+          )}
+        </div>
         <div className="space-y-2">
           {(() => {
             const sortedGrns = [...grns].sort((a, b) => String(b.received_date || b.created_at || '').localeCompare(String(a.received_date || a.created_at || '')));
             return sortedGrns.map(grn => (
             <div key={grn.grn_id} className={`${card} border rounded-md p-3 flex items-center justify-between flex-wrap gap-2 cursor-pointer hover:bg-[var(--bg-hover)]`} onClick={() => openGrn(grn)} data-testid={`grn-row-${grn.grn_id}`}>
               <div className="flex items-center gap-3">
+                {isAdmin && <input type="checkbox" checked={sel.isSelected(grn.grn_id)} onClick={(e) => e.stopPropagation()} onChange={() => sel.toggle(grn.grn_id)} className="accent-[#e94560]" />}
                 <span className={`${textPri} font-medium`}>{grn.grn_no}</span>
                 <Pill map={GRN_STATUS} value={grn.status} />
                 <span className={`text-xs ${textMuted}`}>{grn.po_no} · {grn.vendor_name} · {grn.received_date || ''}</span>
@@ -271,15 +292,37 @@ export function ReturnsTab() {
     try { await procurement.vendorReturns.remove(r.return_id); toast.success(`${r.return_no} deleted`); loadReturns(); }
     catch (e) { toast.error(e?.response?.data?.detail || 'Delete failed'); }
   };
+  const sel = useBulkSelect(list, (r) => r.return_id);
+  const bulkDeleteReturns = async () => {
+    const ids = [...sel.selectedIds];
+    if (!ids.length) return;
+    if (!window.confirm(`Delete ${ids.length} vendor return(s)? Restorable backups are kept.`)) return;
+    let ok = 0, fail = 0;
+    for (const id of ids) { try { await procurement.vendorReturns.remove(id); ok++; } catch { fail++; } }
+    sel.clear(); loadReturns();
+    if (ok) toast.success(`${ok} return(s) deleted`);
+    if (fail) toast.error(`${fail} could not be deleted`);
+  };
   return (
     <div className={`${card} border rounded-md p-5`}>
-      <h2 className={`text-lg font-medium ${textPri} mb-3`}>Vendor Returns / Debit Notes ({list.length})</h2>
+      <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+        <h2 className={`text-lg font-medium ${textPri}`}>Vendor Returns / Debit Notes ({list.length})</h2>
+        {isAdmin && sel.count > 0 && (
+          <Button size="sm" onClick={bulkDeleteReturns} className="bg-red-600 hover:bg-red-700 text-white h-7" data-testid="bulk-delete-returns">
+            <Trash2 className="h-3.5 w-3.5 mr-1" />Delete selected ({sel.count})
+          </Button>
+        )}
+      </div>
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
-          <thead><tr className="bg-[var(--bg-primary)]">{['Return No', 'Vendor', 'Ref GRN', 'Items', 'Total', ''].map(h => <th key={h} className={`text-left text-xs uppercase py-2.5 px-3 ${textMuted}`}>{h}</th>)}</tr></thead>
+          <thead><tr className="bg-[var(--bg-primary)]">
+            {isAdmin && <th className="py-2.5 px-3 w-8"><input type="checkbox" checked={sel.allSelected} onChange={sel.toggleAll} className="accent-[#e94560]" title="Select all" /></th>}
+            {['Return No', 'Vendor', 'Ref GRN', 'Items', 'Total', ''].map(h => <th key={h} className={`text-left text-xs uppercase py-2.5 px-3 ${textMuted}`}>{h}</th>)}
+          </tr></thead>
           <tbody>
             {list.map(r => (
               <tr key={r.return_id} className="border-t border-[var(--border-color)] hover:bg-[var(--bg-hover)]">
+                {isAdmin && <td className="py-2.5 px-3"><input type="checkbox" checked={sel.isSelected(r.return_id)} onChange={() => sel.toggle(r.return_id)} className="accent-[#e94560]" /></td>}
                 <td className={`py-2.5 px-3 ${textPri} font-medium`}>{r.return_no}</td>
                 <td className={`py-2.5 px-3 ${textSec}`}>{r.vendor_name}</td>
                 <td className={`py-2.5 px-3 ${textMuted} font-mono text-xs`}>{r.grn_no}</td>
@@ -292,7 +335,7 @@ export function ReturnsTab() {
                 </td>
               </tr>
             ))}
-            {list.length === 0 && <tr><td colSpan={6} className={`py-10 text-center ${textMuted}`}>No returns yet.</td></tr>}
+            {list.length === 0 && <tr><td colSpan={isAdmin ? 7 : 6} className={`py-10 text-center ${textMuted}`}>No returns yet.</td></tr>}
           </tbody>
         </table>
       </div>

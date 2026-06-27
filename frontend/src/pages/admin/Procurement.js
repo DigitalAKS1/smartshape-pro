@@ -12,6 +12,7 @@ import {
 import { toast } from 'sonner';
 import { procurement } from '../../lib/api';
 import { useAuth } from '../../contexts/AuthContext';
+import useBulkSelect from '../../hooks/useBulkSelect';
 import ItemPicker from '../../components/procurement/ItemPicker';
 import DemandPanel from '../../components/procurement/DemandPanel';
 import { ReceivingTab, ReturnsTab } from '../../components/procurement/ReceivingQC';
@@ -425,6 +426,17 @@ function PurchaseOrdersTab({ vendors }) {
   };
 
   const { sorted: sortedPos, sort, toggle } = useSorted(list, 'created_at');
+  const poSel = useBulkSelect(sortedPos, (p) => p.po_id);
+  const bulkDeletePos = async () => {
+    const ids = [...poSel.selectedIds];
+    if (!ids.length) return;
+    if (!window.confirm(`Delete ${ids.length} purchase order(s)? Each also deletes its goods receipts and reverses their stock. Restorable backups are kept.`)) return;
+    let ok = 0, fail = 0;
+    for (const id of ids) { try { await procurement.purchaseOrders.remove(id); ok++; } catch { fail++; } }
+    poSel.clear(); load();
+    if (ok) toast.success(`${ok} PO(s) deleted`);
+    if (fail) toast.error(`${fail} could not be deleted`);
+  };
 
   const openNew = () => { setVendorId(''); setTerms(''); setExpected(''); setLines([]); setFormOpen(true); };
   const addPicked = (picked) => setLines(prev => [...prev, ...picked]);
@@ -477,16 +489,24 @@ function PurchaseOrdersTab({ vendors }) {
 
   return (
     <div className={`${card} border rounded-md p-5`}>
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
         <h2 className={`text-lg font-medium ${textPri}`}>Purchase Orders ({list.length})</h2>
-        <Button onClick={openNew} size="sm" className="bg-[#e94560] hover:bg-[#f05c75] text-white" data-testid="new-po-btn">
-          <Plus className="mr-1 h-3 w-3" /> Direct Order Planning
-        </Button>
+        <div className="flex items-center gap-2">
+          {isAdmin && poSel.count > 0 && (
+            <Button onClick={bulkDeletePos} size="sm" className="bg-red-600 hover:bg-red-700 text-white" data-testid="bulk-delete-pos">
+              <Trash2 className="mr-1 h-3.5 w-3.5" /> Delete selected ({poSel.count})
+            </Button>
+          )}
+          <Button onClick={openNew} size="sm" className="bg-[#e94560] hover:bg-[#f05c75] text-white" data-testid="new-po-btn">
+            <Plus className="mr-1 h-3 w-3" /> Direct Order Planning
+          </Button>
+        </div>
       </div>
 
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead><tr className="bg-[var(--bg-primary)]">
+            {isAdmin && <th className="py-2.5 px-3 w-8"><input type="checkbox" checked={poSel.allSelected} onChange={poSel.toggleAll} className="accent-[#e94560]" title="Select all" /></th>}
             {[['po_no', 'PO No'], ['vendor_name', 'Vendor'], [null, 'Items'], ['grand_total', 'Total'], ['status', 'Status'], ['created_at', 'Date']].map(([key, label]) => (
               <th key={label} onClick={() => key && toggle(key)} className={`text-left text-xs uppercase py-2.5 px-3 ${textMuted} ${key ? 'cursor-pointer select-none' : ''}`}>
                 {label}{key && sort.key === key ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : ''}
@@ -497,6 +517,7 @@ function PurchaseOrdersTab({ vendors }) {
           <tbody>
             {sortedPos.map(po => (
               <tr key={po.po_id} className="border-t border-[var(--border-color)] hover:bg-[var(--bg-hover)] cursor-pointer" onClick={() => setDetail(po)} data-testid={`po-row-${po.po_id}`}>
+                {isAdmin && <td className="py-2.5 px-3" onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={poSel.isSelected(po.po_id)} onChange={() => poSel.toggle(po.po_id)} className="accent-[#e94560]" /></td>}
                 <td className={`py-2.5 px-3 ${textPri} font-medium`}>{po.po_no}</td>
                 <td className={`py-2.5 px-3 ${textSec}`}>{po.vendor_name}</td>
                 <td className={`py-2.5 px-3 ${textSec}`}>{po.lines?.length || 0}</td>
@@ -506,7 +527,7 @@ function PurchaseOrdersTab({ vendors }) {
                 <td className="py-2.5 px-3 text-right"><ArrowRight className="h-4 w-4 inline text-[var(--text-muted)]" /></td>
               </tr>
             ))}
-            {list.length === 0 && <tr><td colSpan={7} className={`py-10 text-center ${textMuted}`}>No purchase orders yet.</td></tr>}
+            {list.length === 0 && <tr><td colSpan={isAdmin ? 8 : 7} className={`py-10 text-center ${textMuted}`}>No purchase orders yet.</td></tr>}
           </tbody>
         </table>
       </div>

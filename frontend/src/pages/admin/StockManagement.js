@@ -9,6 +9,7 @@ import { Plus, TrendingUp, TrendingDown, Users, Package, AlertTriangle, ChevronD
 import { useStockManagement, MOVEMENT_LABELS, MOVEMENT_COLORS } from '../../hooks/useStockManagement';
 import { signedQtyLabel, STOCK_INCREASE_TYPES } from '../../lib/stockMath';
 import { useAuth } from '../../contexts/AuthContext';
+import useBulkSelect from '../../hooks/useBulkSelect';
 
 export default function StockManagement() {
   const {
@@ -21,10 +22,13 @@ export default function StockManagement() {
     stats, totalHeld,
     handleCreateMovement,
     handleDeleteMovement,
+    bulkDeleteMovements,
   } = useStockManagement();
 
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
+  const sel = useBulkSelect(movements, (m) => m.movement_id);
+  const onBulkDelete = async () => { const n = await bulkDeleteMovements([...sel.selectedIds]); if (n) sel.clear(); };
 
   const card      = 'bg-[var(--bg-card)] border-[var(--border-color)]';
   const inputCls  = 'bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]';
@@ -90,6 +94,19 @@ export default function StockManagement() {
           ))}
         </div>
 
+        {/* Bulk delete bar (admin) */}
+        {isAdmin && activeTab === 'history' && sel.count > 0 && (
+          <div className={`${card} border rounded-md p-2 flex items-center justify-between`}>
+            <span className={`text-sm ${textSec}`}>{sel.count} selected</span>
+            <div className="flex gap-2">
+              <Button size="sm" variant="ghost" onClick={sel.clear} className={textSec}>Clear</Button>
+              <Button size="sm" onClick={onBulkDelete} className="bg-red-600 hover:bg-red-700 text-white" data-testid="bulk-delete-movements">
+                <Trash2 className="h-3.5 w-3.5 mr-1" />Delete selected ({sel.count})
+              </Button>
+            </div>
+          </div>
+        )}
+
         {/* ── Movement History ── */}
         {activeTab === 'history' && (
           <div className={`${card} border rounded-md overflow-hidden`} data-testid="movement-history">
@@ -108,6 +125,7 @@ export default function StockManagement() {
                 <div className="hidden md:block overflow-x-auto">
                   <table className="w-full text-sm" data-testid="movements-table">
                     <thead><tr className="bg-[var(--bg-primary)]">
+                      {isAdmin && <th className="py-3 px-4 w-8"><input type="checkbox" checked={sel.allSelected} onChange={sel.toggleAll} className="accent-[#e94560]" title="Select all" /></th>}
                       <th className={`text-left text-xs uppercase py-3 px-4 ${textMuted}`}>Product</th>
                       <th className={`text-left text-xs uppercase py-3 px-4 ${textMuted}`}>Movement</th>
                       <th className={`text-left text-xs uppercase py-3 px-4 ${textMuted}`}>Qty</th>
@@ -119,6 +137,7 @@ export default function StockManagement() {
                     <tbody>
                       {movements.map(m => (
                         <tr key={m.movement_id} className={`border-t border-[var(--border-color)] hover:bg-[var(--bg-hover)]`} data-testid={`movement-row-${m.movement_id}`}>
+                          {isAdmin && <td className="px-4 py-3"><input type="checkbox" checked={sel.isSelected(m.movement_id)} onChange={() => sel.toggle(m.movement_id)} className="accent-[#e94560]" /></td>}
                           <td className="px-4 py-3">
                             <div className="flex items-center gap-2.5">
                               <Thumb url={rowImg(m)} />

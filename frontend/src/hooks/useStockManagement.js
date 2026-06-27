@@ -105,6 +105,21 @@ export function useStockManagement() {
     }
   };
 
+  // Bulk delete: one confirm, then reverse+delete each sequentially (serial keeps
+  // stock reversal consistent), then refetch once.
+  const bulkDeleteMovements = async (ids) => {
+    if (!ids.length) return 0;
+    if (!window.confirm(`Delete ${ids.length} movement(s)? Each one's effect on stock is reversed. Restorable backups are kept.`)) return 0;
+    let ok = 0, fail = 0;
+    for (const id of ids) {
+      try { await stock.deleteMovement(id); ok++; } catch { fail++; }
+    }
+    fetchData();
+    if (ok) toast.success(`${ok} movement(s) deleted — stock reversed`);
+    if (fail) toast.error(`${fail} could not be deleted`);
+    return ok;
+  };
+
   const stats = {
     total: movements.length,
     stockIn: movements.filter(m => m.movement_type === 'stock_in').length,
@@ -124,6 +139,7 @@ export function useStockManagement() {
     stats, totalHeld,
     handleCreateMovement,
     handleDeleteMovement,
+    bulkDeleteMovements,
     fetchData,
   };
 }
