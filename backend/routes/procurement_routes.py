@@ -1265,6 +1265,87 @@ async def create_return(grn_id: str, request: Request):
     return await _build_vendor_return(g, return_lines, user)
 
 
+# ==================== ADMIN DELETE (with stock reversal + audit backup) ========
+
+async def _delete_grn_internal(g: dict, user: dict):
+    """Reverse a GRN's stock-in, roll back its PO, and snapshot+delete the GRN.
+
+    Reverses every stock movement the GRN created (matched by reference_id), subtracts
+    the GRN's accepted quantities from the parent PO and recomputes its status, then
+    backs up the GRN + its vendor return + its movements to audit_backups and deletes.
+    """
+    from routes.inventory_routes import _reverse_movement  # local import avoids cycle
+    grn_id = g["grn_id"]
+    for m in await db.stock_movements.find({"reference_id": grn_id}, {"_id": 0}).to_list(10000):
+        await _reverse_movement(m)
+    if g.get("po_id"):
+        po = await db.purchase_orders.find_one({"po_id": g["po_id"]}, {"_id": 0})
+        if po:
+            lines = po.get("lines", [])
+            for gl in g.get("lines", []):
+                idx = gl.get("po_line_index")
+                if isinstance(idx, int) and 0 <= idx < len(lines):
+                    lines[idx]["received_qty"] = round2(max(
+                        0.0, float(lines[idx].get("received_qty", 0) or 0) - float(gl.get("accepted_qty", 0) or 0)))
+            any_recv = any(float(l.get("received_qty", 0) or 0) > 0 for l in lines)
+            new_status = "partially_received" if any_recv else "sent"
+            cur = po.get("status")
+            set_doc = {"lines": lines, "updated_at": _now()}
+            if cur in ("partially_received", "received"):
+                set_doc["status"] = new_status
+            await db.purchase_orders.update_one({"po_id": po["po_id"]}, {"$set": set_doc})
+    await snapshot_and_delete([
+        ("goods_receipts", {"grn_id": grn_id}),
+        ("vendor_returns", {"grn_id": grn_id}),
+        ("stock_movements", {"reference_id": grn_id}),
+    ], root_type="grn", root_id=grn_id, root_label=g.get("grn_no", ""), deleted_by=user["email"])
+
+
+@router.delete("/goods-receipts/{grn_id}")
+async def delete_grn(grn_id: str, request: Request):
+    """Admin-only: delete a GRN, reverse the stock it added, and roll back its PO."""
+    user = await get_current_user(request)
+    if get_team(user) != "admin":
+        raise HTTPException(status_code=403, detail="Admins only")
+    g = await db.goods_receipts.find_one({"grn_id": grn_id}, {"_id": 0})
+    if not g:
+        raise HTTPException(status_code=404, detail="GRN not found")
+    await _delete_grn_internal(g, user)
+    return {"message": "GRN deleted and stock reversed"}
+
+
+@router.delete("/purchase-orders/{po_id}")
+async def delete_po(po_id: str, request: Request):
+    """Admin-only: delete a PO. Cascades: every GRN under it is reversed and deleted first."""
+    user = await get_current_user(request)
+    if get_team(user) != "admin":
+        raise HTTPException(status_code=403, detail="Admins only")
+    po = await db.purchase_orders.find_one({"po_id": po_id}, {"_id": 0})
+    if not po:
+        raise HTTPException(status_code=404, detail="PO not found")
+    for g in await db.goods_receipts.find({"po_id": po_id}, {"_id": 0}).to_list(10000):
+        await _delete_grn_internal(g, user)
+    await snapshot_and_delete([("purchase_orders", {"po_id": po_id})],
+        root_type="po", root_id=po_id, root_label=po.get("po_no", ""), deleted_by=user["email"])
+    return {"message": "PO and its receipts deleted; stock reversed"}
+
+
+@router.delete("/vendor-returns/{return_id}")
+async def delete_vendor_return(return_id: str, request: Request):
+    """Admin-only: delete a vendor return (no stock effect) and unlink it from its GRN."""
+    user = await get_current_user(request)
+    if get_team(user) != "admin":
+        raise HTTPException(status_code=403, detail="Admins only")
+    r = await db.vendor_returns.find_one({"return_id": return_id}, {"_id": 0})
+    if not r:
+        raise HTTPException(status_code=404, detail="Return not found")
+    if r.get("grn_id"):
+        await db.goods_receipts.update_one({"grn_id": r["grn_id"]}, {"$unset": {"return_id": ""}})
+    await snapshot_and_delete([("vendor_returns", {"return_id": return_id})],
+        root_type="vendor_return", root_id=return_id, root_label=r.get("return_no", ""), deleted_by=user["email"])
+    return {"message": "Vendor return deleted"}
+
+
 @router.get("/vendor-returns")
 async def list_vendor_returns(request: Request, vendor_id: Optional[str] = None):
     await get_current_user(request)
@@ -1400,7 +1481,7 @@ _CHALLAN_TYPES = ("returnable_out", "returnable_in", "vendor_return_delivery")
 _CHALLAN_REASONS = ("demo", "exhibition", "sampling", "other")
 
 
-async def _adjust_die_stock_for_lines(lines, sign: int):
+async def _adjust_die_stock_for_lines(lines, sign: int, ref_id: str = None, ref_no: str = None):
     """Move physical die stock when goods leave/return on a returnable challan.
 
     sign=-1 when items go OUT (stock leaves the building), +1 when they come back.
@@ -1422,9 +1503,11 @@ async def _adjust_die_stock_for_lines(lines, sign: int):
                 "die_name": die.get("name", ""),
                 "movement_type": "returnable_in" if sign > 0 else "returnable_out",
                 "quantity": q,
+                "item_ref": {"source": "die", "id": die_id},
                 "notes": "Returnable challan return" if sign > 0 else "Returnable challan out",
                 "movement_date": _now(),
-                "reference_number": None,
+                "reference_number": ref_no,
+                "reference_id": ref_id,
             })
 
 
@@ -1506,7 +1589,7 @@ async def create_challan(request: Request):
     await db.challans.insert_one(doc)
     # Goods leaving on a returnable challan reduce physical die stock.
     if ctype == "returnable_out":
-        await _adjust_die_stock_for_lines(_die_line_pairs(built_lines), sign=-1)
+        await _adjust_die_stock_for_lines(_die_line_pairs(built_lines), sign=-1, ref_id=cid, ref_no=cno)
     return await db.challans.find_one({"challan_id": cid}, {"_id": 0})
 
 
@@ -1540,7 +1623,7 @@ async def record_challan_return(challan_id: str, request: Request):
             if applied > 0 and ref.get("source") == "die" and ref.get("id"):
                 restored.append((ref["id"], applied))
     if c.get("type") == "returnable_out" and restored:
-        await _adjust_die_stock_for_lines(restored, sign=+1)
+        await _adjust_die_stock_for_lines(restored, sign=+1, ref_id=challan_id, ref_no=c.get("challan_no"))
     fully = all(float(l.get("returned_qty", 0) or 0) >= float(l.get("qty", 0) or 0) for l in lines)
     any_ret = any(float(l.get("returned_qty", 0) or 0) > 0 for l in lines)
     status = "closed" if fully else ("partially_returned" if any_ret else "open")
@@ -1549,6 +1632,31 @@ async def record_challan_return(challan_id: str, request: Request):
         {"$set": {"lines": lines, "status": status, "updated_at": _now()},
          "$push": {"timeline": _timeline_entry("return_recorded", user["email"])}})
     return await db.challans.find_one({"challan_id": challan_id}, {"_id": 0})
+
+
+@router.delete("/challans/{challan_id}")
+async def delete_challan(challan_id: str, request: Request):
+    """Admin-only: delete a challan and reverse its net stock effect.
+
+    Reverses every stock movement linked to the challan (reference_id) — for a
+    returnable_out, this nets the goods that left minus any already returned back into
+    stock — then snapshots+deletes the challan and its movements. Challans created
+    before movements were linked have no rows to reverse; their stock isn't auto-adjusted.
+    """
+    user = await get_current_user(request)
+    if get_team(user) != "admin":
+        raise HTTPException(status_code=403, detail="Admins only")
+    c = await db.challans.find_one({"challan_id": challan_id}, {"_id": 0})
+    if not c:
+        raise HTTPException(status_code=404, detail="Challan not found")
+    from routes.inventory_routes import _reverse_movement  # local import avoids cycle
+    for m in await db.stock_movements.find({"reference_id": challan_id}, {"_id": 0}).to_list(10000):
+        await _reverse_movement(m)
+    await snapshot_and_delete([
+        ("challans", {"challan_id": challan_id}),
+        ("stock_movements", {"reference_id": challan_id}),
+    ], root_type="challan", root_id=challan_id, root_label=c.get("challan_no", ""), deleted_by=user["email"])
+    return {"message": "Challan deleted and stock reversed"}
 
 
 @router.get("/challans/{challan_id}/pdf")

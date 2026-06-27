@@ -12,6 +12,7 @@ import mimetypes
 from database import db
 from auth_utils import get_current_user
 from rbac import get_team, require_teams, require_module
+from audit_backup import snapshot_and_delete
 from media_utils import youtube_id, normalize_images, MAX_DIE_IMAGES
 
 router = APIRouter()
@@ -541,6 +542,55 @@ async def get_stock_movements(request: Request):
     require_module(user, "stock_management", "read")
     movements = await db.stock_movements.find({}, {"_id": 0}).sort("movement_date", -1).limit(100).to_list(100)
     return movements
+
+
+# Movement types that ADD to warehouse stock vs REMOVE from it — used to reverse
+# a movement's effect when an admin deletes it.
+_INBOUND_TYPES = {"purchase_in", "stock_in", "returnable_in", "returned_from_sales"}
+_OUTBOUND_TYPES = {"stock_out", "returnable_out", "allocated_to_sales"}
+
+
+async def _reverse_movement(mov: dict):
+    """Undo a stock_movements row's effect on the item's stock_qty.
+
+    Inbound types are decremented, outbound types incremented, and a
+    physical_adjustment is restored to its recorded pre-count system_qty. Resolves
+    the item via item_ref ({source,id}) or the legacy die_id/purchase_item_id field.
+    """
+    mtype = mov.get("movement_type")
+    qty = float(mov.get("quantity", 0) or 0)
+    ref = mov.get("item_ref") or {}
+    src = ref.get("source") or ("die" if mov.get("die_id") else ("purchase_item" if mov.get("purchase_item_id") else None))
+    _id = ref.get("id") or mov.get("die_id") or mov.get("purchase_item_id")
+    coll = "dies" if src == "die" else "purchase_items" if src == "purchase_item" else None
+    key = "die_id" if coll == "dies" else "purchase_item_id"
+    if not coll or not _id:
+        return
+    if mtype == "physical_adjustment":
+        if mov.get("system_qty") is not None:
+            await db[coll].update_one({key: _id}, {"$set": {"stock_qty": int(mov["system_qty"])}})
+    elif mtype in _INBOUND_TYPES:
+        await db[coll].update_one({key: _id}, {"$inc": {"stock_qty": -qty}})
+    elif mtype in _OUTBOUND_TYPES:
+        await db[coll].update_one({key: _id}, {"$inc": {"stock_qty": qty}})
+
+
+@router.delete("/stock/movements/{movement_id}")
+async def delete_stock_movement(movement_id: str, request: Request):
+    """Admin-only: delete a stock movement and reverse its effect on stock."""
+    user = await get_current_user(request)
+    if get_team(user) != "admin":
+        raise HTTPException(status_code=403, detail="Admins only")
+    mov = await db.stock_movements.find_one({"movement_id": movement_id}, {"_id": 0})
+    if not mov:
+        raise HTTPException(status_code=404, detail="Movement not found")
+    await _reverse_movement(mov)
+    await snapshot_and_delete(
+        [("stock_movements", {"movement_id": movement_id})],
+        root_type="stock_movement", root_id=movement_id,
+        root_label=f"{mov.get('movement_type')} x{mov.get('quantity')}",
+        deleted_by=user["email"])
+    return {"message": "Movement deleted and stock reversed"}
 
 
 # ==================== PURCHASE ALERTS ====================
