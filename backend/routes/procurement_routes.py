@@ -21,10 +21,12 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone
 import uuid
 import os
+import logging
 
 from database import db
 from auth_utils import get_current_user
-from rbac import require_teams, require_module
+from rbac import require_teams, require_module, get_team
+from audit_backup import snapshot_and_delete
 
 router = APIRouter()
 
@@ -1103,6 +1105,29 @@ async def _apply_stock_in(item_ref: dict, qty: float, grn_id: str, grn_no: str, 
     await db.stock_movements.insert_one(movement)
 
 
+def _normalize_qc_line(upd: dict, existing: dict) -> dict:
+    """Merge a QC submission line into the stored GRN line as quantities.
+
+    received_qty = total physically received; rejected_qty = of those, how many
+    are rejected; accepted_qty = received - rejected (the only part stocked-in).
+    A reason is mandatory whenever something is rejected. qc_status is derived for
+    display/back-compat: accepted | partial_reject | rejected.
+    """
+    received = float(upd.get("received_qty", existing.get("received_qty", 0)) or 0)
+    rejected = float(upd.get("rejected_qty", existing.get("rejected_qty", 0)) or 0)
+    if received < 0 or rejected < 0 or rejected > received:
+        raise HTTPException(status_code=400, detail="rejected_qty must be between 0 and received_qty")
+    reason = (upd.get("reject_reason", existing.get("reject_reason", "")) or "").strip()
+    if rejected > 0 and not reason:
+        raise HTTPException(status_code=400, detail="A rejection reason is required when rejected_qty > 0")
+    accepted = round2(received - rejected)
+    status = "rejected" if (received > 0 and rejected == received) else ("partial_reject" if rejected > 0 else "accepted")
+    return {**existing,
+            "received_qty": round2(received), "rejected_qty": round2(rejected),
+            "accepted_qty": accepted, "reject_reason": reason, "qc_status": status,
+            "remark": upd.get("remark", existing.get("remark", reason))}
+
+
 @router.post("/goods-receipts/{grn_id}/qc")
 async def submit_qc(grn_id: str, request: Request):
     """Submit the QC checklist per line.
@@ -1129,19 +1154,9 @@ async def submit_qc(grn_id: str, request: Request):
     new_lines = []
     stocked = 0
     for l in g["lines"]:
-        upd = incoming.get(l["po_line_index"], {})
-        status = upd.get("qc_status", l.get("qc_status", "pending"))
-        if status not in ("ok", "hold", "return"):
-            raise HTTPException(status_code=400, detail=f"Invalid qc_status '{status}'")
-        merged = {
-            **l, "qc_status": status,
-            "qc_template_id": upd.get("qc_template_id", l.get("qc_template_id")),
-            "qc_results": upd.get("qc_results", l.get("qc_results", [])),
-            "remark": upd.get("remark", l.get("remark", "")),
-            "received_qty": float(upd.get("received_qty", l.get("received_qty", 0)) or 0),
-        }
-        if status == "ok":
-            await _apply_stock_in(merged["item_ref"], merged["received_qty"],
+        merged = _normalize_qc_line(incoming.get(l["po_line_index"], {}), l)
+        if merged["accepted_qty"] > 0:
+            await _apply_stock_in(merged["item_ref"], merged["accepted_qty"],
                                   grn_id, g.get("grn_no"), user["email"])
             stocked += 1
         new_lines.append(merged)
@@ -1156,27 +1171,34 @@ async def submit_qc(grn_id: str, request: Request):
     # advance the PO using cumulative accepted quantities (partial-receipt aware)
     if g.get("po_id"):
         await _advance_po_after_qc(g["po_id"], new_lines, user, g.get("grn_no"))
+
+    # Auto-create a vendor return for any rejected quantities (non-blocking).
+    if any(float(l.get("rejected_qty", 0) or 0) > 0 for l in new_lines):
+        g2 = await db.goods_receipts.find_one({"grn_id": grn_id}, {"_id": 0})
+        if g2 and not g2.get("return_id"):
+            try:
+                await _build_vendor_return(g2, _rejected_return_lines(g2), user)
+            except Exception as _e:
+                logging.warning(f"Auto vendor-return failed for {grn_id}: {_e}")
     return await db.goods_receipts.find_one({"grn_id": grn_id}, {"_id": 0})
 
 
 async def _advance_po_after_qc(po_id: str, qc_lines: List[dict], user: dict, grn_no: str):
-    """Add accepted (OK) quantities to each PO line and set the PO status.
+    """Add accepted quantities to each PO line and set the PO status.
 
-    Only OK lines count as fulfilled; held/returned quantities stay outstanding
-    so the remainder can be received on a later GRN. The PO becomes 'received'
-    once every line is fully received, otherwise 'partially_received'.
+    Only accepted (received minus rejected) quantities count as fulfilled; rejected
+    quantities stay outstanding so the remainder can be received on a later GRN. The
+    PO becomes 'received' once every line is fully received, else 'partially_received'.
     """
     po = await db.purchase_orders.find_one({"po_id": po_id}, {"_id": 0})
     if not po:
         return
     lines = po.get("lines", [])
     for ql in qc_lines:
-        if ql.get("qc_status") != "ok":
-            continue
         idx = ql.get("po_line_index")
         if isinstance(idx, int) and 0 <= idx < len(lines):
             prev = float(lines[idx].get("received_qty", 0) or 0)
-            lines[idx]["received_qty"] = round2(prev + float(ql.get("received_qty", 0) or 0))
+            lines[idx]["received_qty"] = round2(prev + float(ql.get("accepted_qty", 0) or 0))
     fully = all(float(l.get("received_qty", 0) or 0) >= float(l.get("qty", 0) or 0) for l in lines)
     new_status = "received" if fully else "partially_received"
     cur = po.get("status")
@@ -1202,9 +1224,34 @@ async def close_po(po_id: str, request: Request):
 
 # ==================== VENDOR RETURN / DEBIT NOTE ====================
 
+async def _build_vendor_return(g: dict, return_lines: list, user: dict) -> dict:
+    """Insert a vendor return (debit note) for the given rejected lines and link it to the GRN."""
+    grand = round2(sum(float(l["qty"] or 0) * float(l["rate"] or 0) for l in return_lines))
+    return_id = _new_id("ret")
+    return_no = await next_number("return", "RET")
+    doc = {
+        "return_id": return_id, "return_no": return_no, "grn_id": g["grn_id"],
+        "grn_no": g.get("grn_no"), "vendor_id": g.get("vendor_id"),
+        "vendor_name": g.get("vendor_name"), "lines": return_lines,
+        "grand_total": grand, "created_by": user["email"], "created_at": _now(),
+    }
+    await db.vendor_returns.insert_one(doc)
+    await db.goods_receipts.update_one({"grn_id": g["grn_id"]}, {"$set": {"return_id": return_id}})
+    return await db.vendor_returns.find_one({"return_id": return_id}, {"_id": 0})
+
+
+def _rejected_return_lines(g: dict) -> list:
+    """Build vendor-return lines from a GRN's rejected quantities."""
+    return [
+        {"item_ref": l["item_ref"], "name": l["name"], "qty": l.get("rejected_qty", 0),
+         "rate": l.get("rate", 0), "reason": l.get("reject_reason") or l.get("remark") or "Rejected at QC"}
+        for l in g.get("lines", []) if float(l.get("rejected_qty", 0) or 0) > 0
+    ]
+
+
 @router.post("/goods-receipts/{grn_id}/create-return")
 async def create_return(grn_id: str, request: Request):
-    """Create a vendor return (debit note) from the GRN lines flagged 'return'."""
+    """Create a vendor return (debit note) from the GRN's rejected quantities."""
     user = await get_current_user(request)
     require_module(user, "procurement", "read_write")
     g = await db.goods_receipts.find_one({"grn_id": grn_id}, {"_id": 0})
@@ -1212,25 +1259,10 @@ async def create_return(grn_id: str, request: Request):
         raise HTTPException(status_code=404, detail="Goods receipt not found")
     if g.get("return_id"):
         raise HTTPException(status_code=400, detail="A return note already exists for this receipt")
-    return_lines = [
-        {"item_ref": l["item_ref"], "name": l["name"], "qty": l.get("received_qty", 0),
-         "rate": l.get("rate", 0), "reason": l.get("remark", "") or "Rejected at QC"}
-        for l in g.get("lines", []) if l.get("qc_status") == "return"
-    ]
+    return_lines = _rejected_return_lines(g)
     if not return_lines:
-        raise HTTPException(status_code=400, detail="No lines marked for return")
-    grand = round2(sum(float(l["qty"] or 0) * float(l["rate"] or 0) for l in return_lines))
-    return_id = _new_id("ret")
-    return_no = await next_number("return", "RET")
-    doc = {
-        "return_id": return_id, "return_no": return_no, "grn_id": grn_id,
-        "grn_no": g.get("grn_no"), "vendor_id": g.get("vendor_id"),
-        "vendor_name": g.get("vendor_name"), "lines": return_lines,
-        "grand_total": grand, "created_by": user["email"], "created_at": _now(),
-    }
-    await db.vendor_returns.insert_one(doc)
-    await db.goods_receipts.update_one({"grn_id": grn_id}, {"$set": {"return_id": return_id}})
-    return await db.vendor_returns.find_one({"return_id": return_id}, {"_id": 0})
+        raise HTTPException(status_code=400, detail="No rejected quantities to return")
+    return await _build_vendor_return(g, return_lines, user)
 
 
 @router.get("/vendor-returns")
