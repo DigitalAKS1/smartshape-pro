@@ -28,6 +28,7 @@ import SchoolFormDialog from '../../components/crm/SchoolFormDialog';
 import ContactFormDialog from '../../components/crm/ContactFormDialog';
 import ContactsTab from '../../components/crm/ContactsTab';
 import TasksTab from '../../components/crm/TasksTab';
+import OwnerDeleteButton from '../../components/common/OwnerDeleteButton';
 
 export default function LeadsCRM() {
   const navigate = useNavigate();
@@ -696,7 +697,8 @@ export default function LeadsCRM() {
                       <div className="flex gap-1 flex-shrink-0">
                         <Button size="sm" variant="ghost" onClick={() => navigate(`/school-profile/${sch.school_id}`)} className={`${textSec} h-9 w-9 p-0`} title="View School Profile"><Eye className="h-3.5 w-3.5" /></Button>
                         <Button size="sm" variant="ghost" onClick={() => crm.openEditSchool(sch)} className={`${textSec} h-9 w-9 p-0`}><Edit2 className="h-3.5 w-3.5" /></Button>
-                        <Button size="sm" variant="ghost" onClick={() => crm.handleDeleteSchool(sch)} className="text-red-400 h-9 w-9 p-0"><Trash2 className="h-3.5 w-3.5" /></Button>
+                        <Button size="sm" variant="ghost" onClick={() => crm.handleDeleteSchool(sch)} className="text-red-400 h-9 w-9 p-0" title="Archive school (keep leads)"><Trash2 className="h-3.5 w-3.5" /></Button>
+                        <OwnerDeleteButton kind="school" id={sch.school_id} name={sch.school_name} onDeleted={crm.fetchData} label="" className="h-9 px-2" />
                       </div>
                     </div>
                   );
@@ -755,7 +757,8 @@ export default function LeadsCRM() {
                             <td className="py-2.5 px-3 text-center"><span className="bg-[#e94560]/20 text-[#e94560] px-2 py-0.5 rounded text-xs font-bold">{schLeads.length}</span></td>
                             <td className="py-2.5 px-3 text-right" onClick={e => e.stopPropagation()}>
                               <Button size="sm" variant="ghost" onClick={e => { e.stopPropagation(); crm.openEditSchool(sch); }} className={`${textSec} h-7`} data-testid={`edit-school-${sch.school_id}`}><Edit2 className="h-3 w-3" /></Button>
-                              <Button size="sm" variant="ghost" onClick={e => { e.stopPropagation(); crm.handleDeleteSchool(sch); }} className="text-red-400 h-7" data-testid={`delete-school-${sch.school_id}`}><Trash2 className="h-3 w-3" /></Button>
+                              <Button size="sm" variant="ghost" onClick={e => { e.stopPropagation(); crm.handleDeleteSchool(sch); }} className="text-red-400 h-7" data-testid={`delete-school-${sch.school_id}`} title="Archive school (keep leads)"><Trash2 className="h-3 w-3" /></Button>
+                              <span onClick={e => e.stopPropagation()}><OwnerDeleteButton kind="school" id={sch.school_id} name={sch.school_name} onDeleted={crm.fetchData} label="" className="h-7 px-2 inline-flex" /></span>
                             </td>
                           </tr>
                         );
