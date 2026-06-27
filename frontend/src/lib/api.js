@@ -254,7 +254,7 @@ export const schools = {
   getAll: () => API.get('/schools'),
   create: (data) => API.post('/schools', data),
   update: (id, data) => API.put(`/schools/${id}`, data),
-  delete: (id) => API.delete(`/schools/${id}`),
+  delete: (id, force = false) => API.delete(`/schools/${id}`, { params: { force } }),
   getProfile: (id) => API.get(`/schools/${id}/profile`),
   assign: (id, data) => API.post(`/schools/${id}/assign`, data),
   bulkAssign: (data) => API.post('/schools/bulk-assign', data),

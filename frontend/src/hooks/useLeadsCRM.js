@@ -410,8 +410,22 @@ export default function useLeadsCRM() {
 
   const handleDeleteSchool = async (sch) => {
     if (!window.confirm(`Delete school "${sch.school_name}"? Associated leads will NOT be deleted.`)) return;
-    try { await schoolsApi.delete(sch.school_id); toast.success('School deleted'); fetchData(); }
-    catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
+    try {
+      const res = await schoolsApi.delete(sch.school_id);
+      // Backend blocks (doesn't delete) when the school still has linked data.
+      // Offer to archive it anyway — that hides the school but keeps its leads/quotations.
+      if (res?.data?.blocked) {
+        const l = res.data.links || {};
+        const ok = window.confirm(
+          `"${sch.school_name}" has linked data — leads: ${l.leads || 0}, contacts: ${l.contacts || 0}, ` +
+          `quotations: ${l.quotations || 0}, visits: ${l.visits || 0}.\n\nArchive the school anyway? ` +
+          `Its leads and quotations are kept.`);
+        if (!ok) return;
+        await schoolsApi.delete(sch.school_id, true);
+      }
+      toast.success('School deleted');
+      fetchData();
+    } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
   };
 
   // ─────────────────────────────────────────────────────────────────────────────
