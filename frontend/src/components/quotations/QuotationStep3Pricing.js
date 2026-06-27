@@ -26,7 +26,7 @@ export default function QuotationStep3Pricing({
   // totals
   calcTotals,
   // navigation / submit
-  setStep, handleSubmit,
+  setStep, handleSubmit, submitting,
 }) {
   const totals = calcTotals();
 
@@ -561,11 +561,11 @@ export default function QuotationStep3Pricing({
         </Button>
         <Button
           onClick={handleSubmit}
-          disabled={!formData.principal_name || !formData.school_name}
+          disabled={submitting || !formData.principal_name || !formData.school_name}
           className="flex-1 h-12 bg-[#e94560] hover:bg-[#f05c75] text-white font-semibold text-base"
           data-testid="create-quotation-submit"
         >
-          Create Quotation <Check className="ml-2 h-5 w-5" />
+          {submitting ? 'Creating…' : <>Create Quotation <Check className="ml-2 h-5 w-5" /></>}
         </Button>
       </div>
     </div>

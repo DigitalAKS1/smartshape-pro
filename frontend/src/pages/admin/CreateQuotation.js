@@ -102,6 +102,7 @@ export default function CreateQuotation() {
             calcTotals={hook.calcTotals}
             setStep={hook.setStep}
             handleSubmit={hook.handleSubmit}
+            submitting={hook.submitting}
           />
         )}
       </div>

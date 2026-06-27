@@ -8,6 +8,7 @@ export default function useCreateQuotation() {
 
   // ── Wizard step ──────────────────────────────────────────────────────────
   const [step, setStep] = useState(1);
+  const [submitting, setSubmitting] = useState(false);
 
   // ── Remote data ──────────────────────────────────────────────────────────
   const [packagesList, setPackagesList]     = useState([]);
@@ -361,16 +362,19 @@ export default function useCreateQuotation() {
 
   // ── Submit ───────────────────────────────────────────────────────────────
   const handleSubmit = async () => {
+    if (submitting) return; // guard against double-submit creating duplicate quotations
     if (!formData.principal_name || !formData.school_name) {
       toast.error('Principal name and school name are required');
       return;
     }
+    setSubmitting(true);
     try {
       await quotations.create(formData);
       toast.success('Quotation created successfully!');
-      navigate('/quotations');
+      navigate('/quotations'); // success → navigate away (button stays disabled until unmount)
     } catch {
       toast.error('Failed to create quotation');
+      setSubmitting(false); // only re-enable on failure so the user can retry
     }
   };
 
@@ -402,6 +406,6 @@ export default function useCreateQuotation() {
     showAddProduct, setShowAddProduct,
     newProduct, setNewProduct,
     updateLine, handleAddCustomProduct, handleRemoveLine,
-    calcTotals, handleSubmit,
+    calcTotals, handleSubmit, submitting,
   };
 }

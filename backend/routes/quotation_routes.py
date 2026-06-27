@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
 from typing import Optional, List, Dict, Any
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import uuid
 import os
 import re
@@ -455,6 +455,21 @@ async def create_quotation(request: Request):
     d2 = body.get("discount2_pct", 0)
     fr = body.get("freight_amount", 0)
     t  = _compute_totals(lines, d1, d2, fr)
+
+    # Idempotency guard — collapse accidental rapid double-submits (multi-click,
+    # network retry, the 401-retry interceptor) into the first quotation instead of
+    # creating duplicates. Same creator + school + principal + grand total + line
+    # count within 30s is treated as the same intent; return the existing one.
+    recent_cutoff = (datetime.now(timezone.utc) - timedelta(seconds=30)).isoformat()
+    dup = await db.quotations.find_one({
+        "created_by": user["email"],
+        "school_name": body.get("school_name", ""),
+        "principal_name": body.get("principal_name", ""),
+        "grand_total": t.get("grand_total"),
+        "created_at": {"$gte": recent_cutoff},
+    }, {"_id": 0})
+    if dup and len(dup.get("lines", [])) == len(lines):
+        return dup
 
     quotation_id = f"quot_{uuid.uuid4().hex[:12]}"
     quote_number = await generate_quote_number()
