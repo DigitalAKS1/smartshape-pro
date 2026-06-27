@@ -1,8 +1,13 @@
 import axios from 'axios';
 import { emitChange } from './dataSync';
 
+// Fall back to same-origin (relative) if the build-time backend URL is missing,
+// so an unset REACT_APP_BACKEND_URL degrades to working relative calls rather
+// than a broken absolute URL with a literal undefined host.
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || '';
+
 const API = axios.create({
-  baseURL: `${process.env.REACT_APP_BACKEND_URL}/api`,
+  baseURL: `${BACKEND_URL}/api`,
   withCredentials: true,
   headers: {
     'Content-Type': 'application/json',
