@@ -2,9 +2,10 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../ui/dialog';
-import { PackageCheck, ImageOff, Download, RotateCcw, ClipboardCheck } from 'lucide-react';
+import { PackageCheck, ImageOff, Download, RotateCcw, ClipboardCheck, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { procurement } from '../../lib/api';
+import { useAuth } from '../../contexts/AuthContext';
 
 const BACKEND = process.env.REACT_APP_BACKEND_URL || '';
 const imgSrc = (u) => (u ? (u.startsWith('http') ? u : `${BACKEND}${u}`) : '');
@@ -33,6 +34,8 @@ function Pill({ map, value }) {
 
 /* ── Receiving & QC tab ───────────────────────────────────────────────────── */
 export function ReceivingTab() {
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
   const [pos, setPos] = useState([]);
   const [grns, setGrns] = useState([]);
   const [qcGrn, setQcGrn] = useState(null);
@@ -56,6 +59,16 @@ export function ReceivingTab() {
     } catch (e) { toast.error(e?.response?.data?.detail || 'Could not open receipt'); }
   };
   const openGrn = async (grn) => { try { const r = await procurement.goodsReceipts.get(grn.grn_id); setQcGrn(r.data); } catch { /* noop */ } };
+
+  const deleteGrn = async (grn, e) => {
+    e.stopPropagation();
+    if (!window.confirm(`Delete ${grn.grn_no}? This reverses the stock it added and rolls back its PO. A restorable backup is kept.`)) return;
+    try {
+      await procurement.goodsReceipts.remove(grn.grn_id);
+      toast.success(`${grn.grn_no} deleted — stock reversed`);
+      load();
+    } catch (e2) { toast.error(e2?.response?.data?.detail || 'Delete failed'); }
+  };
 
   return (
     <div className="space-y-4">
@@ -91,7 +104,14 @@ export function ReceivingTab() {
                 <Pill map={GRN_STATUS} value={grn.status} />
                 <span className={`text-xs ${textMuted}`}>{grn.po_no} · {grn.vendor_name} · {grn.received_date || ''}</span>
               </div>
-              <span className={`text-xs ${textSec}`}>{grn.status === 'pending_qc' ? 'Open QC →' : 'View'}</span>
+              <div className="flex items-center gap-2">
+                <span className={`text-xs ${textSec}`}>{grn.status === 'pending_qc' ? 'Open QC →' : 'View'}</span>
+                {isAdmin && (
+                  <Button size="sm" variant="ghost" onClick={(e) => deleteGrn(grn, e)} className="text-red-500 h-7 px-2" title="Delete GRN (admin)" data-testid={`grn-delete-${grn.grn_id}`}>
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                )}
+              </div>
             </div>
           ));
           })()}
@@ -109,7 +129,7 @@ function QCDialog({ grn, onClose, onChanged }) {
   const [lines, setLines] = useState([]);
   const [saving, setSaving] = useState(false);
   const done = grn?.status === 'qc_done';
-  const hasReturns = (grn?.lines || []).some(l => l.qc_status === 'return');
+  const hasReturns = (grn?.lines || []).some(l => Number(l.rejected_qty || 0) > 0);
   const [recvDate, setRecvDate] = useState('');
   useEffect(() => { setRecvDate(grn?.received_date || ''); }, [grn]);
 
@@ -117,24 +137,41 @@ function QCDialog({ grn, onClose, onChanged }) {
     setLines((grn?.lines || []).map(l => ({
       po_line_index: l.po_line_index, name: l.name, image_url: l.image_url,
       ordered_qty: l.ordered_qty, received_qty: l.received_qty,
-      qc_status: l.qc_status === 'pending' ? 'ok' : l.qc_status, remark: l.remark || '',
+      rejected_qty: l.rejected_qty || 0,
+      reject_reason: l.reject_reason || l.remark || '',
     })));
   }, [grn]);
+
+  const acceptedOf = (l) => Math.max(0, (Number(l.received_qty) || 0) - (Number(l.rejected_qty) || 0));
 
   const upd = (i, patch) => setLines(ls => ls.map((l, j) => j === i ? { ...l, ...patch } : l));
 
   const submit = async () => {
+    // A reason is mandatory whenever something is rejected.
+    if (lines.some(l => Number(l.rejected_qty || 0) > 0 && !String(l.reject_reason || '').trim())) {
+      toast.error('Add a reason for every line with a rejected quantity');
+      return;
+    }
+    if (lines.some(l => Number(l.rejected_qty || 0) > Number(l.received_qty || 0))) {
+      toast.error('Rejected quantity cannot exceed received quantity');
+      return;
+    }
     setSaving(true);
     try {
       if (!done && recvDate && recvDate !== grn.received_date) {
         await procurement.goodsReceipts.update(grn.grn_id, { received_date: recvDate, lines: [] });
       }
       const r = await procurement.goodsReceipts.submitQc(grn.grn_id, {
-        lines: lines.map(l => ({ po_line_index: l.po_line_index, qc_status: l.qc_status, received_qty: Number(l.received_qty) || 0, remark: l.remark })),
+        lines: lines.map(l => ({
+          po_line_index: l.po_line_index,
+          received_qty: Number(l.received_qty) || 0,
+          rejected_qty: Number(l.rejected_qty) || 0,
+          reject_reason: l.reject_reason,
+        })),
       });
-      const stocked = r.data.lines.filter(l => l.qc_status === 'ok').length;
-      const ret = r.data.lines.filter(l => l.qc_status === 'return').length;
-      toast.success(`QC done — ${stocked} stocked in${ret ? `, ${ret} for return` : ''}`);
+      const accepted = r.data.lines.reduce((s, l) => s + (Number(l.accepted_qty) || 0), 0);
+      const rejected = r.data.lines.reduce((s, l) => s + (Number(l.rejected_qty) || 0), 0);
+      toast.success(`QC done — ${accepted} accepted into stock${rejected ? `, ${rejected} rejected → vendor return` : ''}`);
       onChanged();
       onClose();
     } catch (e) { toast.error(e?.response?.data?.detail || 'QC submit failed'); }
@@ -174,38 +211,40 @@ function QCDialog({ grn, onClose, onChanged }) {
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead><tr className="bg-[var(--bg-primary)]">
-                  {['', 'Item', 'Ordered', 'Received', 'QC Status', 'Remark'].map(h => <th key={h} className={`text-left text-[11px] uppercase py-2 px-2 ${textMuted}`}>{h}</th>)}
+                  {['', 'Item', 'Ordered', 'Received', 'Rejected', 'Accepted', 'Reason'].map(h => <th key={h} className={`text-left text-[11px] uppercase py-2 px-2 ${textMuted}`}>{h}</th>)}
                 </tr></thead>
                 <tbody>
-                  {lines.map((l, i) => (
+                  {lines.map((l, i) => {
+                    const accepted = acceptedOf(l);
+                    const needsReason = Number(l.rejected_qty || 0) > 0;
+                    return (
                     <tr key={i} className="border-t border-[var(--border-color)]" data-testid={`qc-line-${i}`}>
                       <td className="py-2 px-2"><Thumb url={l.image_url} /></td>
                       <td className={`py-2 px-2 ${textPri} font-medium`}>{l.name}</td>
                       <td className={`py-2 px-2 ${textSec}`}>{l.ordered_qty}</td>
                       <td className="py-2 px-2">
                         {done ? <span className={textSec}>{l.received_qty}</span> :
-                          <Input type="number" min="0" value={l.received_qty} onChange={e => upd(i, { received_qty: e.target.value })} className={`${inputCls} h-8 w-20 text-sm`} />}
+                          <Input type="number" min="0" value={l.received_qty} onChange={e => upd(i, { received_qty: e.target.value })} className={`${inputCls} h-8 w-20 text-sm`} data-testid={`qc-received-${i}`} />}
                       </td>
                       <td className="py-2 px-2">
-                        {done ? <Pill map={QC_STATUS} value={l.qc_status} /> :
-                          <select value={l.qc_status} onChange={e => upd(i, { qc_status: e.target.value })} className={`h-8 px-2 rounded text-sm ${inputCls}`} data-testid={`qc-status-${i}`}>
-                            <option value="ok">OK</option>
-                            <option value="hold">Hold</option>
-                            <option value="return">Return</option>
-                          </select>}
+                        {done ? <span className={Number(l.rejected_qty) > 0 ? 'text-red-400' : textSec}>{l.rejected_qty || 0}</span> :
+                          <Input type="number" min="0" max={l.received_qty} value={l.rejected_qty} onChange={e => upd(i, { rejected_qty: e.target.value })} className={`${inputCls} h-8 w-20 text-sm`} data-testid={`qc-rejected-${i}`} />}
                       </td>
+                      <td className={`py-2 px-2 font-medium ${accepted > 0 ? 'text-green-400' : textMuted}`} data-testid={`qc-accepted-${i}`}>{accepted}</td>
                       <td className="py-2 px-2">
-                        {done ? <span className={textSec}>{l.remark || '—'}</span> :
-                          <select value={QC_REASONS.includes(l.remark) ? l.remark : 'Other'} onChange={e => upd(i, { remark: e.target.value })} className={`h-8 px-2 rounded text-sm ${inputCls} w-44`} data-testid={`qc-remark-${i}`}>
-                            {QC_REASONS.map(r => <option key={r} value={r}>{r || '—'}</option>)}
-                          </select>}
+                        {done ? <span className={textSec}>{needsReason ? (l.reject_reason || '—') : '—'}</span> :
+                          needsReason ? (
+                            <select value={QC_REASONS.includes(l.reject_reason) ? l.reject_reason : 'Other'} onChange={e => upd(i, { reject_reason: e.target.value })} className={`h-8 px-2 rounded text-sm ${inputCls} w-44`} data-testid={`qc-reason-${i}`}>
+                              {QC_REASONS.filter(r => r !== '').map(r => <option key={r} value={r}>{r}</option>)}
+                            </select>
+                          ) : <span className={textMuted}>—</span>}
                       </td>
                     </tr>
-                  ))}
+                  ); })}
                 </tbody>
               </table>
             </div>
-            {!done && <p className={`text-xs ${textMuted} mt-2`}>OK → stocked into inventory · Hold → kept aside · Return → kept aside &amp; eligible for a vendor return note.</p>}
+            {!done && <p className={`text-xs ${textMuted} mt-2`}>Accepted (Received − Rejected) is stocked into inventory · Rejected quantities need a reason and auto-create a vendor return note.</p>}
 
             <DialogFooter className="flex-wrap gap-2">
               <Button variant="outline" onClick={onClose} className="border-[var(--border-color)] text-[var(--text-secondary)]">Close</Button>
@@ -221,9 +260,17 @@ function QCDialog({ grn, onClose, onChanged }) {
 
 /* ── Returns tab ──────────────────────────────────────────────────────────── */
 export function ReturnsTab() {
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
   const [list, setList] = useState([]);
-  useEffect(() => { procurement.vendorReturns.getAll().then(r => setList(r.data || [])).catch(() => {}); }, []);
+  const loadReturns = useCallback(() => { procurement.vendorReturns.getAll().then(r => setList(r.data || [])).catch(() => {}); }, []);
+  useEffect(() => { loadReturns(); }, [loadReturns]);
   const inr = (n) => `₹${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+  const deleteReturn = async (r) => {
+    if (!window.confirm(`Delete vendor return ${r.return_no}? A restorable backup is kept.`)) return;
+    try { await procurement.vendorReturns.remove(r.return_id); toast.success(`${r.return_no} deleted`); loadReturns(); }
+    catch (e) { toast.error(e?.response?.data?.detail || 'Delete failed'); }
+  };
   return (
     <div className={`${card} border rounded-md p-5`}>
       <h2 className={`text-lg font-medium ${textPri} mb-3`}>Vendor Returns / Debit Notes ({list.length})</h2>
@@ -241,6 +288,7 @@ export function ReturnsTab() {
                 <td className="py-2.5 px-3 text-right">
                   <Button size="sm" variant="ghost" onClick={() => procurement.vendorReturns.downloadPdf(r.return_id, r.return_no).catch(() => toast.error('Download failed'))} className={`${textSec} h-7`}><Download className="h-3.5 w-3.5" /></Button>
                   <Button size="sm" variant="ghost" onClick={() => procurement.challans.fromVendorReturn(r.return_id).then(res => { toast.success(`Challan ${res.data?.challan_no} created`); if (res.data?.challan_id) procurement.challans.downloadPdf(res.data.challan_id, res.data.challan_no); }).catch(() => toast.error('Failed'))} className={`${textSec} h-7`} title="Create delivery challan"><RotateCcw className="h-3.5 w-3.5" /></Button>
+                  {isAdmin && <Button size="sm" variant="ghost" onClick={() => deleteReturn(r)} className="text-red-500 h-7" title="Delete vendor return (admin)"><Trash2 className="h-3.5 w-3.5" /></Button>}
                 </td>
               </tr>
             ))}

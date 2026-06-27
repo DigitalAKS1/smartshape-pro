@@ -5,9 +5,10 @@ import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../../components/ui/dialog';
-import { Plus, TrendingUp, TrendingDown, Users, Package, AlertTriangle, ChevronDown, ChevronUp } from 'lucide-react';
+import { Plus, TrendingUp, TrendingDown, Users, Package, AlertTriangle, ChevronDown, ChevronUp, Trash2 } from 'lucide-react';
 import { useStockManagement, MOVEMENT_LABELS, MOVEMENT_COLORS } from '../../hooks/useStockManagement';
 import { signedQtyLabel, STOCK_INCREASE_TYPES } from '../../lib/stockMath';
+import { useAuth } from '../../contexts/AuthContext';
 
 export default function StockManagement() {
   const {
@@ -19,7 +20,11 @@ export default function StockManagement() {
     movementForm, setMovementForm,
     stats, totalHeld,
     handleCreateMovement,
+    handleDeleteMovement,
   } = useStockManagement();
+
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
 
   const card      = 'bg-[var(--bg-card)] border-[var(--border-color)]';
   const inputCls  = 'bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]';
@@ -109,6 +114,7 @@ export default function StockManagement() {
                       <th className={`text-left text-xs uppercase py-3 px-4 ${textMuted}`}>Sales Person</th>
                       <th className={`text-left text-xs uppercase py-3 px-4 ${textMuted}`}>Date</th>
                       <th className={`text-left text-xs uppercase py-3 px-4 ${textMuted}`}>Notes</th>
+                      {isAdmin && <th className={`text-right text-xs uppercase py-3 px-4 ${textMuted}`}></th>}
                     </tr></thead>
                     <tbody>
                       {movements.map(m => (
@@ -127,6 +133,13 @@ export default function StockManagement() {
                           <td className={`px-4 py-3 text-sm ${textSec}`}>{m.sales_person_name || '—'}</td>
                           <td className={`px-4 py-3 text-sm ${textMuted}`}>{formatDate(m.movement_date)}</td>
                           <td className={`px-4 py-3 text-xs ${textMuted} max-w-[200px] truncate`}>{m.notes || '—'}</td>
+                          {isAdmin && (
+                            <td className="px-4 py-3 text-right">
+                              <Button size="sm" variant="ghost" onClick={() => handleDeleteMovement(m)} className="text-red-500 h-7 px-2" title="Delete movement (admin)" data-testid={`movement-delete-${m.movement_id}`}>
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </Button>
+                            </td>
+                          )}
                         </tr>
                       ))}
                     </tbody>
@@ -151,6 +164,11 @@ export default function StockManagement() {
                       <div className="text-right">
                         <p className={`font-mono font-bold ${MOVEMENT_COLORS[m.movement_type] || textPri}`}>{signedQtyLabel(m.movement_type, m.quantity)}</p>
                         <p className={`text-[10px] ${textMuted}`}>{formatDate(m.movement_date)}</p>
+                        {isAdmin && (
+                          <Button size="sm" variant="ghost" onClick={() => handleDeleteMovement(m)} className="text-red-500 h-6 px-1 mt-1" title="Delete movement (admin)">
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        )}
                       </div>
                     </div>
                   ))}

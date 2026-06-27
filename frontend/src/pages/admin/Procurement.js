@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { procurement } from '../../lib/api';
+import { useAuth } from '../../contexts/AuthContext';
 import ItemPicker from '../../components/procurement/ItemPicker';
 import DemandPanel from '../../components/procurement/DemandPanel';
 import { ReceivingTab, ReturnsTab } from '../../components/procurement/ReceivingQC';
@@ -411,6 +412,18 @@ function PurchaseOrdersTab({ vendors }) {
   const load = useCallback(() => { procurement.purchaseOrders.getAll().then(r => setList(r.data || [])).catch(() => {}); }, []);
   useEffect(() => { load(); }, [load]);
 
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
+  const deletePo = async (po) => {
+    if (!window.confirm(`Delete ${po.po_no}? This also deletes any goods receipts under it and reverses their stock. A restorable backup is kept.`)) return;
+    try {
+      await procurement.purchaseOrders.remove(po.po_id);
+      toast.success(`${po.po_no} deleted`);
+      setDetail(null);
+      load();
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Delete failed'); }
+  };
+
   const { sorted: sortedPos, sort, toggle } = useSorted(list, 'created_at');
 
   const openNew = () => { setVendorId(''); setTerms(''); setExpected(''); setLines([]); setFormOpen(true); };
@@ -587,6 +600,7 @@ function PurchaseOrdersTab({ vendors }) {
                 {detail.status === 'approved' && <Button onClick={() => act(() => procurement.purchaseOrders.send(detail.po_id), 'Marked sent')} className="bg-indigo-600 hover:bg-indigo-700 text-white"><Send className="h-3.5 w-3.5 mr-1" />Mark Sent</Button>}
                 {detail.status === 'partially_received' && <Button onClick={() => act(() => procurement.purchaseOrders.close(detail.po_id), 'PO closed')} className="bg-gray-600 hover:bg-gray-700 text-white"><Check className="h-3.5 w-3.5 mr-1" />Close (settle remainder)</Button>}
                 {['draft', 'approved', 'sent'].includes(detail.status) && <Button variant="ghost" onClick={() => act(() => procurement.purchaseOrders.cancel(detail.po_id), 'PO cancelled')} className="text-red-400"><X className="h-3.5 w-3.5 mr-1" />Cancel</Button>}
+                {isAdmin && <Button variant="ghost" onClick={() => deletePo(detail)} className="text-red-500" title="Delete PO + its receipts (admin)" data-testid="po-delete"><Trash2 className="h-3.5 w-3.5 mr-1" />Delete</Button>}
               </DialogFooter>
             </>
           )}

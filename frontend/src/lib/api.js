@@ -473,6 +473,7 @@ export const tasks = {
 export const stock = {
   createMovement: (data) => API.post('/stock/movement', data),
   getMovements: () => API.get('/stock/movements'),
+  deleteMovement: (id) => API.delete(`/stock/movements/${id}`),
 };
 
 // Purchase Alerts
@@ -1173,6 +1174,7 @@ export const procurement = {
     downloadPdf: (id, poNo) => downloadFile(`/purchase-orders/${id}/pdf`, `${poNo || 'PO'}.pdf`),
     downloadPackingList: (id, poNo) => downloadFile(`/purchase-orders/${id}/packing-list-pdf`, `${poNo || 'PO'}-packing-list.pdf`),
     receive: (id) => API.post(`/purchase-orders/${id}/receive`),
+    remove: (id) => API.delete(`/purchase-orders/${id}`),
   },
   // Goods Receipts (verification) + QC checklist
   goodsReceipts: {
@@ -1181,11 +1183,13 @@ export const procurement = {
     update: (id, data) => API.put(`/goods-receipts/${id}`, data),
     submitQc: (id, data) => API.post(`/goods-receipts/${id}/qc`, data),
     createReturn: (id) => API.post(`/goods-receipts/${id}/create-return`),
+    remove: (id) => API.delete(`/goods-receipts/${id}`),
   },
   // Vendor returns / debit notes
   vendorReturns: {
     getAll: (params = {}) => API.get('/vendor-returns', { params }),
     downloadPdf: (id, retNo) => downloadFile(`/vendor-returns/${id}/pdf`, `${retNo || 'RETURN'}.pdf`),
+    remove: (id) => API.delete(`/vendor-returns/${id}`),
   },
   challans: {
     getAll: (params = {}) => API.get('/challans', { params }),
@@ -1194,6 +1198,7 @@ export const procurement = {
     recordReturn: (id, lines) => API.post(`/challans/${id}/record-return`, { lines }),
     fromVendorReturn: (returnId) => API.post(`/vendor-returns/${returnId}/challan`),
     downloadPdf: (id, no) => downloadFile(`/challans/${id}/pdf`, `${no || 'challan'}.pdf`),
+    remove: (id) => API.delete(`/challans/${id}`),
   },
 };
 

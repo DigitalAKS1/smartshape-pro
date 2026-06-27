@@ -45,9 +45,9 @@ export function useStockManagement() {
       const [movRes, diesRes, spRes] = await Promise.all([
         stock.getMovements(), dies.getAll(), salesPersons.getAll(),
       ]);
-      setMovements(movRes.data);
-      setDiesList(diesRes.data);
-      setSalesPersonsList(spRes.data);
+      setMovements(Array.isArray(movRes.data) ? movRes.data : []);
+      setDiesList(Array.isArray(diesRes.data) ? diesRes.data : []);
+      setSalesPersonsList(Array.isArray(spRes.data) ? spRes.data : []);
     } catch {
       toast.error('Failed to load data');
     } finally {
@@ -94,6 +94,17 @@ export function useStockManagement() {
     }
   };
 
+  const handleDeleteMovement = async (m) => {
+    if (!window.confirm(`Delete this ${MOVEMENT_LABELS[m.movement_type] || m.movement_type} of ${m.quantity}? This reverses its effect on stock. A restorable backup is kept.`)) return;
+    try {
+      await stock.deleteMovement(m.movement_id);
+      toast.success('Movement deleted — stock reversed');
+      fetchData();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Delete failed');
+    }
+  };
+
   const stats = {
     total: movements.length,
     stockIn: movements.filter(m => m.movement_type === 'stock_in').length,
@@ -112,6 +123,7 @@ export function useStockManagement() {
     movementForm, setMovementForm,
     stats, totalHeld,
     handleCreateMovement,
+    handleDeleteMovement,
     fetchData,
   };
 }
