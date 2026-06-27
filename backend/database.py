@@ -8,13 +8,31 @@ from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import logging
 
-# MongoDB connection
+# MongoDB connection.
+# IMPORTANT: never let a bad/unreachable DB URL crash the whole app on *import* —
+# that turns into an endless restart/crash-loop on container hosts (e.g. Railway).
+# If the client can't be created (missing env var, or a placeholder/invalid SRV host
+# like "cluster.mongodb.net" that fails DNS), we log loudly and leave db = None. The
+# app still boots, /api/health reports the problem, and DB-backed requests fail with a
+# clear error instead of the process dying over and over.
 mongo_url = os.environ.get('MONGO_URL') or os.environ.get('MONGODB_URL')
-if not mongo_url:
-    raise RuntimeError("MONGO_URL environment variable is not set")
 db_name = os.environ.get('DB_NAME', 'smartshape_prod')
-client = AsyncIOMotorClient(mongo_url)
-db = client[db_name]
+client = None
+db = None
+db_init_error = None
+try:
+    if not mongo_url:
+        raise RuntimeError("MONGO_URL (or MONGODB_URL) environment variable is not set")
+    # serverSelectionTimeoutMS keeps real outages from hanging requests for ~30s.
+    client = AsyncIOMotorClient(mongo_url, serverSelectionTimeoutMS=5000)
+    db = client[db_name]
+except Exception as e:
+    db_init_error = str(e)
+    logging.error(
+        "DATABASE NOT INITIALISED — backend started but cannot use MongoDB. "
+        "Check the MONGO_URL/DB_NAME environment variables on this host "
+        "(a placeholder host such as 'cluster.mongodb.net' will fail DNS). Error: %s",
+        str(e)[:300])
 
 
 async def _i(coro):
@@ -33,6 +51,9 @@ async def connect_db():
     (such as a unique constraint over existing duplicate values) must NEVER abort
     startup, or the container fails its health check and the deploy is rejected.
     """
+    if db is None:
+        logging.error("connect_db skipped — database not initialised (%s)", db_init_error)
+        return
 
     # ── Unique constraints ──────────────────────────────────────────────────
     await _i(db.users.create_index("email", unique=True))
@@ -173,5 +194,6 @@ async def connect_db():
 
 async def close_db():
     """Called on shutdown — closes the Motor client."""
-    client.close()
-    logging.info("Database connection closed")
+    if client is not None:
+        client.close()
+        logging.info("Database connection closed")

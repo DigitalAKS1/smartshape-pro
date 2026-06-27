@@ -125,7 +125,16 @@ app.mount("/uploads/certificates", StaticFiles(directory=_CERT_UPLOADS), name="c
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok"}
+    # Report DB reachability so a misconfigured/unreachable database surfaces as a
+    # clear "degraded" signal instead of a silent crash-loop.
+    from database import db, db_init_error
+    if db is None:
+        return {"status": "degraded", "database": "not_initialised", "detail": db_init_error}
+    try:
+        await db.command("ping")
+        return {"status": "ok", "database": "connected"}
+    except Exception as e:
+        return {"status": "degraded", "database": "unreachable", "detail": str(e)[:200]}
 
 
 # ── WebSocket: Today's Actions real-time push ──────────────────────────────────
