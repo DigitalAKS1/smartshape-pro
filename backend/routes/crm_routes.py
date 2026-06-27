@@ -2982,6 +2982,8 @@ async def create_physical_dispatch(request: Request):
         "tracking_number": body.get("tracking_number", ""),
         "sent_date": body.get("sent_date", now_iso[:10]),
         "received_confirmed": False,
+        "dispatched_without_payment": bool(body.get("dispatched_without_payment", False)),
+        "payment_pending_reason": body.get("payment_pending_reason", ""),
         "created_by": user["email"],
         "created_at": now_iso,
     }
@@ -3081,7 +3083,7 @@ async def create_physical_dispatch(request: Request):
 async def update_physical_dispatch(dispatch_id: str, request: Request):
     await get_current_user(request)
     body = await request.json()
-    allowed = {k: body[k] for k in ("courier_name", "tracking_number", "sent_date", "received_confirmed", "description", "material_type") if k in body}
+    allowed = {k: body[k] for k in ("courier_name", "tracking_number", "sent_date", "received_confirmed", "description", "material_type", "dispatched_without_payment", "payment_pending_reason") if k in body}
     await db.physical_dispatches.update_one({"dispatch_id": dispatch_id}, {"$set": allowed})
     return await db.physical_dispatches.find_one({"dispatch_id": dispatch_id}, {"_id": 0})
 

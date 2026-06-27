@@ -44,8 +44,8 @@ export function useSalesExpenses() {
         expensesApi.getAll(currentMonth),
         visitsApi.getAll(),
       ]);
-      setExpenses(expRes.data);
-      setVisits(visitsRes.data.filter(v => v.status === 'visited'));
+      setExpenses(Array.isArray(expRes.data) ? expRes.data : []);
+      setVisits((Array.isArray(visitsRes.data) ? visitsRes.data : []).filter(v => v.status === 'visited'));
     } catch (err) {
       console.error(err);
     }

@@ -307,6 +307,13 @@ export default function LeadDetailPanel({
                 <Input value={pdForm.courier_name} onChange={e => setPdForm({...pdForm, courier_name: e.target.value})} placeholder="Courier" className={`${inputCls} text-xs h-9`} />
                 <Input value={pdForm.tracking_number} onChange={e => setPdForm({...pdForm, tracking_number: e.target.value})} placeholder="Tracking #" className={`${inputCls} text-xs h-9`} />
                 <Input type="date" value={pdForm.sent_date} onChange={e => setPdForm({...pdForm, sent_date: e.target.value})} className={`${inputCls} text-xs h-9`} />
+                <label className={`col-span-2 sm:col-span-3 flex items-center gap-2 text-xs ${textSec} cursor-pointer select-none`}>
+                  <input type="checkbox" checked={!!pdForm.dispatched_without_payment} onChange={e => setPdForm({...pdForm, dispatched_without_payment: e.target.checked})} className="accent-[#e94560]" />
+                  Dispatch without payment
+                </label>
+                {pdForm.dispatched_without_payment && (
+                  <Input value={pdForm.payment_pending_reason} onChange={e => setPdForm({...pdForm, payment_pending_reason: e.target.value})} placeholder="Reason (required) — why dispatch without payment?" className={`${inputCls} text-xs h-9 col-span-2 sm:col-span-3`} />
+                )}
                 <Button onClick={addPhysicalDispatch} size="sm" className="bg-[#e94560] hover:bg-[#f05c75] h-9 text-xs col-span-2 sm:col-span-1">Log</Button>
               </div>
               {physicalDispatches.length > 0 && (
@@ -319,6 +326,8 @@ export default function LeadDetailPanel({
                         <span className={`ml-2 ${textMuted}`}>{d.sent_date}</span>
                         {d.courier_name && <span className={`ml-1 ${textMuted}`}>via {d.courier_name}</span>}
                         {d.tracking_number && <span className={`ml-1 text-blue-400`}>#{d.tracking_number}</span>}
+                        {d.dispatched_without_payment && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-500 font-medium" title={d.payment_pending_reason || ''}>Unpaid</span>}
+                        {d.dispatched_without_payment && d.payment_pending_reason && <span className={`ml-1 ${textMuted}`}>— {d.payment_pending_reason}</span>}
                       </div>
                       {d.received_confirmed
                         ? <span className="text-green-400 text-xs">Received</span>

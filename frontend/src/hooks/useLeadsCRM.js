@@ -71,7 +71,7 @@ export default function useLeadsCRM() {
   const [leadEnrollments, setLeadEnrollments] = useState([]);
   const [noteForm, setNoteForm] = useState({ type: 'call', content: '', outcome: '' });
   const [fuForm, setFuForm] = useState({ followup_date: '', followup_time: '', followup_type: 'call', notes: '' });
-  const [pdForm, setPdForm] = useState({ material_type: 'brochure', description: '', courier_name: '', tracking_number: '', sent_date: '' });
+  const [pdForm, setPdForm] = useState({ material_type: 'brochure', description: '', courier_name: '', tracking_number: '', sent_date: '', dispatched_without_payment: false, payment_pending_reason: '' });
   const [enrollDialogOpen, setEnrollDialogOpen] = useState(false);
   const [selectedSequenceId, setSelectedSequenceId] = useState('');
 
@@ -138,18 +138,19 @@ export default function useLeadsCRM() {
         quotationsApi.getAll().catch(() => ({ data: [] })),
         designationsApi.getAll().catch(() => ({ data: [] })),
       ]);
-      setLeadsList(lr.data);
-      setSchoolsList(sr.data);
-      setTasksList(tr.data);
-      setSpList(spr.data);
-      setContactsList(cr.data);
-      setGroupsList(gr.data || []);
-      setSourcesList(srcR.data || []);
-      setRolesList(rlR.data || []);
-      setTagsList(tgR.data || []);
-      setDripSequencesList(dripR.data || []);
-      setAllQuotations(qR.data || []);
-      setDesignationsList(desR.data || []);
+      const arr = (x) => Array.isArray(x) ? x : [];
+      setLeadsList(arr(lr.data));
+      setSchoolsList(arr(sr.data));
+      setTasksList(arr(tr.data));
+      setSpList(arr(spr.data));
+      setContactsList(arr(cr.data));
+      setGroupsList(arr(gr.data));
+      setSourcesList(arr(srcR.data));
+      setRolesList(arr(rlR.data));
+      setTagsList(arr(tgR.data));
+      setDripSequencesList(arr(dripR.data));
+      setAllQuotations(arr(qR.data));
+      setDesignationsList(arr(desR.data));
     } catch { toast.error('Failed to load'); }
     finally { setLoading(false); }
   };
@@ -192,7 +193,7 @@ export default function useLeadsCRM() {
     setDetailLead(lead);
     setPhysicalDispatches([]);
     setLeadVisits([]);
-    setPdForm({ material_type: 'brochure', description: '', courier_name: '', tracking_number: '', sent_date: new Date().toISOString().slice(0, 10) });
+    setPdForm({ material_type: 'brochure', description: '', courier_name: '', tracking_number: '', sent_date: new Date().toISOString().slice(0, 10), dispatched_without_payment: false, payment_pending_reason: '' });
     try {
       const [nr, fr, pdRes, enrollRes, visitsRes] = await Promise.all([
         leadsApi.getNotes(lead.lead_id),
@@ -296,6 +297,10 @@ export default function useLeadsCRM() {
 
   const addPhysicalDispatch = async () => {
     if (!detailLead) return;
+    if (pdForm.dispatched_without_payment && !pdForm.payment_pending_reason.trim()) {
+      toast.error('Please add a reason for dispatching without payment');
+      return;
+    }
     try {
       const res = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/physical-dispatches`, {
         method: 'POST', credentials: 'include',
@@ -304,7 +309,7 @@ export default function useLeadsCRM() {
       });
       const created = await res.json();
       setPhysicalDispatches(prev => [created, ...prev]);
-      setPdForm({ material_type: 'brochure', description: '', courier_name: '', tracking_number: '', sent_date: new Date().toISOString().slice(0, 10) });
+      setPdForm({ material_type: 'brochure', description: '', courier_name: '', tracking_number: '', sent_date: new Date().toISOString().slice(0, 10), dispatched_without_payment: false, payment_pending_reason: '' });
       toast.success('Dispatch logged');
     } catch { toast.error('Failed to log dispatch'); }
   };

@@ -28,7 +28,7 @@ export default function Dashboard() {
           analytics.getDashboard(), quotApi.getAll(), analytics.getConversion(),
         ]);
         setStats(sr.data);
-        setRecentQuots(qr.data.slice(0, 5));
+        setRecentQuots(Array.isArray(qr.data) ? qr.data.slice(0, 5) : []);
         setConversion(convRes.data);
       } catch (e) {
         console.error('Dashboard fetch error:', e);

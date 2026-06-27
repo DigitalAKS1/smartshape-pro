@@ -5,7 +5,7 @@ import { useTheme } from '../../contexts/ThemeContext';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { toast } from 'sonner';
-import { Search, Package, ExternalLink, Copy, MessageSquare, CheckCircle, RefreshCw } from 'lucide-react';
+import { Search, Package, ExternalLink, Copy, MessageSquare, CheckCircle, RefreshCw, Pencil, Save, X } from 'lucide-react';
 import WhatsAppSendDialog from '../../components/WhatsAppSendDialog';
 
 const COURIERS = ['Delhivery', 'Blue Dart', 'DTDC', 'Other'];
@@ -35,6 +35,10 @@ export default function DispatchTracking() {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterCourier, setFilterCourier] = useState('');
   const [filterReceived, setFilterReceived] = useState('all');
+  const [filterPayment, setFilterPayment] = useState('all');
+  const [editingId, setEditingId] = useState(null);
+  const [editForm, setEditForm] = useState({ courier_name: '', tracking_number: '', dispatched_without_payment: false, payment_pending_reason: '' });
+  const [savingEdit, setSavingEdit] = useState(false);
   const [waOpen, setWaOpen] = useState(false);
   const [waCtx, setWaCtx] = useState({ module: 'dispatch', context: {}, title: 'Send WhatsApp', initialBody: '' });
 
@@ -62,6 +66,33 @@ export default function DispatchTracking() {
     } catch { toast.error('Failed to update'); }
   };
 
+  const startEdit = (d) => {
+    setEditingId(d.dispatch_id);
+    setEditForm({
+      courier_name: d.courier_name || '',
+      tracking_number: d.tracking_number || '',
+      dispatched_without_payment: !!d.dispatched_without_payment,
+      payment_pending_reason: d.payment_pending_reason || '',
+    });
+  };
+
+  const cancelEdit = () => { setEditingId(null); };
+
+  const saveEdit = async (dispatch_id) => {
+    if (editForm.dispatched_without_payment && !editForm.payment_pending_reason.trim()) {
+      toast.error('Please add a reason for dispatching without payment');
+      return;
+    }
+    setSavingEdit(true);
+    try {
+      await dispatchApi.update(dispatch_id, { ...editForm });
+      setDispatches(prev => prev.map(d => d.dispatch_id === dispatch_id ? { ...d, ...editForm } : d));
+      setEditingId(null);
+      toast.success('Dispatch updated');
+    } catch { toast.error('Failed to update'); }
+    finally { setSavingEdit(false); }
+  };
+
   const copyLink = (url) => {
     if (!url) { toast.error('No tracking URL available for this courier'); return; }
     navigator.clipboard.writeText(url).then(() => toast.success('Tracking link copied!')).catch(() => toast.error('Copy failed'));
@@ -81,6 +112,8 @@ export default function DispatchTracking() {
     if (filterCourier && (d.courier_name || '').toLowerCase() !== filterCourier.toLowerCase()) return false;
     if (filterReceived === 'received' && !d.received_confirmed) return false;
     if (filterReceived === 'pending' && d.received_confirmed) return false;
+    if (filterPayment === 'unpaid' && !d.dispatched_without_payment) return false;
+    if (filterPayment === 'paid' && d.dispatched_without_payment) return false;
     if (searchTerm) {
       const s = searchTerm.toLowerCase();
       if (!((d.lead_name || '').toLowerCase().includes(s) || (d.tracking_number || '').toLowerCase().includes(s) || (d.contact_name || '').toLowerCase().includes(s))) return false;
@@ -125,6 +158,11 @@ export default function DispatchTracking() {
             <option value="pending">Pending Delivery</option>
             <option value="received">Received</option>
           </select>
+          <select value={filterPayment} onChange={e => setFilterPayment(e.target.value)} className={`h-10 px-3 rounded-md text-sm ${inputCls}`}>
+            <option value="all">All Payments</option>
+            <option value="paid">Paid</option>
+            <option value="unpaid">Unpaid</option>
+          </select>
         </div>
 
         {/* Table */}
@@ -152,6 +190,7 @@ export default function DispatchTracking() {
                 <tbody>
                   {filtered.map(d => {
                     const trackingUrl = buildTrackingUrl(d.courier_name, d.tracking_number);
+                    const editing = editingId === d.dispatch_id;
                     return (
                       <tr key={d.dispatch_id} className={`border-t border-[var(--border-color)] hover:bg-[var(--bg-hover)]`}>
                         <td className={`py-3 px-4 text-xs ${textMuted} whitespace-nowrap`}>{d.sent_date || d.created_at?.slice(0, 10) || '—'}</td>
@@ -160,8 +199,19 @@ export default function DispatchTracking() {
                           {d.contact_name && <p className={`text-xs ${textMuted}`}>{d.contact_name}</p>}
                         </td>
                         <td className={`py-3 px-4 hidden sm:table-cell text-sm ${textSec} capitalize`}>{d.material_type || '—'}</td>
-                        <td className={`py-3 px-4 hidden md:table-cell text-sm ${textSec}`}>{d.courier_name || '—'}</td>
-                        <td className={`py-3 px-4 hidden md:table-cell font-mono text-xs ${textPri}`}>{d.tracking_number || '—'}</td>
+                        <td className={`py-3 px-4 hidden md:table-cell text-sm ${textSec}`}>
+                          {editing ? (
+                            <select value={editForm.courier_name} onChange={e => setEditForm({ ...editForm, courier_name: e.target.value })} className={`h-8 px-2 rounded text-xs ${inputCls}`}>
+                              <option value="">— Courier —</option>
+                              {COURIERS.map(c => <option key={c} value={c}>{c}</option>)}
+                            </select>
+                          ) : (d.courier_name || '—')}
+                        </td>
+                        <td className={`py-3 px-4 hidden md:table-cell font-mono text-xs ${textPri}`}>
+                          {editing ? (
+                            <Input value={editForm.tracking_number} onChange={e => setEditForm({ ...editForm, tracking_number: e.target.value })} placeholder="Tracking #" className={`${inputCls} h-8 text-xs w-36`} />
+                          ) : (d.tracking_number || '—')}
+                        </td>
                         <td className="py-3 px-4 hidden lg:table-cell">
                           {trackingUrl ? (
                             <a href={trackingUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-[#e94560] hover:underline flex items-center gap-1 max-w-[180px] truncate">
@@ -174,30 +224,63 @@ export default function DispatchTracking() {
                           )}
                         </td>
                         <td className="py-3 px-4 text-center">
-                          {d.received_confirmed ? (
-                            <span className="text-[11px] px-2 py-0.5 rounded bg-green-500/20 text-green-400 font-medium flex items-center justify-center gap-1 whitespace-nowrap">
-                              <CheckCircle className="h-3 w-3" /> Received
-                            </span>
+                          {editing ? (
+                            <div className="flex flex-col gap-1 items-start text-left min-w-[170px]">
+                              <label className={`flex items-center gap-1 text-[11px] ${textSec} cursor-pointer select-none`}>
+                                <input type="checkbox" checked={editForm.dispatched_without_payment} onChange={e => setEditForm({ ...editForm, dispatched_without_payment: e.target.checked })} className="accent-[#e94560]" />
+                                Dispatch without payment
+                              </label>
+                              {editForm.dispatched_without_payment && (
+                                <Input value={editForm.payment_pending_reason} onChange={e => setEditForm({ ...editForm, payment_pending_reason: e.target.value })} placeholder="Reason (required)" className={`${inputCls} h-7 text-[11px]`} />
+                              )}
+                            </div>
                           ) : (
-                            <span className="text-[11px] px-2 py-0.5 rounded bg-yellow-500/20 text-yellow-400 font-medium">In Transit</span>
+                            <div className="flex flex-col items-center gap-1">
+                              {d.received_confirmed ? (
+                                <span className="text-[11px] px-2 py-0.5 rounded bg-green-500/20 text-green-400 font-medium flex items-center justify-center gap-1 whitespace-nowrap">
+                                  <CheckCircle className="h-3 w-3" /> Received
+                                </span>
+                              ) : (
+                                <span className="text-[11px] px-2 py-0.5 rounded bg-yellow-500/20 text-yellow-400 font-medium">In Transit</span>
+                              )}
+                              {d.dispatched_without_payment && (
+                                <span className="text-[11px] px-2 py-0.5 rounded bg-amber-500/20 text-amber-500 font-medium whitespace-nowrap" title={d.payment_pending_reason || ''}>Unpaid</span>
+                              )}
+                            </div>
                           )}
                         </td>
                         <td className="py-3 px-4 text-right whitespace-nowrap">
-                          <Button size="sm" variant="ghost" onClick={() => copyLink(trackingUrl)} className={`${textSec} h-7 px-2`} title="Copy tracking link">
-                            <Copy className="h-3.5 w-3.5" />
-                          </Button>
-                          {trackingUrl && (
-                            <Button size="sm" variant="ghost" asChild className={`${textSec} h-7 px-2`} title="Open tracking page">
-                              <a href={trackingUrl} target="_blank" rel="noopener noreferrer"><ExternalLink className="h-3.5 w-3.5" /></a>
-                            </Button>
-                          )}
-                          <Button size="sm" variant="ghost" onClick={() => openWa(d)} className="text-green-500 h-7 px-2" title="Send WhatsApp notification">
-                            <MessageSquare className="h-3.5 w-3.5" />
-                          </Button>
-                          {!d.received_confirmed && (
-                            <Button size="sm" variant="ghost" onClick={() => markReceived(d.dispatch_id)} className="text-[#e94560] h-7 px-2" title="Mark as received">
-                              <CheckCircle className="h-3.5 w-3.5" />
-                            </Button>
+                          {editing ? (
+                            <>
+                              <Button size="sm" variant="ghost" disabled={savingEdit} onClick={() => saveEdit(d.dispatch_id)} className="text-green-500 h-7 px-2" title="Save changes">
+                                <Save className="h-3.5 w-3.5" />
+                              </Button>
+                              <Button size="sm" variant="ghost" disabled={savingEdit} onClick={cancelEdit} className={`${textSec} h-7 px-2`} title="Cancel">
+                                <X className="h-3.5 w-3.5" />
+                              </Button>
+                            </>
+                          ) : (
+                            <>
+                              <Button size="sm" variant="ghost" onClick={() => startEdit(d)} className={`${textSec} h-7 px-2`} title="Edit courier / tracking / payment">
+                                <Pencil className="h-3.5 w-3.5" />
+                              </Button>
+                              <Button size="sm" variant="ghost" onClick={() => copyLink(trackingUrl)} className={`${textSec} h-7 px-2`} title="Copy tracking link">
+                                <Copy className="h-3.5 w-3.5" />
+                              </Button>
+                              {trackingUrl && (
+                                <Button size="sm" variant="ghost" asChild className={`${textSec} h-7 px-2`} title="Open tracking page">
+                                  <a href={trackingUrl} target="_blank" rel="noopener noreferrer"><ExternalLink className="h-3.5 w-3.5" /></a>
+                                </Button>
+                              )}
+                              <Button size="sm" variant="ghost" onClick={() => openWa(d)} className="text-green-500 h-7 px-2" title="Send WhatsApp notification">
+                                <MessageSquare className="h-3.5 w-3.5" />
+                              </Button>
+                              {!d.received_confirmed && (
+                                <Button size="sm" variant="ghost" onClick={() => markReceived(d.dispatch_id)} className="text-[#e94560] h-7 px-2" title="Mark as received">
+                                  <CheckCircle className="h-3.5 w-3.5" />
+                                </Button>
+                              )}
+                            </>
                           )}
                         </td>
                       </tr>

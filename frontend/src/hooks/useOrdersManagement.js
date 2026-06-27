@@ -68,10 +68,10 @@ export default function useOrdersManagement() {
       const [or, hr, dr, di] = await Promise.all([
         ordersApi.getAll(), holdsApi.getAll(), dispatchesApi.getAll(), diesApi.getAll(),
       ]);
-      setOrdersList(or.data);
-      setHoldsList(hr.data);
-      setDispatchList(dr.data);
-      setDiesList((di.data || []).filter(d => d.is_active !== false));
+      setOrdersList(Array.isArray(or.data) ? or.data : []);
+      setHoldsList(Array.isArray(hr.data) ? hr.data : []);
+      setDispatchList(Array.isArray(dr.data) ? dr.data : []);
+      setDiesList((Array.isArray(di.data) ? di.data : []).filter(d => d.is_active !== false));
     } catch { toast.error('Failed to load orders'); }
     finally { setLoading(false); }
   };
@@ -119,7 +119,7 @@ export default function useOrdersManagement() {
     try {
       const res = await quotApi.getAll();
       const existing = ordersList.map(o => o.quotation_id);
-      setPendingQuots(res.data.filter(q =>
+      setPendingQuots((Array.isArray(res.data) ? res.data : []).filter(q =>
         (q.catalogue_status === 'submitted' || q.quotation_status === 'pending' || q.quotation_status === 'confirmed') &&
         !existing.includes(q.quotation_id)
       ));

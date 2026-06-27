@@ -18,7 +18,7 @@ export function useSalesLeads() {
   const fetchLeads = async () => {
     try {
       const res = await leadsApi.getAll();
-      setLeads(res.data || []);
+      setLeads(Array.isArray(res.data) ? res.data : []);
     } catch {
       toast.error('Failed to load leads');
     } finally {

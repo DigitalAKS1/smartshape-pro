@@ -35,7 +35,7 @@ export function useTodayDashboard() {
     else setRefreshing(true);
     try {
       const r = await todayActions.get();
-      setData(r.data);
+      setData(r.data && typeof r.data === 'object' && !Array.isArray(r.data) ? r.data : {});
     } catch {
       toast.error('Failed to load today actions');
     } finally {

@@ -25,9 +25,10 @@ export default function useQuotations() {
   const loadData = useCallback(async () => {
     try {
       const [qRes, spRes] = await Promise.all([quotApi.getAll(), salesPersons.getAll()]);
-      setQuotations(qRes.data);
-      setFiltered(qRes.data);
-      setAgentList(spRes.data || []);
+      const qList = Array.isArray(qRes.data) ? qRes.data : [];
+      setQuotations(qList);
+      setFiltered(qList);
+      setAgentList(Array.isArray(spRes.data) ? spRes.data : []);
     } catch {
       toast.error('Failed to load quotations');
     } finally {
@@ -40,7 +41,7 @@ export default function useQuotations() {
   useAutoRefresh(loadData, 60000);
 
   useEffect(() => {
-    let f = quotations;
+    let f = Array.isArray(quotations) ? quotations : [];
     if (statusFilter !== 'all') f = f.filter(q => q.quotation_status === statusFilter);
     if (agentFilter !== 'all')  f = f.filter(q => q.sales_person_id === agentFilter || q.sales_person_email === agentFilter);
     if (dateFrom) f = f.filter(q => q.created_at >= dateFrom);

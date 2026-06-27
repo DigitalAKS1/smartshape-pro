@@ -33,7 +33,7 @@ export default function Payroll() {
   const fetchTripDetails = async (salesPersonEmail, monthYear) => {
     try {
       const res = await expenses.getAll(monthYear);
-      const personExpenses = res.data.filter(e => e.sales_person_email === salesPersonEmail);
+      const personExpenses = (Array.isArray(res.data) ? res.data : []).filter(e => e.sales_person_email === salesPersonEmail);
       setTripDetails({ ...tripDetails, [salesPersonEmail]: personExpenses });
     } catch (error) {
       console.error('Error fetching trip details:', error);

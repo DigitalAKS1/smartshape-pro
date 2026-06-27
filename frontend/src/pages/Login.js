@@ -20,8 +20,10 @@ export default function Login() {
   const [loading, setLoading]       = useState(false);
   const [deviceCode, setDeviceCode] = useState('');
 
-  const hasAccess = user && (user.role === 'admin' || (user.assigned_modules && user.assigned_modules.length > 0));
-  if (hasAccess) return <Navigate to="/" replace />;
+  // Fail-open: any authenticated user is sent into the app. Module-based routing
+  // (incl. legacy no-module users → full access) is handled by SmartRedirect /
+  // ProtectedRoute, so we must not strand a logged-in user on the login screen.
+  if (user) return <Navigate to="/" replace />;
 
   const handleSubmit = async (e) => {
     e?.preventDefault();

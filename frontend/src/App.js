@@ -146,7 +146,7 @@ function SmartRedirect() {
   for (const mod of userModules) {
     if (ROUTE_FOR_MODULE[mod]) return <Navigate to={ROUTE_FOR_MODULE[mod]} replace />;
   }
-  // No modules at all — show dashboard which will show "No Access" via ProtectedRoute
+  // No modules at all — legacy user, treated as full access (fail-open); land on dashboard.
   return <Navigate to="/dashboard" replace />;
 }
 
