@@ -108,6 +108,25 @@ Push is optional — the app runs without it (login/attendance/leads all work);
 
 ## 7. Verified
 
-> Pending: run section 4 (`flutter test`) and the manual smoke checklist in
-> `docs/superpowers/plans/2026-06-28-flutter-sales-mobile-app-phase1.md` (Task 18)
-> once the Flutter SDK is installed. Record results here.
+On **Flutter 3.44.4 / Dart 3.12.2** (Windows, JDK 17, Android SDK 35+36):
+
+- `flutter analyze` → **No issues found**
+- `flutter test` → **16/16 passing**
+- `flutter build web` → **success**
+- `flutter build apk --debug` → **success** (`build/app/outputs/flutter-apk/app-debug.apk`, ~151 MB debug)
+
+### Toolchain on this machine
+Flutter is at `C:\flutter`, Android SDK at `C:\Android` (`ANDROID_HOME`), JDK 17 at
+`C:\Program Files\Microsoft\jdk-17.0.19.10-hotspot` (`JAVA_HOME`). All added to the
+user PATH. `flutter doctor`: Android toolchain ✓, Chrome ✓ (Visual Studio C++ is the
+only red item — irrelevant unless you build the Windows desktop target).
+
+### Android build notes (already applied in `android/`)
+This box has ~8 GB RAM, so `android/gradle.properties` caps the Gradle heap at
+`-Xmx1536m` (the default 8 GB OOM-crashes the daemon) and sets `kotlin.incremental=false`
+(a Windows incremental-cache file-lock under a path containing spaces). `app/build.gradle.kts`
+enables core-library desugaring (required by `flutter_local_notifications`).
+
+> Still pending: the manual on-device smoke checklist in
+> `docs/superpowers/plans/2026-06-28-flutter-sales-mobile-app-phase1.md` (Task 18) —
+> needs a running backend + a device/emulator.
