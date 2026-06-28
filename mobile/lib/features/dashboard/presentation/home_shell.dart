@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import '../../attendance/presentation/attendance_screen.dart';
 import '../../leads/presentation/leads_list_screen.dart';
 import '../../notifications/presentation/notifications_screen.dart';
+import '../../tasks/presentation/tasks_screen.dart';
 import 'dashboard_screen.dart';
 
 /// Bottom-navigation shell. [tab] picks the active destination; tapping a
@@ -12,14 +13,15 @@ class HomeShell extends ConsumerWidget {
   const HomeShell({super.key, required this.tab});
   final int tab;
 
-  static const _routes = ['/dashboard', '/leads', '/attendance', '/notifications'];
+  static const _routes = ['/dashboard', '/leads', '/tasks', '/attendance', '/notifications'];
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final body = switch (tab) {
       1 => const LeadsListScreen(),
-      2 => const AttendanceScreen(),
-      3 => const NotificationsScreen(),
+      2 => const TasksScreen(),
+      3 => const AttendanceScreen(),
+      4 => const NotificationsScreen(),
       _ => const DashboardScreen(),
     };
     return Scaffold(
@@ -30,6 +32,7 @@ class HomeShell extends ConsumerWidget {
         destinations: const [
           NavigationDestination(icon: Icon(Icons.dashboard_outlined), label: 'Home'),
           NavigationDestination(icon: Icon(Icons.people_outline), label: 'Leads'),
+          NavigationDestination(icon: Icon(Icons.checklist_outlined), label: 'Tasks'),
           NavigationDestination(icon: Icon(Icons.location_on_outlined), label: 'Attend'),
           NavigationDestination(
               icon: Icon(Icons.notifications_outlined), label: 'Alerts'),

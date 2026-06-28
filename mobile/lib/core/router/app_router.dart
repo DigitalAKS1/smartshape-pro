@@ -6,6 +6,8 @@ import '../../features/leads/data/lead_model.dart';
 import '../../features/leads/presentation/add_lead_screen.dart';
 import '../../features/leads/presentation/lead_detail_screen.dart';
 import '../../features/login/presentation/login_screen.dart';
+import '../../features/tasks/presentation/reminders_screen.dart';
+import '../../features/quotations/presentation/create_quotation_screen.dart';
 import '../auth/auth_providers.dart';
 import '../auth/auth_state.dart';
 
@@ -30,9 +32,14 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/login', builder: (_, __) => const LoginScreen()),
       GoRoute(path: '/dashboard', builder: (_, __) => const HomeShell(tab: 0)),
       GoRoute(path: '/leads', builder: (_, __) => const HomeShell(tab: 1)),
-      GoRoute(path: '/attendance', builder: (_, __) => const HomeShell(tab: 2)),
+      GoRoute(path: '/tasks', builder: (_, __) => const HomeShell(tab: 2)),
+      GoRoute(path: '/attendance', builder: (_, __) => const HomeShell(tab: 3)),
       GoRoute(
-          path: '/notifications', builder: (_, __) => const HomeShell(tab: 3)),
+          path: '/notifications', builder: (_, __) => const HomeShell(tab: 4)),
+      GoRoute(path: '/reminders', builder: (_, __) => const RemindersScreen()),
+      GoRoute(
+          path: '/quotations/new',
+          builder: (_, __) => const CreateQuotationScreen()),
       GoRoute(path: '/leads/add', builder: (_, __) => const AddLeadScreen()),
       GoRoute(
         path: '/leads/:id',

@@ -39,6 +39,24 @@ class DashboardScreen extends ConsumerWidget {
             children: [
               _AttendanceCard(summary: s),
               const SizedBox(height: 12),
+              Row(children: [
+                Expanded(
+                  child: _QuickAction(
+                    icon: Icons.request_quote_outlined,
+                    label: 'New quote',
+                    onTap: () => context.push('/quotations/new'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: _QuickAction(
+                    icon: Icons.alarm,
+                    label: 'Reminders',
+                    onTap: () => context.push('/reminders'),
+                  ),
+                ),
+              ]),
+              const SizedBox(height: 12),
               _TargetCard(progress: s.targetProgress),
               const SizedBox(height: 12),
               Row(children: [
@@ -126,6 +144,33 @@ class _TargetCard extends StatelessWidget {
   }
 
   String _fmt(double v) => v >= 1000 ? '${(v / 1000).toStringAsFixed(1)}k' : v.toStringAsFixed(0);
+}
+
+class _QuickAction extends StatelessWidget {
+  const _QuickAction({required this.icon, required this.label, required this.onTap});
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
+          child: Row(
+            children: [
+              Icon(icon, color: AppTheme.navy),
+              const SizedBox(width: 10),
+              Text(label, style: const TextStyle(fontWeight: FontWeight.w600)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _MiniStat extends StatelessWidget {

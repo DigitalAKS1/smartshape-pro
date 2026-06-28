@@ -20,6 +20,16 @@ class Endpoints {
   static const String followups = '/followups';
   static const String crmNotifications = '/crm/notifications';
 
+  // Delegation / My Tasks (Phase 2)
+  static const String myInstances = '/delegation/my-instances';
+  static const String reminders = '/delegation/reminders';
+  static String instanceComplete(String id) => '/delegation/instances/$id/complete';
+  static String instanceReport(String id) => '/delegation/instances/$id/report';
+  static String reminder(String id) => '/delegation/reminders/$id';
+
+  // Quotations (Phase 2)
+  static const String quotations = '/quotations';
+
   // Push (mobile FCM)
   static const String fcmRegister = '/push/fcm/register';
   static const String fcmUnregister = '/push/fcm/unregister';
