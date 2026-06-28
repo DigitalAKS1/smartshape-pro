@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Sun, Moon, X, LogOut, CalendarDays, ChevronDown } from 'lucide-react';
+import { Sun, Moon, X, LogOut, CalendarDays, ChevronDown, Smartphone } from 'lucide-react';
 import { useTheme } from '../../contexts/ThemeContext';
 import NotificationBell from './NotificationBell';
 import { TODAY_ITEM } from './AdminNavItems';
@@ -176,6 +176,19 @@ export default function AdminSidebar({ sidebarGroups, user, initials, onClose, o
           </div>
         </div>
       </nav>
+
+      {/* Get the mobile app */}
+      <div className="flex-shrink-0 px-3 pt-2">
+        <Link
+          to="/get-app"
+          onClick={onClose}
+          className="flex items-center gap-2.5 px-2 py-2 rounded-lg text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--accent)] transition-colors"
+          title="Download the mobile app"
+        >
+          <Smartphone className="h-4 w-4 flex-shrink-0" />
+          <span className="text-[12px] font-semibold">Get the mobile app</span>
+        </Link>
+      </div>
 
       {/* User footer */}
       <div className="flex-shrink-0 px-3 py-3 border-t border-[var(--border-color)]">

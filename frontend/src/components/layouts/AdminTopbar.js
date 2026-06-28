@@ -1,5 +1,5 @@
 import React from 'react';
-import { Menu, Sun, Moon } from 'lucide-react';
+import { Menu, Sun, Moon, Smartphone } from 'lucide-react';
 import { useTheme } from '../../contexts/ThemeContext';
 import { getPageTitle } from './AdminNavItems';
 import { useLocation } from 'react-router-dom';
@@ -38,8 +38,15 @@ export default function AdminTopbar({ initials, onMenuOpen }) {
         {getPageTitle(location.pathname)}
       </span>
 
-      {/* Right: theme toggle + avatar */}
+      {/* Right: get-app + theme toggle + avatar */}
       <div className="flex items-center gap-1 -mr-1">
+        <a
+          href="/get-app"
+          title="Get the mobile app"
+          className="w-9 h-9 flex items-center justify-center rounded-xl text-[var(--text-muted)] hover:bg-[var(--bg-hover)] hover:text-[var(--accent)] transition-colors"
+        >
+          <Smartphone className="h-4 w-4" />
+        </a>
         <button
           onClick={toggleTheme}
           className="w-9 h-9 flex items-center justify-center rounded-xl text-[var(--text-muted)] hover:bg-[var(--bg-hover)] transition-colors"

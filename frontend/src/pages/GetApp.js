@@ -17,6 +17,7 @@ export default function GetApp() {
   const [installing, setInstalling] = useState(false);
   const [step, setStep] = useState(0); // for iOS stepper animation
   const [copied, setCopied] = useState(false);
+  const [apk, setApk] = useState({ available: false }); // native Android app
 
   const platform = isIOS ? 'ios' : isAndroid ? 'android' : 'desktop';
   const appUrl = `${window.location.origin}/get-app`;
@@ -31,6 +32,14 @@ export default function GetApp() {
     }).catch(() => {});
     return () => { document.title = 'SmartShape Pro'; };
   }, [platform]);
+
+  // Check whether the native Android APK is available to download
+  useEffect(() => {
+    fetch('/api/app/android/info')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (d) setApk(d); })
+      .catch(() => {});
+  }, []);
 
   // Capture Android install prompt + appinstalled event
   useEffect(() => {
@@ -109,6 +118,29 @@ export default function GetApp() {
         <p className="text-white/50 text-sm text-center mb-8">
           Your school CRM, field visits, quotations, and marketing — all in one place.
         </p>
+
+        {/* Native Android app download (APK) — not shown on iOS (can't sideload) */}
+        {!isIOS && apk.available && (
+          <div className="w-full mb-6">
+            <a
+              href="/api/app/android"
+              onClick={() => {
+                fetch('/api/app-installs', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ platform: 'android', action: 'apk_download' }),
+                }).catch(() => {});
+              }}
+              className="w-full h-14 rounded-2xl bg-gradient-to-r from-[#123c69] to-[#1d5a9e] text-white font-bold text-base flex items-center justify-center gap-3 shadow-xl shadow-[#123c69]/30 active:scale-95 transition-transform"
+            >
+              <Download className="h-5 w-5" />
+              Download Android app{apk.size_mb ? ` · ${apk.size_mb} MB` : ''}
+            </a>
+            <p className="text-white/35 text-[11px] text-center mt-2">
+              Android only. After downloading, tap the file and allow “Install from this source”.
+            </p>
+          </div>
+        )}
 
         {/* Already installed */}
         {installed ? (
