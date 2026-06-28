@@ -724,6 +724,20 @@ async def list_instances(
     return await db.del_task_instances.find(q, {"_id": 0}).sort("due_date", -1).to_list(2000)
 
 
+@router.get("/my-instances")
+async def list_my_instances(request: Request, status: Optional[str] = "pending"):
+    """The logged-in user's own task instances (resolves email -> delegation employee).
+    Convenience endpoint for the mobile app so it doesn't need to look up emp_id first."""
+    user = await get_current_user(request)
+    actor = await _resolve_actor(user)
+    if not actor.get("emp_id"):
+        return []
+    q = {"emp_id": actor["emp_id"]}
+    if status:
+        q["status"] = status
+    return await db.del_task_instances.find(q, {"_id": 0}).sort("due_date", 1).to_list(500)
+
+
 @router.get("/calendar")
 async def get_calendar(
     request: Request,

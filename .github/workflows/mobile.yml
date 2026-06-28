@@ -1,0 +1,61 @@
+name: Mobile (Flutter)
+
+# Builds the SmartShape Sales app. Android produces an installable APK artifact;
+# iOS is compiled (no code signing) to verify it builds — a Mac is not required
+# locally because GitHub provides macOS runners.
+
+on:
+  push:
+    branches: [main, feat/module-rbac]
+    paths: ["mobile/**", ".github/workflows/mobile.yml"]
+  pull_request:
+    paths: ["mobile/**", ".github/workflows/mobile.yml"]
+  workflow_dispatch:
+
+env:
+  FLUTTER_VERSION: "3.44.4"
+  API_BASE_URL: "https://app.smartshape.in"
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test
+      - run: flutter build apk --release --dart-define=API_BASE_URL=${{ env.API_BASE_URL }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: smartshape-android-apk
+          path: mobile/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+
+  ios:
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      # No code signing: verifies the iOS app compiles. Signed IPA / TestFlight
+      # needs an Apple Developer account + certificates (add as CI secrets later).
+      - run: flutter build ios --release --no-codesign --dart-define=API_BASE_URL=${{ env.API_BASE_URL }}
