@@ -290,6 +290,11 @@ async def login(input: LoginInput, response: Response, request: Request):
 
     user_data = await db.users.find_one({"email": email}, {"_id": 0, "password_hash": 0})
 
+    # Mobile clients use Bearer auth and read the tokens from the body. The web app
+    # ignores these fields and keeps using the httpOnly cookies set above.
+    user_data["access_token"] = access_token
+    user_data["refresh_token"] = refresh_token
+
     # Log login event
     await db.login_logs.insert_one({
         "log_id":     f"ll_{uuid.uuid4().hex[:12]}",
@@ -383,6 +388,9 @@ async def refresh_tokens(request: Request, response: Response):
         response.set_cookie(key="access_token", value=access_token, max_age=86400, **_COOKIE_KWARGS)
         response.set_cookie(key="refresh_token", value=new_refresh_token, max_age=2592000, **_COOKIE_KWARGS)
 
+        # Mobile (Bearer auth) reads the rotated tokens from the body; web uses cookies.
+        user["access_token"] = access_token
+        user["refresh_token"] = new_refresh_token
         return user
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Refresh token expired")

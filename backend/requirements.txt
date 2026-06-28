@@ -34,6 +34,9 @@ aiohttp==3.13.0
 # Web Push (PWA push notifications)
 pywebpush==2.0.0
 
+# Native push (FCM -> Android/APNs) for the mobile app
+firebase-admin>=6.5.0
+
 # WebSocket
 websockets==16.0
 

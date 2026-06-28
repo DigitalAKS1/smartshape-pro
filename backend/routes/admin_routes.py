@@ -15,8 +15,9 @@ from audit_backup import list_backups, restore_bundle
 # Lazy import to avoid circular dependency — push_routes imports from database only
 async def _push(email, title, body, url="/today", tag="general"):
     try:
-        from routes.push_routes import send_push_to_user
-        await send_push_to_user(email, title, body, url, tag)
+        # Fan out to both web push (browsers) and native FCM (mobile app).
+        from routes.push_routes import notify_user
+        await notify_user(email, title, body, url, tag)
     except Exception:
         pass
 
