@@ -13,3 +13,6 @@ android/app/google-services.json
 ios/Runner/GoogleService-Info.plist
 **/firebase_service_account*.json
 .env
+
+# Kotlin build artifacts
+android/.kotlin/
