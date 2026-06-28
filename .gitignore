@@ -81,10 +81,11 @@ chainlit.md
 agenthub/agents/youtube/db
 
 # Old codebases / internal tooling — not part of the deployed app
-AAP/
-app/
-memory/
-test_reports/
+# (anchored to repo root so they don't match nested dirs like mobile/android/app)
+/AAP/
+/app/
+/memory/
+/test_reports/
 backend_test.py
 tests/
 
