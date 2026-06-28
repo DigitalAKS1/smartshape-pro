@@ -70,7 +70,7 @@ class AuthController extends StateNotifier<AuthState> {
       );
       return false;
     } catch (e) {
-      state = AuthState(
+      state = const AuthState(
         status: AuthStatus.unauthenticated,
         errorMessage: 'Something went wrong. Please try again.',
       );

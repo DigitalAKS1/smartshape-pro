@@ -143,7 +143,7 @@ class _LeadDetailScreenState extends ConsumerState<LeadDetailScreen> {
           const Text('Stage', style: TextStyle(fontWeight: FontWeight.bold)),
           const SizedBox(height: 6),
           DropdownButtonFormField<String>(
-            value: _stages.contains(_stage) ? _stage : null,
+            initialValue: _stages.contains(_stage) ? _stage : null,
             items: _stages
                 .map((s) => DropdownMenuItem(value: s, child: Text(s)))
                 .toList(),

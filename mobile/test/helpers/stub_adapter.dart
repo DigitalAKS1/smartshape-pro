@@ -17,8 +17,10 @@ class StubAdapter implements HttpClientAdapter {
     Future<void>? cancelFuture,
   ) async {
     final (status, body) = handler(options);
+    // Encode the body as-is so a `null` body round-trips to JSON null (the
+    // backend returns null for e.g. "no attendance today"), not {}.
     return ResponseBody.fromString(
-      jsonEncode(body ?? {}),
+      jsonEncode(body),
       status,
       headers: {
         Headers.contentTypeHeader: [Headers.jsonContentType],
