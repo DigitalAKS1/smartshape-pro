@@ -26,7 +26,7 @@ class _SmartShapeAppState extends ConsumerState<SmartShapeApp> {
     final status = ref.watch(authControllerProvider).status;
     if (status == AuthStatus.unknown) {
       return MaterialApp(
-        title: 'SmartShape Sales',
+        title: 'Smartshape',
         theme: AppTheme.light,
         debugShowCheckedModeBanner: false,
         home: const Scaffold(
@@ -36,7 +36,7 @@ class _SmartShapeAppState extends ConsumerState<SmartShapeApp> {
       );
     }
     return MaterialApp.router(
-      title: 'SmartShape Sales',
+      title: 'Smartshape',
       theme: AppTheme.light,
       debugShowCheckedModeBanner: false,
       routerConfig: ref.watch(appRouterProvider),

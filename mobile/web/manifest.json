@@ -1,11 +1,11 @@
 {
-    "name": "smartshape_sales",
-    "short_name": "smartshape_sales",
+    "name": "Smartshape",
+    "short_name": "Smartshape",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "background_color": "#123C69",
+    "theme_color": "#123C69",
+    "description": "SmartShape Sales mobile app.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

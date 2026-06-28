@@ -28,8 +28,9 @@ import uuid
 from datetime import datetime, timezone
 from typing import Set
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from starlette.middleware.cors import CORSMiddleware
 
 from database import db, connect_db, close_db
@@ -121,6 +122,34 @@ app.mount("/uploads/whatsapp", StaticFiles(directory=_WA_UPLOADS), name="wa_uplo
 _CERT_UPLOADS = os.path.join(os.path.dirname(__file__), "uploads", "certificates")
 os.makedirs(_CERT_UPLOADS, exist_ok=True)
 app.mount("/uploads/certificates", StaticFiles(directory=_CERT_UPLOADS), name="cert_uploads")
+
+# ── Native Android app (APK) download ────────────────────────────────────────────
+# The release APK is committed at backend/app_dist/smartshape.apk and served here so
+# the web "Get the app" page can offer a direct download/install link.
+_APK_PATH = os.path.join(os.path.dirname(__file__), "app_dist", "smartshape.apk")
+
+
+@app.get("/api/app/android")
+async def download_android_apk():
+    if not os.path.exists(_APK_PATH):
+        raise HTTPException(status_code=404, detail="Android app is not available yet.")
+    return FileResponse(
+        _APK_PATH,
+        media_type="application/vnd.android.package-archive",
+        filename="Smartshape.apk",
+    )
+
+
+@app.get("/api/app/android/info")
+async def android_apk_info():
+    if not os.path.exists(_APK_PATH):
+        return {"available": False}
+    size = os.path.getsize(_APK_PATH)
+    return {
+        "available": True,
+        "size_mb": round(size / (1024 * 1024), 1),
+        "url": "/api/app/android",
+    }
 
 
 @app.get("/api/health")
