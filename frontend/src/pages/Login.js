@@ -5,7 +5,7 @@ import { useTheme } from '../contexts/ThemeContext';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
-import { LogIn, ArrowRight, Shield, ShieldOff, Monitor, Globe, RefreshCw, Sun, Moon, Eye, EyeOff } from 'lucide-react';
+import { LogIn, ArrowRight, Shield, ShieldOff, Monitor, Globe, RefreshCw, Sun, Moon, Eye, EyeOff, Smartphone } from 'lucide-react';
 import { getDeviceInfo } from '../utils/deviceService';
 
 export default function Login() {
@@ -255,6 +255,15 @@ export default function Login() {
 
                 {/* Footer */}
                 <div className="space-y-3">
+                  {/* Download the mobile app */}
+                  <a
+                    href="/get-app"
+                    className="flex items-center justify-center gap-2 w-full h-11 rounded-xl border border-[#e94560]/40 text-[#e94560] font-semibold text-sm hover:bg-[#e94560]/10 transition-colors"
+                    data-testid="login-get-app"
+                  >
+                    <Smartphone className="h-4 w-4" />
+                    Download the mobile app
+                  </a>
                   <p className={`text-center text-xs ${textMuted}`}>
                     Contact your administrator to get access.
                   </p>
