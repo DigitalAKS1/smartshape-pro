@@ -69,6 +69,7 @@ export const MODULE_ROUTE_MAP = {
     { path: '/import-center', icon: Upload, label: 'Import Center' },
     { path: '/activity-logs', icon: Activity, label: 'Activity Logs' },
   ],
+  master_fields: { path: '/master-fields', icon: SlidersHorizontal, label: 'Master Fields' },
 };
 
 // Always-on home link — shown to every user regardless of granted modules.
@@ -83,7 +84,7 @@ export const SIDEBAR_SECTIONS = [
   { label: 'Finance & People',   modules: ['accounts', 'payroll', 'hr'] },
   { label: 'Operations',         modules: ['delegation', 'flow_management', 'analytics'] },
   { label: 'School Engagement',  modules: ['school_portal', 'certificates'] },
-  { label: 'Administration',     modules: ['user_management', 'settings'] },
+  { label: 'Administration',     modules: ['user_management', 'settings', 'master_fields'] },
 ];
 
 export const TEAM_MODULES = {
