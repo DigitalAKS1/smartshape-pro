@@ -4,6 +4,7 @@ import {
   Smartphone, Layers, IndianRupee, UserCog, Store, MapPin, Target,
   CalendarDays, Calendar, ShoppingCart, Upload, Activity,
   Home, MoreHorizontal, Zap, Heart, Truck, Award, Video, Trophy, Inbox, CalendarClock,
+  SlidersHorizontal,
 } from 'lucide-react';
 
 /**
