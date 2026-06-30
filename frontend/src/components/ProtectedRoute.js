@@ -35,6 +35,7 @@ const ROUTE_MODULE_MAP = {
   '/settings': 'settings',
   '/app-settings': 'settings',
   '/import-center': 'settings',
+  '/master-fields': 'settings',
   '/activity-logs': 'settings',
   '/user-management': 'user_management',
   '/module-master': 'user_management',

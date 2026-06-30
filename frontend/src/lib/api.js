@@ -774,6 +774,17 @@ export const importSystem = {
   template: (withIds) => API.get(`/import/template?with_ids=${withIds ? 'true' : 'false'}`),
 };
 
+// Dynamic master-data import (distinct paths to avoid the legacy /import shadow)
+export const masterImport = {
+  preview: (file, entityType) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    return API.post(`/master-import/preview?entity_type=${entityType}`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+  },
+  execute: (payload) => API.post('/master-import/execute', payload),
+  template: (withIds) => API.get(`/master-import/template?with_ids=${withIds ? 'true' : 'false'}`),
+};
+
 // Dynamic field definitions (used by master-data import)
 export const fields = {
   list:   (entity) => API.get(`/fields${entity ? `?entity=${entity}` : ''}`),

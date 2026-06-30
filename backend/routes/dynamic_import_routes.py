@@ -1,13 +1,16 @@
 """dynamic_import_routes.py — HTTP API for field definitions and master-data import.
 
 Exposes:
-  GET  /fields                   – list active field definitions (admin only)
-  POST /fields                   – create custom field (admin only)
-  PUT  /fields/{field_id}        – update field (admin only)
-  DELETE /fields/{field_id}      – soft-delete custom field (admin only)
-  POST /import/preview           – parse + propose mapping + resolve preview
-  POST /import/execute           – commit rows + learn aliases + write import_log
-  GET  /import/template          – downloadable template headers (+ existing ids)
+  GET  /fields                        – list active field definitions (admin only)
+  POST /fields                        – create custom field (admin only)
+  PUT  /fields/{field_id}             – update field (admin only)
+  DELETE /fields/{field_id}           – soft-delete custom field (admin only)
+  POST /master-import/preview         – parse + propose mapping + resolve preview
+  POST /master-import/execute         – commit rows + learn aliases + write import_log
+  GET  /master-import/template        – downloadable template headers (+ existing ids)
+
+Paths use /master-import/ prefix (not /import/) to avoid shadowing the legacy
+generic importer registered earlier in main.py under admin_router.
 """
 
 from datetime import datetime, timezone
@@ -78,7 +81,7 @@ def _key_rows(headers: list, rows: list, mapping: list) -> list:
 # Import preview
 # ---------------------------------------------------------------------------
 
-@router.post("/import/preview")
+@router.post("/master-import/preview")
 async def import_preview(
     file: UploadFile = File(...),
     entity_type: str = "school",
@@ -127,7 +130,7 @@ async def import_preview(
 # Import execute
 # ---------------------------------------------------------------------------
 
-@router.post("/import/execute")
+@router.post("/master-import/execute")
 async def import_execute(payload: dict, user: dict = Depends(get_current_user)):
     """Commit pre-mapped rows, learn confirmed aliases, and write an import_log.
 
@@ -175,7 +178,7 @@ async def import_execute(payload: dict, user: dict = Depends(get_current_user)):
 # Import template
 # ---------------------------------------------------------------------------
 
-@router.get("/import/template")
+@router.get("/master-import/template")
 async def import_template(
     with_ids: bool = False,
     user: dict = Depends(get_current_user),

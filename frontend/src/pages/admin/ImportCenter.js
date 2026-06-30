@@ -1,13 +1,12 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import AdminLayout from '../../components/layouts/AdminLayout';
-import { importSystem, fields as fieldsApi } from '../../lib/api';
+import { importSystem, masterImport, fields as fieldsApi } from '../../lib/api';
 import { Button } from '../../components/ui/button';
 import { toast } from 'sonner';
 import { Upload, CheckCircle, XCircle, FileText, Play, Clock, Download } from 'lucide-react';
 import ZoomCrmImport from '../../components/crm/ZoomCrmImport';
 
 export default function ImportCenter() {
-  const [entityType, setEntityType] = useState('contacts');
   const [preview, setPreview] = useState(null);
   const [mapping, setMapping] = useState([]);
   const [mapMode, setMapMode] = useState('auto'); // 'auto' | 'manual'
@@ -26,7 +25,7 @@ export default function ImportCenter() {
   const textSec = 'text-[var(--text-secondary)]';
   const textMuted = 'text-[var(--text-muted)]';
 
-  const COLS = { contacts: 'name, phone, email, company, designation, source, notes', schools: 'school_name, email, phone, school_type, city, state, contact_name, password', inventory: 'code, name, type, stock_qty, min_level, description' };
+  const SCHOOL_COLS = 'school_name, email, phone, school_type, city, state, contact_name, password';
 
   // Load all field definitions on mount
   useEffect(() => {
@@ -39,7 +38,7 @@ export default function ImportCenter() {
     if (!file) return;
     setPreview(null); setResult(null); setMapping([]); setSelectedSource(null);
     try {
-      const res = await importSystem.preview(file, entityType);
+      const res = await masterImport.preview(file, 'school');
       const data = res.data;
       setPreview(data);
       setMapping(data.mapping ? data.mapping.map(m => ({ ...m })) : []);
@@ -111,7 +110,7 @@ export default function ImportCenter() {
     setImporting(true);
     try {
       const rows_keyed = buildRowsKeyed();
-      const res = await importSystem.execute({ rows_keyed, mapping, create_leads: false });
+      const res = await masterImport.execute({ rows_keyed, mapping, create_leads: false });
       setResult(res.data);
       toast.success(`Import complete: ${res.data.counts?.create || 0} created, ${res.data.counts?.update || 0} updated`);
       setPreview(null); setMapping([]);
@@ -121,7 +120,7 @@ export default function ImportCenter() {
 
   const handleDownloadTemplate = async () => {
     try {
-      const res = await importSystem.template(true);
+      const res = await masterImport.template(true);
       const { headers, rows } = res.data;
       const lines = [headers.join(',')];
       (rows || []).forEach(r => {
@@ -166,19 +165,13 @@ export default function ImportCenter() {
 
         {activeTab === 'import' && (
           <div className="space-y-4">
-            {/* Step 1: Entity Type */}
+            {/* Step 1: Entity Type (school-only; master-data engine always fans out to School+Contact+Lead) */}
             <div className={`${card} border rounded-md p-5 space-y-4`}>
-              <h2 className={`text-lg font-medium ${textPri}`}>Step 1: Select Data Type</h2>
-              <div className="flex flex-wrap gap-2">
-                {['contacts', 'schools', 'inventory'].map(t => (
-                  <button key={t} onClick={() => { setEntityType(t); setPreview(null); setResult(null); setMapping([]); }}
-                    className={`px-4 py-2 rounded-md text-sm font-medium border transition-all capitalize ${entityType === t ? 'bg-[#e94560] text-white border-[#e94560]' : `${card} border ${textSec}`}`}
-                    data-testid={`entity-type-${t}`}>
-                    {t}
-                  </button>
-                ))}
+              <h2 className={`text-lg font-medium ${textPri}`}>Step 1: Data Type</h2>
+              <div className={`inline-flex items-center gap-2 px-4 py-2 rounded-md border text-sm font-medium bg-[#e94560] text-white border-[#e94560]`} data-testid="entity-type-school">
+                Importing: School master data (School + Contact + Lead)
               </div>
-              <p className={`text-xs ${textMuted}`}>Expected columns: <code className="bg-[var(--bg-primary)] px-1.5 py-0.5 rounded text-[11px]">{COLS[entityType]}</code></p>
+              <p className={`text-xs ${textMuted}`}>Expected columns: <code className="bg-[var(--bg-primary)] px-1.5 py-0.5 rounded text-[11px]">{SCHOOL_COLS}</code></p>
             </div>
 
             {/* Step 2: Upload */}
