@@ -108,3 +108,90 @@ async def list_fields(db, entity: str = None) -> list:
     if entity:
         q["entity"] = entity
     return [d async for d in db.field_definitions.find(q, {"_id": 0}).sort("order", 1)]
+
+
+# ---------------------------------------------------------------------------
+# Task 2: Field CRUD + merge_fields
+# ---------------------------------------------------------------------------
+
+def _key_from_label(label: str) -> str:
+    k = re.sub(r"[^a-z0-9]+", "_", (label or "").strip().lower()).strip("_")
+    return k or f"field_{uuid.uuid4().hex[:6]}"
+
+
+async def create_field(db, payload: dict, user: dict) -> dict:
+    """Insert a new custom (non-core) field definition.
+
+    Raises ValueError if a field with the derived key already exists.
+    """
+    key = payload.get("key") or _key_from_label(payload["label"])
+    if await db.field_definitions.find_one({"key": key}):
+        raise ValueError(f"field key exists: {key}")
+    doc = {
+        "field_id":   new_field_id(),
+        "key":        key,
+        "label":      payload["label"],
+        "entity":     payload.get("entity", "school"),
+        "type":       payload.get("type", "text"),
+        "options":    payload.get("options", []),
+        "required":   bool(payload.get("required")),
+        "is_unique":  False,
+        "is_core":    False,
+        "maps_to":    None,
+        "aliases":    [normalize_header(payload["label"])],
+        "group":      payload.get("group", "Custom"),
+        "order":      900,
+        "is_active":  True,
+        "created_by": user.get("email", "?"),
+        "created_at": _now(),
+    }
+    await db.field_definitions.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+async def update_field(db, field_id: str, patch: dict) -> dict:
+    """Update an existing field definition.
+
+    Core fields may only have label/options/group/order/required changed.
+    Custom fields additionally allow type changes.
+    Raises ValueError if the field is not found.
+    """
+    f = await db.field_definitions.find_one({"field_id": field_id})
+    if not f:
+        raise ValueError("not found")
+    allowed = {"label", "options", "group", "order", "required"}
+    if not f["is_core"]:
+        allowed |= {"type"}
+    upd = {k: v for k, v in patch.items() if k in allowed}
+    if upd:
+        await db.field_definitions.update_one({"field_id": field_id}, {"$set": upd})
+    result = {**f, **upd}
+    result.pop("_id", None)
+    return result
+
+
+async def soft_delete_field(db, field_id: str) -> None:
+    """Mark a custom field as inactive (is_active=False).
+
+    Raises ValueError for core fields — they cannot be deleted.
+    Raises ValueError if the field is not found.
+    """
+    f = await db.field_definitions.find_one({"field_id": field_id})
+    if not f:
+        raise ValueError("not found")
+    if f["is_core"]:
+        raise ValueError("cannot delete core field")
+    await db.field_definitions.update_one(
+        {"field_id": field_id}, {"$set": {"is_active": False}}
+    )
+
+
+def merge_fields(doc: dict) -> dict:
+    """Flatten custom_fields dict onto the top-level document dict.
+
+    Strips _id and custom_fields keys from the result.
+    """
+    out = {k: v for k, v in doc.items() if k not in ("custom_fields", "_id")}
+    out.update(doc.get("custom_fields") or {})
+    return out
