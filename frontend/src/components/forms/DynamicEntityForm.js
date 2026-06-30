@@ -38,6 +38,30 @@ export default function DynamicEntityForm({ entity = 'school', value = {}, onCha
               <option value="">—</option>
               {(f.options || []).map(o => <option key={o} value={o}>{o}</option>)}
             </select>
+          ) : f.type === 'multiselect' ? (
+            <div className="flex flex-wrap gap-2 mt-1">
+              {(f.options || []).map(o => {
+                const arr = Array.isArray(value[f.key]) ? value[f.key] : [];
+                const on = arr.includes(o);
+                return (
+                  <label key={o} className="flex items-center gap-1 text-sm text-[var(--text-primary)]">
+                    <input
+                      type="checkbox"
+                      checked={on}
+                      onChange={() => set(f.key, on ? arr.filter(x => x !== o) : [...arr, o])}
+                    />
+                    {o}
+                  </label>
+                );
+              })}
+            </div>
+          ) : f.type === 'boolean' ? (
+            <input
+              type="checkbox"
+              className="mt-2 block"
+              checked={!!value[f.key]}
+              onChange={e => set(f.key, e.target.checked)}
+            />
           ) : (
             <Input
               type={
@@ -45,6 +69,7 @@ export default function DynamicEntityForm({ entity = 'school', value = {}, onCha
                 f.type === 'date'   ? 'date'   :
                 f.type === 'email'  ? 'email'  :
                 f.type === 'url'    ? 'url'    :
+                f.type === 'phone'  ? 'tel'    :
                 'text'
               }
               value={value[f.key] || ''}

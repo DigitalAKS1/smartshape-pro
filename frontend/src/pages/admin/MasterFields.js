@@ -106,6 +106,7 @@ export default function MasterFields() {
             <button
               key={e}
               onClick={() => setEntity(e)}
+              translate="no"
               className={`flex-shrink-0 px-4 py-2 rounded text-sm font-medium capitalize whitespace-nowrap transition-all ${
                 entity === e
                   ? 'bg-[#e94560] text-white shadow-sm'
