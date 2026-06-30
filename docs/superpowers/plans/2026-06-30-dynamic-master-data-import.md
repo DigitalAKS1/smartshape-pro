@@ -990,9 +990,26 @@ def test_end_to_end_idempotent(client):
 Run: `cd backend && DB_NAME=smartshape_test python -m pytest tests/test_import_endpoints.py::test_end_to_end_idempotent -v`
 Expected: PASS (engine already built; this locks the contract the UI depends on).
 
-- [ ] **Step 3: Extend `ImportCenter.js`** — accept `.xlsx`, render mapping step
+- [ ] **Step 3: Extend `ImportCenter.js`** — accept `.xlsx`, render mapping step (auto + manual 1-to-1 modes)
 
-Change the file input `accept=".csv"` → `accept=".csv,.xlsx"` (per `ImportCenter.js:92`). After `importSystem.preview` returns, render a mapping table before execute:
+Change the file input `accept=".csv"` → `accept=".csv,.xlsx"` (per `ImportCenter.js:92`). After `importSystem.preview` returns, render a mapping UI with a mode toggle:
+
+**Mode A — Auto map (default):** the per-row mapping table below (each source column → field dropdown + confidence dot). This is the auto-mapper output, editable.
+
+**Mode B — Manual 1-to-1 (owner-requested):** a side-by-side two-pane picker for full hands-on control —
+- **Table 1 (left):** the uploaded sheet's columns (`preview.headers`), each a selectable row.
+- **Table 2 (right):** our registered fields (`allFields`, grouped School/Contact/Lead), each a selectable row.
+- Click a left column, then a right field → creates a link (writes that source's `key` in the mapping). A field already linked is shown disabled/greyed so it **cannot be picked twice (enforced 1-to-1)**. Linked pairs render in a "Mapped" list with an ✕ to unlink. Unlinked left columns are treated as "ignore".
+- A "Switch to Auto" / "Switch to Manual" button toggles modes; both modes write the same `mapping[]` shape (`{source, field_id, key, confidence}`, confidence `"manual"` for hand-linked), so `runExecute` is unchanged.
+
+```jsx
+// shared mode state
+const [mapMode, setMapMode] = useState('auto');           // 'auto' | 'manual'
+const usedKeys = new Set(preview.mapping.filter(m => m.key).map(m => m.key));
+const linkManual = (source, field) => updateMapByKey(source, field.key, field.field_id, 'manual');
+```
+
+Then the auto-mode table:
 ```jsx
 {preview && (
   <div className="space-y-2">
