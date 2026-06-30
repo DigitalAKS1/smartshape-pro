@@ -27,23 +27,25 @@ def parse_table(filename: str, content: bytes) -> tuple[list[str], list[dict]]:
 
     if name.endswith((".xlsx", ".xlsm")):
         wb = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
-        ws = wb.active
-        rows_iter = ws.iter_rows(values_only=True)
-        headers = [
-            str(h).strip() if h is not None else ""
-            for h in next(rows_iter, [])
-        ]
-        rows = []
-        for r in rows_iter:
-            if r is None or all(c is None for c in r):
-                continue
-            rows.append({
-                headers[i]: ("" if v is None else str(v)).strip()
-                for i, v in enumerate(r)
-                if i < len(headers) and headers[i]
-            })
-        wb.close()
-        return headers, rows
+        try:
+            ws = wb.active
+            rows_iter = ws.iter_rows(values_only=True)
+            headers = [
+                str(h).strip() if h is not None else ""
+                for h in next(rows_iter, [])
+            ]
+            rows = []
+            for r in rows_iter:
+                if r is None or all(c is None for c in r):
+                    continue
+                rows.append({
+                    headers[i]: ("" if v is None else str(v)).strip()
+                    for i, v in enumerate(r)
+                    if i < len(headers) and headers[i]
+                })
+            return headers, rows
+        finally:
+            wb.close()
 
     # CSV with encoding fallback (mirrors crm_routes.py encoding pattern)
     text = None
