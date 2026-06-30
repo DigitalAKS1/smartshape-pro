@@ -7,6 +7,7 @@ Task 3: parse_table(filename, content) -> (headers, rows)
 """
 import csv
 import io
+import re as _re
 from difflib import SequenceMatcher
 
 from openpyxl import load_workbook
@@ -117,3 +118,58 @@ async def propose_mapping(db, headers: list) -> list:
             out.append({"source": h, "field_id": None, "key": None, "confidence": "none"})
 
     return out
+
+
+# ---------------------------------------------------------------------------
+# Task 5: Row resolver — school identity match
+# ---------------------------------------------------------------------------
+async def resolve_school(db, values: dict) -> dict:
+    """Match a mapped row dict to an existing school record.
+
+    Match precedence:
+      1. values["school_id"] present and non-deleted school exists → update
+      2. school_name (case-insensitive exact), optionally narrowed by city
+         1 match → update, ≥2 → needs_review
+      3. school_phone / phone exact match
+         1 match → update, ≥2 → needs_review
+      4. no match → create
+
+    Returns:
+        {"action": "create"|"update"|"needs_review", "school_id": str|None, "candidates": int}
+    """
+    sid = (values.get("school_id") or "").strip()
+    if sid:
+        hit = await db.schools.find_one(
+            {"school_id": sid, "is_deleted": {"$ne": True}},
+            {"_id": 0, "school_id": 1},
+        )
+        if hit:
+            return {"action": "update", "school_id": sid, "candidates": 1}
+
+    name = (values.get("school_name") or "").strip()
+    city = (values.get("city") or "").strip()
+    if name:
+        q: dict = {
+            "school_name": {"$regex": f"^{_re.escape(name)}$", "$options": "i"},
+            "is_deleted": {"$ne": True},
+        }
+        if city:
+            q["city"] = {"$regex": f"^{_re.escape(city)}$", "$options": "i"}
+        cands = [d async for d in db.schools.find(q, {"_id": 0, "school_id": 1})]
+        if len(cands) == 1:
+            return {"action": "update", "school_id": cands[0]["school_id"], "candidates": 1}
+        if len(cands) >= 2:
+            return {"action": "needs_review", "school_id": None, "candidates": len(cands)}
+
+    phone = (values.get("school_phone") or values.get("phone") or "").strip()
+    if phone:
+        cands = [d async for d in db.schools.find(
+            {"phone": phone, "is_deleted": {"$ne": True}},
+            {"_id": 0, "school_id": 1},
+        )]
+        if len(cands) == 1:
+            return {"action": "update", "school_id": cands[0]["school_id"], "candidates": 1}
+        if len(cands) >= 2:
+            return {"action": "needs_review", "school_id": None, "candidates": len(cands)}
+
+    return {"action": "create", "school_id": None, "candidates": 0}
