@@ -250,6 +250,9 @@ async def commit_row(db, row_keyed: dict, user: dict, create_leads: bool) -> dic
     sid = res["school_id"]
     user_email = user.get("email", "import")
 
+    # Derive lead owner from the row (used for I-1 visibility stamping)
+    row_owner = parts["lead"].get("assigned_to", "")
+
     if res["action"] == "create":
         sid = f"sch_{_uuid.uuid4().hex[:12]}"
         doc = {
@@ -260,6 +263,9 @@ async def commit_row(db, row_keyed: dict, user: dict, create_leads: bool) -> dic
             "custom_fields": parts["custom"]["school"],
             **parts["school"],
         }
+        # I-1: stamp assigned_to on new school so rep can see it
+        if row_owner:
+            doc["assigned_to"] = row_owner
         await db.schools.insert_one(doc)
     else:
         # Snapshot existing doc before overwriting (safety-critical — never skip)
@@ -277,14 +283,20 @@ async def commit_row(db, row_keyed: dict, user: dict, create_leads: bool) -> dic
         upd["last_activity_date"] = _now()
         await db.schools.update_one({"school_id": sid}, {"$set": upd})
 
-    # ---- contact: dedup by {school_id, phone} (mirrors crm_routes.py:2015) ----
+    # ---- contact: dedup by {school_id, phone} then {school_id, name} (I-2) ----
     cid = None
     phone = parts["contact"].get("phone", "")
-    if parts["contact"].get("name") or phone:
-        existing_contact = (
-            await db.contacts.find_one({"school_id": sid, "phone": phone})
-            if phone else None
-        )
+    contact_name = parts["contact"].get("name", "")
+    if contact_name or phone:
+        existing_contact = None
+        if phone:
+            # Primary dedup: by phone within school (mirrors crm_routes.py)
+            existing_contact = await db.contacts.find_one({"school_id": sid, "phone": phone})
+        if existing_contact is None and contact_name:
+            # I-2 fallback: dedup by exact name within school when phone is blank
+            existing_contact = await db.contacts.find_one(
+                {"school_id": sid, "name": contact_name}
+            )
         cdoc = {
             "school_id": sid,
             **parts["contact"],
@@ -295,10 +307,20 @@ async def commit_row(db, row_keyed: dict, user: dict, create_leads: bool) -> dic
             await db.contacts.update_one({"contact_id": cid}, {"$set": cdoc})
         else:
             cid = f"con_{_uuid.uuid4().hex[:12]}"
+            school_name_val = parts["school"].get("school_name", "")
+            # M-1: baseline fields matching create_contact shape in crm_routes.py
             await db.contacts.insert_one({
                 "contact_id": cid,
                 "created_at": _now(),
                 "is_deleted": False,
+                "created_by": user_email,
+                "status": "active",
+                "company": school_name_val,
+                "source": "import",
+                "converted_to_lead": False,
+                "lead_id": None,
+                # I-1: stamp assigned_to on new contact
+                **({"assigned_to": row_owner} if row_owner else {}),
                 **cdoc,
             })
 
