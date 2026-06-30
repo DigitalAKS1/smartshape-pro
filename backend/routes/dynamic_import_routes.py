@@ -12,7 +12,7 @@ Exposes:
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException
+from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
 
 from auth_utils import get_current_user
 from rbac import require_admin, require_module
@@ -81,13 +81,16 @@ def _key_rows(headers: list, rows: list, mapping: list) -> list:
 @router.post("/import/preview")
 async def import_preview(
     file: UploadFile = File(...),
-    entity_type: str = Form("school"),
+    entity_type: str = "school",
     user: dict = Depends(get_current_user),
 ):
     """Parse an uploaded CSV/Excel, propose column mapping, and resolve each row.
 
     Capped at 200 rows for preview speed. Returns:
-      {headers, mapping, rows_preview, counts:{create,update,needs_review,error}, total}
+      {headers, mapping, rows_preview, rows_keyed, counts:{create,update,needs_review,error}, total}
+
+    Note: entity_type is accepted as a query param or form field (both work).
+    rows_keyed is included (capped at 1000) so the UI can pass it directly to execute.
     """
     require_module(user, "settings", "read_write")
     content = await file.read()
@@ -110,6 +113,7 @@ async def import_preview(
         "headers": headers,
         "mapping": mapping,
         "rows_preview": preview,
+        "rows_keyed": keyed[:1000],
         "counts": counts,
         "total": len(keyed),
     }
