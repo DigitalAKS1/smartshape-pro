@@ -191,6 +191,13 @@ async def connect_db():
 
     logging.info("Database indexes created/verified (%d collections indexed)", 30)
 
+    # ── Field-definition registry indexes (Import Center) ────────────────────
+    await _i(db.field_definitions.create_index([("entity", 1), ("is_active", 1)], background=True))
+    await _i(db.field_definitions.create_index([("key", 1)], unique=True))
+
+    # ── Field-definition master seed (28 importable fields) ──────────────────
+    from field_registry import seed_field_definitions as _seed_fields
+    await _seed_fields(db)
 
 async def close_db():
     """Called on shutdown — closes the Motor client."""
