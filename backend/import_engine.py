@@ -98,6 +98,13 @@ async def propose_mapping(db, headers: list) -> list:
     for h in headers:
         nh = normalize_header(h)
 
+        # --- school_id control column (round-trip / re-upload by ID) ---
+        # Not a registered field, but must flow through so resolve_school can
+        # match by id and re-uploads update instead of duplicating.
+        if nh in ("school id", "schoolid", "school_id"):
+            out.append({"source": h, "field_id": None, "key": "school_id", "confidence": "high"})
+            continue
+
         # --- exact match ---
         f = alias_index.get(nh)
         if f:

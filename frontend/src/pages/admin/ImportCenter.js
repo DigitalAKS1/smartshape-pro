@@ -92,23 +92,15 @@ export default function ImportCenter() {
     const h2k = {};
     mapping.forEach(m => { if (m.key) h2k[m.source] = m; });
     // rows_keyed from preview is already keyed by original mapping keys
-    // We need to re-key if mapping changed. rows_keyed is {original_key: value}.
-    // Build a source->newKey map: original mapping source->originalKey, new mapping source->newKey
-    const origMap = {};
-    (preview.mapping || []).forEach(m => { if (m.source) origMap[m.source] = m.key; });
-
-    return (preview.rows_keyed || []).map(row => {
+    // Re-key from rows_raw (keyed by SOURCE header) through the CURRENT mapping,
+    // so user edits — including assigning a field to a column that auto-mapped
+    // to nothing — always take effect. Falls back to rows_keyed if rows_raw absent.
+    const raw = preview.rows_raw || preview.rows_keyed || [];
+    return raw.map(row => {
       const out = {};
       mapping.forEach(m => {
         if (!m.key) return;
-        // Find value from original keyed row using original key for this source
-        const origKey = origMap[m.source];
-        if (origKey && origKey in row) {
-          out[m.key] = row[origKey];
-        } else if (m.key in row) {
-          // If mapping key unchanged, direct access works
-          out[m.key] = row[m.key];
-        }
+        if (m.source in row) out[m.key] = row[m.source];
       });
       return out;
     });
@@ -256,6 +248,7 @@ export default function ImportCenter() {
                                 onChange={e => updateMap(i, e.target.value)}
                                 className={`text-xs rounded border px-2 py-1 ${inputCls} w-full max-w-[220px]`}>
                                 <option value="">— ignore —</option>
+                                <option value="school_id">School ID (match key)</option>
                                 {allFields.map(f => (
                                   <option key={f.field_id} value={f.key}>{f.label}</option>
                                 ))}
