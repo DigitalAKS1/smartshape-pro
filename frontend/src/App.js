@@ -57,6 +57,7 @@ const MarketingHub = lazy(() => import('./pages/admin/MarketingHub'));
 const DelegationApp = lazy(() => import('./pages/admin/DelegationApp'));
 const FlowManagement = lazy(() => import('./pages/admin/FlowManagement'));
 const Certificates = lazy(() => import('./pages/admin/Certificates'));
+const MasterFields = lazy(() => import('./pages/admin/MasterFields'));
 
 // Sales pages
 const SalesHome = lazy(() => import('./pages/sales/SalesHome'));
@@ -227,6 +228,7 @@ function AppRouter() {
       <Route path="/delegation" element={<ProtectedRoute><DelegationApp /></ProtectedRoute>} />
       <Route path="/flow-management" element={<ProtectedRoute><FlowManagement /></ProtectedRoute>} />
       <Route path="/certificates" element={<ProtectedRoute><Certificates /></ProtectedRoute>} />
+      <Route path="/master-fields" element={<ProtectedRoute><MasterFields /></ProtectedRoute>} />
       
       {/* Protected Routes - Sales */}
       <Route path="/sales" element={<ProtectedRoute><SalesHome /></ProtectedRoute>} />
