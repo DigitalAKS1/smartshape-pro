@@ -174,3 +174,154 @@ async def resolve_school(db, values: dict) -> dict:
             return {"action": "needs_review", "school_id": None, "candidates": len(cands)}
 
     return {"action": "create", "school_id": None, "candidates": 0}
+
+
+# ---------------------------------------------------------------------------
+# Task 6: split_values + commit_row — upsert School+Contact+Lead with audit
+# ---------------------------------------------------------------------------
+import uuid as _uuid
+
+from field_registry import SEED_FIELDS
+
+
+def _now() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat()
+
+
+# Module-level map: key -> (entity, maps_to|None)
+# Built from SEED_FIELDS tuple: (key, label, entity, type, maps_to, group, aliases)
+_CORE = {key: (entity, maps_to) for (key, _l, entity, _t, maps_to, _g, _a) in SEED_FIELDS}
+
+
+def split_values(row_keyed: dict) -> dict:
+    """Split a mapped row dict into native and custom-field buckets per entity.
+
+    Returns:
+        {
+          "school": {native_col: val, ...},
+          "contact": {native_col: val, ...},
+          "lead": {native_col: val, ...},
+          "custom": {"school": {key: val}, "contact": {key: val}, "lead": {key: val}},
+        }
+
+    The control key "school_id" is skipped (it is used only for resolve_school).
+    Keys whose maps_to is set write to native columns under their entity.
+    Keys with no maps_to (or unknown keys) write to custom[entity][key].
+    """
+    out: dict = {
+        "school": {},
+        "contact": {},
+        "lead": {},
+        "custom": {"school": {}, "contact": {}, "lead": {}},
+    }
+    for key, val in row_keyed.items():
+        if key == "school_id":          # control key — not stored as a field
+            continue
+        meta = _CORE.get(key)
+        if meta and meta[1]:            # known key with a native column mapping
+            entity, native = meta
+            out[entity][native] = val
+        else:                           # custom field — goes into custom_fields
+            entity = meta[0] if meta else "school"
+            out["custom"][entity][key] = val
+    return out
+
+
+async def commit_row(db, row_keyed: dict, user: dict, create_leads: bool) -> dict:
+    """Upsert one import row into schools / contacts / leads with a pre-update audit snapshot.
+
+    Safety rules:
+    - If resolve_school returns needs_review → return immediately, write NOTHING.
+    - create: mint sch_<12hex>, insert school doc.
+    - update: snapshot the prior school doc into audit_backup (kind=school_pre_import)
+              BEFORE any $set, then $set native + custom_fields.<key> dotted paths.
+    - contact: dedup by {school_id, phone} matching crm_routes.py dedup logic.
+    - lead: only if create_leads AND assigned_to present; upsert one lead per school.
+
+    Returns:
+        {"action": str, "school_id": str|None, "contact_id": str|None, "lead_id": str|None}
+    """
+    res = await resolve_school(db, row_keyed)
+    if res["action"] == "needs_review":
+        return {"action": "needs_review", "school_id": None, "contact_id": None, "lead_id": None}
+
+    parts = split_values(row_keyed)
+    sid = res["school_id"]
+    user_email = user.get("email", "import")
+
+    if res["action"] == "create":
+        sid = f"sch_{_uuid.uuid4().hex[:12]}"
+        doc = {
+            "school_id": sid,
+            "is_deleted": False,
+            "created_by": user_email,
+            "created_at": _now(),
+            "custom_fields": parts["custom"]["school"],
+            **parts["school"],
+        }
+        await db.schools.insert_one(doc)
+    else:
+        # Snapshot existing doc before overwriting (safety-critical — never skip)
+        old = await db.schools.find_one({"school_id": sid})
+        await db.audit_backup.insert_one({
+            "kind": "school_pre_import",
+            "school_id": sid,
+            "snapshot": {k: v for k, v in (old or {}).items() if k != "_id"},
+            "at": _now(),
+            "by": user_email,
+        })
+        upd: dict = dict(parts["school"])
+        for k, v in parts["custom"]["school"].items():
+            upd[f"custom_fields.{k}"] = v
+        upd["last_activity_date"] = _now()
+        await db.schools.update_one({"school_id": sid}, {"$set": upd})
+
+    # ---- contact: dedup by {school_id, phone} (mirrors crm_routes.py:2015) ----
+    cid = None
+    phone = parts["contact"].get("phone", "")
+    if parts["contact"].get("name") or phone:
+        existing_contact = (
+            await db.contacts.find_one({"school_id": sid, "phone": phone})
+            if phone else None
+        )
+        cdoc = {
+            "school_id": sid,
+            **parts["contact"],
+            "custom_fields": parts["custom"]["contact"],
+        }
+        if existing_contact:
+            cid = existing_contact["contact_id"]
+            await db.contacts.update_one({"contact_id": cid}, {"$set": cdoc})
+        else:
+            cid = f"con_{_uuid.uuid4().hex[:12]}"
+            await db.contacts.insert_one({
+                "contact_id": cid,
+                "created_at": _now(),
+                "is_deleted": False,
+                **cdoc,
+            })
+
+    # ---- lead: only if create_leads AND an assigned_to is present ----
+    lid = None
+    owner = parts["lead"].get("assigned_to", "")
+    if create_leads and owner:
+        existing_lead = await db.leads.find_one(
+            {"school_id": sid, "is_deleted": {"$ne": True}}
+        )
+        if existing_lead:
+            lid = existing_lead["lead_id"]
+            await db.leads.update_one({"lead_id": lid}, {"$set": {"assigned_to": owner}})
+        else:
+            lid = f"lead_{_uuid.uuid4().hex[:12]}"
+            await db.leads.insert_one({
+                "lead_id": lid,
+                "school_id": sid,
+                "assigned_to": owner,
+                "company_name": parts["school"].get("school_name", ""),
+                "stage": "new",
+                "created_at": _now(),
+                "is_deleted": False,
+            })
+
+    return {"action": res["action"], "school_id": sid, "contact_id": cid, "lead_id": lid}
