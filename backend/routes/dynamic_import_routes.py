@@ -114,6 +114,10 @@ async def import_preview(
         "mapping": mapping,
         "rows_preview": preview,
         "rows_keyed": keyed[:1000],
+        # rows_raw is keyed by SOURCE header so the UI can re-key any column
+        # through the user's edited mapping (incl. columns that auto-mapped to
+        # nothing but the user later assigns a field).
+        "rows_raw": rows[:1000],
         "counts": counts,
         "total": len(keyed),
     }
@@ -191,7 +195,7 @@ async def import_template(
             {"_id": 0, "school_id": 1, "school_name": 1},
         ):
             rows.append({
-                "School ID": s["school_id"],
+                "School ID": s.get("school_id", ""),
                 "School/Institute Name": s.get("school_name", ""),
             })
     return {"headers": headers, "rows": rows}
