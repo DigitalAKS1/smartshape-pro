@@ -7,8 +7,11 @@ Task 3: parse_table(filename, content) -> (headers, rows)
 """
 import csv
 import io
+from difflib import SequenceMatcher
 
 from openpyxl import load_workbook
+
+from field_registry import list_fields, normalize_header
 
 
 def parse_table(filename: str, content: bytes) -> tuple[list[str], list[dict]]:
@@ -68,10 +71,6 @@ def parse_table(filename: str, content: bytes) -> tuple[list[str], list[dict]]:
 # ---------------------------------------------------------------------------
 # Task 4: Auto column-mapping via alias lookup + fuzzy fallback
 # ---------------------------------------------------------------------------
-from difflib import SequenceMatcher
-from field_registry import list_fields, normalize_header
-
-
 async def propose_mapping(db, headers: list) -> list:
     """Map raw spreadsheet headers to registered field definitions.
 
