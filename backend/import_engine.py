@@ -152,23 +152,24 @@ async def resolve_school(db, values: dict) -> dict:
         q: dict = {
             "school_name": {"$regex": f"^{_re.escape(name)}$", "$options": "i"},
             "is_deleted": {"$ne": True},
+            "school_id": {"$exists": True, "$ne": None},
         }
         if city:
             q["city"] = {"$regex": f"^{_re.escape(city)}$", "$options": "i"}
         cands = [d async for d in db.schools.find(q, {"_id": 0, "school_id": 1})]
         if len(cands) == 1:
-            return {"action": "update", "school_id": cands[0]["school_id"], "candidates": 1}
+            return {"action": "update", "school_id": cands[0].get("school_id"), "candidates": 1}
         if len(cands) >= 2:
             return {"action": "needs_review", "school_id": None, "candidates": len(cands)}
 
     phone = (values.get("school_phone") or values.get("phone") or "").strip()
     if phone:
         cands = [d async for d in db.schools.find(
-            {"phone": phone, "is_deleted": {"$ne": True}},
+            {"phone": phone, "is_deleted": {"$ne": True}, "school_id": {"$exists": True, "$ne": None}},
             {"_id": 0, "school_id": 1},
         )]
         if len(cands) == 1:
-            return {"action": "update", "school_id": cands[0]["school_id"], "candidates": 1}
+            return {"action": "update", "school_id": cands[0].get("school_id"), "candidates": 1}
         if len(cands) >= 2:
             return {"action": "needs_review", "school_id": None, "candidates": len(cands)}
 
