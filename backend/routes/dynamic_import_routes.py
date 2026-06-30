@@ -10,6 +10,8 @@ Exposes:
   GET  /import/template          – downloadable template headers (+ existing ids)
 """
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException
 
 from auth_utils import get_current_user
@@ -128,6 +130,13 @@ async def import_execute(payload: dict, user: dict = Depends(get_current_user)):
     rows = payload.get("rows_keyed") or []
     create_leads = bool(payload.get("create_leads"))
 
+    # Defense-in-depth: only allow keys that are real registered field keys
+    # (plus the "school_id" control key). Drops anything a client injects that
+    # is not a known field, so it can never reach commit_row / custom_fields.
+    allowed_keys = {f["key"] for f in await fr.list_fields(db)}
+    allowed_keys.add("school_id")
+    rows = [{k: v for k, v in (kr or {}).items() if k in allowed_keys} for kr in rows]
+
     # Learn confirmed aliases: add normalized source header to each mapped field's aliases
     for m in payload.get("mapping", []):
         if m.get("field_id") and m.get("source"):
@@ -147,7 +156,7 @@ async def import_execute(payload: dict, user: dict = Depends(get_current_user)):
     log = {
         "by": user.get("email"),
         "counts": counts,
-        "at": ie._now(),
+        "at": datetime.now(timezone.utc).isoformat(),
     }
     insert_result = await db.import_logs.insert_one(dict(log))
     log["log_id"] = str(insert_result.inserted_id)
