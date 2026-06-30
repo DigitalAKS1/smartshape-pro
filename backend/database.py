@@ -189,11 +189,11 @@ async def connect_db():
     # dispatcher, not this index; this index just serves the per-flow audit query.
     await db.fms_action_logs.create_index([("flow_id", 1), ("at", 1)], background=True)
 
-    logging.info("Database indexes created/verified (%d collections indexed)", 30)
-
     # ── Field-definition registry indexes (Import Center) ────────────────────
     await _i(db.field_definitions.create_index([("entity", 1), ("is_active", 1)], background=True))
-    await _i(db.field_definitions.create_index([("key", 1)], unique=True))
+    await _i(db.field_definitions.create_index([("key", 1)], unique=True, background=True))
+
+    logging.info("Database indexes created/verified (%d collections indexed)", 31)
 
     # ── Field-definition master seed (28 importable fields) ──────────────────
     from field_registry import seed_field_definitions as _seed_fields
