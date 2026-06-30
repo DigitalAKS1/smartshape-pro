@@ -778,6 +778,15 @@ export const importSystem = {
   },
   execute: (data) => API.post('/import/execute', data),
   logs: () => API.get('/import/logs'),
+  template: (withIds) => API.get(`/import/template?with_ids=${withIds ? 'true' : 'false'}`),
+};
+
+// Dynamic field definitions (used by master-data import)
+export const fields = {
+  list:   (entity) => API.get(`/fields${entity ? `?entity=${entity}` : ''}`),
+  create: (body)   => API.post('/fields', body),
+  update: (id, patch) => API.put(`/fields/${id}`, patch),
+  remove: (id)     => API.delete(`/fields/${id}`),
 };
 
 // Activity Logs
