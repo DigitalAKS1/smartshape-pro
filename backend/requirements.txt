@@ -64,3 +64,6 @@ annotated-types==0.7.0
 typing_extensions==4.15.0
 
 sentry-sdk>=2.0.0
+
+# Email sanitization
+bleach>=6
