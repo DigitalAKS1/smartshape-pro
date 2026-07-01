@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import Response
 from datetime import datetime, timezone
 import uuid, logging
 
@@ -62,6 +63,17 @@ async def delete_session(session_id: str, request: Request):
     await db.training_sessions.delete_one({"session_id": session_id})
     await db.session_registrations.delete_many({"session_id": session_id})
     return {"ok": True}
+
+
+@router.get("/training/sessions/{session_id}/ics")
+async def session_ics(session_id: str):
+    session = await db.training_sessions.find_one({"session_id": session_id}, {"_id": 0})
+    if not session:
+        raise HTTPException(404, "Session not found")
+    from webinar_ics import build_session_ics
+    ics = build_session_ics(session)
+    return Response(content=ics, media_type="text/calendar",
+                    headers={"Content-Disposition": f'attachment; filename="{session_id}.ics"'})
 
 
 @router.get("/training/sessions/{session_id}/registrations")
