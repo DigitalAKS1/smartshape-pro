@@ -1118,6 +1118,7 @@ export const adminApi = {
   revokeLockout: (email) => API.delete(`/admin/lockouts/${encodeURIComponent(email)}`),
   clearCache: (categories) => API.post('/admin/cache/clear', { categories }),
   backfillSchools: () => API.post('/admin/backfill-schools'),
+  backfillContactOwners: () => API.post('/contacts/backfill-owners'),
   dbIntegrity: () => API.post('/admin/db-integrity'),
   // Owner-only (info@smartshape.in): cascade-delete backups + restore
   listAuditBackups: (limit = 100) => API.get('/admin/audit-backups', { params: { limit } }),

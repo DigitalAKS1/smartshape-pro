@@ -168,6 +168,19 @@ export default function ContactsTab({
             <Building2 className="mr-1 h-3 w-3" /> Sync Schools
           </Button>
         )}
+        {user?.role === 'admin' && (
+          <Button onClick={async () => {
+            try {
+              const res = await adminApi.backfillContactOwners();
+              const d = res.data || {};
+              const unresolved = Object.keys(d.unresolved || {}).length;
+              toast.success(`Owners synced — ${d.fixed || 0} fixed, ${d.linked_schools || 0} schools linked${unresolved ? `, ${unresolved} name(s) unmatched` : ''}`);
+              fetchData();
+            } catch { toast.error('Owner sync failed'); }
+          }} variant="outline" size="sm" className="border-purple-500/40 text-purple-400 hover:bg-purple-500/10" title="Resolve each contact's owner (name → Sales Exec email) so contacts sync to the right rep">
+            <UserPlus className="mr-1 h-3 w-3" /> Sync Owners
+          </Button>
+        )}
         <span className={`text-xs ${textMuted} ml-auto`}>{cFiltered.length} contacts{searchTerm || filterRole ? ' (filtered)' : ''} • {contactsList.filter(c => c.converted_to_lead).length} converted</span>
       </div>
 
@@ -245,6 +258,7 @@ export default function ContactsTab({
                   <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden sm:table-cell cursor-pointer select-none`} onClick={() => toggleSort('email')}>Email{sortIndicator('email')}</th>
                   <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden md:table-cell cursor-pointer select-none`} onClick={() => toggleSort('company')}>School{sortIndicator('company')}</th>
                   <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden lg:table-cell cursor-pointer select-none`} onClick={() => toggleSort('source')}>Source{sortIndicator('source')}</th>
+                  <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden lg:table-cell cursor-pointer select-none`} onClick={() => toggleSort('assigned_name')}>Owner{sortIndicator('assigned_name')}</th>
                   <th className={`text-center text-xs uppercase py-3 px-3 ${textMuted} hidden xl:table-cell cursor-pointer select-none`} onClick={() => toggleSort('last_activity_date')}>Last Touch{sortIndicator('last_activity_date')}</th>
                   <th className={`text-center text-xs uppercase py-3 px-3 ${textMuted}`}>Status</th>
                   <th className={`text-right text-xs uppercase py-3 px-3 ${textMuted}`}>Actions</th>
@@ -301,6 +315,11 @@ export default function ContactsTab({
                             ? <span className={textMuted}>{contact.source}</span>
                             : <span className="italic" style={{ color: '#c0ccd8' }}>no source</span>}
                         </td>
+                        <td className="py-2.5 px-3 hidden lg:table-cell text-xs">
+                          {contact.assigned_name
+                            ? <span className={textSec}>{contact.assigned_name}</span>
+                            : <span className="italic" style={{ color: '#c0ccd8' }}>unassigned</span>}
+                        </td>
                         <td className="py-2.5 px-3 hidden xl:table-cell text-center">
                           {contact.last_activity_date ? (
                             <span className={`text-[11px] font-medium ${touchAgeCls(contact.last_activity_date)}`}>
@@ -334,7 +353,7 @@ export default function ContactsTab({
                       </tr>
                       {expandedContactId === contact.contact_id && (
                         <tr>
-                          <td colSpan="8" className={`px-4 py-3 ${isDark ? 'bg-[var(--bg-hover)]' : 'bg-[#f8fafc]'} border-t border-[var(--border-color)]`}>
+                          <td colSpan="9" className={`px-4 py-3 ${isDark ? 'bg-[var(--bg-hover)]' : 'bg-[#f8fafc]'} border-t border-[var(--border-color)]`}>
                             <p className={`text-xs font-semibold ${textSec} mb-2`}>Activity Timeline</p>
                             {contactActivity.length === 0 ? (
                               <p className={`text-xs ${textMuted}`}>No marketing activity recorded yet</p>
