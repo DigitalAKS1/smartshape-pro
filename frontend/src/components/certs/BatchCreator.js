@@ -3,7 +3,7 @@ import {
   Users, BookOpen, AlignLeft, Calendar, Tag, UserCheck, Send, X, MessageSquare,
   Upload, Plus, Trash2, Video, Sparkles, Settings, Loader2,
 } from 'lucide-react';
-import { certsApi } from '../../lib/api';
+import { certsApi, schools as schoolsApi } from '../../lib/api';
 import { toast } from 'sonner';
 import axios from 'axios';
 
@@ -31,7 +31,7 @@ const parseRows = (text) =>
       else rest.push(c);
     });
     const name = (rest.join(' ').trim() || cells[0]).trim();
-    return name ? { title: '', name, phone, email } : null;
+    return name ? { title: '', name, phone, email, school: '' } : null;
   }).filter(Boolean);
 
 /**
@@ -62,6 +62,8 @@ export default function BatchCreator({ templates = [], onCreated, onCancel }) {
   const [autoClean, setAutoClean] = useState(true);
   const [pasteText, setPasteText] = useState('');
   const [bulkTitle, setBulkTitle] = useState('');
+  const [bulkSchool, setBulkSchool] = useState('');
+  const [schoolOpts, setSchoolOpts] = useState([]);   // school names from the CRM database
   const fileRef = useRef(null);
 
   /* ── Zoom ── */
@@ -85,7 +87,7 @@ export default function BatchCreator({ templates = [], onCreated, onCancel }) {
   const [waCaption, setWaCaption]       = useState('');
   const subjectRef = useRef(null), bodyRef = useRef(null), captionRef = useRef(null);
   const [activeField, setActiveField] = useState('email_body');
-  const TOKENS = ['{Name}', '{Date}', '{Theme}', '{Conducted By}'];
+  const TOKENS = ['{Name}', '{School}', '{Date}', '{Theme}', '{Conducted By}'];
   const MSG_FIELDS = {
     email_subject: { ref: subjectRef, set: setEmailSubject },
     email_body:    { ref: bodyRef,    set: setEmailBody    },
@@ -100,6 +102,21 @@ export default function BatchCreator({ templates = [], onCreated, onCancel }) {
     f.set(el.value.slice(0, start) + tok + el.value.slice(end));
     requestAnimationFrame(() => { el.focus(); const p = start + tok.length; try { el.setSelectionRange(p, p); } catch { /* noop */ } });
   };
+
+  /* ── load school names from the CRM database (for the per-attendee picker) ── */
+  useEffect(() => {
+    let alive = true;
+    schoolsApi.getAll()
+      .then(r => {
+        if (!alive) return;
+        const names = Array.from(new Set(
+          (r.data || []).map(s => (s.school_name || s.name || '').trim()).filter(Boolean)
+        )).sort((a, b) => a.localeCompare(b));
+        setSchoolOpts(names);
+      })
+      .catch(() => { /* non-fatal — free text still works */ });
+    return () => { alive = false; };
+  }, []);
 
   /* ── load training sessions on demand ── */
   useEffect(() => {
@@ -133,9 +150,10 @@ export default function BatchCreator({ templates = [], onCreated, onCancel }) {
   };
   const updateRow  = (i, field, val) => setRows(prev => prev.map((r, idx) => idx === i ? { ...r, [field]: val } : r));
   const removeRow  = (i) => setRows(prev => prev.filter((_, idx) => idx !== i));
-  const addBlank   = () => setRows(prev => [...prev, { title: '', name: '', phone: '', email: '' }]);
+  const addBlank   = () => setRows(prev => [...prev, { title: '', name: '', phone: '', email: '', school: '' }]);
   const cleanAll   = () => setRows(prev => prev.map(r => ({ ...r, name: cleanNameJS(r.name) })));
   const applyTitleAll = () => setRows(prev => prev.map(r => ({ ...r, title: bulkTitle })));
+  const applySchoolAll = () => setRows(prev => prev.map(r => ({ ...r, school: bulkSchool })));
 
   const handlePaste = () => {
     const parsed = parseRows(pasteText);
@@ -164,7 +182,7 @@ export default function BatchCreator({ templates = [], onCreated, onCancel }) {
     setZoomFetching(true);
     try {
       const r = await certsApi.zoomParticipants(zoomMeetingId.trim());
-      const people = (r.data?.participants || []).map(p => ({ title: '', name: p.name, phone: p.phone || '', email: p.email || '' }));
+      const people = (r.data?.participants || []).map(p => ({ title: '', name: p.name, phone: p.phone || '', email: p.email || '', school: '' }));
       if (!people.length) { toast.error('No participants returned for that meeting'); return; }
       addRows(people, true);
       toast.success(`${people.length} participants fetched from Zoom`);
@@ -221,7 +239,7 @@ export default function BatchCreator({ templates = [], onCreated, onCancel }) {
       const attendees = rows.map(r => {
         const nm = (autoClean ? cleanNameJS(r.name) : r.name || '').trim();
         const t = (r.title || '').trim();
-        return { name: t && nm ? `${t} ${nm}` : nm, phone: (r.phone || '').trim(), email: (r.email || '').trim() };
+        return { name: t && nm ? `${t} ${nm}` : nm, phone: (r.phone || '').trim(), email: (r.email || '').trim(), school: (r.school || '').trim() };
       }).filter(a => a.name);
       if (!attendees.length) { toast.error('Add at least one attendee'); return; }
       body.attendees = attendees;
@@ -408,17 +426,20 @@ export default function BatchCreator({ templates = [], onCreated, onCancel }) {
                 </button>
                 <input list="titleopts" value={bulkTitle} onChange={e => setBulkTitle(e.target.value)} placeholder="Title…" className={`${inputCls} w-20 py-1`} />
                 <button type="button" onClick={applyTitleAll} className={`px-2 py-1 rounded border border-[var(--border-color)] text-xs ${textSec} hover:bg-[var(--bg-hover)]`}>Apply to all</button>
+                <input list="schoolopts" value={bulkSchool} onChange={e => setBulkSchool(e.target.value)} placeholder="School…" className={`${inputCls} w-32 py-1`} />
+                <button type="button" onClick={applySchoolAll} className={`px-2 py-1 rounded border border-[var(--border-color)] text-xs ${textSec} hover:bg-[var(--bg-hover)]`}>Apply to all</button>
               </div>
             </div>
 
             <datalist id="titleopts">{TITLE_OPTS.map(t => <option key={t} value={t} />)}</datalist>
+            <datalist id="schoolopts">{schoolOpts.map(s => <option key={s} value={s} />)}</datalist>
 
             {rows.length > 0 ? (
               <div className={`${card} border rounded-lg overflow-x-auto`}>
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-[var(--border-color)]">
-                      {['Title', 'Name', 'Phone', 'Email', ''].map((h, i) => (
+                      {['Title', 'Name', 'School', 'Phone', 'Email', ''].map((h, i) => (
                         <th key={i} className={`px-2 py-1.5 text-left text-xs font-semibold uppercase tracking-wide ${textMuted}`}>{h}</th>
                       ))}
                     </tr>
@@ -428,6 +449,7 @@ export default function BatchCreator({ templates = [], onCreated, onCancel }) {
                       <tr key={i} className="hover:bg-[var(--bg-hover)]">
                         <td className="px-2 py-1 w-20"><input list="titleopts" className={`${cellInput} w-16`} value={r.title} onChange={e => updateRow(i, 'title', e.target.value)} /></td>
                         <td className="px-2 py-1"><input className={cellInput} value={r.name} onChange={e => updateRow(i, 'name', e.target.value)} onBlur={e => autoClean && updateRow(i, 'name', cleanNameJS(e.target.value))} placeholder="Full name" /></td>
+                        <td className="px-2 py-1"><input list="schoolopts" className={cellInput} value={r.school || ''} onChange={e => updateRow(i, 'school', e.target.value)} placeholder="School" /></td>
                         <td className="px-2 py-1 w-36"><input className={cellInput} value={r.phone} onChange={e => updateRow(i, 'phone', e.target.value)} placeholder="Phone" /></td>
                         <td className="px-2 py-1"><input className={cellInput} value={r.email} onChange={e => updateRow(i, 'email', e.target.value)} placeholder="Email" /></td>
                         <td className="px-2 py-1 w-8">

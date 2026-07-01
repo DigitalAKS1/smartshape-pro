@@ -67,6 +67,9 @@ def safe_bg_path(cert_dir: str, bg_url: str) -> str:
 def resolve_field_value(key: str, item: Dict[str, Any], shared: Dict[str, Any]) -> str:
     if key == "name":
         return str(item.get("name", "") or "")
+    if key == "school":
+        # per-attendee value stored on the item (not a batch-shared value)
+        return str(item.get("school", "") or "")
     if key in ("date", "theme", "expert"):
         return str((shared or {}).get(key, "") or "")
     return ""
@@ -104,14 +107,17 @@ DEFAULT_WA_CAPTION = "Dear {Name}, please find your certificate for {Theme} atta
 
 def render_placeholders(text: str, item: Dict[str, Any], shared: Dict[str, Any]) -> str:
     """Replace mail-merge tokens (case-insensitive) with values from the attendee
-    row + batch shared values. Supported: {Name}, {Date}, {Theme}, {Expert},
-    {Conducted By}. Unknown tokens are left untouched."""
+    row + batch shared values. Supported: {Name}, {School}, {School Name}, {Date},
+    {Theme}, {Expert}, {Conducted By}. Unknown tokens are left untouched."""
     if not text:
         return ""
     shared = shared or {}
     expert = str(shared.get("expert", "") or "")
+    school = str(item.get("school", "") or "")
     values = {
         "name": str(item.get("name", "") or ""),
+        "school": school,
+        "school name": school,
         "date": str(shared.get("date", "") or ""),
         "theme": str(shared.get("theme", "") or ""),
         "expert": expert,
@@ -143,8 +149,11 @@ def _anchor_x(draw: ImageDraw.ImageDraw, text: str, font, x: int, align: str) ->
 def _merge_values(item: Dict[str, Any], shared: Dict[str, Any]) -> Dict[str, str]:
     shared = shared or {}
     expert = str(shared.get("expert", "") or "")
+    school = str(item.get("school", "") or "")
     return {
         "{Name}": str(item.get("name", "") or ""),
+        "{School}": school,
+        "{School Name}": school,
         "{Date}": str(shared.get("date", "") or ""),
         "{Theme}": str(shared.get("theme", "") or ""),
         "{Expert}": expert,
@@ -233,7 +242,7 @@ def pdf_tokens_found(template_pdf_path: str) -> List[str]:
     try:
         present = []
         all_text = "".join(page.get_text() for page in doc)
-        for tok in ("{Name}", "{Date}", "{Theme}", "{Conducted By}", "{Expert}"):
+        for tok in ("{Name}", "{School}", "{School Name}", "{Date}", "{Theme}", "{Conducted By}", "{Expert}"):
             if tok in all_text:
                 present.append(tok)
         return present

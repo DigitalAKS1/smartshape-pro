@@ -91,7 +91,7 @@ async def pdf_preview(request: Request, file: UploadFile = File(...)):
 
 
 class TemplateField(BaseModel):
-    key: str            # name | date | theme | expert
+    key: str            # name | school | date | theme | expert
     x: int
     y: int
     size: int = 24
@@ -142,6 +142,7 @@ class Attendee(BaseModel):
     name: str
     phone: Optional[str] = ""
     email: Optional[str] = ""
+    school: Optional[str] = ""
 
 class BatchCreate(BaseModel):
     title: str
@@ -158,10 +159,10 @@ class BatchCreate(BaseModel):
     wa_caption: Optional[str] = None
 
 
-def _new_item(batch_id: str, name: str, phone: str, email: str) -> dict:
+def _new_item(batch_id: str, name: str, phone: str, email: str, school: str = "") -> dict:
     return {
         "item_id": gen_id("citem"), "batch_id": batch_id,
-        "name": name, "phone": phone or "", "email": email or "",
+        "name": name, "phone": phone or "", "email": email or "", "school": school or "",
         "pdf_url": None, "gen_status": "pending", "gen_error": None,
         "delivery": {
             "whatsapp": {"status": "pending", "at": None, "error": None},
@@ -181,10 +182,11 @@ async def create_batch(body: BatchCreate, request: Request):
         for r in regs:
             rows.append(_new_item(bid, r.get("name") or r.get("principal_name") or "",
                                   r.get("phone") or r.get("contact_phone") or "",
-                                  r.get("email") or r.get("customer_email") or ""))
+                                  r.get("email") or r.get("customer_email") or "",
+                                  r.get("school_name") or r.get("school") or ""))
     else:
         for a in (body.attendees or []):
-            rows.append(_new_item(bid, a.name, a.phone or "", a.email or ""))
+            rows.append(_new_item(bid, a.name, a.phone or "", a.email or "", a.school or ""))
     rows = [r for r in rows if r["name"].strip()]
     batch = {
         "batch_id": bid, "title": body.title, "template_id": body.template_id,
@@ -220,7 +222,7 @@ async def get_batch(batch_id: str, request: Request):
 async def add_attendees(batch_id: str, request: Request):
     user = await get_current_user(request); require_admin(user)
     body = await request.json()
-    rows = [_new_item(batch_id, a.get("name", ""), a.get("phone", ""), a.get("email", ""))
+    rows = [_new_item(batch_id, a.get("name", ""), a.get("phone", ""), a.get("email", ""), a.get("school", ""))
             for a in body.get("attendees", []) if a.get("name", "").strip()]
     if rows:
         await db.cert_items.insert_many(rows)
@@ -337,17 +339,18 @@ async def preview_item(item_id: str, request: Request):
     except ValueError:
         raise HTTPException(400, "Invalid background path")
     out_path = os.path.join(tempfile.gettempdir(), f"preview_{item_id}.pdf")
+    item = {"name": it["name"], "school": it.get("school", "")}
     if tpl.get("kind") == "pdf":
         if tpl.get("fields"):
             render_certificate_pdf_overlay(bg_path, out_path, tpl.get("fields", []),
-                                           {"name": it["name"]}, batch.get("shared_values", {}),
+                                           item, batch.get("shared_values", {}),
                                            tpl.get("width_px") or 0, tpl.get("height_px") or 0)
         else:
             render_certificate_pdf_merge(bg_path, out_path,
-                                         {"name": it["name"]}, batch.get("shared_values", {}))
+                                         item, batch.get("shared_values", {}))
     else:
         render_certificate_pdf(bg_path, out_path, tpl.get("fields", []),
-                               {"name": it["name"]}, batch.get("shared_values", {}))
+                               item, batch.get("shared_values", {}))
     return FileResponse(out_path, media_type="application/pdf", filename="preview.pdf")
 
 

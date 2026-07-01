@@ -8,6 +8,7 @@ const DISPLAY_WIDTH = 800;
 
 const FIELDS = [
   { key: 'name',   label: 'Name',   defaultColor: '#1a1a1a' },
+  { key: 'school', label: 'School', defaultColor: '#222222' },
   { key: 'date',   label: 'Date',   defaultColor: '#333333' },
   { key: 'theme',  label: 'Theme',  defaultColor: '#444444' },
   { key: 'expert', label: 'Expert', defaultColor: '#555555' },
@@ -15,6 +16,7 @@ const FIELDS = [
 
 const FIELD_COLORS = {
   name:   '#2563eb',
+  school: '#0891b2',
   date:   '#16a34a',
   theme:  '#9333ea',
   expert: '#d97706',
@@ -23,6 +25,7 @@ const FIELD_COLORS = {
 // Representative preview text so the on-canvas size + alignment read true.
 const SAMPLE = {
   name:   'Attendee Name',
+  school: 'School Name',
   date:   '12 June 2026',
   theme:  'Workshop Theme',
   expert: 'Expert Name',
@@ -41,7 +44,8 @@ function initFieldState(w = 0, h = 0) {
     const cx = Math.round(w / 2);
     const layout = {
       name:   { x: cx,                 y: Math.round(h * 0.42), size: Math.round(w * 0.055), align: 'center' },
-      theme:  { x: cx,                 y: Math.round(h * 0.60), size: Math.round(w * 0.030), align: 'center' },
+      school: { x: cx,                 y: Math.round(h * 0.52), size: Math.round(w * 0.032), align: 'center' },
+      theme:  { x: cx,                 y: Math.round(h * 0.62), size: Math.round(w * 0.030), align: 'center' },
       date:   { x: Math.round(w * 0.25), y: Math.round(h * 0.84), size: Math.round(w * 0.022), align: 'center' },
       expert: { x: Math.round(w * 0.75), y: Math.round(h * 0.84), size: Math.round(w * 0.022), align: 'center' },
     };

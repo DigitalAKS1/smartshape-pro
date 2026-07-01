@@ -282,7 +282,7 @@ export default function BatchDetail({ batch, loadBatch, generate, send, stop, on
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-[var(--border-color)]">
-                  {['Name', 'Generated', 'WhatsApp', 'Email', 'Preview'].map(h => (
+                  {['Name', 'School', 'Generated', 'WhatsApp', 'Email', 'Preview'].map(h => (
                     <th
                       key={h}
                       className={`px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide ${textMuted} whitespace-nowrap`}
@@ -300,6 +300,9 @@ export default function BatchDetail({ batch, loadBatch, generate, send, stop, on
                     <tr key={item.item_id} className="hover:bg-[var(--bg-hover)] transition-colors">
                       <td className={`px-4 py-2.5 font-medium ${textPri} whitespace-nowrap`}>
                         {item.name}
+                      </td>
+                      <td className={`px-4 py-2.5 ${textSec} whitespace-nowrap`}>
+                        {item.school || <span className={textMuted}>—</span>}
                       </td>
                       <td className="px-4 py-2.5">
                         <Badge map={GEN_BADGE} status={item.gen_status} />
