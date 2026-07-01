@@ -1,7 +1,11 @@
-"""Pure, DB-free email HTML/text helpers. Unit-tested in tests/test_email_utils.py."""
+"""Pure, DB-free email HTML/text helpers. Unit-tested in tests/test_email_utils.py.
+
+`bleach` is imported LAZILY inside sanitize_html (never at module load) so a missing
+dependency on a server that hasn't pip-installed it cannot crash the whole app at import.
+When bleach is absent we fall back to a regex sanitizer that strips the dangerous bits.
+"""
 import re
 import html as _html
-import bleach
 
 _ALLOWED_TAGS = [
     "a", "b", "strong", "i", "em", "u", "p", "br", "hr", "span", "div",
@@ -19,17 +23,32 @@ _ALLOWED_ATTRS = {
 _ALLOWED_PROTOCOLS = ["http", "https", "mailto"]
 
 
+def _fallback_sanitize(html: str) -> str:
+    """Regex sanitizer used only when bleach isn't installed. Not a full allowlist,
+    but strips the genuinely dangerous constructs (contact values are also HTML-escaped
+    via personalize_html, so this is defense-in-depth on app-controlled template HTML)."""
+    html = re.sub(r"(?is)<(script|style|iframe|object|embed)[^>]*>.*?</\1\s*>", "", html)
+    html = re.sub(r"(?is)<(script|style|iframe|object|embed)[^>]*/?>", "", html)
+    html = re.sub(r'(?i)\son\w+\s*=\s*("[^"]*"|\'[^\']*\'|[^\s>]+)', "", html)
+    html = re.sub(r'(?i)(href|src)\s*=\s*(["\']?)\s*javascript:[^"\'>\s]*', r'\1=\2#', html)
+    return html
+
+
 def sanitize_html(html: str) -> str:
     if not html:
         return ""
-    cleaned = bleach.clean(
-        html,
-        tags=_ALLOWED_TAGS,
-        attributes=_ALLOWED_ATTRS,
-        protocols=_ALLOWED_PROTOCOLS,
-        strip=True,
-        strip_comments=True,
-    )
+    try:
+        import bleach  # lazy — a missing dep must never crash app startup
+        cleaned = bleach.clean(
+            html,
+            tags=_ALLOWED_TAGS,
+            attributes=_ALLOWED_ATTRS,
+            protocols=_ALLOWED_PROTOCOLS,
+            strip=True,
+            strip_comments=True,
+        )
+    except Exception:
+        cleaned = _fallback_sanitize(html)
     cleaned = re.sub(r"(?i)expression\s*\(", "", cleaned)
     return cleaned
 
