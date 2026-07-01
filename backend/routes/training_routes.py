@@ -74,6 +74,22 @@ async def _enqueue_webinar_stage(session: dict, reg: dict, stage: str) -> bool:
     register endpoint (stage "confirm") and the scheduler (Task 6, later
     stages). Idempotent per registration+stage via `sent_stages`.
     """
+    campaign_id = f"webinar_{session['session_id']}"
+    await db.email_campaigns.update_one(
+        {"campaign_id": campaign_id},
+        {"$setOnInsert": {
+            "campaign_id": campaign_id,
+            "name": f"Webinar: {session.get('title','')}"[:60],
+            "source": "webinar", "source_id": session["session_id"],
+            "subject": f"Webinar: {session.get('title','')}",
+            "audience_filter": {}, "audience_label": "Webinar registrants",
+            "audience_count": 0, "status": "queued",
+            "sent_count": 0, "delivered_count": 0, "failed_count": 0,
+            "created_at": _now(), "updated_at": _now(), "sent_at": _now(),
+        }},
+        upsert=True,
+    )
+
     if stage in (reg.get("sent_stages") or []):
         return False
 
@@ -97,7 +113,7 @@ async def _enqueue_webinar_stage(session: dict, reg: dict, stage: str) -> bool:
     now = _now()
     await db.email_scheduled.insert_one({
         "scheduled_id": f"esched_{uuid.uuid4().hex[:10]}",
-        "campaign_id": f"webinar_{session['session_id']}",
+        "campaign_id": campaign_id,
         "email": email,
         "contact_name": reg.get("name", ""),
         "subject": personalize(subject_final, first, school),
@@ -203,11 +219,12 @@ async def get_registrations(session_id: str, request: Request):
 
 @router.post("/training/sessions/{session_id}/register")
 async def register_for_session(session_id: str, request: Request):
-    """Public registration for a training session/webinar. Dedups by
+    """Staff-initiated registration for a training session/webinar. Dedups by
     (session_id, email); re-registering the same email reuses the existing
     row instead of creating a duplicate. Enqueues the Stage-2 confirmation
     email via the shared _enqueue_webinar_stage helper unless disabled.
     """
+    user = await get_current_user(request)
     session = await db.training_sessions.find_one({"session_id": session_id}, {"_id": 0})
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")

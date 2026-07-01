@@ -48,6 +48,7 @@ async def test_db(monkeypatch):
     await d.session_registrations.delete_many({})
     await d.email_scheduled.delete_many({})
     await d.email_suppressions.delete_many({})
+    await d.email_campaigns.delete_many({})
     motor_client.close()
 
 
@@ -124,3 +125,41 @@ async def test_register_creates_reg_and_confirm(client, test_db):
 
     sched_count = await test_db.email_scheduled.count_documents({"campaign_id": f"webinar_{sid}"})
     assert sched_count == 1
+
+
+@pytest.mark.asyncio
+async def test_register_creates_campaign_doc(client, test_db):
+    sid = "sess_reg2"
+    await test_db.training_sessions.insert_one({
+        "session_id": sid,
+        "title": "Stamp Workshop",
+        "description": "Live demo",
+        "date": "2099-04-05",
+        "time": "11:00",
+        "platform": "zoom",
+        "meeting_link": "https://zoom.us/j/456",
+        "location": "",
+        "max_participants": 0,
+        "status": "upcoming",
+        "is_published": True,
+        "host_name": "Aman",
+        "host_email": "aman@smartshape.in",
+        "recording_url": "",
+        "zoom_meeting_id": "",
+        "webinar_emails": _default_webinar_emails(),
+        "reminders_sent": {},
+        "created_at": tr._now(),
+        "created_by": "admin@t",
+    })
+
+    r = await client.post(f"/api/training/sessions/{sid}/register", json={
+        "name": "Neha Gupta", "email": "neha@x.com", "school_name": "SVM",
+    })
+    assert r.status_code == 200
+    assert r.json()["registered"] is True
+
+    campaign = await test_db.email_campaigns.find_one({"campaign_id": f"webinar_{sid}"})
+    assert campaign is not None
+    assert campaign["source"] == "webinar"
+    assert campaign["source_id"] == sid
+    assert "Stamp Workshop" in campaign["name"]
