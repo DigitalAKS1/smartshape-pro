@@ -379,6 +379,8 @@ export const email = {
   launchCampaign: (id)     => API.post(`/email/campaigns/${id}/launch`),
   getAnalytics:   ()       => API.get('/email/analytics'),
   getQueue:       (params) => API.get('/email/queue', { params }),
+  sendNow:        (payload) => API.post('/email/send-now', payload),
+  sendTest:       (payload) => API.post('/email/send-test', payload),
 };
 
 // Drip Sequences
