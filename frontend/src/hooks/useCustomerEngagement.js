@@ -13,6 +13,8 @@ export function useCustomerEngagement() {
     title: '', description: '', date: '', time: '',
     platform: 'zoom', meeting_link: '', location: '',
     max_participants: 0, is_published: true,
+    host_name: '', recording_url: '',
+    webinar_emails: { confirm: true, remind_24h: true, remind_1h: true, live: true, noshow: true, attended: true },
   });
   const [sessRegs, setSessRegs] = useState({ open: false, session: null, list: [] });
 
@@ -77,12 +79,20 @@ export function useCustomerEngagement() {
   // ── Sessions CRUD ─────────────────────────────────────────────────────────
   const openNewSess = () => {
     setEditSess(null);
-    setSessForm({ title: '', description: '', date: '', time: '', platform: 'zoom', meeting_link: '', location: '', max_participants: 0, is_published: true });
+    setSessForm({
+      title: '', description: '', date: '', time: '', platform: 'zoom', meeting_link: '', location: '', max_participants: 0, is_published: true,
+      host_name: '', recording_url: '',
+      webinar_emails: { confirm: true, remind_24h: true, remind_1h: true, live: true, noshow: true, attended: true },
+    });
     setSessDialog(true);
   };
   const openEditSess = (s) => {
     setEditSess(s);
-    setSessForm({ title: s.title, description: s.description || '', date: s.date, time: s.time, platform: s.platform, meeting_link: s.meeting_link || '', location: s.location || '', max_participants: s.max_participants || 0, is_published: s.is_published });
+    setSessForm({
+      title: s.title, description: s.description || '', date: s.date, time: s.time, platform: s.platform, meeting_link: s.meeting_link || '', location: s.location || '', max_participants: s.max_participants || 0, is_published: s.is_published,
+      host_name: s.host_name || '', recording_url: s.recording_url || '',
+      webinar_emails: { confirm: true, remind_24h: true, remind_1h: true, live: true, noshow: true, attended: true, ...(s.webinar_emails || {}) },
+    });
     setSessDialog(true);
   };
   const saveSess = async () => {

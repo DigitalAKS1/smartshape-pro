@@ -147,6 +147,30 @@ export default function CustomerEngagement() {
                       </div>
                     : <div><label className={`block text-xs font-medium ${textSec} mb-1`}>Location / Venue</label><input className={inp} value={hook.sessForm.location} onChange={e => hook.setSessForm(p => ({ ...p, location: e.target.value }))} /></div>
                   }
+                  <div className="grid grid-cols-2 gap-3">
+                    <div><label className={`block text-xs font-medium ${textSec} mb-1`}>Host name</label><input className={inp} value={hook.sessForm.host_name} onChange={e => hook.setSessForm(p => ({ ...p, host_name: e.target.value }))} placeholder="e.g. Aman Shrivastava" /></div>
+                    <div><label className={`block text-xs font-medium ${textSec} mb-1`}>Recording URL (after session)</label><input className={inp} value={hook.sessForm.recording_url} onChange={e => hook.setSessForm(p => ({ ...p, recording_url: e.target.value }))} placeholder="https://..." /></div>
+                  </div>
+                  <div>
+                    <p className={`block text-xs font-medium ${textSec} mb-1`}>Automated emails</p>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {[
+                        ['confirm', 'Registration confirmation'],
+                        ['remind_24h', 'Reminder — 1 day before'],
+                        ['remind_1h', 'Reminder — 1 hour before'],
+                        ['live', 'Live now'],
+                        ['noshow', 'No-show follow-up'],
+                        ['attended', 'Attended follow-up'],
+                      ].map(([key, label]) => (
+                        <label key={key} className="flex items-center gap-2 cursor-pointer">
+                          <input type="checkbox" checked={(hook.sessForm.webinar_emails || {})[key] !== false}
+                            onChange={e => hook.setSessForm(p => ({ ...p, webinar_emails: { ...p.webinar_emails, [key]: e.target.checked } }))}
+                            className="rounded" />
+                          <span className={`text-sm ${textSec}`}>{label}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
                   <label className="flex items-center gap-2 cursor-pointer">
                     <input type="checkbox" checked={hook.sessForm.is_published} onChange={e => hook.setSessForm(p => ({ ...p, is_published: e.target.checked }))} className="rounded" />
                     <span className={`text-sm ${textSec}`}>Publish (visible to customers)</span>
