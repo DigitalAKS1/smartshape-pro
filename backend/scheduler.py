@@ -2,11 +2,13 @@
 SmartShape background automation engine.
 
 Five perpetual asyncio loops:
-  1. email_sender_loop    — every 2 min: flush email_scheduled queue via SMTP
-  2. wa_sender_loop       — every 2 min: flush whatsapp_scheduled queue via WABA provider
-  3. drip_executor_loop   — every 1 hr: advance drip enrollments whose next_step_at <= now
-  4. greeting_loop        — daily 9am IST: fire greeting rules matching today's MM-DD
-  5. fms_sla_loop         — every 5 min: send SLA breach/escalate/warning notifications
+  1. email_sender_loop        — every 2 min: flush email_scheduled queue via SMTP
+  2. wa_sender_loop           — every 2 min: flush whatsapp_scheduled queue via WABA provider
+  3. drip_executor_loop       — every 1 hr: advance drip enrollments whose next_step_at <= now
+  4. greeting_loop            — daily 9am IST: fire greeting rules matching today's MM-DD
+  5. fms_sla_loop             — every 5 min: send SLA breach/escalate/warning notifications
+  6. webinar_lifecycle_loop   — every 10 min: fire time-based webinar emails
+                                (remind_24h/remind_1h/live/noshow/attended)
 """
 
 import asyncio
@@ -904,6 +906,73 @@ async def fms_sla_loop():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# JOB — Zoom Webinar Lifecycle (time-based reminder/live/follow-up emails)
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def process_webinar_lifecycle(now=None):
+    """One pass over published webinar sessions: fire whichever time-based
+    stages (remind_24h/remind_1h/live/noshow/attended) are due right now.
+
+    `now` is injectable (tests pass a fixed UTC-aware datetime); defaults to
+    the real wall clock. Deps are imported lazily inside the function body to
+    avoid any circular-import risk at module load (scheduler is imported very
+    early by main.py, and routes.training_routes / webinar_lifecycle both sit
+    downstream of database/db setup).
+    """
+    from webinar_lifecycle import due_time_stages
+    from routes.training_routes import _enqueue_webinar_stage
+
+    if now is None:
+        now = datetime.now(timezone.utc)
+
+    sessions = await db.training_sessions.find(
+        {"is_published": True, "meeting_link": {"$nin": ["", None]}}, {"_id": 0}
+    ).to_list(500)
+
+    for session in sessions:
+        try:
+            stages = due_time_stages(session, now)
+            if not stages:
+                continue
+
+            sid = session.get("session_id")
+            for stage in stages:
+                if stage in ("remind_24h", "remind_1h", "live"):
+                    status_filter = "registered"
+                elif stage == "attended":
+                    status_filter = "attended"
+                elif stage == "noshow":
+                    if not session.get("recording_url"):
+                        # No recording yet — hold this stage; it'll fire on a
+                        # later cycle once the recording is set.
+                        continue
+                    status_filter = "no_show"
+                else:
+                    continue
+
+                # Load registrations fresh from DB each cycle so the
+                # idempotency guard in _enqueue_webinar_stage (which reads
+                # reg["sent_stages"]) sees the current state.
+                regs = await db.session_registrations.find(
+                    {"session_id": sid, "status": status_filter}, {"_id": 0}
+                ).to_list(2000)
+                for reg in regs:
+                    await _enqueue_webinar_stage(session, reg, stage)
+        except Exception as exc:
+            log.error(f"[webinar loop] session {session.get('session_id')} error: {exc}")
+
+
+async def webinar_lifecycle_loop():
+    log.info("[scheduler] webinar lifecycle loop started (interval: 10 min)")
+    while True:
+        try:
+            await process_webinar_lifecycle()
+        except Exception as exc:
+            log.warning(f"[webinar loop] {exc}")
+        await asyncio.sleep(600)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # JOB 6 — CRM "Needs Attention" Daily Digest
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -1391,5 +1460,6 @@ async def start_scheduler():
     asyncio.create_task(daily_digest_loop())
     asyncio.create_task(daily_orders_report_loop())
     asyncio.create_task(challan_due_loop())
+    asyncio.create_task(webinar_lifecycle_loop())
     log.info("[scheduler] cert loop running")
-    log.info("[scheduler] all 11 background jobs running")
+    log.info("[scheduler] all 12 background jobs running")
