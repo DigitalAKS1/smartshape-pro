@@ -712,6 +712,65 @@ async def send_test_email(request: Request):
     return {"sent": True, "to": user["email"]}
 
 
+# ── Send-now (composer: campaign + queue for explicitly selected contacts) ────
+
+@router.post("/email/send-now")
+async def send_now(request: Request):
+    user = await get_current_user(request)
+    body = await request.json()
+    subject = (body.get("subject") or "").strip()
+    html_raw = (body.get("body_html") or "").strip()
+    recipient_ids = body.get("recipient_ids") or []
+    if not recipient_ids:
+        raise HTTPException(400, "Select at least one recipient")
+    if not subject:
+        raise HTTPException(400, "Subject is required")
+    if not html_raw:
+        raise HTTPException(400, "Message body is required")
+    html_tmpl = wrap_email_shell(sanitize_html(html_raw))
+    text_tmpl = (body.get("body_text") or plain_from_html(html_raw) or "").strip()
+
+    contacts = await db.contacts.find(
+        {"contact_id": {"$in": recipient_ids}, "is_deleted": {"$ne": True}}, {"_id": 0}
+    ).to_list(None)
+    now = datetime.now(timezone.utc).isoformat()
+    campaign_id = f"ecamp_{uuid.uuid4().hex[:10]}"
+    await db.email_campaigns.insert_one({
+        "campaign_id": campaign_id,
+        "name": body.get("name") or subject[:60],
+        "subject": subject, "body_html": html_tmpl, "message": text_tmpl,
+        "template_id": body.get("template_id"),
+        "source": body.get("source", "manual"), "source_id": body.get("source_id", ""),
+        "audience_filter": {}, "audience_label": f"{len(contacts)} selected",
+        "audience_count": len(contacts), "status": "queued",
+        "sent_count": 0, "delivered_count": 0, "failed_count": 0,
+        "created_by": user["email"], "created_by_name": user.get("name", user["email"]),
+        "created_at": now, "updated_at": now, "sent_at": now,
+    })
+    queued = 0
+    for contact in contacts:
+        email_addr = (contact.get("email") or "").strip()
+        if not email_addr or "@" not in email_addr:
+            continue
+        if await _is_suppressed(email_addr):
+            continue
+        first = (contact.get("first_name") or contact.get("name") or "").split(" ")[0] if (contact.get("first_name") or contact.get("name")) else ""
+        school = contact.get("company") or "your school"
+        await db.email_scheduled.insert_one({
+            "scheduled_id": f"esched_{uuid.uuid4().hex[:10]}",
+            "campaign_id": campaign_id, "contact_id": contact.get("contact_id", ""),
+            "contact_name": first, "email": email_addr,
+            "subject": personalize(subject, first, school),
+            "message": personalize(text_tmpl, first, school),
+            "body_html": personalize(html_tmpl, first, school),
+            "status": "pending", "queued_at": now, "sent_at": None, "type": "campaign",
+        })
+        queued += 1
+    await db.email_campaigns.update_one({"campaign_id": campaign_id},
+        {"$set": {"audience_count": queued, "sent_count": 0}})
+    return {"queued": queued, "campaign_id": campaign_id}
+
+
 # ── Queue ─────────────────────────────────────────────────────────────────────
 
 @router.get("/email/queue")

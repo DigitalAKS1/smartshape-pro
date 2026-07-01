@@ -215,3 +215,74 @@ async def test_send_test_sends_to_current_user(client, test_db, monkeypatch):
     assert body["sent"] is True
     assert body["to"] == "admin@t"
     assert "text/html" in _FakeSMTP.last["raw"]
+
+
+# ---------------------------------------------------------------------------
+# POST /email/send-now — composer: campaign + per-recipient queue rows
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_send_now_queues_rows_for_selected_contacts(client, test_db):
+    await test_db.contacts.insert_one({
+        "contact_id": "con_qa1", "name": "QA Person",
+        "email": "qa1@example.com", "company": "QA School",
+    })
+
+    r = await client.post("/api/email/send-now", json={
+        "subject": "Hi {name}",
+        "body_html": "<p>Hello {name} at {school_name}</p>",
+        "recipient_ids": ["con_qa1"],
+        "source": "manual",
+    })
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["queued"] == 1
+    assert body["campaign_id"].startswith("ecamp_")
+
+    rows = await test_db.email_scheduled.find({"campaign_id": body["campaign_id"]}).to_list(None)
+    assert len(rows) == 1
+    row = rows[0]
+    assert "QA" in row["body_html"]
+    assert "QA School" in row["body_html"]
+    assert "{name}" not in row["body_html"]
+    assert "{school_name}" not in row["body_html"]
+
+
+@pytest.mark.asyncio
+async def test_send_now_skips_suppressed(client, test_db):
+    await test_db.contacts.insert_one({
+        "contact_id": "con_qa2", "name": "Asha Kumar",
+        "email": "asha@example.com", "company": "Sunrise School",
+    })
+    await test_db.contacts.insert_one({
+        "contact_id": "con_qa3", "name": "Ravi Singh",
+        "email": "ravi@example.com", "company": "Green Valley School",
+    })
+    await test_db.email_suppressions.insert_one({"email": "ravi@example.com"})
+
+    r = await client.post("/api/email/send-now", json={
+        "subject": "Hi {name}",
+        "body_html": "<p>Hello {name}</p>",
+        "recipient_ids": ["con_qa2", "con_qa3"],
+        "source": "manual",
+    })
+    assert r.status_code == 200, r.text
+    assert r.json()["queued"] == 1
+
+
+@pytest.mark.asyncio
+async def test_send_now_validation(client, test_db):
+    r = await client.post("/api/email/send-now", json={
+        "subject": "Hi", "body_html": "<p>hi</p>", "recipient_ids": [],
+    })
+    assert r.status_code == 400
+
+    r = await client.post("/api/email/send-now", json={
+        "subject": "", "body_html": "<p>hi</p>", "recipient_ids": ["con_qa1"],
+    })
+    assert r.status_code == 400
+
+    r = await client.post("/api/email/send-now", json={
+        "subject": "Hi", "body_html": "", "recipient_ids": ["con_qa1"],
+    })
+    assert r.status_code == 400
