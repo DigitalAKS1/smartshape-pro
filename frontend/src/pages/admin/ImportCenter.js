@@ -5,6 +5,7 @@ import { Button } from '../../components/ui/button';
 import { toast } from 'sonner';
 import { Upload, CheckCircle, XCircle, FileText, Play, Clock, Download } from 'lucide-react';
 import ZoomCrmImport from '../../components/crm/ZoomCrmImport';
+import DynamicEntityForm from '../../components/forms/DynamicEntityForm';
 
 export default function ImportCenter() {
   const [preview, setPreview] = useState(null);
@@ -18,6 +19,10 @@ export default function ImportCenter() {
   // Manual picker state
   const [selectedSource, setSelectedSource] = useState(null);
   const fileRef = useRef(null);
+  // Manual Entry (single-record) state
+  const [entryValues, setEntryValues] = useState({});
+  const [entrySaving, setEntrySaving] = useState(false);
+  const [entryResult, setEntryResult] = useState(null);
 
   const card = 'bg-[var(--bg-card)] border-[var(--border-color)]';
   const inputCls = 'bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]';
@@ -164,6 +169,22 @@ export default function ImportCenter() {
     try { const res = await importSystem.logs(); setLogs(res.data); } catch {}
   };
 
+  const submitEntry = async () => {
+    setEntrySaving(true);
+    try {
+      const res = await masterImport.entry({ values: entryValues, create_leads: true });
+      const r = res.data;
+      setEntryResult(r);
+      if (r.action === 'needs_review') {
+        toast.error('This matches more than one existing school — set the School ID to update a specific one.');
+      } else {
+        toast.success(r.action === 'update' ? 'School updated' : `School created (${r.school_id})`);
+        if (r.action === 'create') setEntryValues({}); // clear after a fresh create
+      }
+    } catch { toast.error('Failed to save'); }
+    setEntrySaving(false);
+  };
+
   // Derived: which keys are already used (for 1-to-1 enforcement in manual mode)
   const usedKeys = new Set(mapping.filter(m => m.key).map(m => m.key));
 
@@ -178,16 +199,70 @@ export default function ImportCenter() {
         <h1 className={`text-3xl sm:text-4xl font-semibold ${textPri} tracking-tight`} data-testid="import-center-title">Import Center</h1>
 
         <div className={`flex gap-1 ${card} border rounded-md p-1`}>
-          {['import', 'zoom', 'logs'].map(tab => (
+          {['import', 'entry', 'zoom', 'logs'].map(tab => (
             <button key={tab} onClick={() => { setActiveTab(tab); if (tab === 'logs') loadLogs(); }}
               className={`flex-1 px-4 py-2 rounded text-sm font-medium transition-all capitalize ${activeTab === tab ? 'bg-[#e94560] text-white' : `${textSec} hover:bg-[var(--bg-hover)]`}`}
               data-testid={`import-tab-${tab}`}>
-              {tab === 'import' ? 'Import Data' : tab === 'zoom' ? 'Zoom CRM' : 'Import History'}
+              {tab === 'import' ? 'Import Data' : tab === 'entry' ? 'Manual Entry' : tab === 'zoom' ? 'Zoom CRM' : 'Import History'}
             </button>
           ))}
         </div>
 
         {activeTab === 'zoom' && <ZoomCrmImport />}
+
+        {activeTab === 'entry' && (
+          <div className={`${card} border rounded-md p-5 space-y-5`} data-testid="manual-entry-panel">
+            <div>
+              <h2 className={`text-lg font-medium ${textPri}`}>Add / Edit School (Master Form)</h2>
+              <p className={`text-xs ${textMuted} mt-1`} translate="no">
+                Fill the fields below and save. To UPDATE an existing school, paste its School ID.
+                Adding a field in Master Fields makes it appear here automatically.
+              </p>
+            </div>
+
+            <div>
+              <label className={`text-xs ${textSec}`}>School ID</label>
+              <input
+                type="text"
+                value={entryValues.school_id || ''}
+                onChange={e => setEntryValues({ ...entryValues, school_id: e.target.value })}
+                placeholder="leave blank to create new"
+                className={`mt-1 w-full max-w-sm rounded border px-2 py-2 text-sm ${inputCls}`}
+                data-testid="manual-entry-school-id"
+              />
+              <p className={`text-[11px] ${textMuted} mt-0.5`}>leave blank to create new</p>
+            </div>
+
+            <div className="space-y-2">
+              <h3 className={`text-sm font-semibold ${textPri}`}>School</h3>
+              <DynamicEntityForm entity="school" value={entryValues} onChange={setEntryValues} />
+            </div>
+
+            <div className="space-y-2">
+              <h3 className={`text-sm font-semibold ${textPri}`}>Contact</h3>
+              <DynamicEntityForm entity="contact" value={entryValues} onChange={setEntryValues} />
+            </div>
+
+            <div className="space-y-2">
+              <h3 className={`text-sm font-semibold ${textPri}`}>Lead</h3>
+              <DynamicEntityForm entity="lead" value={entryValues} onChange={setEntryValues} />
+            </div>
+
+            <div className="flex items-center gap-3 pt-2">
+              <Button onClick={submitEntry} disabled={entrySaving}
+                className="bg-[#e94560] hover:bg-[#f05c75] text-white" data-testid="manual-entry-save-btn">
+                {entrySaving ? 'Saving...' : 'Save'}
+              </Button>
+              {entryResult && (
+                <span className={`text-sm ${entryResult.action === 'needs_review' ? 'text-yellow-400' : 'text-green-400'}`} translate="no">
+                  {entryResult.action === 'needs_review'
+                    ? 'Matches more than one school — set the School ID to update a specific one.'
+                    : `${entryResult.action === 'update' ? 'Updated' : 'Created'} school ${entryResult.school_id || ''}`}
+                </span>
+              )}
+            </div>
+          </div>
+        )}
 
         {activeTab === 'import' && (
           <div className="space-y-4">
