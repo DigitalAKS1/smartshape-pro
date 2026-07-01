@@ -384,6 +384,8 @@ export const email = {
   launchCampaign: (id)     => API.post(`/email/campaigns/${id}/launch`),
   getAnalytics:   ()       => API.get('/email/analytics'),
   getQueue:       (params) => API.get('/email/queue', { params }),
+  previewAudience:    (audience_filter) => API.post('/email/audience/preview', { audience_filter }),
+  getAudienceOptions: ()                => API.get('/email/audience/options'),
 };
 
 // Drip Sequences
