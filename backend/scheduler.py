@@ -1055,17 +1055,18 @@ async def _generate_pending_certs():
             out_name = f"{it['item_id']}.pdf"
             out_path = os.path.join(_CERT_DIR, out_name)
             try:
+                item = {"name": it["name"], "school": it.get("school", "")}
                 if tpl.get("kind") == "pdf":
                     if tpl.get("fields"):
                         render_certificate_pdf_overlay(bg_path, out_path, tpl.get("fields", []),
-                                                       {"name": it["name"]}, batch.get("shared_values", {}),
+                                                       item, batch.get("shared_values", {}),
                                                        tpl.get("width_px") or 0, tpl.get("height_px") or 0)
                     else:
                         render_certificate_pdf_merge(bg_path, out_path,
-                                                     {"name": it["name"]}, batch.get("shared_values", {}))
+                                                     item, batch.get("shared_values", {}))
                 else:
                     render_certificate_pdf(bg_path, out_path, tpl.get("fields", []),
-                                           {"name": it["name"]}, batch.get("shared_values", {}))
+                                           item, batch.get("shared_values", {}))
                 await db.cert_items.update_one({"item_id": it["item_id"]}, {"$set": {
                     "gen_status": "generated", "pdf_url": f"/uploads/certificates/{out_name}"}})
                 await db.cert_batches.update_one({"batch_id": batch["batch_id"]},
