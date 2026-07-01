@@ -389,6 +389,28 @@ async def _seed_templates():
 # ── Audience resolution (same logic as WhatsApp, uses email field) ────────────
 
 async def _resolve_audience(audience_filter: dict) -> list:
+    session_id = audience_filter.get("session_id")
+    if session_id:
+        session_status = audience_filter.get("session_status")
+        q: dict = {"session_id": session_id}
+        if session_status:
+            q["status"] = session_status
+        regs = await db.session_registrations.find(q, {"_id": 0}).to_list(5000)
+        result = []
+        for reg in regs:
+            email = reg.get("email", "")
+            if not email:
+                continue
+            name = reg.get("name", "") or ""
+            result.append({
+                "contact_id": reg.get("contact_id", ""),
+                "email": email,
+                "name": name,
+                "first_name": name.split(" ")[0] if name else "",
+                "company": reg.get("school_name", ""),
+            })
+        return result
+
     roles        = audience_filter.get("roles", [])
     boards       = audience_filter.get("boards", [])
     cities       = audience_filter.get("cities", [])
