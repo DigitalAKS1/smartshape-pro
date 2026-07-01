@@ -10,7 +10,9 @@
 
 ## Global Constraints
 
-- **NEVER run tests against production data.** Backend integration tests require a server started with `DB_NAME=smartshape_test`. Pure-logic tests must mock `smtplib` and touch no DB. (Repo convention: tests in `backend/tests/` hit a live server via `REACT_APP_BACKEND_URL`, login `info@smartshape.in`.)
+- **NEVER run tests against production data.** Use the repo's **in-process** harness, not a live server. Run all backend tests as: `cd backend && MONGO_URL=mongodb://localhost:27017 DB_NAME=smartshape_test python -m pytest tests/<file> -v`.
+  - **Pure-logic tests** (e.g. `email_utils`, `_smtp_send`): no DB; mock `smtplib` by monkeypatching `scheduler.smtplib.SMTP_SSL`. Pattern reference: `backend/tests/test_field_registry.py`.
+  - **Endpoint tests** (`/email/*`, `notify`): build a **minimal FastAPI app** including only the target router with `prefix="/api"`, override `auth_utils.get_current_user` via `app.dependency_overrides`, patch the route module's `db` to a fresh Motor client bound to the test loop, and drive it with `httpx.AsyncClient(ASGITransport)`. **Do NOT import `main.app`** (it starts the scheduler against prod Atlas). Copy this exact pattern from `backend/tests/test_import_endpoints.py`. Every test file starts with the prod-guard: `assert _DB_NAME.endswith("_test") or _DB_NAME == "mtt_ci"`. The `requests`/`REACT_APP_BACKEND_URL` code shown in task steps below is illustrative of intent only — implement the assertions using this in-process harness.
 - **Backward compatible:** `body_html` is always optional; when absent, behavior is byte-identical to today (plain text).
 - **No schema migration:** new fields are additive and defaulted at read/write time.
 - **Sanitize all HTML** server-side with `bleach` before storing or sending; render previews only inside a sandboxed iframe client-side.
