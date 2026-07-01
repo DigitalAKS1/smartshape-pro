@@ -114,6 +114,8 @@ async def notify_session(session_id: str, request: Request):
         if not email_addr or "@" not in email_addr or email_addr in seen:
             continue
         seen.add(email_addr)
+        if await db.email_suppressions.find_one({"email": email_addr}):
+            continue
         first = q.get("principal_name") or "Sir/Ma'am"
         school = q.get("school_name") or "your school"
         await db.email_scheduled.insert_one({

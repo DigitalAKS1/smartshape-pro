@@ -52,6 +52,7 @@ async def test_db():
     await d.quotations.delete_many({})
     await d.email_scheduled.delete_many({})
     await d.email_campaigns.delete_many({})
+    await d.email_suppressions.delete_many({})
     motor_client.close()
 
 
@@ -109,3 +110,46 @@ async def test_notify_session_enqueues_not_inline(client, test_db):
     assert campaign is not None
     assert campaign["source"] == "training_session"
     assert campaign["status"] == "queued"
+
+
+@pytest.mark.asyncio
+async def test_notify_session_skips_suppressed(client, test_db):
+    session_id = f"sess_{uuid.uuid4().hex[:12]}"
+    await test_db.training_sessions.insert_one({
+        "session_id": session_id,
+        "title": "QA Webinar",
+        "description": "A test session",
+        "date": "2099-01-01",
+        "time": "10:00",
+        "platform": "zoom",
+        "meeting_link": "https://zoom.us/j/1",
+        "location": "",
+        "is_published": True,
+        "status": "upcoming",
+    })
+
+    # Insert two quotations with distinct customer emails
+    await test_db.quotations.insert_many([
+        {
+            "customer_email": "alice@example.com",
+            "principal_name": "Alice Principal",
+            "school_name": "Alice School",
+        },
+        {
+            "customer_email": "bob@example.com",
+            "principal_name": "Bob Principal",
+            "school_name": "Bob School",
+        },
+    ])
+
+    # Suppress one of the emails
+    await test_db.email_suppressions.insert_one({"email": "alice@example.com"})
+
+    r = await client.post(f"/api/training/sessions/{session_id}/notify")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["queued"] == 1, "suppressed email should be skipped"
+
+    scheduled_rows = await test_db.email_scheduled.find({}).to_list(10)
+    assert len(scheduled_rows) == 1
+    assert scheduled_rows[0]["email"] == "bob@example.com"
