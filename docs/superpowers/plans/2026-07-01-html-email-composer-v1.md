@@ -763,7 +763,9 @@ git commit -m "feat(email): reusable RecipientPicker (search + filters + select-
 
 Sections, top to bottom, inside the existing `<Dialog>`/`<DialogContent>` primitives:
 1. **Subject** input (prefilled from `initialSubject`).
-2. **Content mode toggle** `[Rich text | Paste HTML]`. Rich text → `<ReactQuill value={html} onChange={setHtml} />`. Paste HTML → `<textarea value={html} onChange>`. Both bind the same `html` state. An "Insert field" `<select>` inserts `{name}`/`{school_name}` into the subject/body.
+2. **Content** → use the shared `<HtmlBodyEditor value={html} onChange={setHtml} />` component (see below). An "Insert field" `<select>` inserts `{name}`/`{school_name}` into the subject/body.
+
+**Extract a shared editor** `frontend/src/components/email/HtmlBodyEditor.js`: a controlled `<HtmlBodyEditor value onChange />` with a `[Rich text | Paste HTML]` toggle — Rich text → `<ReactQuill value onChange />`; Paste HTML → `<textarea value onChange>`; both bind the same HTML string. This component is reused by the composer (this task) AND the template dialog (Task 13), so neither duplicates the editor.
 3. **Template row:** "Load template" `<select>` (from `email.getTemplates`, options where `body_html` exists → set subject+html); "Save as template" button (prompts name → `email.createTemplate({name, subject, body_html: html, category:'custom'})`).
 4. **Recipients:** `<RecipientPicker contacts allTags roles selectedIds={recipientIds} onChange={setRecipientIds} />` (load `contacts/tags/roles` on open).
 5. **Guardrails:** "Preview" toggle → renders `dangerouslySetInnerHTML={{__html: DOMPurify.sanitize(html)}}` inside a bordered box (or `<iframe sandbox>` for isolation); "Send test to me" → `email.sendTest({subject, body_html: html})` + toast; footer "Send" button.
@@ -862,6 +864,37 @@ Expected: prints a positive integer, no import error.
 ```bash
 git add backend/email_templates_html.py backend/routes/email_routes.py
 git commit -m "feat(email): seed evergreen templates with email-safe HTML bodies"
+```
+
+---
+
+## Task 13: HTML body option in the Email Template create/edit dialog
+
+**Files:**
+- Modify: `frontend/src/components/marketing/EmailHubTab.js` (the "New Email Template" / edit dialog)
+
+**Interfaces:**
+- Consumes: `<HtmlBodyEditor>` (Task 10), `email.createTemplate`/`email.updateTemplate` (send `body_html`).
+- Produces: the template dialog can author an HTML body (rich-text or pasted) stored on the template's `body_html`; existing plain "Email Body" (`body`) stays as the plain-text fallback.
+
+- [ ] **Step 1: Add an HTML body field to the template dialog**
+
+In `EmailHubTab.js`, locate the template create/edit dialog (the form with Template Name / Category / Subject Line / Email Body — the "New Email Template" modal). Add, below the plain "Email Body" textarea, a labelled section **"HTML Design (optional)"** rendering `<HtmlBodyEditor value={form.body_html || ''} onChange={(html) => setForm(f => ({ ...f, body_html: html }))} />`. Keep the existing plain "Email Body" textarea (it feeds `body`, the plain-text fallback). Add `body_html` to the dialog's form state initializer (default `''`) and to the edit-prefill (`body_html: tmpl.body_html || ''`).
+
+- [ ] **Step 2: Persist body_html on save**
+
+Ensure the create/update calls include `body_html` in the payload (e.g. `email.createTemplate({ ...form, body_html: form.body_html })` / the update equivalent). Backend already accepts and echoes `body_html` (Task 4). A live preview is optional here; the composer (Task 10) is the primary preview surface.
+
+- [ ] **Step 3: Verify build compiles**
+
+Run: `cd frontend && DISABLE_ESLINT_PLUGIN=true npm run build 2>&1 | tail -5`
+Expected: Compiled.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add frontend/src/components/marketing/EmailHubTab.js
+git commit -m "feat(email): HTML body (rich-text/paste) in the Email Template dialog"
 ```
 
 ---
