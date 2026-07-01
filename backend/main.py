@@ -376,6 +376,19 @@ async def startup():
         {"$set": {"product_type_id": "ptype_dies", "product_type": "Dies"}},
     )
 
+    # Seed the dynamic master-data field registry (28 importable fields).
+    # NOTE: connect_db() in database.py also seeds this, but connect_db() is not
+    # called on the main:app startup path — so we seed it here (idempotent).
+    # Without this, field_definitions stays empty and the importer/exporter/
+    # template show only the "School ID" column.
+    try:
+        from field_registry import seed_field_definitions
+        await db.field_definitions.create_index([("entity", 1), ("is_active", 1)], background=True)
+        await db.field_definitions.create_index([("key", 1)], unique=True, background=True)
+        await seed_field_definitions(db)
+    except Exception as _fd_err:
+        logging.warning(f"field_definitions seed skipped: {_fd_err}")
+
     # Seed modules
     default_modules = [
         {"module_id": "mod_dashboard", "name": "dashboard", "display_name": "Dashboard", "category": "admin", "sort_order": 1, "is_active": True},
