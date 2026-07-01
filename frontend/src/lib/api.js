@@ -790,6 +790,8 @@ export const masterImport = {
   },
   execute: (payload) => API.post('/master-import/execute', payload),
   template: (withIds) => API.get(`/master-import/template?with_ids=${withIds ? 'true' : 'false'}`),
+  exportJson: () => API.get('/master-import/export'),
+  exportXlsx: () => API.get('/master-import/export.xlsx', { responseType: 'blob' }),
 };
 
 // Dynamic field definitions (used by master-data import)

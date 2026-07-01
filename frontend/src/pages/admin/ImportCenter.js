@@ -134,6 +134,32 @@ export default function ImportCenter() {
     } catch { toast.error('Failed to download template'); }
   };
 
+  const handleExportCsv = async () => {
+    try {
+      const res = await masterImport.exportJson();
+      const { headers, rows } = res.data;
+      const lines = [headers.join(',')];
+      (rows || []).forEach(r => {
+        lines.push(headers.map(h => `"${(r[h] || '').replace(/"/g, '""')}"`).join(','));
+      });
+      const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'master_data_export.csv'; a.click();
+      URL.revokeObjectURL(url);
+    } catch { toast.error('Failed to export CSV'); }
+  };
+
+  const handleExportXlsx = async () => {
+    try {
+      const res = await masterImport.exportXlsx();
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'master_data_export.xlsx'; a.click();
+      URL.revokeObjectURL(url);
+    } catch { toast.error('Failed to export Excel'); }
+  };
+
   const loadLogs = async () => {
     try { const res = await importSystem.logs(); setLogs(res.data); } catch {}
   };
@@ -193,6 +219,26 @@ export default function ImportCenter() {
               </div>
             </div>
 
+            {/* Export Master Data */}
+            <div className={`${card} border rounded-md p-5 space-y-3`} translate="no">
+              <h2 className={`text-lg font-medium ${textPri}`}>Export Master Data</h2>
+              <p className={`text-xs ${textMuted}`}>
+                Download all school master-data (all fields incl. custom) — re-imports cleanly.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Button variant="outline" onClick={handleExportCsv}
+                  className={`border-[var(--border-color)] ${textSec} text-xs flex items-center gap-1.5`}
+                  data-testid="export-master-csv-btn">
+                  <Download className="h-3.5 w-3.5" /> Export CSV
+                </Button>
+                <Button variant="outline" onClick={handleExportXlsx}
+                  className={`border-[var(--border-color)] ${textSec} text-xs flex items-center gap-1.5`}
+                  data-testid="export-master-xlsx-btn">
+                  <Download className="h-3.5 w-3.5" /> Export Excel
+                </Button>
+              </div>
+            </div>
+
             {/* Step 3: Mapping */}
             {preview && (
               <div className={`${card} border rounded-md p-5 space-y-4`} data-testid="import-preview">
@@ -242,8 +288,12 @@ export default function ImportCenter() {
                                 className={`text-xs rounded border px-2 py-1 ${inputCls} w-full max-w-[220px]`}>
                                 <option value="">— ignore —</option>
                                 <option value="school_id">School ID (match key)</option>
-                                {allFields.map(f => (
-                                  <option key={f.field_id} value={f.key}>{f.label}</option>
+                                {['school', 'contact', 'lead'].map(ent => (
+                                  <optgroup key={ent} label={ent === 'school' ? 'School' : ent === 'contact' ? 'Contact' : 'Lead'}>
+                                    {allFields.filter(f => f.entity === ent).map(f => (
+                                      <option key={f.field_id} value={f.key}>{f.label}</option>
+                                    ))}
+                                  </optgroup>
                                 ))}
                               </select>
                             </td>
@@ -296,18 +346,29 @@ export default function ImportCenter() {
                           Available fields {selectedSource ? `(click to link to "${selectedSource}")` : '(select a source column first)'}
                         </div>
                         <div className="max-h-64 overflow-y-auto">
-                          {allFields.map(f => {
-                            const alreadyUsed = usedKeys.has(f.key) && !mapping.find(m => m.source === selectedSource && m.key === f.key);
+                          {['school', 'contact', 'lead'].map(ent => {
+                            const entFields = allFields.filter(f => f.entity === ent);
+                            if (entFields.length === 0) return null;
                             return (
-                              <button
-                                key={f.field_id}
-                                disabled={!selectedSource || alreadyUsed}
-                                onClick={() => selectedSource && !alreadyUsed && linkManual(selectedSource, f)}
-                                className={`w-full text-left px-3 py-2 text-xs border-b border-[var(--border-color)] last:border-0 transition-all flex items-center justify-between gap-2
-                                  ${alreadyUsed ? 'opacity-40 cursor-not-allowed' : selectedSource ? 'hover:bg-[var(--bg-hover)] cursor-pointer' : 'cursor-default opacity-60'}`}>
-                                <span className={textPri}>{f.label}</span>
-                                <span className={`text-[10px] ${textMuted}`}>{f.key}</span>
-                              </button>
+                              <div key={ent}>
+                                <div className={`px-3 py-1 text-[10px] font-semibold uppercase tracking-wide ${textMuted} bg-[var(--bg-primary)] sticky top-0`}>
+                                  {ent === 'school' ? 'School' : ent === 'contact' ? 'Contact' : 'Lead'}
+                                </div>
+                                {entFields.map(f => {
+                                  const alreadyUsed = usedKeys.has(f.key) && !mapping.find(m => m.source === selectedSource && m.key === f.key);
+                                  return (
+                                    <button
+                                      key={f.field_id}
+                                      disabled={!selectedSource || alreadyUsed}
+                                      onClick={() => selectedSource && !alreadyUsed && linkManual(selectedSource, f)}
+                                      className={`w-full text-left px-3 py-2 text-xs border-b border-[var(--border-color)] last:border-0 transition-all flex items-center justify-between gap-2
+                                        ${alreadyUsed ? 'opacity-40 cursor-not-allowed' : selectedSource ? 'hover:bg-[var(--bg-hover)] cursor-pointer' : 'cursor-default opacity-60'}`}>
+                                      <span className={textPri}>{f.label}</span>
+                                      <span className={`text-[10px] ${textMuted}`}>{f.key}</span>
+                                    </button>
+                                  );
+                                })}
+                              </div>
                             );
                           })}
                           {allFields.length === 0 && (
