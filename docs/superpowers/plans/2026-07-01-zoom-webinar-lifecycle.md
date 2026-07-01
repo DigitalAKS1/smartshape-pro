@@ -35,7 +35,7 @@
 
 ---
 
-## Task W1: Session `.ics` builder + endpoint
+### Task 1: Session `.ics` builder + endpoint
 
 **Files:**
 - Create: `backend/webinar_ics.py`
@@ -145,7 +145,7 @@ git commit -m "feat(webinar): session .ics builder + GET /training/sessions/{id}
 
 ---
 
-## Task W2: Session + registration data model
+### Task 2: Session + registration data model
 
 **Files:**
 - Modify: `backend/routes/training_routes.py` (`create_session`, `update_session`, and a `_session_defaults` reader)
@@ -182,7 +182,7 @@ async def test_session_persists_webinar_fields(client, test_db):
 "webinar_emails": {**{k: True for k in ("confirm","remind_24h","remind_1h","live","noshow","attended")}, **(body.get("webinar_emails") or {})},
 "reminders_sent": {},
 ```
-Add the same keys to `update_session`'s `allowed` list (`host_name, host_email, recording_url, zoom_meeting_id, webinar_emails`). In `list_sessions`, after fetching, backfill defaults for legacy docs missing `webinar_emails` (map default-True dict) so reads are consistent. Registration status fields are set where registrations are created (Task W3).
+Add the same keys to `update_session`'s `allowed` list (`host_name, host_email, recording_url, zoom_meeting_id, webinar_emails`). In `list_sessions`, after fetching, backfill defaults for legacy docs missing `webinar_emails` (map default-True dict) so reads are consistent. Registration status fields are set where registrations are created (Task 3).
 
 - [ ] **Step 4: Run → GREEN.**
 
@@ -190,7 +190,7 @@ Add the same keys to `update_session`'s `allowed` list (`host_name, host_email, 
 
 ---
 
-## Task W3: Register endpoint + Stage-2 confirmation (HTML + .ics)
+### Task 3: Register endpoint + Stage-2 confirmation (HTML + .ics)
 
 **Files:**
 - Modify: `backend/routes/training_routes.py` (`POST /training/sessions/{id}/register`, `_enqueue_webinar_stage` helper)
@@ -205,7 +205,7 @@ Add the same keys to `update_session`'s `allowed` list (`host_name, host_email, 
 
 - [ ] **Step 2: Run → RED.**
 
-- [ ] **Step 3: Implement** `_enqueue_webinar_stage` (reuse the enqueue shape from `notify_session`; use `personalize_html` for `body_html`, plain `personalize` for subject/message; tokens from a `_session_tokens(session)` dict incl. `add_to_calendar_url = f"{FRONTEND_URL}/api/training/sessions/{id}/ics"`), the `register` endpoint, and a `_get_or_create_registration` dedup. `webinar_templates_html.STAGE_HTML["confirm"]` supplies the body (Task W4 — for RED you may inline a minimal body, but W4 replaces it).
+- [ ] **Step 3: Implement** `_enqueue_webinar_stage` (reuse the enqueue shape from `notify_session`; use `personalize_html` for `body_html`, plain `personalize` for subject/message; tokens from a `_session_tokens(session)` dict incl. `add_to_calendar_url = f"{FRONTEND_URL}/api/training/sessions/{id}/ics"`), the `register` endpoint, and a `_get_or_create_registration` dedup. `webinar_templates_html.STAGE_HTML["confirm"]` supplies the body (Task 4 — for RED you may inline a minimal body, but W4 replaces it).
 
 - [ ] **Step 4: Run → GREEN.**
 
@@ -213,7 +213,7 @@ Add the same keys to `update_session`'s `allowed` list (`host_name, host_email, 
 
 ---
 
-## Task W4: Webinar HTML templates (7 stages)
+### Task 4: Webinar HTML templates (7 stages)
 
 **Files:**
 - Create: `backend/webinar_templates_html.py`
@@ -230,7 +230,7 @@ Add the same keys to `update_session`'s `allowed` list (`host_name, host_email, 
 
 ---
 
-## Task W5: `webinar_lifecycle` due-time helpers (pure)
+### Task 5: `webinar_lifecycle` due-time helpers (pure)
 
 **Files:**
 - Create: `backend/webinar_lifecycle.py`
@@ -249,7 +249,7 @@ Add the same keys to `update_session`'s `allowed` list (`host_name, host_email, 
 
 ---
 
-## Task W6: `webinar_lifecycle_loop` scheduler job
+### Task 6: `webinar_lifecycle_loop` scheduler job
 
 **Files:**
 - Modify: `backend/scheduler.py` (add `webinar_lifecycle_loop()` + register `asyncio.create_task(webinar_lifecycle_loop())` in the start function alongside the others)
@@ -267,7 +267,7 @@ Add the same keys to `update_session`'s `allowed` list (`host_name, host_email, 
 
 ---
 
-## Task W7: Attendance reconciliation → no-show/attended
+### Task 7: Attendance reconciliation → no-show/attended
 
 **Files:**
 - Modify: `backend/routes/training_routes.py` (`POST /training/sessions/{id}/reconcile-attendance`)
@@ -285,7 +285,7 @@ Add the same keys to `update_session`'s `allowed` list (`host_name, host_email, 
 
 ---
 
-## Task W8: `session_id` audience filter
+### Task 8: `session_id` audience filter
 
 **Files:**
 - Modify: `backend/routes/email_routes.py` (`_resolve_audience`)
@@ -302,7 +302,7 @@ Add the same keys to `update_session`'s `allowed` list (`host_name, host_email, 
 
 ---
 
-## Task W9: Session dialog — host + recording + per-stage toggles
+### Task 9: Session dialog — host + recording + per-stage toggles
 
 **Files:**
 - Modify: `frontend/src/hooks/useCustomerEngagement.js` (session form state)
@@ -318,7 +318,7 @@ Add the same keys to `update_session`'s `allowed` list (`host_name, host_email, 
 
 ---
 
-## Task W10: Registrations view — attendance + reconcile
+### Task 10: Registrations view — attendance + reconcile
 
 **Files:**
 - Modify: `frontend/src/hooks/useCustomerEngagement.js` (reconcile action)
