@@ -27,6 +27,7 @@ assert _DB_NAME.endswith("_test") or _DB_NAME == "mtt_ci", (
 
 import routes.email_routes as er_mod
 import auth_utils
+import scheduler
 
 # Build minimal app — no scheduler, no startup hooks
 _app = FastAPI()
@@ -69,6 +70,7 @@ async def test_db(monkeypatch):
     await d.email_scheduled.delete_many({})
     await d.email_suppressions.delete_many({})
     await d.contacts.delete_many({})
+    await d.settings.delete_many({"type": "email"})
     motor_client.close()
 
 
@@ -172,3 +174,44 @@ async def test_launch_skips_suppressed_and_personalizes_html(client, test_db):
     assert "Sunrise School" in row["body_html"]
     assert "<script>" not in row["body_html"]
     assert "onclick" not in row["body_html"]
+
+
+# ---------------------------------------------------------------------------
+# POST /email/send-test — immediate single self-send, bypassing the queue
+# ---------------------------------------------------------------------------
+
+class _FakeSMTP:
+    last = {}
+    def __init__(self, *a, **k): pass
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+    def login(self, *a): pass
+    def sendmail(self, frm, to, raw): _FakeSMTP.last = {"frm": frm, "to": to, "raw": raw}
+
+
+@pytest.mark.asyncio
+async def test_send_test_400_when_email_not_configured(client, test_db):
+    r = await client.post("/api/email/send-test", json={
+        "subject": "Hello {name}", "body_html": "<p>hi {name}</p>",
+    })
+    assert r.status_code == 400, r.text
+
+
+@pytest.mark.asyncio
+async def test_send_test_sends_to_current_user(client, test_db, monkeypatch):
+    await test_db.settings.insert_one({
+        "type": "email",
+        "sender_email": "s@x.com",
+        "gmail_app_password": "pw",
+        "sender_name": "SmartShape",
+    })
+    monkeypatch.setattr(scheduler.smtplib, "SMTP_SSL", _FakeSMTP)
+
+    r = await client.post("/api/email/send-test", json={
+        "subject": "Hello {name}", "body_html": "<p>hi {name}</p>",
+    })
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["sent"] is True
+    assert body["to"] == "admin@t"
+    assert "text/html" in _FakeSMTP.last["raw"]

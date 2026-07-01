@@ -1,10 +1,12 @@
 from fastapi import APIRouter, HTTPException, Request
 from datetime import datetime, timezone
+import asyncio
 import uuid
 
 from database import db
 from auth_utils import get_current_user
-from email_utils import sanitize_html, personalize
+from email_utils import sanitize_html, personalize, plain_from_html, wrap_email_shell
+from scheduler import _smtp_send
 
 router = APIRouter()
 
@@ -688,6 +690,26 @@ async def get_email_analytics(request: Request):
         "campaigns": {"total": total_campaigns, "live": live_campaigns, "list": campaigns[:10]},
         "by_type": by_type,
     }
+
+
+# ── Send-test (immediate self-send, bypassing the queue) ──────────────────────
+
+@router.post("/email/send-test")
+async def send_test_email(request: Request):
+    user = await get_current_user(request)
+    body = await request.json()
+    s = await db.settings.find_one({"type": "email"}, {"_id": 0})
+    se = s.get("sender_email") if s else None
+    ap = s.get("gmail_app_password") if s else None
+    sn = s.get("sender_name", "SmartShape Pro") if s else "SmartShape Pro"
+    if not se or not ap:
+        raise HTTPException(400, "Email not configured")
+    subject = personalize((body.get("subject") or "Test email").strip(), user.get("name", ""), "")
+    html = sanitize_html((body.get("body_html") or "").strip())
+    html = wrap_email_shell(personalize(html, user.get("name", ""), "Your School")) if html else ""
+    text = personalize((body.get("body_text") or plain_from_html(html) or "Test").strip(), user.get("name", ""), "")
+    await asyncio.to_thread(_smtp_send, se, ap, sn, user["email"], f"[TEST] {subject}", text, html or None)
+    return {"sent": True, "to": user["email"]}
 
 
 # ── Queue ─────────────────────────────────────────────────────────────────────
