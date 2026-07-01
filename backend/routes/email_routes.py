@@ -379,72 +379,141 @@ async def _seed_templates():
 # ── Audience resolution (same logic as WhatsApp, uses email field) ────────────
 
 async def _resolve_audience(audience_filter: dict) -> list:
-    roles        = audience_filter.get("roles", [])
-    boards       = audience_filter.get("boards", [])
-    cities       = audience_filter.get("cities", [])
-    tags         = audience_filter.get("tags", [])
-    lead_stages  = audience_filter.get("lead_stages", [])
-    school_types = audience_filter.get("school_types", [])
-    min_strength = audience_filter.get("min_strength")
-    school_cities = audience_filter.get("school_cities", [])
-
-    base_filt = {"is_deleted": {"$ne": True}}
-
-    # By lead stage
-    if lead_stages:
-        leads_in_stage = await db.leads.find(
-            {"stage": {"$in": lead_stages}, "is_deleted": {"$ne": True}},
-            {"_id": 0, "converted_from_contact": 1, "school_id": 1},
+    # ── Special one-off modes (do NOT combine with the filter builder) ──────────
+    contact_ids = audience_filter.get("contact_ids")
+    if contact_ids:
+        return await db.contacts.find(
+            {"contact_id": {"$in": contact_ids}, "is_deleted": {"$ne": True}},
+            {"_id": 0},
         ).to_list(None)
-        cfc_ids  = [l["converted_from_contact"] for l in leads_in_stage if l.get("converted_from_contact")]
-        sch_ids  = [l["school_id"] for l in leads_in_stage if l.get("school_id")]
-        or_clauses = []
-        if cfc_ids:
-            or_clauses.append({"contact_id": {"$in": cfc_ids}})
-        if sch_ids:
-            or_clauses.append({"school_id": {"$in": sch_ids}})
-        if not or_clauses:
-            return []
-        return await db.contacts.find({"$and": [base_filt, {"$or": or_clauses}]}, {"_id": 0}).to_list(None)
 
-    # By school attributes
-    if school_types or min_strength is not None or school_cities:
+    if audience_filter.get("not_purchased"):
+        won_school_ids = {
+            l["school_id"]
+            async for l in db.leads.find(
+                {"stage": "won", "is_deleted": {"$ne": True}}, {"_id": 0, "school_id": 1}
+            )
+            if l.get("school_id")
+        }
+        q = {"is_deleted": {"$ne": True}}
+        if won_school_ids:
+            q["school_id"] = {"$nin": list(won_school_ids)}
+        return await db.contacts.find(q, {"_id": 0}).to_list(None)
+
+    # ── Combinable facets: AND across, OR within ────────────────────────────────
+    sources      = audience_filter.get("sources") or []
+    roles        = audience_filter.get("roles") or []
+    tags         = audience_filter.get("tags") or []
+    lead_stages  = audience_filter.get("lead_stages") or []
+    school_types = audience_filter.get("school_types") or []
+    cities       = audience_filter.get("cities") or audience_filter.get("school_cities") or []
+    min_strength = audience_filter.get("min_strength")
+    max_strength = audience_filter.get("max_strength")
+
+    contact_q = {"is_deleted": {"$ne": True}}
+
+    # School-level facets → intersect into one school_id set
+    school_id_sets = []
+    if school_types or cities or min_strength is not None or max_strength is not None:
         sch_q: dict = {}
         if school_types:
             sch_q["school_type"] = {"$in": school_types}
-        if min_strength is not None:
-            sch_q["school_strength"] = {"$gte": int(min_strength)}
-        if school_cities:
-            sch_q["city"] = {"$in": school_cities}
-        school_ids = [s["school_id"] async for s in db.schools.find(sch_q, {"_id": 0, "school_id": 1})]
+        if cities:
+            sch_q["city"] = {"$in": cities}
+        if min_strength is not None or max_strength is not None:
+            strq: dict = {}
+            if min_strength is not None:
+                strq["$gte"] = int(min_strength)
+            if max_strength is not None:
+                strq["$lte"] = int(max_strength)
+            sch_q["school_strength"] = strq
+        school_id_sets.append(
+            {s["school_id"] async for s in db.schools.find(sch_q, {"_id": 0, "school_id": 1})}
+        )
+    if lead_stages:
+        stage_ids = set()
+        async for l in db.leads.find(
+            {"stage": {"$in": lead_stages}, "is_deleted": {"$ne": True}},
+            {"_id": 0, "school_id": 1},
+        ):
+            if l.get("school_id"):
+                stage_ids.add(l["school_id"])
+        school_id_sets.append(stage_ids)
+    if school_id_sets:
+        school_ids = set.intersection(*school_id_sets)
         if not school_ids:
             return []
-        base_filt["school_id"] = {"$in": school_ids}
-        return await db.contacts.find(base_filt, {"_id": 0}).to_list(None)
+        contact_q["school_id"] = {"$in": list(school_ids)}
 
-    if boards:
-        base_filt["board"] = {"$in": boards}
-    if cities:
-        base_filt["city"] = {"$in": cities}
-
+    # Contact-level facets applied directly to the contacts query
+    if sources:
+        contact_q["source"] = {"$in": sources}
     if tags:
-        base_filt["tag_ids"] = {"$in": tags}
-        return await db.contacts.find(base_filt, {"_id": 0}).to_list(None)
+        contact_q["tag_ids"] = {"$in": tags}
 
+    contacts = await db.contacts.find(contact_q, {"_id": 0}).to_list(None)
+
+    # Role facet: OR over contact_role_id and free-text designation (post-filter)
     if roles:
         role_docs = await db.contact_roles.find(
             {"name": {"$in": roles}}, {"role_id": 1, "name": 1}
         ).to_list(None)
         role_ids = {r["role_id"] for r in role_docs}
-        role_names_lower = {r["name"].lower() for r in role_docs}
-        all_contacts = await db.contacts.find(base_filt, {"_id": 0}).to_list(None)
-        return [
-            c for c in all_contacts
+        role_names_lower = {r["name"].lower() for r in role_docs} | {r.lower() for r in roles}
+        contacts = [
+            c for c in contacts
             if c.get("contact_role_id") in role_ids
             or (c.get("designation") or "").lower() in role_names_lower
         ]
 
-    return await db.contacts.find(base_filt, {"_id": 0}).to_list(None)
+    return contacts
+
+
+def _has_email(c: dict) -> bool:
+    e = (c.get("email") or "").strip()
+    return "@" in e
+
+
+E_STAGES = [
+    {"id": "new", "label": "New"}, {"id": "contacted", "label": "Contacted"},
+    {"id": "demo", "label": "Demo"}, {"id": "negotiation", "label": "Negotiation"},
+    {"id": "quoted", "label": "Quoted"}, {"id": "follow_up", "label": "Follow Up"},
+    {"id": "won", "label": "Won"}, {"id": "lost", "label": "Lost"},
+]
+
+
+@router.post("/email/audience/preview")
+async def preview_email_audience(request: Request):
+    await get_current_user(request)
+    body = await request.json()
+    contacts = await _resolve_audience(body.get("audience_filter", {}))
+    emailable = [c for c in contacts if _has_email(c)]
+    return {
+        "count": len(emailable),
+        "sample_names": [c.get("name", "") for c in emailable[:5]],
+    }
+
+
+@router.get("/email/audience/options")
+async def email_audience_options(request: Request):
+    await get_current_user(request)
+    sources = sorted({(c.get("source") or "").strip()
+                      for c in await db.contacts.find(
+                          {"is_deleted": {"$ne": True}}, {"_id": 0, "source": 1}).to_list(None)
+                      if (c.get("source") or "").strip()})
+    roles = [r["name"] async for r in db.contact_roles.find(
+        {"is_active": {"$ne": False}}, {"_id": 0, "name": 1}).sort("name", 1)]
+    school_types = sorted({(s.get("school_type") or "").strip()
+                           for s in await db.schools.find(
+                               {"is_deleted": {"$ne": True}}, {"_id": 0, "school_type": 1}).to_list(None)
+                           if (s.get("school_type") or "").strip()})
+    cities = sorted({(s.get("city") or "").strip()
+                     for s in await db.schools.find(
+                         {"is_deleted": {"$ne": True}}, {"_id": 0, "city": 1}).to_list(None)
+                     if (s.get("city") or "").strip()})
+    tags = await db.tags.find({}, {"_id": 0, "tag_id": 1, "name": 1, "color": 1}).to_list(None)
+    return {"sources": sources, "roles": roles, "school_types": school_types,
+            "cities": cities, "tags": tags, "stages": E_STAGES}
 
 
 # ── Template endpoints ─────────────────────────────────────────────────────────
