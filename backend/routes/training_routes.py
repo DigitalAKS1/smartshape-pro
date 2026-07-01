@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 from datetime import datetime, timezone
-import uuid, logging
+import os, uuid, logging
 
 from database import db
 from auth_utils import get_current_user
@@ -10,6 +10,8 @@ router = APIRouter()
 
 WEBINAR_STAGES = ("confirm", "remind_24h", "remind_1h", "live", "noshow", "attended")
 
+FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:3000")
+
 
 def _now():
     return datetime.now(timezone.utc).isoformat()
@@ -17,6 +19,100 @@ def _now():
 
 def _default_webinar_emails():
     return {k: True for k in WEBINAR_STAGES}
+
+
+def _session_tokens(session: dict) -> dict:
+    """Merge tokens for a webinar-lifecycle email. `{name}`/`{school_name}` are
+    left as-is here for later per-recipient personalize()/personalize_html()."""
+    session_id = session.get("session_id", "")
+    return {
+        "{name}": "{name}",
+        "{school_name}": "{school_name}",
+        "{session_title}": session.get("title", ""),
+        "{session_date}": session.get("date", ""),
+        "{session_time}": session.get("time", ""),
+        "{platform}": session.get("platform", ""),
+        "{join_url}": session.get("meeting_link", ""),
+        "{host_name}": session.get("host_name", ""),
+        "{recording_url}": session.get("recording_url", ""),
+        "{add_to_calendar_url}": f"{FRONTEND_URL}/api/training/sessions/{session_id}/ics",
+    }
+
+
+def _apply_tokens(text: str, tokens: dict) -> str:
+    for k, v in tokens.items():
+        text = text.replace(k, v or "")
+    return text
+
+
+def _stage_email_content(stage: str, tokens: dict) -> tuple[str, str]:
+    """Returns (subject, html_inner) for a webinar-lifecycle stage, with session
+    tokens already substituted (trusted app data). `{name}`/`{school_name}`
+    remain for per-recipient personalize()/personalize_html() downstream.
+
+    FOR NOW only "confirm" (Stage 2) is implemented; Task 4 replaces this with
+    the full webinar_templates_html.STAGE_HTML set for all stages.
+    """
+    if stage == "confirm":
+        subject = f"You're Registered: {tokens['{session_title}']}"
+        html_inner = (
+            f'<h2 style="color:#e94560;margin:0 0 8px;">You\'re registered!</h2>'
+            f'<p>Dear {{name}}, you are confirmed for <strong>{tokens["{session_title}"]}</strong>.</p>'
+            f'<p><strong>Date:</strong> {tokens["{session_date}"]} &nbsp; '
+            f'<strong>Time:</strong> {tokens["{session_time}"]}</p>'
+            f'<p><a href="{tokens["{join_url}"]}" style="background:#e94560;color:#fff;'
+            f'padding:12px 20px;border-radius:8px;text-decoration:none;display:inline-block;">'
+            f'Join the Session</a></p>'
+            f'<p><a href="{tokens["{add_to_calendar_url}"]}">Add to Calendar</a></p>'
+        )
+        return subject, html_inner
+    raise ValueError(f"Unknown webinar stage: {stage}")
+
+
+async def _enqueue_webinar_stage(session: dict, reg: dict, stage: str) -> bool:
+    """Shared enqueuer for webinar-lifecycle stage emails. Reused by the
+    register endpoint (stage "confirm") and the scheduler (Task 6, later
+    stages). Idempotent per registration+stage via `sent_stages`.
+    """
+    if stage in (reg.get("sent_stages") or []):
+        return False
+
+    email = (reg.get("email") or "").strip().lower()
+    if not email or "@" not in email:
+        return False
+    if await db.email_suppressions.find_one({"email": email}):
+        return False
+
+    from email_utils import sanitize_html, personalize, personalize_html, plain_from_html, wrap_email_shell
+
+    tokens = _session_tokens(session)
+    subject_tmpl, html_inner_tmpl = _stage_email_content(stage, tokens)
+    subject_final = _apply_tokens(subject_tmpl, tokens)
+    html_with_session_tokens = _apply_tokens(html_inner_tmpl, tokens)
+    html_tmpl = wrap_email_shell(sanitize_html(html_with_session_tokens))
+
+    first = (reg.get("name") or "").split(" ")[0]
+    school = reg.get("school_name") or "your school"
+
+    now = _now()
+    await db.email_scheduled.insert_one({
+        "scheduled_id": f"esched_{uuid.uuid4().hex[:10]}",
+        "campaign_id": f"webinar_{session['session_id']}",
+        "email": email,
+        "contact_name": reg.get("name", ""),
+        "subject": personalize(subject_final, first, school),
+        "message": personalize(plain_from_html(html_tmpl), first, school),
+        "body_html": personalize_html(html_tmpl, first, school),
+        "status": "pending",
+        "type": "webinar",
+        "queued_at": now,
+        "sent_at": None,
+    })
+
+    await db.session_registrations.update_one(
+        {"reg_id": reg["reg_id"]}, {"$addToSet": {"sent_stages": stage}}
+    )
+    return True
 
 
 # ── Training Sessions ─────────────────────────────────────────────────────────
@@ -103,6 +199,45 @@ async def get_registrations(session_id: str, request: Request):
     await get_current_user(request)
     regs = await db.session_registrations.find({"session_id": session_id}, {"_id": 0}).to_list(500)
     return regs
+
+
+@router.post("/training/sessions/{session_id}/register")
+async def register_for_session(session_id: str, request: Request):
+    """Public registration for a training session/webinar. Dedups by
+    (session_id, email); re-registering the same email reuses the existing
+    row instead of creating a duplicate. Enqueues the Stage-2 confirmation
+    email via the shared _enqueue_webinar_stage helper unless disabled.
+    """
+    session = await db.training_sessions.find_one({"session_id": session_id}, {"_id": 0})
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    body = await request.json()
+    email = (body.get("email") or "").strip().lower()
+    name = body.get("name", "")
+    school_name = body.get("school_name", "")
+    contact_id = body.get("contact_id")
+
+    reg = await db.session_registrations.find_one({"session_id": session_id, "email": email})
+    if not reg:
+        reg = {
+            "reg_id": f"reg_{uuid.uuid4().hex[:12]}",
+            "session_id": session_id,
+            "name": name,
+            "email": email,
+            "school_name": school_name,
+            "contact_id": contact_id,
+            "status": "registered",
+            "sent_stages": [],
+            "registered_at": _now(),
+        }
+        await db.session_registrations.insert_one(reg)
+
+    webinar_emails = {**_default_webinar_emails(), **(session.get("webinar_emails") or {})}
+    if webinar_emails.get("confirm", True):
+        await _enqueue_webinar_stage(session, reg, "confirm")
+
+    return {"registered": True, "reg_id": reg["reg_id"]}
 
 
 @router.post("/training/sessions/{session_id}/notify")
