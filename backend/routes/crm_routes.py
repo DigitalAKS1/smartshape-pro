@@ -785,6 +785,42 @@ async def _sales_lead_scope(email: str) -> list:
     return [{"assigned_to": email}, {"school_id": {"$in": owned}}]
 
 
+async def _resolve_owner(raw: str):
+    """Map an owner value (an email OR a display name) to a real (email, name).
+
+    Ownership everywhere is keyed by EMAIL (scoping is `assigned_to == user email`)
+    while the UI shows `assigned_name`. A CSV/import that puts a person's NAME into
+    `assigned_to` silently breaks both. This resolves against the salespersons + users
+    directory (preferring an active match) and returns:
+      • (email, name)  when resolved — set BOTH fields with these
+      • (raw, "")      when given an unknown but syntactically-valid email (keep it)
+      • ("", raw)      when a name can't be matched — keep it as the display name only,
+                       never as `assigned_to`, so scoping is never corrupted.
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return "", ""
+    if "@" in raw:
+        for coll in (db.salespersons, db.users):
+            u = await coll.find_one(
+                {"email": {"$regex": f"^{re.escape(raw)}$", "$options": "i"}},
+                {"_id": 0, "email": 1, "name": 1},
+            )
+            if u and u.get("email"):
+                return u["email"], u.get("name", "") or raw
+        return raw, ""  # unknown email — still a valid scoping key
+    # name → prefer an active directory entry, else any match
+    for active_only in (True, False):
+        for coll in (db.salespersons, db.users):
+            q = {"name": {"$regex": f"^{re.escape(raw)}$", "$options": "i"}}
+            if active_only:
+                q["is_active"] = {"$ne": False}
+            u = await coll.find_one(q, {"_id": 0, "email": 1, "name": 1})
+            if u and u.get("email"):
+                return u["email"], u.get("name", "") or raw
+    return "", raw  # unresolved name — keep as label, do not corrupt assigned_to
+
+
 async def _user_can_access_school(user: dict, school: dict) -> bool:
     """Mirror GET /schools sales scope: admin sees all; accounts/store none;
     sales sees owned/created schools + schools holding their leads."""
@@ -1825,20 +1861,30 @@ async def import_contacts_csv(
             notes_combined = f"{csv_notes}\n{extra_note}".strip() if csv_notes and extra_note else (extra_note or csv_notes)
             csv_company = (row.get("school", "") or row.get("company", "")).strip()
             csv_now = datetime.now(timezone.utc).isoformat()
+            # Resolve the CSV owner (name OR email) → real (email, name). A bare name
+            # like "Parul Kanchan" maps to that salesperson's email so the contact
+            # actually syncs to their account and the UI shows the owner.
+            owner_email, owner_name = await _resolve_owner(row.get("assigned_to", ""))
             # Auto-link company name → school_id; auto-create school if missing
             csv_school_id = None
             if csv_company:
                 found_sch = await db.schools.find_one(
                     {"school_name": {"$regex": f"^{re.escape(csv_company)}$", "$options": "i"}},
-                    {"_id": 0, "school_id": 1}
+                    {"_id": 0, "school_id": 1, "assigned_to": 1}
                 )
                 if found_sch:
                     csv_school_id = found_sch["school_id"]
+                    # Link an unowned school to this contact's owner so the rep sees it.
+                    if owner_email and not (found_sch.get("assigned_to") or ""):
+                        await db.schools.update_one(
+                            {"school_id": csv_school_id},
+                            {"$set": {"assigned_to": owner_email, "assigned_name": owner_name}})
                 else:
                     new_sch_id = f"sch_{uuid.uuid4().hex[:12]}"
                     await db.schools.insert_one({
                         "school_id": new_sch_id, "school_name": csv_company,
                         "school_type": "CBSE",
+                        "assigned_to": owner_email, "assigned_name": owner_name,
                         "phone": phone, "email": row.get("email", "").strip(),
                         "city": "", "state": "", "pincode": "", "address": "",
                         "primary_contact_name": name,
@@ -1849,7 +1895,6 @@ async def import_contacts_csv(
                         "last_activity_date": csv_now, "created_by": "import", "created_at": csv_now,
                     })
                     csv_school_id = new_sch_id
-            csv_assigned = row.get("assigned_to", "").strip()
             await db.contacts.insert_one({
                 "contact_id": contact_id,
                 "name": name,
@@ -1861,7 +1906,8 @@ async def import_contacts_csv(
                 "source": row.get("source", "").strip(),
                 "notes": notes_combined,
                 "birthday": row.get("birthday", "").strip(),
-                "assigned_to": csv_assigned,
+                "assigned_to": owner_email,
+                "assigned_name": owner_name,
                 "tag_ids": tag_id_list,
                 "status": "active",
                 "converted_to_lead": False,
@@ -1874,6 +1920,72 @@ async def import_contacts_csv(
         except Exception as e:
             errors.append(str(e))
     return {"created": created, "duplicates": duplicates, "errors": errors[:10]}
+
+
+async def _backfill_contact_owners_core() -> dict:
+    """Idempotent repair for contacts whose `assigned_to` holds a NAME instead of an
+    email (e.g. older CSV imports). Resolves the name → real user, sets both
+    `assigned_to` (email) + `assigned_name`, and links the contact's school to that
+    owner when the school is currently unowned. Also backfills a blank `assigned_name`
+    when the owner email is already correct. Never overrides an already-owned school."""
+    fixed = 0
+    linked_schools = 0
+    unresolved: dict = {}
+    cursor = db.contacts.find(
+        {"is_deleted": {"$ne": True}},
+        {"_id": 0, "contact_id": 1, "assigned_to": 1, "assigned_name": 1, "school_id": 1},
+    )
+    async for c in cursor:
+        at = (c.get("assigned_to") or "").strip()
+        an = (c.get("assigned_name") or "").strip()
+        set_doc = {}
+        owner_email = ""
+        owner_name = an
+        if at and "@" not in at:
+            # NAME in the email field — the broken case
+            owner_email, resolved_name = await _resolve_owner(at)
+            if owner_email:
+                owner_name = resolved_name or at
+                set_doc["assigned_to"] = owner_email
+                set_doc["assigned_name"] = owner_name
+            else:
+                # can't resolve — keep the label as the name, clear the bad email field
+                set_doc["assigned_to"] = ""
+                set_doc["assigned_name"] = at
+                unresolved[at] = unresolved.get(at, 0) + 1
+        elif at and "@" in at:
+            # already a real email owner — fill a missing display name
+            owner_email = at
+            if not an:
+                _, resolved_name = await _resolve_owner(at)
+                if resolved_name:
+                    owner_name = resolved_name
+                    set_doc["assigned_name"] = resolved_name
+        if set_doc:
+            await db.contacts.update_one({"contact_id": c["contact_id"]}, {"$set": set_doc})
+            fixed += 1
+        # Link an UNOWNED school to the contact's owner so the rep also sees the
+        # account. Runs for every email-owned contact (not only ones we just
+        # changed) so a re-run converges; never overrides an already-owned school.
+        sid = c.get("school_id")
+        if owner_email and sid:
+            sch = await db.schools.find_one({"school_id": sid}, {"_id": 0, "assigned_to": 1})
+            if sch and not (sch.get("assigned_to") or ""):
+                await db.schools.update_one(
+                    {"school_id": sid},
+                    {"$set": {"assigned_to": owner_email, "assigned_name": owner_name}})
+                linked_schools += 1
+    return {"fixed": fixed, "linked_schools": linked_schools, "unresolved": unresolved}
+
+
+@router.post("/contacts/backfill-owners")
+async def backfill_contact_owners(request: Request):
+    """Admin-only, idempotent: repair contacts whose owner was stored as a name (not an
+    email) — e.g. from an older CSV import — so they sync to the right Sales Exec."""
+    user = await get_current_user(request)
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    return await _backfill_contact_owners_core()
 
 
 # ==================== LEADS ====================
