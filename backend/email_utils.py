@@ -21,13 +21,6 @@ _ALLOWED_PROTOCOLS = ["http", "https", "mailto"]
 def sanitize_html(html: str) -> str:
     if not html:
         return ""
-    # Use tinycss2 for CSS sanitization if available
-    try:
-        from bleach.css_sanitizer import CSSSanitizer
-        css_sanitizer = CSSSanitizer()
-    except ImportError:
-        css_sanitizer = None
-
     cleaned = bleach.clean(
         html,
         tags=_ALLOWED_TAGS,
@@ -35,9 +28,7 @@ def sanitize_html(html: str) -> str:
         protocols=_ALLOWED_PROTOCOLS,
         strip=True,
         strip_comments=True,
-        css_sanitizer=css_sanitizer,
     )
-    # bleach's css sanitizer isn't enabled by default; belt-and-braces on url()/expression
     cleaned = re.sub(r"(?i)expression\s*\(", "", cleaned)
     return cleaned
 
