@@ -386,6 +386,8 @@ export const email = {
   getQueue:       (params) => API.get('/email/queue', { params }),
   sendNow:        (payload) => API.post('/email/send-now', payload),
   sendTest:       (payload) => API.post('/email/send-test', payload),
+  previewAudience:    (audience_filter) => API.post('/email/audience/preview', { audience_filter }),
+  getAudienceOptions: ()                => API.get('/email/audience/options'),
 };
 
 // Drip Sequences

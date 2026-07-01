@@ -10,9 +10,12 @@ import {
 } from 'lucide-react';
 import { adminApi } from '../../lib/api';
 import { toast } from 'sonner';
+import MultiFilterBar from './MultiFilterBar';
+import { deriveFilterOptions, buildCrmContext, matchesCrmFilter } from '../../lib/crmFilter';
 
 export default function ContactsTab({
   contactsList, leadsList,
+  schoolsList = [], sourcesList = [],
   filterRole, setFilterRole,
   filterContactTag, setFilterContactTag,
   searchTerm,
@@ -76,9 +79,18 @@ export default function ContactsTab({
   });
   const topRoles = Object.entries(roleCounts).sort((a, b) => b[1] - a[1]);
 
+  const [crmFilter, setCrmFilter] = React.useState({});
+  const filterOptions = React.useMemo(
+    () => deriveFilterOptions({ contacts: contactsList, schools: schoolsList, sources: sourcesList, roles: rolesList, tags: tagsList }),
+    [contactsList, schoolsList, sourcesList, rolesList, tagsList]);
+  const crmCtx = React.useMemo(
+    () => buildCrmContext('contact', { schools: schoolsList, leads: leadsList, roles: rolesList }),
+    [schoolsList, leadsList, rolesList]);
+
   let cFiltered = contactsList.filter(c => {
     if (filterRole && getRoleName(c) !== filterRole) return false;
     if (filterContactTag && !(c.tag_ids || []).includes(filterContactTag)) return false;
+    if (!matchesCrmFilter(c, crmFilter, crmCtx)) return false;
     if (searchTerm) {
       const s = searchTerm.toLowerCase();
       return (c.name || '').toLowerCase().includes(s) || (c.phone || '').includes(s) || (c.company || '').toLowerCase().includes(s) || (c.email || '').toLowerCase().includes(s);
@@ -183,6 +195,8 @@ export default function ContactsTab({
         )}
         <span className={`text-xs ${textMuted} ml-auto`}>{cFiltered.length} contacts{searchTerm || filterRole ? ' (filtered)' : ''} • {contactsList.filter(c => c.converted_to_lead).length} converted</span>
       </div>
+
+      <MultiFilterBar options={filterOptions} value={crmFilter} onChange={setCrmFilter} resultCount={cFiltered.length} />
 
       {cFiltered.length === 0 ? (
         <div className={`${card} border rounded-md p-12 text-center`}>
