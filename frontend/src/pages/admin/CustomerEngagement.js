@@ -5,9 +5,10 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../componen
 import {
   Plus, Trash2, Edit2, Send, Users, Video, Tag,
   Megaphone, Calendar, CheckCircle2, Globe,
-  MapPin, Eye, Loader2,
+  MapPin, Eye,
 } from 'lucide-react';
 import { useCustomerEngagement } from '../../hooks/useCustomerEngagement';
+import EmailComposerDialog from '../../components/email/EmailComposerDialog';
 
 const VIDEO_CATEGORIES = [
   { value: 'product_training', label: 'Product Training' },
@@ -105,8 +106,8 @@ export default function CustomerEngagement() {
                     </div>
                     <div className="flex gap-1.5 flex-shrink-0 flex-wrap">
                       <Button size="sm" variant="outline" onClick={() => hook.viewRegs(s)} className={`border-[var(--border-color)] ${textSec} text-xs h-8`}><Users className="mr-1 h-3 w-3" />{s.registration_count || 0}</Button>
-                      <Button size="sm" variant="outline" onClick={() => hook.notifySession(s.session_id)} disabled={hook.notifying[s.session_id]} className="border-blue-500/40 text-blue-400 hover:bg-blue-500/10 text-xs h-8">
-                        {hook.notifying[s.session_id] ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
+                      <Button size="sm" variant="outline" onClick={() => hook.openComposerForSession(s)} className="border-blue-500/40 text-blue-400 hover:bg-blue-500/10 text-xs h-8">
+                        <Send className="h-3 w-3" />
                       </Button>
                       <Button size="sm" variant="ghost" onClick={() => hook.openEditSess(s)} className={`${textSec} h-8 w-8 p-0`}><Edit2 className="h-3.5 w-3.5" /></Button>
                       <Button size="sm" variant="ghost" onClick={() => hook.deleteSess(s.session_id)} className="text-red-400 h-8 w-8 p-0"><Trash2 className="h-3.5 w-3.5" /></Button>
@@ -264,8 +265,8 @@ export default function CustomerEngagement() {
                       {(p.valid_from || p.valid_until) && <p className={`text-xs ${textMuted} mt-1`}>Valid: {p.valid_from} → {p.valid_until}</p>}
                     </div>
                     <div className="flex gap-1.5 flex-shrink-0">
-                      <Button size="sm" variant="outline" onClick={() => hook.notifyPromo(p.promo_id)} disabled={hook.notifying[p.promo_id]} className="border-blue-500/40 text-blue-400 hover:bg-blue-500/10 text-xs h-8">
-                        {hook.notifying[p.promo_id] ? <Loader2 className="h-3 w-3 animate-spin" /> : <><Send className="mr-1 h-3 w-3" />Notify</>}
+                      <Button size="sm" variant="outline" onClick={() => hook.openComposerForPromo(p)} className="border-blue-500/40 text-blue-400 hover:bg-blue-500/10 text-xs h-8">
+                        <Send className="mr-1 h-3 w-3" />Notify
                       </Button>
                       <Button size="sm" variant="ghost" onClick={() => hook.openEditPromo(p)} className={`${textSec} h-8 w-8 p-0`}><Edit2 className="h-3.5 w-3.5" /></Button>
                       <Button size="sm" variant="ghost" onClick={() => hook.deletePromo(p.promo_id)} className="text-red-400 h-8 w-8 p-0"><Trash2 className="h-3.5 w-3.5" /></Button>
@@ -332,8 +333,8 @@ export default function CustomerEngagement() {
                       <p className={`text-[10px] ${textMuted} mt-1`}>{a.published_at?.slice(0, 10)}</p>
                     </div>
                     <div className="flex gap-1.5 flex-shrink-0">
-                      <Button size="sm" variant="outline" onClick={() => hook.notifyAnn(a.announcement_id)} disabled={hook.notifying[a.announcement_id]} className="border-blue-500/40 text-blue-400 hover:bg-blue-500/10 text-xs h-8">
-                        {hook.notifying[a.announcement_id] ? <Loader2 className="h-3 w-3 animate-spin" /> : <><Send className="mr-1 h-3 w-3" />Notify All</>}
+                      <Button size="sm" variant="outline" onClick={() => hook.openComposerForAnn(a)} className="border-blue-500/40 text-blue-400 hover:bg-blue-500/10 text-xs h-8">
+                        <Send className="mr-1 h-3 w-3" />Notify All
                       </Button>
                       <Button size="sm" variant="ghost" onClick={() => hook.openEditAnn(a)} className={`${textSec} h-8 w-8 p-0`}><Edit2 className="h-3.5 w-3.5" /></Button>
                       <Button size="sm" variant="ghost" onClick={() => hook.deleteAnn(a.announcement_id)} className="text-red-400 h-8 w-8 p-0"><Trash2 className="h-3.5 w-3.5" /></Button>
@@ -368,6 +369,15 @@ export default function CustomerEngagement() {
             </Dialog>
           </>
         )}
+
+        <EmailComposerDialog
+          open={hook.composer.open}
+          onClose={() => hook.setComposer(c => ({ ...c, open: false }))}
+          source={hook.composer.source}
+          sourceId={hook.composer.sourceId}
+          initialSubject={hook.composer.subject}
+          initialHtml={hook.composer.html}
+        />
       </div>
     </AdminLayout>
   );
