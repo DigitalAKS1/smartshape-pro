@@ -22,51 +22,21 @@ def _default_webinar_emails():
 
 
 def _session_tokens(session: dict) -> dict:
-    """Merge tokens for a webinar-lifecycle email. `{name}`/`{school_name}` are
-    left as-is here for later per-recipient personalize()/personalize_html()."""
+    """SESSION-level merge tokens (plain keys, no braces) for
+    webinar_templates_html.render_stage(). `{name}`/`{school_name}` are NOT
+    included here — render_stage leaves those unsubstituted for later
+    per-recipient personalize()/personalize_html()."""
     session_id = session.get("session_id", "")
     return {
-        "{name}": "{name}",
-        "{school_name}": "{school_name}",
-        "{session_title}": session.get("title", ""),
-        "{session_date}": session.get("date", ""),
-        "{session_time}": session.get("time", ""),
-        "{platform}": session.get("platform", ""),
-        "{join_url}": session.get("meeting_link", ""),
-        "{host_name}": session.get("host_name", ""),
-        "{recording_url}": session.get("recording_url", ""),
-        "{add_to_calendar_url}": f"{FRONTEND_URL}/api/training/sessions/{session_id}/ics",
+        "session_title": session.get("title", ""),
+        "session_date": session.get("date", ""),
+        "session_time": session.get("time", ""),
+        "platform": session.get("platform", ""),
+        "join_url": session.get("meeting_link", ""),
+        "host_name": session.get("host_name", ""),
+        "recording_url": session.get("recording_url", ""),
+        "add_to_calendar_url": f"{FRONTEND_URL}/api/training/sessions/{session_id}/ics",
     }
-
-
-def _apply_tokens(text: str, tokens: dict) -> str:
-    for k, v in tokens.items():
-        text = text.replace(k, v or "")
-    return text
-
-
-def _stage_email_content(stage: str, tokens: dict) -> tuple[str, str]:
-    """Returns (subject, html_inner) for a webinar-lifecycle stage, with session
-    tokens already substituted (trusted app data). `{name}`/`{school_name}`
-    remain for per-recipient personalize()/personalize_html() downstream.
-
-    FOR NOW only "confirm" (Stage 2) is implemented; Task 4 replaces this with
-    the full webinar_templates_html.STAGE_HTML set for all stages.
-    """
-    if stage == "confirm":
-        subject = f"You're Registered: {tokens['{session_title}']}"
-        html_inner = (
-            f'<h2 style="color:#e94560;margin:0 0 8px;">You\'re registered!</h2>'
-            f'<p>Dear {{name}}, you are confirmed for <strong>{tokens["{session_title}"]}</strong>.</p>'
-            f'<p><strong>Date:</strong> {tokens["{session_date}"]} &nbsp; '
-            f'<strong>Time:</strong> {tokens["{session_time}"]}</p>'
-            f'<p><a href="{tokens["{join_url}"]}" style="background:#e94560;color:#fff;'
-            f'padding:12px 20px;border-radius:8px;text-decoration:none;display:inline-block;">'
-            f'Join the Session</a></p>'
-            f'<p><a href="{tokens["{add_to_calendar_url}"]}">Add to Calendar</a></p>'
-        )
-        return subject, html_inner
-    raise ValueError(f"Unknown webinar stage: {stage}")
 
 
 async def _enqueue_webinar_stage(session: dict, reg: dict, stage: str) -> bool:
@@ -100,12 +70,11 @@ async def _enqueue_webinar_stage(session: dict, reg: dict, stage: str) -> bool:
         return False
 
     from email_utils import sanitize_html, personalize, personalize_html, plain_from_html, wrap_email_shell
+    from webinar_templates_html import render_stage
 
     tokens = _session_tokens(session)
-    subject_tmpl, html_inner_tmpl = _stage_email_content(stage, tokens)
-    subject_final = _apply_tokens(subject_tmpl, tokens)
-    html_with_session_tokens = _apply_tokens(html_inner_tmpl, tokens)
-    html_tmpl = wrap_email_shell(sanitize_html(html_with_session_tokens))
+    subject_final, html_inner = render_stage(stage, tokens)
+    html_tmpl = wrap_email_shell(sanitize_html(html_inner))
 
     first = (reg.get("name") or "").split(" ")[0]
     school = reg.get("school_name") or "your school"
