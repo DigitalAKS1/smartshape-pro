@@ -6,6 +6,7 @@ import uuid
 from database import db
 from auth_utils import get_current_user
 from email_utils import sanitize_html, personalize, personalize_html, plain_from_html, wrap_email_shell
+from email_templates_html import HTML_BODIES, NEW_DEFAULT_TEMPLATES
 from scheduler import _smtp_send
 
 router = APIRouter()
@@ -349,7 +350,7 @@ _DEFAULT_TEMPLATES = [
         ),
         "is_active": True, "usage_count": 0,
     },
-]
+] + NEW_DEFAULT_TEMPLATES
 
 
 async def _seed_templates():
@@ -365,6 +366,7 @@ async def _seed_templates():
                 {"$set": {
                     "subject": tmpl["subject"],
                     "body": tmpl["body"],
+                    "body_html": HTML_BODIES.get(tmpl["name"], ""),
                     "category": tmpl["category"],
                     "variables": tmpl["variables"],
                     "updated_at": now,
@@ -374,6 +376,7 @@ async def _seed_templates():
             await db.email_templates.insert_one({
                 "template_id": f"etmpl_{uuid.uuid4().hex[:10]}",
                 **tmpl,
+                "body_html": HTML_BODIES.get(tmpl["name"], ""),
                 "created_by": "system",
                 "created_at": now,
                 "updated_at": now,

@@ -294,6 +294,27 @@ async def test_send_now_skips_suppressed(client, test_db):
     assert r.json()["queued"] == 1
 
 
+# ---------------------------------------------------------------------------
+# Seeded system templates: body_html must be populated for evergreen templates
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_seeded_templates_have_html(client):
+    r = await client.get("/api/email/templates")
+    assert r.status_code == 200, r.text
+    templates = r.json()
+
+    with_html = [t for t in templates if (t.get("body_html") or "").strip()]
+    assert len(with_html) >= 1, "expected at least one seeded template with body_html"
+
+    demo = next((t for t in templates if t["name"] == "Demo Invitation Email"), None)
+    assert demo is not None, "seeded 'Demo Invitation Email' template not found"
+    html = demo.get("body_html") or ""
+    assert html, "Demo Invitation Email body_html should not be empty"
+    assert "{school_name}" in html or "{name}" in html
+    assert "#e94560" in html
+
+
 @pytest.mark.asyncio
 async def test_send_now_validation(client, test_db):
     r = await client.post("/api/email/send-now", json={
