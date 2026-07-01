@@ -1,11 +1,19 @@
 from fastapi import APIRouter, HTTPException, Request
 from datetime import datetime, timezone
+import asyncio
 import uuid
 
 from database import db
 from auth_utils import get_current_user
+from email_utils import sanitize_html, personalize, personalize_html, plain_from_html, wrap_email_shell
+from email_templates_html import HTML_BODIES, NEW_DEFAULT_TEMPLATES
+from scheduler import _smtp_send
 
 router = APIRouter()
+
+
+async def _is_suppressed(email_addr: str) -> bool:
+    return bool(await db.email_suppressions.find_one({"email": (email_addr or "").strip().lower()}))
 
 # ── 15 SmartShape SMARTS-SHAPES email templates ───────────────────────────────
 _DEFAULT_TEMPLATES = [
@@ -342,7 +350,7 @@ _DEFAULT_TEMPLATES = [
         ),
         "is_active": True, "usage_count": 0,
     },
-]
+] + NEW_DEFAULT_TEMPLATES
 
 
 async def _seed_templates():
@@ -358,6 +366,7 @@ async def _seed_templates():
                 {"$set": {
                     "subject": tmpl["subject"],
                     "body": tmpl["body"],
+                    "body_html": HTML_BODIES.get(tmpl["name"], ""),
                     "category": tmpl["category"],
                     "variables": tmpl["variables"],
                     "updated_at": now,
@@ -367,6 +376,7 @@ async def _seed_templates():
             await db.email_templates.insert_one({
                 "template_id": f"etmpl_{uuid.uuid4().hex[:10]}",
                 **tmpl,
+                "body_html": HTML_BODIES.get(tmpl["name"], ""),
                 "created_by": "system",
                 "created_at": now,
                 "updated_at": now,
@@ -379,6 +389,28 @@ async def _seed_templates():
 # ── Audience resolution (same logic as WhatsApp, uses email field) ────────────
 
 async def _resolve_audience(audience_filter: dict) -> list:
+    session_id = audience_filter.get("session_id")
+    if session_id:
+        session_status = audience_filter.get("session_status")
+        q: dict = {"session_id": session_id}
+        if session_status:
+            q["status"] = session_status
+        regs = await db.session_registrations.find(q, {"_id": 0}).to_list(5000)
+        result = []
+        for reg in regs:
+            email = reg.get("email", "")
+            if not email:
+                continue
+            name = reg.get("name", "") or ""
+            result.append({
+                "contact_id": reg.get("contact_id", ""),
+                "email": email,
+                "name": name,
+                "first_name": name.split(" ")[0] if name else "",
+                "company": reg.get("school_name", ""),
+            })
+        return result
+
     roles        = audience_filter.get("roles", [])
     boards       = audience_filter.get("boards", [])
     cities       = audience_filter.get("cities", [])
@@ -469,6 +501,7 @@ async def create_email_template(request: Request):
         "category": body.get("category", "intro"),
         "subject": body.get("subject", "").strip(),
         "body": body.get("body", "").strip(),
+        "body_html": body.get("body_html", ""),
         "variables": body.get("variables", []),
         "is_active": True,
         "usage_count": 0,
@@ -488,7 +521,7 @@ async def update_email_template(template_id: str, request: Request):
         raise HTTPException(404, "Template not found")
     body = await request.json()
     updates = {"updated_at": datetime.now(timezone.utc).isoformat()}
-    for field in ("name", "category", "subject", "body", "variables", "is_active"):
+    for field in ("name", "category", "subject", "body", "body_html", "variables", "is_active"):
         if field in body:
             updates[field] = body[field]
     await db.email_templates.update_one({"template_id": template_id}, {"$set": updates})
@@ -528,6 +561,9 @@ async def create_email_campaign(request: Request):
         "template_id": body.get("template_id"),
         "subject": body.get("subject", "").strip(),
         "message": body.get("message", ""),
+        "body_html": body.get("body_html", ""),
+        "source": body.get("source", "manual"),
+        "source_id": body.get("source_id", ""),
         "audience_filter": audience_filter,
         "audience_label": body.get("audience_label", "All Contacts"),
         "audience_count": len(contacts),
@@ -554,7 +590,7 @@ async def update_email_campaign(campaign_id: str, request: Request):
         raise HTTPException(404, "Campaign not found")
     body = await request.json()
     updates = {"updated_at": datetime.now(timezone.utc).isoformat()}
-    for field in ("name", "description", "template_id", "subject", "message",
+    for field in ("name", "description", "template_id", "subject", "message", "body_html",
                   "audience_filter", "audience_label", "scheduled_at"):
         if field in body:
             updates[field] = body[field]
@@ -596,6 +632,13 @@ async def launch_email_campaign(campaign_id: str, request: Request):
     if not subject:
         raise HTTPException(400, "No subject line. Add a subject or select a template.")
 
+    body_html_tmpl = (camp.get("body_html") or "").strip()
+    if not body_html_tmpl and camp.get("template_id"):
+        tmpl = await db.email_templates.find_one({"template_id": camp["template_id"]})
+        if tmpl:
+            body_html_tmpl = (tmpl.get("body_html") or "").strip()
+    body_html_tmpl = wrap_email_shell(sanitize_html(body_html_tmpl)) if body_html_tmpl else ""
+
     contacts = await _resolve_audience(camp.get("audience_filter", {}))
     now = datetime.now(timezone.utc).isoformat()
     queued = 0
@@ -605,6 +648,9 @@ async def launch_email_campaign(campaign_id: str, request: Request):
             continue
         first_name = (contact.get("first_name") or contact.get("name") or "").split()[0]
         school = contact.get("company") or "your school"
+        if await _is_suppressed(email_addr):
+            continue
+        personalized_html = personalize_html(body_html_tmpl, first_name, school) if body_html_tmpl else None
         personalized_subject = subject.replace("{name}", first_name).replace("{school_name}", school)
         personalized_body = message.replace("{name}", first_name).replace("{school_name}", school)
         await db.email_scheduled.insert_one({
@@ -615,6 +661,7 @@ async def launch_email_campaign(campaign_id: str, request: Request):
             "email": email_addr,
             "subject": personalized_subject,
             "message": personalized_body,
+            "body_html": personalized_html,
             "status": "pending",
             "queued_at": now,
             "sent_at": None,
@@ -668,6 +715,85 @@ async def get_email_analytics(request: Request):
         "campaigns": {"total": total_campaigns, "live": live_campaigns, "list": campaigns[:10]},
         "by_type": by_type,
     }
+
+
+# ── Send-test (immediate self-send, bypassing the queue) ──────────────────────
+
+@router.post("/email/send-test")
+async def send_test_email(request: Request):
+    user = await get_current_user(request)
+    body = await request.json()
+    s = await db.settings.find_one({"type": "email"}, {"_id": 0})
+    se = s.get("sender_email") if s else None
+    ap = s.get("gmail_app_password") if s else None
+    sn = s.get("sender_name", "SmartShape Pro") if s else "SmartShape Pro"
+    if not se or not ap:
+        raise HTTPException(400, "Email not configured")
+    subject = personalize((body.get("subject") or "Test email").strip(), user.get("name", ""), "")
+    html = sanitize_html((body.get("body_html") or "").strip())
+    html = wrap_email_shell(personalize(html, user.get("name", ""), "Your School")) if html else ""
+    text = personalize((body.get("body_text") or plain_from_html(html) or "Test").strip(), user.get("name", ""), "")
+    await asyncio.to_thread(_smtp_send, se, ap, sn, user["email"], f"[TEST] {subject}", text, html or None)
+    return {"sent": True, "to": user["email"]}
+
+
+# ── Send-now (composer: campaign + queue for explicitly selected contacts) ────
+
+@router.post("/email/send-now")
+async def send_now(request: Request):
+    user = await get_current_user(request)
+    body = await request.json()
+    subject = (body.get("subject") or "").strip()
+    html_raw = (body.get("body_html") or "").strip()
+    recipient_ids = body.get("recipient_ids") or []
+    if not recipient_ids:
+        raise HTTPException(400, "Select at least one recipient")
+    if not subject:
+        raise HTTPException(400, "Subject is required")
+    if not html_raw:
+        raise HTTPException(400, "Message body is required")
+    html_tmpl = wrap_email_shell(sanitize_html(html_raw))
+    text_tmpl = (body.get("body_text") or plain_from_html(html_raw) or "").strip()
+
+    contacts = await db.contacts.find(
+        {"contact_id": {"$in": recipient_ids}, "is_deleted": {"$ne": True}}, {"_id": 0}
+    ).to_list(None)
+    now = datetime.now(timezone.utc).isoformat()
+    campaign_id = f"ecamp_{uuid.uuid4().hex[:10]}"
+    await db.email_campaigns.insert_one({
+        "campaign_id": campaign_id,
+        "name": body.get("name") or subject[:60],
+        "subject": subject, "body_html": html_tmpl, "message": text_tmpl,
+        "template_id": body.get("template_id"),
+        "source": body.get("source", "manual"), "source_id": body.get("source_id", ""),
+        "audience_filter": {}, "audience_label": f"{len(contacts)} selected",
+        "audience_count": len(contacts), "status": "queued",
+        "sent_count": 0, "delivered_count": 0, "failed_count": 0,
+        "created_by": user["email"], "created_by_name": user.get("name", user["email"]),
+        "created_at": now, "updated_at": now, "sent_at": now,
+    })
+    queued = 0
+    for contact in contacts:
+        email_addr = (contact.get("email") or "").strip()
+        if not email_addr or "@" not in email_addr:
+            continue
+        if await _is_suppressed(email_addr):
+            continue
+        first = (contact.get("first_name") or contact.get("name") or "").split(" ")[0] if (contact.get("first_name") or contact.get("name")) else ""
+        school = contact.get("company") or "your school"
+        await db.email_scheduled.insert_one({
+            "scheduled_id": f"esched_{uuid.uuid4().hex[:10]}",
+            "campaign_id": campaign_id, "contact_id": contact.get("contact_id", ""),
+            "contact_name": first, "email": email_addr,
+            "subject": personalize(subject, first, school),
+            "message": personalize(text_tmpl, first, school),
+            "body_html": personalize_html(html_tmpl, first, school),
+            "status": "pending", "queued_at": now, "sent_at": None, "type": "campaign",
+        })
+        queued += 1
+    await db.email_campaigns.update_one({"campaign_id": campaign_id},
+        {"$set": {"audience_count": queued, "sent_count": 0}})
+    return {"queued": queued, "campaign_id": campaign_id}
 
 
 # ── Queue ─────────────────────────────────────────────────────────────────────

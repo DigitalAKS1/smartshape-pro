@@ -13,6 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { toast } from 'sonner';
 import { contactRoles as contactRolesApi, contacts as contactsApi, email as emailApi, tags as tagsApi } from '../../lib/api';
 import { STATUS_CHIP, mapCampaign, personalize } from '../../lib/marketingUtils';
+import HtmlBodyEditor from '../email/HtmlBodyEditor';
 
 const TMPL_CATS = ['All', 'intro', 'catalogue', 'offer', 'followup', 'reengagement', 'seasonal'];
 const TMPL_CAT_META = {
@@ -23,7 +24,7 @@ const TMPL_CAT_META = {
   reengagement: { label: 'Re-engagement',  col: 'text-red-400',    bg: 'bg-red-400/15' },
   seasonal:     { label: 'Seasonal',       col: 'text-cyan-500',   bg: 'bg-cyan-500/15' },
 };
-const BLANK_EMAIL_TMPL = { name: '', category: 'intro', subject: '', body: '' };
+const BLANK_EMAIL_TMPL = { name: '', category: 'intro', subject: '', body: '', body_html: '' };
 
 // ── Email Campaigns Sub-Tab ────────────────────────────────────────────────────
 function EmailCampaignsSubTab({ tk, campaigns, setCampaigns, roles, contacts, templates, allTags }) {
@@ -731,6 +732,11 @@ function EmailTemplatesSubTab({ tk, templates, setTemplates }) {
                 placeholder="Write the full email body here. Use {name} and {school_name} for personalisation."
                 value={form.body} onChange={e => setForm(p => ({ ...p, body: e.target.value }))} />
               <p className={`text-[11px] ${tk.tm} mt-1`}>{form.body.length} chars</p>
+            </div>
+            <div>
+              <Label className={`${tk.t2} text-xs mb-1.5 block`}>HTML Design (optional)</Label>
+              <p className={`text-[11px] ${tk.tm} mb-1.5`}>Design or paste an HTML email. Overrides plain text in email clients.</p>
+              <HtmlBodyEditor value={form.body_html || ''} onChange={(html) => setForm(p => ({ ...p, body_html: html }))} />
             </div>
           </div>
           <DialogFooter className="gap-2">

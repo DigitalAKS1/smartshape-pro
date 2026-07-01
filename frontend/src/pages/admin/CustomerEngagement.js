@@ -5,9 +5,10 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../componen
 import {
   Plus, Trash2, Edit2, Send, Users, Video, Tag,
   Megaphone, Calendar, CheckCircle2, Globe,
-  MapPin, Eye, Loader2,
+  MapPin, Eye,
 } from 'lucide-react';
 import { useCustomerEngagement } from '../../hooks/useCustomerEngagement';
+import EmailComposerDialog from '../../components/email/EmailComposerDialog';
 
 const VIDEO_CATEGORIES = [
   { value: 'product_training', label: 'Product Training' },
@@ -105,8 +106,8 @@ export default function CustomerEngagement() {
                     </div>
                     <div className="flex gap-1.5 flex-shrink-0 flex-wrap">
                       <Button size="sm" variant="outline" onClick={() => hook.viewRegs(s)} className={`border-[var(--border-color)] ${textSec} text-xs h-8`}><Users className="mr-1 h-3 w-3" />{s.registration_count || 0}</Button>
-                      <Button size="sm" variant="outline" onClick={() => hook.notifySession(s.session_id)} disabled={hook.notifying[s.session_id]} className="border-blue-500/40 text-blue-400 hover:bg-blue-500/10 text-xs h-8">
-                        {hook.notifying[s.session_id] ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
+                      <Button size="sm" variant="outline" onClick={() => hook.openComposerForSession(s)} className="border-blue-500/40 text-blue-400 hover:bg-blue-500/10 text-xs h-8">
+                        <Send className="h-3 w-3" />
                       </Button>
                       <Button size="sm" variant="ghost" onClick={() => hook.openEditSess(s)} className={`${textSec} h-8 w-8 p-0`}><Edit2 className="h-3.5 w-3.5" /></Button>
                       <Button size="sm" variant="ghost" onClick={() => hook.deleteSess(s.session_id)} className="text-red-400 h-8 w-8 p-0"><Trash2 className="h-3.5 w-3.5" /></Button>
@@ -146,6 +147,30 @@ export default function CustomerEngagement() {
                       </div>
                     : <div><label className={`block text-xs font-medium ${textSec} mb-1`}>Location / Venue</label><input className={inp} value={hook.sessForm.location} onChange={e => hook.setSessForm(p => ({ ...p, location: e.target.value }))} /></div>
                   }
+                  <div className="grid grid-cols-2 gap-3">
+                    <div><label className={`block text-xs font-medium ${textSec} mb-1`}>Host name</label><input className={inp} value={hook.sessForm.host_name} onChange={e => hook.setSessForm(p => ({ ...p, host_name: e.target.value }))} placeholder="e.g. Aman Shrivastava" /></div>
+                    <div><label className={`block text-xs font-medium ${textSec} mb-1`}>Recording URL (after session)</label><input className={inp} value={hook.sessForm.recording_url} onChange={e => hook.setSessForm(p => ({ ...p, recording_url: e.target.value }))} placeholder="https://..." /></div>
+                  </div>
+                  <div>
+                    <p className={`block text-xs font-medium ${textSec} mb-1`}>Automated emails</p>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {[
+                        ['confirm', 'Registration confirmation'],
+                        ['remind_24h', 'Reminder — 1 day before'],
+                        ['remind_1h', 'Reminder — 1 hour before'],
+                        ['live', 'Live now'],
+                        ['noshow', 'No-show follow-up'],
+                        ['attended', 'Attended follow-up'],
+                      ].map(([key, label]) => (
+                        <label key={key} className="flex items-center gap-2 cursor-pointer">
+                          <input type="checkbox" checked={(hook.sessForm.webinar_emails || {})[key] !== false}
+                            onChange={e => hook.setSessForm(p => ({ ...p, webinar_emails: { ...p.webinar_emails, [key]: e.target.checked } }))}
+                            className="rounded" />
+                          <span className={`text-sm ${textSec}`}>{label}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
                   <label className="flex items-center gap-2 cursor-pointer">
                     <input type="checkbox" checked={hook.sessForm.is_published} onChange={e => hook.setSessForm(p => ({ ...p, is_published: e.target.checked }))} className="rounded" />
                     <span className={`text-sm ${textSec}`}>Publish (visible to customers)</span>
@@ -161,17 +186,29 @@ export default function CustomerEngagement() {
             <Dialog open={hook.sessRegs.open} onOpenChange={o => hook.setSessRegs(p => ({ ...p, open: o }))}>
               <DialogContent className={dlg}>
                 <DialogHeader><DialogTitle>Registrations — {hook.sessRegs.session?.title}</DialogTitle></DialogHeader>
-                <div className="mt-2 space-y-2 max-h-80 overflow-y-auto">
+                <div className="flex justify-end mb-2">
+                  <Button size="sm" variant="outline" onClick={() => hook.reconcileAttendance(hook.sessRegs.session)} className={`border-[var(--border-color)] ${textSec} text-xs h-8`}>
+                    <CheckCircle2 className="mr-1 h-3 w-3" />Reconcile attendance
+                  </Button>
+                </div>
+                <div className="mt-1 space-y-2 max-h-80 overflow-y-auto">
                   {hook.sessRegs.list.length === 0 && <p className={`text-center py-8 ${textMuted}`}>No registrations yet</p>}
-                  {hook.sessRegs.list.map((r, i) => (
+                  {hook.sessRegs.list.map((r, i) => {
+                    const st = r.status || 'registered';
+                    const stCls = st === 'attended' ? 'bg-green-500/20 text-green-400' : st === 'no_show' ? 'bg-red-500/20 text-red-400' : 'bg-blue-500/20 text-blue-400';
+                    return (
                     <div key={r.reg_id || i} className="flex items-center justify-between p-3 rounded-lg border border-[var(--border-color)] bg-[var(--bg-primary)]">
                       <div>
                         <p className={`text-sm font-medium ${textPri}`}>{r.school_name}</p>
-                        <p className={`text-xs ${textMuted}`}>{r.contact_name} · {r.contact_email}</p>
+                        <p className={`text-xs ${textMuted}`}>{r.contact_name || r.name} · {r.contact_email || r.email}</p>
                       </div>
-                      <p className={`text-[10px] ${textMuted}`}>{r.registered_at?.slice(0, 10)}</p>
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        <span className={`text-[10px] px-2 py-0.5 rounded font-medium capitalize ${stCls}`}>{st.replace('_', '-')}</span>
+                        <p className={`text-[10px] ${textMuted}`}>{r.registered_at?.slice(0, 10)}</p>
+                      </div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </DialogContent>
             </Dialog>
@@ -264,8 +301,8 @@ export default function CustomerEngagement() {
                       {(p.valid_from || p.valid_until) && <p className={`text-xs ${textMuted} mt-1`}>Valid: {p.valid_from} → {p.valid_until}</p>}
                     </div>
                     <div className="flex gap-1.5 flex-shrink-0">
-                      <Button size="sm" variant="outline" onClick={() => hook.notifyPromo(p.promo_id)} disabled={hook.notifying[p.promo_id]} className="border-blue-500/40 text-blue-400 hover:bg-blue-500/10 text-xs h-8">
-                        {hook.notifying[p.promo_id] ? <Loader2 className="h-3 w-3 animate-spin" /> : <><Send className="mr-1 h-3 w-3" />Notify</>}
+                      <Button size="sm" variant="outline" onClick={() => hook.openComposerForPromo(p)} className="border-blue-500/40 text-blue-400 hover:bg-blue-500/10 text-xs h-8">
+                        <Send className="mr-1 h-3 w-3" />Notify
                       </Button>
                       <Button size="sm" variant="ghost" onClick={() => hook.openEditPromo(p)} className={`${textSec} h-8 w-8 p-0`}><Edit2 className="h-3.5 w-3.5" /></Button>
                       <Button size="sm" variant="ghost" onClick={() => hook.deletePromo(p.promo_id)} className="text-red-400 h-8 w-8 p-0"><Trash2 className="h-3.5 w-3.5" /></Button>
@@ -332,8 +369,8 @@ export default function CustomerEngagement() {
                       <p className={`text-[10px] ${textMuted} mt-1`}>{a.published_at?.slice(0, 10)}</p>
                     </div>
                     <div className="flex gap-1.5 flex-shrink-0">
-                      <Button size="sm" variant="outline" onClick={() => hook.notifyAnn(a.announcement_id)} disabled={hook.notifying[a.announcement_id]} className="border-blue-500/40 text-blue-400 hover:bg-blue-500/10 text-xs h-8">
-                        {hook.notifying[a.announcement_id] ? <Loader2 className="h-3 w-3 animate-spin" /> : <><Send className="mr-1 h-3 w-3" />Notify All</>}
+                      <Button size="sm" variant="outline" onClick={() => hook.openComposerForAnn(a)} className="border-blue-500/40 text-blue-400 hover:bg-blue-500/10 text-xs h-8">
+                        <Send className="mr-1 h-3 w-3" />Notify All
                       </Button>
                       <Button size="sm" variant="ghost" onClick={() => hook.openEditAnn(a)} className={`${textSec} h-8 w-8 p-0`}><Edit2 className="h-3.5 w-3.5" /></Button>
                       <Button size="sm" variant="ghost" onClick={() => hook.deleteAnn(a.announcement_id)} className="text-red-400 h-8 w-8 p-0"><Trash2 className="h-3.5 w-3.5" /></Button>
@@ -368,6 +405,15 @@ export default function CustomerEngagement() {
             </Dialog>
           </>
         )}
+
+        <EmailComposerDialog
+          open={hook.composer.open}
+          onClose={() => hook.setComposer(c => ({ ...c, open: false }))}
+          source={hook.composer.source}
+          sourceId={hook.composer.sourceId}
+          initialSubject={hook.composer.subject}
+          initialHtml={hook.composer.html}
+        />
       </div>
     </AdminLayout>
   );

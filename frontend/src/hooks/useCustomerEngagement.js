@@ -13,6 +13,8 @@ export function useCustomerEngagement() {
     title: '', description: '', date: '', time: '',
     platform: 'zoom', meeting_link: '', location: '',
     max_participants: 0, is_published: true,
+    host_name: '', recording_url: '',
+    webinar_emails: { confirm: true, remind_24h: true, remind_1h: true, live: true, noshow: true, attended: true },
   });
   const [sessRegs, setSessRegs] = useState({ open: false, session: null, list: [] });
 
@@ -46,6 +48,22 @@ export function useCustomerEngagement() {
   const [saving, setSaving] = useState(false);
   const [notifying, setNotifying] = useState({});
 
+  // ── Email composer ───────────────────────────────────────────────────────
+  const [composer, setComposer] = useState({ open: false, source: '', sourceId: '', subject: '', html: '' });
+  const openComposerForSession = (s) => setComposer({ open: true, source: 'training_session', sourceId: s.session_id,
+    subject: `Training Session: ${s.title}`,
+    html: `<h2 style="color:#e94560">${s.title}</h2>`
+        + `<p><strong>Date:</strong> ${s.date}${s.time ? ' ' + s.time : ''}</p>`
+        + (s.description ? `<p>${s.description}</p>` : '')
+        + (s.meeting_link ? `<p><a href="${s.meeting_link}">Join the session</a></p>` : (s.location ? `<p><strong>Location:</strong> ${s.location}</p>` : ''))
+        + `<p>Dear {name}, you're invited to this SmartShape training session.</p>` });
+  const openComposerForPromo = (p) => setComposer({ open: true, source: 'promo', sourceId: p.promo_id,
+    subject: p.title || 'Special Offer from SmartShape',
+    html: `<h2 style="color:#e94560">${p.title || ''}</h2>` + (p.description ? `<p>${p.description}</p>` : '') + (p.details ? `<p>${p.details}</p>` : '') + `<p>Dear {name}, here's an offer for {school_name}.</p>` });
+  const openComposerForAnn = (a) => setComposer({ open: true, source: 'announcement', sourceId: a.announcement_id,
+    subject: a.title || 'Announcement from SmartShape',
+    html: `<h2 style="color:#e94560">${a.title || ''}</h2>` + (a.body ? `<p>${a.body}</p>` : '') + (a.image_url ? `<p><img src="${a.image_url}" alt="" style="max-width:100%"/></p>` : '') + `<p>Dear {name},</p>` });
+
   useEffect(() => {
     if (tab === 'sessions')      fetchSessions();
     if (tab === 'videos')        fetchVideos();
@@ -61,12 +79,20 @@ export function useCustomerEngagement() {
   // ── Sessions CRUD ─────────────────────────────────────────────────────────
   const openNewSess = () => {
     setEditSess(null);
-    setSessForm({ title: '', description: '', date: '', time: '', platform: 'zoom', meeting_link: '', location: '', max_participants: 0, is_published: true });
+    setSessForm({
+      title: '', description: '', date: '', time: '', platform: 'zoom', meeting_link: '', location: '', max_participants: 0, is_published: true,
+      host_name: '', recording_url: '',
+      webinar_emails: { confirm: true, remind_24h: true, remind_1h: true, live: true, noshow: true, attended: true },
+    });
     setSessDialog(true);
   };
   const openEditSess = (s) => {
     setEditSess(s);
-    setSessForm({ title: s.title, description: s.description || '', date: s.date, time: s.time, platform: s.platform, meeting_link: s.meeting_link || '', location: s.location || '', max_participants: s.max_participants || 0, is_published: s.is_published });
+    setSessForm({
+      title: s.title, description: s.description || '', date: s.date, time: s.time, platform: s.platform, meeting_link: s.meeting_link || '', location: s.location || '', max_participants: s.max_participants || 0, is_published: s.is_published,
+      host_name: s.host_name || '', recording_url: s.recording_url || '',
+      webinar_emails: { confirm: true, remind_24h: true, remind_1h: true, live: true, noshow: true, attended: true, ...(s.webinar_emails || {}) },
+    });
     setSessDialog(true);
   };
   const saveSess = async () => {
@@ -98,11 +124,16 @@ export function useCustomerEngagement() {
   const viewRegs = async (s) => {
     try { const r = await API.get(`/training/sessions/${s.session_id}/registrations`); setSessRegs({ open: true, session: s, list: r.data }); } catch { toast.error('Failed to load registrations'); }
   };
-  const notifySession = async (id) => {
-    setNotifying(p => ({ ...p, [id]: true }));
-    try { const r = await API.post(`/training/sessions/${id}/notify`); toast.success(`Notified ${r.data.sent} customers`); } catch { toast.error('Notification failed'); } finally { setNotifying(p => ({ ...p, [id]: false })); }
+  const reconcileAttendance = async (s) => {
+    const raw = window.prompt('Paste attendee emails (comma / space / newline separated).\nEveryone registered but NOT listed here is marked no-show:');
+    if (raw === null) return;
+    const emails = raw.split(/[\s,;]+/).map(e => e.trim()).filter(Boolean);
+    try {
+      const r = await API.post(`/training/sessions/${s.session_id}/reconcile-attendance`, { attendee_emails: emails });
+      toast.success(`${r.data.attended} attended · ${r.data.no_show} no-show`);
+      viewRegs(s);
+    } catch { toast.error('Reconcile failed'); }
   };
-
   // ── Videos CRUD ──────────────────────────────────────────────────────────
   const openNewVid = () => {
     setEditVid(null);
@@ -152,11 +183,6 @@ export function useCustomerEngagement() {
     if (!window.confirm('Delete this promotion?')) return;
     try { await API.delete(`/promotions/${id}`); fetchPromos(); toast.success('Deleted'); } catch { toast.error('Failed'); }
   };
-  const notifyPromo = async (id) => {
-    setNotifying(p => ({ ...p, [id]: true }));
-    try { const r = await API.post(`/promotions/${id}/notify`); toast.success(`Notified ${r.data.sent} customers`); } catch { toast.error('Notification failed'); } finally { setNotifying(p => ({ ...p, [id]: false })); }
-  };
-
   // ── Announcements CRUD ────────────────────────────────────────────────────
   const openNewAnn = () => {
     setEditAnn(null);
@@ -181,27 +207,24 @@ export function useCustomerEngagement() {
     if (!window.confirm('Delete this announcement?')) return;
     try { await API.delete(`/announcements/${id}`); fetchAnns(); toast.success('Deleted'); } catch { toast.error('Failed'); }
   };
-  const notifyAnn = async (id) => {
-    setNotifying(p => ({ ...p, [id]: true }));
-    try { const r = await API.post(`/announcements/${id}/notify`); toast.success(`Notified ${r.data.sent} customers`); } catch { toast.error('Notification failed'); } finally { setNotifying(p => ({ ...p, [id]: false })); }
-  };
-
   return {
     tab, setTab,
     // sessions
     sessions, sessDialog, setSessDialog, editSess, sessForm, setSessForm, sessRegs, setSessRegs,
-    openNewSess, openEditSess, saveSess, deleteSess, viewRegs, notifySession,
+    openNewSess, openEditSess, saveSess, deleteSess, viewRegs, reconcileAttendance,
     genSessZoom, genningZoom,
     // videos
     videos, vidDialog, setVidDialog, editVid, vidForm, setVidForm,
     openNewVid, openEditVid, saveVid, deleteVid,
     // promos
     promos, promoDialog, setPromoDialog, editPromo, promoForm, setPromoForm,
-    openNewPromo, openEditPromo, savePromo, deletePromo, notifyPromo,
+    openNewPromo, openEditPromo, savePromo, deletePromo,
     // announcements
     anns, annDialog, setAnnDialog, editAnn, annForm, setAnnForm,
-    openNewAnn, openEditAnn, saveAnn, deleteAnn, notifyAnn,
+    openNewAnn, openEditAnn, saveAnn, deleteAnn,
     // shared
     saving, notifying,
+    // email composer
+    composer, setComposer, openComposerForSession, openComposerForPromo, openComposerForAnn,
   };
 }
