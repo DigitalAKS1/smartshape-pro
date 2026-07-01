@@ -5,7 +5,7 @@ import uuid
 
 from database import db
 from auth_utils import get_current_user
-from email_utils import sanitize_html, personalize, plain_from_html, wrap_email_shell
+from email_utils import sanitize_html, personalize, personalize_html, plain_from_html, wrap_email_shell
 from scheduler import _smtp_send
 
 router = APIRouter()
@@ -625,7 +625,7 @@ async def launch_email_campaign(campaign_id: str, request: Request):
         school = contact.get("company") or "your school"
         if await _is_suppressed(email_addr):
             continue
-        personalized_html = personalize(body_html_tmpl, first_name, school) if body_html_tmpl else None
+        personalized_html = personalize_html(body_html_tmpl, first_name, school) if body_html_tmpl else None
         personalized_subject = subject.replace("{name}", first_name).replace("{school_name}", school)
         personalized_body = message.replace("{name}", first_name).replace("{school_name}", school)
         await db.email_scheduled.insert_one({
@@ -762,7 +762,7 @@ async def send_now(request: Request):
             "contact_name": first, "email": email_addr,
             "subject": personalize(subject, first, school),
             "message": personalize(text_tmpl, first, school),
-            "body_html": personalize(html_tmpl, first, school),
+            "body_html": personalize_html(html_tmpl, first, school),
             "status": "pending", "queued_at": now, "sent_at": None, "type": "campaign",
         })
         queued += 1

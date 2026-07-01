@@ -249,6 +249,30 @@ async def test_send_now_queues_rows_for_selected_contacts(client, test_db):
 
 
 @pytest.mark.asyncio
+async def test_send_now_escapes_contact_html(client, test_db):
+    await test_db.contacts.insert_one({
+        "contact_id": "con_xss1", "name": "<script>evil</script>",
+        "email": "xss@example.com", "company": "<b>Hax</b> School",
+    })
+
+    r = await client.post("/api/email/send-now", json={
+        "subject": "Hi {name}",
+        "body_html": "<p>Hi {name} at {school_name}</p>",
+        "recipient_ids": ["con_xss1"],
+        "source": "manual",
+    })
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["queued"] == 1
+
+    rows = await test_db.email_scheduled.find({"campaign_id": body["campaign_id"]}).to_list(None)
+    assert len(rows) == 1
+    row = rows[0]
+    assert "&lt;script&gt;" in row["body_html"]
+    assert "<script>evil</script>" not in row["body_html"]
+
+
+@pytest.mark.asyncio
 async def test_send_now_skips_suppressed(client, test_db):
     await test_db.contacts.insert_one({
         "contact_id": "con_qa2", "name": "Asha Kumar",

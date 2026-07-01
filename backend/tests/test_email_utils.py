@@ -1,4 +1,4 @@
-from email_utils import sanitize_html, personalize, plain_from_html, wrap_email_shell
+from email_utils import sanitize_html, personalize, personalize_html, plain_from_html, wrap_email_shell
 
 def test_sanitize_strips_script_and_handlers():
     dirty = '<p onclick="x()">Hi</p><script>alert(1)</script><a href="javascript:evil()">y</a>'
@@ -22,6 +22,12 @@ def test_personalize_replaces_known_tokens_only():
 
 def test_personalize_blank_name_is_safe():
     assert personalize("Dear {name},", "", "") == "Dear ,"
+
+def test_personalize_html_escapes_values():
+    out = personalize_html("<p>Hi {name} at {school_name}</p>", "<script>x</script>", "A&B")
+    assert "&lt;script&gt;" in out
+    assert "&amp;" in out
+    assert "<script>" not in out
 
 def test_plain_from_html_strips_tags():
     assert "Hello" in plain_from_html("<p>Hello <b>world</b></p>")

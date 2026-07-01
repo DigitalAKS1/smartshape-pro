@@ -1,5 +1,6 @@
 """Pure, DB-free email HTML/text helpers. Unit-tested in tests/test_email_utils.py."""
 import re
+import html as _html
 import bleach
 
 _ALLOWED_TAGS = [
@@ -37,6 +38,15 @@ def personalize(text: str, name: str = "", school_name: str = "") -> str:
     if not text:
         return text or ""
     return text.replace("{name}", name or "").replace("{school_name}", school_name or "")
+
+
+def personalize_html(text: str, name: str = "", school_name: str = "") -> str:
+    """Like personalize(), but HTML-escapes the substituted values so contact-sourced
+    data cannot inject markup into already-sanitized HTML. Use for HTML bodies only."""
+    if not text:
+        return text or ""
+    return (text.replace("{name}", _html.escape(name or ""))
+                .replace("{school_name}", _html.escape(school_name or "")))
 
 
 def plain_from_html(html: str) -> str:
