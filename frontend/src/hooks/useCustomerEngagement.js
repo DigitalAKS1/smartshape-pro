@@ -124,6 +124,16 @@ export function useCustomerEngagement() {
   const viewRegs = async (s) => {
     try { const r = await API.get(`/training/sessions/${s.session_id}/registrations`); setSessRegs({ open: true, session: s, list: r.data }); } catch { toast.error('Failed to load registrations'); }
   };
+  const reconcileAttendance = async (s) => {
+    const raw = window.prompt('Paste attendee emails (comma / space / newline separated).\nEveryone registered but NOT listed here is marked no-show:');
+    if (raw === null) return;
+    const emails = raw.split(/[\s,;]+/).map(e => e.trim()).filter(Boolean);
+    try {
+      const r = await API.post(`/training/sessions/${s.session_id}/reconcile-attendance`, { attendee_emails: emails });
+      toast.success(`${r.data.attended} attended · ${r.data.no_show} no-show`);
+      viewRegs(s);
+    } catch { toast.error('Reconcile failed'); }
+  };
   // ── Videos CRUD ──────────────────────────────────────────────────────────
   const openNewVid = () => {
     setEditVid(null);
@@ -201,7 +211,7 @@ export function useCustomerEngagement() {
     tab, setTab,
     // sessions
     sessions, sessDialog, setSessDialog, editSess, sessForm, setSessForm, sessRegs, setSessRegs,
-    openNewSess, openEditSess, saveSess, deleteSess, viewRegs,
+    openNewSess, openEditSess, saveSess, deleteSess, viewRegs, reconcileAttendance,
     genSessZoom, genningZoom,
     // videos
     videos, vidDialog, setVidDialog, editVid, vidForm, setVidForm,

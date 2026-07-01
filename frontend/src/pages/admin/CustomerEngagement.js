@@ -186,17 +186,29 @@ export default function CustomerEngagement() {
             <Dialog open={hook.sessRegs.open} onOpenChange={o => hook.setSessRegs(p => ({ ...p, open: o }))}>
               <DialogContent className={dlg}>
                 <DialogHeader><DialogTitle>Registrations — {hook.sessRegs.session?.title}</DialogTitle></DialogHeader>
-                <div className="mt-2 space-y-2 max-h-80 overflow-y-auto">
+                <div className="flex justify-end mb-2">
+                  <Button size="sm" variant="outline" onClick={() => hook.reconcileAttendance(hook.sessRegs.session)} className={`border-[var(--border-color)] ${textSec} text-xs h-8`}>
+                    <CheckCircle2 className="mr-1 h-3 w-3" />Reconcile attendance
+                  </Button>
+                </div>
+                <div className="mt-1 space-y-2 max-h-80 overflow-y-auto">
                   {hook.sessRegs.list.length === 0 && <p className={`text-center py-8 ${textMuted}`}>No registrations yet</p>}
-                  {hook.sessRegs.list.map((r, i) => (
+                  {hook.sessRegs.list.map((r, i) => {
+                    const st = r.status || 'registered';
+                    const stCls = st === 'attended' ? 'bg-green-500/20 text-green-400' : st === 'no_show' ? 'bg-red-500/20 text-red-400' : 'bg-blue-500/20 text-blue-400';
+                    return (
                     <div key={r.reg_id || i} className="flex items-center justify-between p-3 rounded-lg border border-[var(--border-color)] bg-[var(--bg-primary)]">
                       <div>
                         <p className={`text-sm font-medium ${textPri}`}>{r.school_name}</p>
-                        <p className={`text-xs ${textMuted}`}>{r.contact_name} · {r.contact_email}</p>
+                        <p className={`text-xs ${textMuted}`}>{r.contact_name || r.name} · {r.contact_email || r.email}</p>
                       </div>
-                      <p className={`text-[10px] ${textMuted}`}>{r.registered_at?.slice(0, 10)}</p>
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        <span className={`text-[10px] px-2 py-0.5 rounded font-medium capitalize ${stCls}`}>{st.replace('_', '-')}</span>
+                        <p className={`text-[10px] ${textMuted}`}>{r.registered_at?.slice(0, 10)}</p>
+                      </div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </DialogContent>
             </Dialog>
