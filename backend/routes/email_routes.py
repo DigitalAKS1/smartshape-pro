@@ -4,8 +4,13 @@ import uuid
 
 from database import db
 from auth_utils import get_current_user
+from email_utils import sanitize_html, personalize
 
 router = APIRouter()
+
+
+async def _is_suppressed(email_addr: str) -> bool:
+    return bool(await db.email_suppressions.find_one({"email": (email_addr or "").strip().lower()}))
 
 # ── 15 SmartShape SMARTS-SHAPES email templates ───────────────────────────────
 _DEFAULT_TEMPLATES = [
@@ -469,6 +474,7 @@ async def create_email_template(request: Request):
         "category": body.get("category", "intro"),
         "subject": body.get("subject", "").strip(),
         "body": body.get("body", "").strip(),
+        "body_html": body.get("body_html", ""),
         "variables": body.get("variables", []),
         "is_active": True,
         "usage_count": 0,
@@ -488,7 +494,7 @@ async def update_email_template(template_id: str, request: Request):
         raise HTTPException(404, "Template not found")
     body = await request.json()
     updates = {"updated_at": datetime.now(timezone.utc).isoformat()}
-    for field in ("name", "category", "subject", "body", "variables", "is_active"):
+    for field in ("name", "category", "subject", "body", "body_html", "variables", "is_active"):
         if field in body:
             updates[field] = body[field]
     await db.email_templates.update_one({"template_id": template_id}, {"$set": updates})
@@ -528,6 +534,9 @@ async def create_email_campaign(request: Request):
         "template_id": body.get("template_id"),
         "subject": body.get("subject", "").strip(),
         "message": body.get("message", ""),
+        "body_html": body.get("body_html", ""),
+        "source": body.get("source", "manual"),
+        "source_id": body.get("source_id", ""),
         "audience_filter": audience_filter,
         "audience_label": body.get("audience_label", "All Contacts"),
         "audience_count": len(contacts),
@@ -554,7 +563,7 @@ async def update_email_campaign(campaign_id: str, request: Request):
         raise HTTPException(404, "Campaign not found")
     body = await request.json()
     updates = {"updated_at": datetime.now(timezone.utc).isoformat()}
-    for field in ("name", "description", "template_id", "subject", "message",
+    for field in ("name", "description", "template_id", "subject", "message", "body_html",
                   "audience_filter", "audience_label", "scheduled_at"):
         if field in body:
             updates[field] = body[field]
@@ -596,6 +605,13 @@ async def launch_email_campaign(campaign_id: str, request: Request):
     if not subject:
         raise HTTPException(400, "No subject line. Add a subject or select a template.")
 
+    body_html_tmpl = (camp.get("body_html") or "").strip()
+    if not body_html_tmpl and camp.get("template_id"):
+        tmpl = await db.email_templates.find_one({"template_id": camp["template_id"]})
+        if tmpl:
+            body_html_tmpl = (tmpl.get("body_html") or "").strip()
+    body_html_tmpl = sanitize_html(body_html_tmpl) if body_html_tmpl else ""
+
     contacts = await _resolve_audience(camp.get("audience_filter", {}))
     now = datetime.now(timezone.utc).isoformat()
     queued = 0
@@ -605,6 +621,9 @@ async def launch_email_campaign(campaign_id: str, request: Request):
             continue
         first_name = (contact.get("first_name") or contact.get("name") or "").split()[0]
         school = contact.get("company") or "your school"
+        if await _is_suppressed(email_addr):
+            continue
+        personalized_html = personalize(body_html_tmpl, first_name, school) if body_html_tmpl else None
         personalized_subject = subject.replace("{name}", first_name).replace("{school_name}", school)
         personalized_body = message.replace("{name}", first_name).replace("{school_name}", school)
         await db.email_scheduled.insert_one({
@@ -615,6 +634,7 @@ async def launch_email_campaign(campaign_id: str, request: Request):
             "email": email_addr,
             "subject": personalized_subject,
             "message": personalized_body,
+            "body_html": personalized_html,
             "status": "pending",
             "queued_at": now,
             "sent_at": None,
