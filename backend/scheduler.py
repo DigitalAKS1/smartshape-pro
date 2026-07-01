@@ -55,12 +55,17 @@ async def _wa_cfg():
 # SMTP — sync, runs via asyncio.to_thread
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _smtp_send(sender_email, app_password, sender_name, to_email, subject, body):
+def _smtp_send(sender_email, app_password, sender_name, to_email, subject, body, body_html=None):
     msg = MIMEMultipart("alternative")
     msg["From"] = f"{sender_name} <{sender_email}>"
     msg["To"] = to_email
     msg["Subject"] = subject
-    msg.attach(MIMEText(body, "plain"))
+    if body_html:
+        msg["List-Unsubscribe"] = f"<mailto:{sender_email}?subject=unsubscribe>"
+        msg["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
+    msg.attach(MIMEText(body or "", "plain"))
+    if body_html:
+        msg.attach(MIMEText(body_html, "html"))
     with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=20) as smtp:
         smtp.login(sender_email, app_password)
         smtp.sendmail(sender_email, [to_email], msg.as_string())
