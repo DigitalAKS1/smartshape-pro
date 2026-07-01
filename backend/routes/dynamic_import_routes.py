@@ -180,6 +180,39 @@ async def import_execute(payload: dict, user: dict = Depends(get_current_user)):
 
 
 # ---------------------------------------------------------------------------
+# Single-record manual entry (reuses the exact same commit engine as bulk import)
+# ---------------------------------------------------------------------------
+
+@router.post("/master-import/entry")
+async def import_entry(payload: dict, user: dict = Depends(get_current_user)):
+    """Add/edit ONE school record through the dynamic form.
+
+    Body: {values: {<field_key>: value, ..., optional "school_id": "sch_..."}, create_leads: bool}
+
+    Reuses import_engine.commit_row so this inherits dedup, ID-upsert,
+    audit-snapshot, needs_review, and School+Contact+Lead fan-out — do not
+    reimplement any of that here.
+
+    Returns the commit_row result dict {action, school_id, contact_id, lead_id}.
+    If action == "needs_review", still returns HTTP 200 (not an error) so the
+    UI can tell the user this matches more than one existing school and must
+    be resolved manually.
+    """
+    require_module(user, "settings", "read_write")
+    values = payload.get("values") or {}
+    create_leads = bool(payload.get("create_leads"))
+
+    # Defense-in-depth: only allow keys that are real registered field keys
+    # (plus the "school_id" control key) — mirrors import_execute's sanitization.
+    allowed_keys = {f["key"] for f in await fr.list_fields(db)}
+    allowed_keys.add("school_id")
+    sanitized = {k: v for k, v in values.items() if k in allowed_keys}
+
+    result = await ie.commit_row(db, sanitized, user, create_leads)
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Import template
 # ---------------------------------------------------------------------------
 
