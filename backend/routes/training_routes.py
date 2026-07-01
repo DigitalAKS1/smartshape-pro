@@ -226,6 +226,42 @@ async def register_for_session(session_id: str, request: Request):
     return {"registered": True, "reg_id": reg["reg_id"]}
 
 
+async def _reconcile_attendance(session_id: str, attendee_emails: list) -> dict:
+    """Mark each session_registrations row of `session_id` as attended/no_show
+    based on whether its email (case-insensitive) appears in `attendee_emails`
+    (typically the Zoom attendee report). Returns {"attended", "no_show"} counts.
+    """
+    att = {(e or "").strip().lower() for e in attendee_emails if e}
+    regs = await db.session_registrations.find({"session_id": session_id}, {"_id": 0}).to_list(2000)
+    attended, no_show = 0, 0
+    for reg in regs:
+        email = (reg.get("email") or "").strip().lower()
+        if email in att:
+            await db.session_registrations.update_one(
+                {"reg_id": reg["reg_id"]},
+                {"$set": {"status": "attended", "attended_at": _now()}},
+            )
+            attended += 1
+        else:
+            await db.session_registrations.update_one(
+                {"reg_id": reg["reg_id"]},
+                {"$set": {"status": "no_show"}},
+            )
+            no_show += 1
+    return {"attended": attended, "no_show": no_show}
+
+
+@router.post("/training/sessions/{session_id}/reconcile-attendance")
+async def reconcile_attendance(session_id: str, request: Request):
+    user = await get_current_user(request)
+    session = await db.training_sessions.find_one({"session_id": session_id}, {"_id": 0})
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    body = await request.json()
+    attendee_emails = body.get("attendee_emails", []) or []
+    return await _reconcile_attendance(session_id, attendee_emails)
+
+
 @router.post("/training/sessions/{session_id}/notify")
 async def notify_session(session_id: str, request: Request):
     """Queue an HTML training-session invite to every quotation-customer email.

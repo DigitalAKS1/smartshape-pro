@@ -97,6 +97,7 @@ async def zoom_crm_import(request: Request):
     rows = body.get("rows", []) or []
     create_lead = body.get("create_lead", True)
     create_contact = body.get("create_contact", True)
+    session_id = (body.get("session_id") or "").strip()
     if not rows:
         raise HTTPException(400, "No rows to import")
 
@@ -179,5 +180,11 @@ async def zoom_crm_import(request: Request):
                 res["leads_created"] += 1
         except Exception as e:
             res["errors"].append({"row": i, "name": r.get("name", ""), "error": str(e)[:200]})
+
+    if session_id:
+        # Lazy import to avoid any circular-import risk with training_routes.
+        from routes.training_routes import _reconcile_attendance
+        emails = [r.get("email") for r in rows if r.get("email")]
+        res["attendance"] = await _reconcile_attendance(session_id, emails)
 
     return res
