@@ -1,13 +1,21 @@
 from fastapi import APIRouter, HTTPException, Request
 from datetime import datetime, timezone
-import asyncio
 import uuid
 
 from database import db
 from auth_utils import get_current_user
+from rbac import get_team
 from email_utils import sanitize_html, personalize, personalize_html, plain_from_html, wrap_email_shell
-from email_templates_html import HTML_BODIES, NEW_DEFAULT_TEMPLATES
-from scheduler import _smtp_send
+from email_templates_html import HTML_BODIES
+
+
+def _owner_clause(user: dict):
+    """Non-admins may only reach contacts they own (assigned or created) — mirrors CRM scope.
+    Returns an $or clause, or None for admins / no user (unrestricted)."""
+    if not user or get_team(user) == "admin":
+        return None
+    em = user.get("email", "")
+    return {"$or": [{"assigned_to": em}, {"created_by": em}]}
 
 router = APIRouter()
 
@@ -350,7 +358,7 @@ _DEFAULT_TEMPLATES = [
         ),
         "is_active": True, "usage_count": 0,
     },
-] + NEW_DEFAULT_TEMPLATES
+]
 
 
 async def _seed_templates():
@@ -388,7 +396,14 @@ async def _seed_templates():
 
 # ── Audience resolution (same logic as WhatsApp, uses email field) ────────────
 
-async def _resolve_audience(audience_filter: dict) -> list:
+async def _resolve_audience(audience_filter: dict, user: dict = None) -> list:
+    # Ownership scope: a sales user's audience is limited to contacts they own.
+    _own = _owner_clause(user)
+    def _scoped(q: dict) -> dict:
+        return {"$and": [q, _own]} if _own else q
+
+    # ── Special one-off modes (do NOT combine with the filter builder) ──────────
+    # Webinar targeting: registrants/attendees/no-shows of a training session.
     session_id = audience_filter.get("session_id")
     if session_id:
         session_status = audience_filter.get("session_status")
@@ -396,87 +411,154 @@ async def _resolve_audience(audience_filter: dict) -> list:
         if session_status:
             q["status"] = session_status
         regs = await db.session_registrations.find(q, {"_id": 0}).to_list(5000)
-        result = []
+        out = []
         for reg in regs:
-            email = reg.get("email", "")
+            email = (reg.get("email") or "").strip()
             if not email:
                 continue
-            name = reg.get("name", "") or ""
-            result.append({
+            out.append({
                 "contact_id": reg.get("contact_id", ""),
                 "email": email,
-                "name": name,
-                "first_name": name.split(" ")[0] if name else "",
+                "name": reg.get("name", ""),
+                "first_name": (reg.get("name") or "").split(" ")[0],
                 "company": reg.get("school_name", ""),
             })
-        return result
+        return out
 
-    roles        = audience_filter.get("roles", [])
-    boards       = audience_filter.get("boards", [])
-    cities       = audience_filter.get("cities", [])
-    tags         = audience_filter.get("tags", [])
-    lead_stages  = audience_filter.get("lead_stages", [])
-    school_types = audience_filter.get("school_types", [])
-    min_strength = audience_filter.get("min_strength")
-    school_cities = audience_filter.get("school_cities", [])
-
-    base_filt = {"is_deleted": {"$ne": True}}
-
-    # By lead stage
-    if lead_stages:
-        leads_in_stage = await db.leads.find(
-            {"stage": {"$in": lead_stages}, "is_deleted": {"$ne": True}},
-            {"_id": 0, "converted_from_contact": 1, "school_id": 1},
+    contact_ids = audience_filter.get("contact_ids")
+    if contact_ids:
+        return await db.contacts.find(
+            _scoped({"contact_id": {"$in": contact_ids}, "is_deleted": {"$ne": True}}),
+            {"_id": 0},
         ).to_list(None)
-        cfc_ids  = [l["converted_from_contact"] for l in leads_in_stage if l.get("converted_from_contact")]
-        sch_ids  = [l["school_id"] for l in leads_in_stage if l.get("school_id")]
-        or_clauses = []
-        if cfc_ids:
-            or_clauses.append({"contact_id": {"$in": cfc_ids}})
-        if sch_ids:
-            or_clauses.append({"school_id": {"$in": sch_ids}})
-        if not or_clauses:
-            return []
-        return await db.contacts.find({"$and": [base_filt, {"$or": or_clauses}]}, {"_id": 0}).to_list(None)
 
-    # By school attributes
-    if school_types or min_strength is not None or school_cities:
+    if audience_filter.get("not_purchased"):
+        won_school_ids = {
+            l["school_id"]
+            async for l in db.leads.find(
+                {"stage": "won", "is_deleted": {"$ne": True}}, {"_id": 0, "school_id": 1}
+            )
+            if l.get("school_id")
+        }
+        q = {"is_deleted": {"$ne": True}}
+        if won_school_ids:
+            q["school_id"] = {"$nin": list(won_school_ids)}
+        return await db.contacts.find(_scoped(q), {"_id": 0}).to_list(None)
+
+    # ── Combinable facets: AND across, OR within ────────────────────────────────
+    sources      = audience_filter.get("sources") or []
+    roles        = audience_filter.get("roles") or []
+    tags         = audience_filter.get("tags") or []
+    lead_stages  = audience_filter.get("lead_stages") or []
+    school_types = audience_filter.get("school_types") or []
+    cities       = audience_filter.get("cities") or audience_filter.get("school_cities") or []
+    min_strength = audience_filter.get("min_strength")
+    max_strength = audience_filter.get("max_strength")
+
+    contact_q = {"is_deleted": {"$ne": True}}
+
+    # School-level facets → intersect into one school_id set
+    school_id_sets = []
+    if school_types or cities or min_strength is not None or max_strength is not None:
         sch_q: dict = {}
         if school_types:
             sch_q["school_type"] = {"$in": school_types}
-        if min_strength is not None:
-            sch_q["school_strength"] = {"$gte": int(min_strength)}
-        if school_cities:
-            sch_q["city"] = {"$in": school_cities}
-        school_ids = [s["school_id"] async for s in db.schools.find(sch_q, {"_id": 0, "school_id": 1})]
+        if cities:
+            sch_q["city"] = {"$in": cities}
+        if min_strength is not None or max_strength is not None:
+            strq: dict = {}
+            if min_strength is not None:
+                strq["$gte"] = int(min_strength)
+            if max_strength is not None:
+                strq["$lte"] = int(max_strength)
+            sch_q["school_strength"] = strq
+        school_id_sets.append(
+            {s["school_id"] async for s in db.schools.find(sch_q, {"_id": 0, "school_id": 1})}
+        )
+    if lead_stages:
+        stage_ids = set()
+        async for l in db.leads.find(
+            {"stage": {"$in": lead_stages}, "is_deleted": {"$ne": True}},
+            {"_id": 0, "school_id": 1},
+        ):
+            if l.get("school_id"):
+                stage_ids.add(l["school_id"])
+        school_id_sets.append(stage_ids)
+    if school_id_sets:
+        school_ids = set.intersection(*school_id_sets)
         if not school_ids:
             return []
-        base_filt["school_id"] = {"$in": school_ids}
-        return await db.contacts.find(base_filt, {"_id": 0}).to_list(None)
+        contact_q["school_id"] = {"$in": list(school_ids)}
 
-    if boards:
-        base_filt["board"] = {"$in": boards}
-    if cities:
-        base_filt["city"] = {"$in": cities}
-
+    # Contact-level facets applied directly to the contacts query
+    if sources:
+        contact_q["source"] = {"$in": sources}
     if tags:
-        base_filt["tag_ids"] = {"$in": tags}
-        return await db.contacts.find(base_filt, {"_id": 0}).to_list(None)
+        contact_q["tag_ids"] = {"$in": tags}
 
+    contacts = await db.contacts.find(_scoped(contact_q), {"_id": 0}).to_list(None)
+
+    # Role facet: OR over contact_role_id and free-text designation (post-filter)
     if roles:
         role_docs = await db.contact_roles.find(
             {"name": {"$in": roles}}, {"role_id": 1, "name": 1}
         ).to_list(None)
         role_ids = {r["role_id"] for r in role_docs}
-        role_names_lower = {r["name"].lower() for r in role_docs}
-        all_contacts = await db.contacts.find(base_filt, {"_id": 0}).to_list(None)
-        return [
-            c for c in all_contacts
+        role_names_lower = {r["name"].lower() for r in role_docs} | {r.lower() for r in roles}
+        contacts = [
+            c for c in contacts
             if c.get("contact_role_id") in role_ids
             or (c.get("designation") or "").lower() in role_names_lower
         ]
 
-    return await db.contacts.find(base_filt, {"_id": 0}).to_list(None)
+    return contacts
+
+
+def _has_email(c: dict) -> bool:
+    e = (c.get("email") or "").strip()
+    return "@" in e
+
+
+E_STAGES = [
+    {"id": "new", "label": "New"}, {"id": "contacted", "label": "Contacted"},
+    {"id": "demo", "label": "Demo"}, {"id": "negotiation", "label": "Negotiation"},
+    {"id": "quoted", "label": "Quoted"}, {"id": "follow_up", "label": "Follow Up"},
+    {"id": "won", "label": "Won"}, {"id": "lost", "label": "Lost"},
+]
+
+
+@router.post("/email/audience/preview")
+async def preview_email_audience(request: Request):
+    user = await get_current_user(request)
+    body = await request.json()
+    contacts = await _resolve_audience(body.get("audience_filter", {}), user)
+    emailable = [c for c in contacts if _has_email(c)]
+    return {
+        "count": len(emailable),
+        "sample_names": [c.get("name", "") for c in emailable[:5]],
+    }
+
+
+@router.get("/email/audience/options")
+async def email_audience_options(request: Request):
+    await get_current_user(request)
+    sources = sorted({(c.get("source") or "").strip()
+                      for c in await db.contacts.find(
+                          {"is_deleted": {"$ne": True}}, {"_id": 0, "source": 1}).to_list(None)
+                      if (c.get("source") or "").strip()})
+    roles = [r["name"] async for r in db.contact_roles.find(
+        {"is_active": {"$ne": False}}, {"_id": 0, "name": 1}).sort("name", 1)]
+    school_types = sorted({(s.get("school_type") or "").strip()
+                           for s in await db.schools.find(
+                               {"is_deleted": {"$ne": True}}, {"_id": 0, "school_type": 1}).to_list(None)
+                           if (s.get("school_type") or "").strip()})
+    cities = sorted({(s.get("city") or "").strip()
+                     for s in await db.schools.find(
+                         {"is_deleted": {"$ne": True}}, {"_id": 0, "city": 1}).to_list(None)
+                     if (s.get("city") or "").strip()})
+    tags = await db.tags.find({}, {"_id": 0, "tag_id": 1, "name": 1, "color": 1}).to_list(None)
+    return {"sources": sources, "roles": roles, "school_types": school_types,
+            "cities": cities, "tags": tags, "stages": E_STAGES}
 
 
 # ── Template endpoints ─────────────────────────────────────────────────────────
@@ -552,7 +634,7 @@ async def create_email_campaign(request: Request):
     if not body.get("name"):
         raise HTTPException(400, "name is required")
     audience_filter = body.get("audience_filter", {})
-    contacts = await _resolve_audience(audience_filter)
+    contacts = await _resolve_audience(audience_filter, user)
     now = datetime.now(timezone.utc).isoformat()
     doc = {
         "campaign_id": f"ecamp_{uuid.uuid4().hex[:10]}",
@@ -632,6 +714,7 @@ async def launch_email_campaign(campaign_id: str, request: Request):
     if not subject:
         raise HTTPException(400, "No subject line. Add a subject or select a template.")
 
+    # HTML body (optional): campaign's own, else the linked template's. Sanitize + wrap once.
     body_html_tmpl = (camp.get("body_html") or "").strip()
     if not body_html_tmpl and camp.get("template_id"):
         tmpl = await db.email_templates.find_one({"template_id": camp["template_id"]})
@@ -639,20 +722,20 @@ async def launch_email_campaign(campaign_id: str, request: Request):
             body_html_tmpl = (tmpl.get("body_html") or "").strip()
     body_html_tmpl = wrap_email_shell(sanitize_html(body_html_tmpl)) if body_html_tmpl else ""
 
-    contacts = await _resolve_audience(camp.get("audience_filter", {}))
+    contacts = await _resolve_audience(camp.get("audience_filter", {}), user)
     now = datetime.now(timezone.utc).isoformat()
     queued = 0
     for contact in contacts:
         email_addr = (contact.get("email") or "").strip()
         if not email_addr:
             continue
-        first_name = (contact.get("first_name") or contact.get("name") or "").split()[0]
-        school = contact.get("company") or "your school"
         if await _is_suppressed(email_addr):
             continue
-        personalized_html = personalize_html(body_html_tmpl, first_name, school) if body_html_tmpl else None
+        first_name = (contact.get("first_name") or contact.get("name") or "").split()[0]
+        school = contact.get("company") or "your school"
         personalized_subject = subject.replace("{name}", first_name).replace("{school_name}", school)
         personalized_body = message.replace("{name}", first_name).replace("{school_name}", school)
+        personalized_html = personalize_html(body_html_tmpl, first_name, school) if body_html_tmpl else None
         await db.email_scheduled.insert_one({
             "scheduled_id": f"esched_{uuid.uuid4().hex[:10]}",
             "campaign_id": campaign_id,
@@ -689,6 +772,88 @@ async def launch_email_campaign(campaign_id: str, request: Request):
     return {"queued": queued, "status": new_status}
 
 
+# ── Composer: immediate test send + send-now to selected recipients ─────────────
+
+@router.post("/email/send-test")
+async def send_test_email(request: Request):
+    user = await get_current_user(request)
+    body = await request.json()
+    s = await db.settings.find_one({"type": "email"}, {"_id": 0})
+    se = s.get("sender_email") if s else None
+    ap = s.get("gmail_app_password") if s else None
+    sn = s.get("sender_name", "SmartShape Pro") if s else "SmartShape Pro"
+    if not se or not ap:
+        raise HTTPException(400, "Email not configured")
+    subject = personalize((body.get("subject") or "Test email").strip(), user.get("name", ""), "")
+    html = sanitize_html((body.get("body_html") or "").strip())
+    html = wrap_email_shell(personalize(html, user.get("name", ""), "Your School")) if html else ""
+    text = personalize((body.get("body_text") or plain_from_html(html) or "Test").strip(), user.get("name", ""), "")
+    import asyncio
+    from scheduler import _smtp_send
+    await asyncio.to_thread(_smtp_send, se, ap, sn, user["email"], f"[TEST] {subject}", text, html or None)
+    return {"sent": True, "to": user["email"]}
+
+
+@router.post("/email/send-now")
+async def send_now(request: Request):
+    user = await get_current_user(request)
+    body = await request.json()
+    subject = (body.get("subject") or "").strip()
+    html_raw = (body.get("body_html") or "").strip()
+    recipient_ids = body.get("recipient_ids") or []
+    if not recipient_ids:
+        raise HTTPException(400, "Select at least one recipient")
+    if not subject:
+        raise HTTPException(400, "Subject is required")
+    if not html_raw:
+        raise HTTPException(400, "Message body is required")
+    html_tmpl = wrap_email_shell(sanitize_html(html_raw))
+    text_tmpl = (body.get("body_text") or plain_from_html(html_raw) or "").strip()
+
+    recip_q = {"contact_id": {"$in": recipient_ids}, "is_deleted": {"$ne": True}}
+    _own = _owner_clause(user)
+    if _own:
+        recip_q = {"$and": [recip_q, _own]}
+    contacts = await db.contacts.find(recip_q, {"_id": 0}).to_list(None)
+    now = datetime.now(timezone.utc).isoformat()
+    campaign_id = f"ecamp_{uuid.uuid4().hex[:10]}"
+    await db.email_campaigns.insert_one({
+        "campaign_id": campaign_id,
+        "name": body.get("name") or subject[:60],
+        "subject": subject, "body_html": html_tmpl, "message": text_tmpl,
+        "template_id": body.get("template_id"),
+        "source": body.get("source", "manual"), "source_id": body.get("source_id", ""),
+        "audience_filter": {}, "audience_label": f"{len(contacts)} selected",
+        "audience_count": len(contacts), "status": "queued",
+        "sent_count": 0, "delivered_count": 0, "failed_count": 0,
+        "created_by": user["email"], "created_by_name": user.get("name", user["email"]),
+        "created_at": now, "updated_at": now, "sent_at": now,
+    })
+    queued = 0
+    for contact in contacts:
+        email_addr = (contact.get("email") or "").strip()
+        if not email_addr or "@" not in email_addr:
+            continue
+        if await _is_suppressed(email_addr):
+            continue
+        nm = contact.get("first_name") or contact.get("name") or ""
+        first = nm.split(" ")[0] if nm else ""
+        school = contact.get("company") or "your school"
+        await db.email_scheduled.insert_one({
+            "scheduled_id": f"esched_{uuid.uuid4().hex[:10]}",
+            "campaign_id": campaign_id, "contact_id": contact.get("contact_id", ""),
+            "contact_name": first, "email": email_addr,
+            "subject": personalize(subject, first, school),
+            "message": personalize(text_tmpl, first, school),
+            "body_html": personalize_html(html_tmpl, first, school),
+            "status": "pending", "queued_at": now, "sent_at": None, "type": "campaign",
+        })
+        queued += 1
+    await db.email_campaigns.update_one({"campaign_id": campaign_id},
+        {"$set": {"audience_count": queued, "sent_count": 0}})
+    return {"queued": queued, "campaign_id": campaign_id}
+
+
 # ── Analytics ─────────────────────────────────────────────────────────────────
 
 @router.get("/email/analytics")
@@ -715,85 +880,6 @@ async def get_email_analytics(request: Request):
         "campaigns": {"total": total_campaigns, "live": live_campaigns, "list": campaigns[:10]},
         "by_type": by_type,
     }
-
-
-# ── Send-test (immediate self-send, bypassing the queue) ──────────────────────
-
-@router.post("/email/send-test")
-async def send_test_email(request: Request):
-    user = await get_current_user(request)
-    body = await request.json()
-    s = await db.settings.find_one({"type": "email"}, {"_id": 0})
-    se = s.get("sender_email") if s else None
-    ap = s.get("gmail_app_password") if s else None
-    sn = s.get("sender_name", "SmartShape Pro") if s else "SmartShape Pro"
-    if not se or not ap:
-        raise HTTPException(400, "Email not configured")
-    subject = personalize((body.get("subject") or "Test email").strip(), user.get("name", ""), "")
-    html = sanitize_html((body.get("body_html") or "").strip())
-    html = wrap_email_shell(personalize(html, user.get("name", ""), "Your School")) if html else ""
-    text = personalize((body.get("body_text") or plain_from_html(html) or "Test").strip(), user.get("name", ""), "")
-    await asyncio.to_thread(_smtp_send, se, ap, sn, user["email"], f"[TEST] {subject}", text, html or None)
-    return {"sent": True, "to": user["email"]}
-
-
-# ── Send-now (composer: campaign + queue for explicitly selected contacts) ────
-
-@router.post("/email/send-now")
-async def send_now(request: Request):
-    user = await get_current_user(request)
-    body = await request.json()
-    subject = (body.get("subject") or "").strip()
-    html_raw = (body.get("body_html") or "").strip()
-    recipient_ids = body.get("recipient_ids") or []
-    if not recipient_ids:
-        raise HTTPException(400, "Select at least one recipient")
-    if not subject:
-        raise HTTPException(400, "Subject is required")
-    if not html_raw:
-        raise HTTPException(400, "Message body is required")
-    html_tmpl = wrap_email_shell(sanitize_html(html_raw))
-    text_tmpl = (body.get("body_text") or plain_from_html(html_raw) or "").strip()
-
-    contacts = await db.contacts.find(
-        {"contact_id": {"$in": recipient_ids}, "is_deleted": {"$ne": True}}, {"_id": 0}
-    ).to_list(None)
-    now = datetime.now(timezone.utc).isoformat()
-    campaign_id = f"ecamp_{uuid.uuid4().hex[:10]}"
-    await db.email_campaigns.insert_one({
-        "campaign_id": campaign_id,
-        "name": body.get("name") or subject[:60],
-        "subject": subject, "body_html": html_tmpl, "message": text_tmpl,
-        "template_id": body.get("template_id"),
-        "source": body.get("source", "manual"), "source_id": body.get("source_id", ""),
-        "audience_filter": {}, "audience_label": f"{len(contacts)} selected",
-        "audience_count": len(contacts), "status": "queued",
-        "sent_count": 0, "delivered_count": 0, "failed_count": 0,
-        "created_by": user["email"], "created_by_name": user.get("name", user["email"]),
-        "created_at": now, "updated_at": now, "sent_at": now,
-    })
-    queued = 0
-    for contact in contacts:
-        email_addr = (contact.get("email") or "").strip()
-        if not email_addr or "@" not in email_addr:
-            continue
-        if await _is_suppressed(email_addr):
-            continue
-        first = (contact.get("first_name") or contact.get("name") or "").split(" ")[0] if (contact.get("first_name") or contact.get("name")) else ""
-        school = contact.get("company") or "your school"
-        await db.email_scheduled.insert_one({
-            "scheduled_id": f"esched_{uuid.uuid4().hex[:10]}",
-            "campaign_id": campaign_id, "contact_id": contact.get("contact_id", ""),
-            "contact_name": first, "email": email_addr,
-            "subject": personalize(subject, first, school),
-            "message": personalize(text_tmpl, first, school),
-            "body_html": personalize_html(html_tmpl, first, school),
-            "status": "pending", "queued_at": now, "sent_at": None, "type": "campaign",
-        })
-        queued += 1
-    await db.email_campaigns.update_one({"campaign_id": campaign_id},
-        {"$set": {"audience_count": queued, "sent_count": 0}})
-    return {"queued": queued, "campaign_id": campaign_id}
 
 
 # ── Queue ─────────────────────────────────────────────────────────────────────
