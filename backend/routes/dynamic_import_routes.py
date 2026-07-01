@@ -8,14 +8,19 @@ Exposes:
   POST /master-import/preview         – parse + propose mapping + resolve preview
   POST /master-import/execute         – commit rows + learn aliases + write import_log
   GET  /master-import/template        – downloadable template headers (+ existing ids)
+  GET  /master-import/export          – JSON export of all master data (same column shape)
+  GET  /master-import/export.xlsx     – Excel download of the same export
 
 Paths use /master-import/ prefix (not /import/) to avoid shadowing the legacy
 generic importer registered earlier in main.py under admin_router.
 """
 
 from datetime import datetime, timezone
+from io import BytesIO
 
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
+from fastapi.responses import Response
+from openpyxl import Workbook
 
 from auth_utils import get_current_user
 from rbac import require_admin, require_module
@@ -202,3 +207,84 @@ async def import_template(
                 "School/Institute Name": s.get("school_name", ""),
             })
     return {"headers": headers, "rows": rows}
+
+
+# ---------------------------------------------------------------------------
+# Master-data export (round-trips back through preview/execute)
+# ---------------------------------------------------------------------------
+
+def _cell(value) -> str:
+    """Coerce a field value to a plain string for export cells."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    return str(value)
+
+
+async def _build_export(db) -> dict:
+    """Build {headers, rows} for ALL schools, in the same column shape the
+    importer accepts, so the exported file can be re-imported cleanly.
+
+    headers = ["School ID"] + every active field's label (school/contact/lead).
+    Each row pulls school-entity fields (and the lead "Assign To" field, which
+    lives on the school as assigned_to) from the school document, and
+    contact-entity fields from that school's PRIMARY contact (first
+    non-deleted contact found for the school).
+    """
+    fields = await fr.list_fields(db)
+    headers = ["School ID"] + [f["label"] for f in fields]
+
+    # Pre-fetch contacts once to avoid N+1 lookups; keep the first (primary)
+    # contact seen per school_id.
+    primary_contact_by_school: dict = {}
+    async for c in db.contacts.find({"is_deleted": {"$ne": True}}):
+        sid = c.get("school_id")
+        if sid and sid not in primary_contact_by_school:
+            primary_contact_by_school[sid] = c
+
+    rows = []
+    async for school in db.schools.find({"is_deleted": {"$ne": True}}):
+        ms = fr.merge_fields(school)
+        contact = primary_contact_by_school.get(school.get("school_id"), {})
+        mc = fr.merge_fields(contact)
+
+        row = {"School ID": school.get("school_id", "")}
+        for f in fields:
+            src = mc if f.get("entity") == "contact" else ms
+            value = src.get(f.get("maps_to") or f["key"], "")
+            row[f["label"]] = _cell(value)
+        rows.append(row)
+
+    return {"headers": headers, "rows": rows}
+
+
+@router.get("/master-import/export")
+async def master_export(user: dict = Depends(get_current_user)):
+    """Return ALL school master-data as JSON {headers, rows}, in the same
+    column shape the importer accepts (round-trips through preview/execute)."""
+    require_module(user, "settings", "read_write")
+    return await _build_export(db)
+
+
+@router.get("/master-import/export.xlsx")
+async def master_export_xlsx(user: dict = Depends(get_current_user)):
+    """Return ALL school master-data as a downloadable .xlsx workbook."""
+    require_module(user, "settings", "read_write")
+    data = await _build_export(db)
+    headers = data["headers"]
+
+    wb = Workbook()
+    ws = wb.active
+    ws.append(headers)
+    for row in data["rows"]:
+        ws.append([row.get(h, "") for h in headers])
+
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="master_data_export.xlsx"'},
+    )
