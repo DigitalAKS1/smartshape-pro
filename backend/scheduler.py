@@ -189,6 +189,7 @@ async def process_email_queue():
 
         # field stored by email_routes is "message"; legacy records may use "body"
         body_text = msg.get("message") or msg.get("body") or ""
+        body_html = msg.get("body_html")
 
         try:
             await asyncio.to_thread(
@@ -196,6 +197,7 @@ async def process_email_queue():
                 to_email,
                 msg.get("subject", "Message from SmartShape"),
                 body_text,
+                body_html,
             )
             await db.email_scheduled.update_one(
                 {"scheduled_id": msg["scheduled_id"]},
