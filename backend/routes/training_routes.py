@@ -8,9 +8,15 @@ from auth_utils import get_current_user
 
 router = APIRouter()
 
+WEBINAR_STAGES = ("confirm", "remind_24h", "remind_1h", "live", "noshow", "attended")
+
 
 def _now():
     return datetime.now(timezone.utc).isoformat()
+
+
+def _default_webinar_emails():
+    return {k: True for k in WEBINAR_STAGES}
 
 
 # ── Training Sessions ─────────────────────────────────────────────────────────
@@ -18,6 +24,14 @@ def _now():
 @router.get("/training/sessions")
 async def list_sessions(request: Request):
     sessions = await db.training_sessions.find({}, {"_id": 0}).sort("date", 1).to_list(200)
+    # Backfill webinar_emails defaults for legacy docs so reads are consistent.
+    for s in sessions:
+        s["webinar_emails"] = {**_default_webinar_emails(), **(s.get("webinar_emails") or {})}
+        s.setdefault("reminders_sent", {})
+        s.setdefault("host_name", "")
+        s.setdefault("host_email", "")
+        s.setdefault("recording_url", "")
+        s.setdefault("zoom_meeting_id", "")
     return sessions
 
 
@@ -38,10 +52,17 @@ async def create_session(request: Request):
         "max_participants": body.get("max_participants", 0),
         "status": "upcoming",
         "is_published": body.get("is_published", True),
+        "host_name": body.get("host_name", ""),
+        "host_email": body.get("host_email", ""),
+        "recording_url": body.get("recording_url", ""),
+        "zoom_meeting_id": body.get("zoom_meeting_id", ""),
+        "webinar_emails": {**_default_webinar_emails(), **(body.get("webinar_emails") or {})},
+        "reminders_sent": {},
         "created_at": _now(),
         "created_by": user["email"],
     }
     await db.training_sessions.insert_one(doc)
+    doc.pop("_id", None)
     return {**doc, "registrations": 0}
 
 
@@ -50,7 +71,8 @@ async def update_session(session_id: str, request: Request):
     await get_current_user(request)
     body = await request.json()
     allowed = ["title", "description", "date", "time", "platform",
-               "meeting_link", "location", "max_participants", "status", "is_published"]
+               "meeting_link", "location", "max_participants", "status", "is_published",
+               "host_name", "host_email", "recording_url", "zoom_meeting_id", "webinar_emails"]
     updates = {k: body[k] for k in allowed if k in body}
     updates["updated_at"] = _now()
     await db.training_sessions.update_one({"session_id": session_id}, {"$set": updates})
