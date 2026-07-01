@@ -73,68 +73,60 @@ async def get_registrations(session_id: str, request: Request):
 
 @router.post("/training/sessions/{session_id}/notify")
 async def notify_session(session_id: str, request: Request):
-    """Email all active customers about this training session."""
-    await get_current_user(request)
+    """Queue an HTML training-session invite to every quotation-customer email.
+
+    Builds one source-tagged email_campaigns doc and personalized email_scheduled
+    rows (type "campaign"); the existing queue processor + scheduler deliver them.
+    No inline/synchronous SMTP here.
+    """
+    user = await get_current_user(request)
     session = await db.training_sessions.find_one({"session_id": session_id}, {"_id": 0})
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    s = await db.settings.find_one({"type": "email"}, {"_id": 0})
-    se = s.get("sender_email") if s else None
-    ap = s.get("gmail_app_password") if s else None
-    sn = s.get("sender_name", "SmartShape Pro") if s else "SmartShape Pro"
-    if not se or not ap:
-        raise HTTPException(status_code=400, detail="Email not configured")
+    from email_utils import sanitize_html, personalize, personalize_html, plain_from_html, wrap_email_shell
 
-    import os
-    frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:3000")
+    link_line = (f'<p><a href="{session.get("meeting_link","")}" style="background:#e94560;color:#fff;padding:12px 20px;border-radius:8px;text-decoration:none;display:inline-block;">Join the Session</a></p>'
+                 if session.get("meeting_link") else f'<p>Location: {session.get("location","")}</p>')
+    inner = (f'<h2 style="color:#e94560;margin:0 0 8px;">{session["title"]}</h2>'
+             f'<p><strong>Date:</strong> {session.get("date","")} &nbsp; <strong>Time:</strong> {session.get("time","")}</p>'
+             f'<p>{session.get("description","")}</p>{link_line}'
+             f'<p style="color:#666;font-size:13px;">Dear {{name}}, you are invited to this SmartShape training session.</p>')
+    html_tmpl = wrap_email_shell(sanitize_html(inner))
+    text_tmpl = plain_from_html(inner)
 
+    now = _now()
+    campaign_id = f"ecamp_{uuid.uuid4().hex[:10]}"
+    await db.email_campaigns.insert_one({
+        "campaign_id": campaign_id, "name": f"Session: {session['title']}"[:60],
+        "subject": f"Training Session: {session['title']}", "body_html": html_tmpl, "message": text_tmpl,
+        "source": "training_session", "source_id": session_id, "audience_filter": {},
+        "audience_label": "Quotation customers", "audience_count": 0, "status": "queued",
+        "sent_count": 0, "delivered_count": 0, "failed_count": 0,
+        "created_by": user["email"], "created_at": now, "updated_at": now, "sent_at": now,
+    })
     quotations = await db.quotations.find(
-        {"customer_email": {"$exists": True, "$ne": ""},
-         "catalogue_token": {"$exists": True, "$ne": ""}},
-        {"_id": 0, "customer_email": 1, "principal_name": 1, "school_name": 1, "catalogue_token": 1}
-    ).to_list(2000)
-
-    sent = 0
+        {"customer_email": {"$exists": True, "$ne": ""}},
+        {"_id": 0, "customer_email": 1, "principal_name": 1, "school_name": 1}).to_list(2000)
+    seen, queued = set(), 0
     for q in quotations:
-        email = q.get("customer_email", "").strip()
-        if not email:
+        email_addr = (q.get("customer_email") or "").strip().lower()
+        if not email_addr or "@" not in email_addr or email_addr in seen:
             continue
-        portal_url = f"{frontend_url}/my-quote/{q['catalogue_token']}"
-        salutation = q.get("principal_name") or "Sir/Ma'am"
-        body = f"""Dear {salutation},
-
-We are pleased to invite you to an upcoming SmartShape Pro training session:
-
-{session['title']}
-Date: {session['date']}  |  Time: {session['time']}
-Platform: {session['platform'].upper()}
-{f"Meeting Link: {session['meeting_link']}" if session.get('meeting_link') else f"Location: {session.get('location','')}" }
-
-{session.get('description','')}
-
-You can register and view session details in your personal portal:
-{portal_url}
-
-Best regards,
-SmartShape Pro Team"""
-        try:
-            import smtplib
-            from email.mime.text import MIMEText
-            from email.mime.multipart import MIMEMultipart
-            msg = MIMEMultipart()
-            msg["From"] = f"{sn} <{se}>"
-            msg["To"] = email
-            msg["Subject"] = f"Training Session: {session['title']}"
-            msg.attach(MIMEText(body, "plain", "utf-8"))
-            with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
-                smtp.login(se, ap)
-                smtp.sendmail(se, [email], msg.as_string())
-            sent += 1
-        except Exception as e:
-            logging.error(f"Session notify failed for {email}: {e}")
-
-    return {"sent": sent}
+        seen.add(email_addr)
+        first = q.get("principal_name") or "Sir/Ma'am"
+        school = q.get("school_name") or "your school"
+        await db.email_scheduled.insert_one({
+            "scheduled_id": f"esched_{uuid.uuid4().hex[:10]}", "campaign_id": campaign_id,
+            "email": q["customer_email"].strip(), "contact_name": first,
+            "subject": f"Training Session: {session['title']}",
+            "message": personalize(text_tmpl, first, school),
+            "body_html": personalize_html(html_tmpl, first, school),
+            "status": "pending", "queued_at": now, "sent_at": None, "type": "campaign",
+        })
+        queued += 1
+    await db.email_campaigns.update_one({"campaign_id": campaign_id}, {"$set": {"audience_count": queued}})
+    return {"queued": queued}
 
 
 # ── Training Videos ───────────────────────────────────────────────────────────
