@@ -29,11 +29,14 @@ import ContactFormDialog from '../../components/crm/ContactFormDialog';
 import ContactsTab from '../../components/crm/ContactsTab';
 import TasksTab from '../../components/crm/TasksTab';
 import OwnerDeleteButton from '../../components/common/OwnerDeleteButton';
+import MultiFilterBar from '../../components/crm/MultiFilterBar';
+import { deriveFilterOptions, buildCrmContext, matchesCrmFilter } from '../../lib/crmFilter';
 
 export default function LeadsCRM() {
   const navigate = useNavigate();
   const { isDark } = useTheme();
   const crm = useLeadsCRM();
+  const [leadsFilter, setLeadsFilter] = React.useState({});
 
   // Theme shorthand
   const card = isDark ? 'bg-[var(--bg-card)] border-[var(--border-color)]' : 'bg-white border-[var(--border-color)]';
@@ -301,6 +304,8 @@ export default function LeadsCRM() {
           <ContactsTab
             contactsList={crm.contactsList}
             leadsList={crm.leadsList}
+            schoolsList={crm.schoolsList}
+            sourcesList={crm.sourcesList}
             filterRole={crm.filterRole}
             setFilterRole={crm.setFilterRole}
             filterContactTag={crm.filterContactTag}
@@ -338,8 +343,13 @@ export default function LeadsCRM() {
 
         {/* ── LEADS LIST VIEW ───────────────────────────────────────── */}
         {crm.activeTab === 'list' && (() => {
-          const sortedLeads = crm.sortData(crm.filteredLeads, crm.sortConfig.key, crm.sortConfig.dir);
+          const lctx = buildCrmContext('lead', { schools: crm.schoolsList, leads: crm.leadsList, roles: crm.rolesList });
+          const lOptions = deriveFilterOptions({ leads: crm.leadsList, schools: crm.schoolsList, sources: crm.sourcesList, roles: crm.rolesList, tags: crm.tagsList });
+          const sortedLeads = crm.sortData(crm.filteredLeads, crm.sortConfig.key, crm.sortConfig.dir)
+            .filter(l => matchesCrmFilter(l, leadsFilter, lctx));
           return (
+            <>
+            <MultiFilterBar options={lOptions} value={leadsFilter} onChange={setLeadsFilter} resultCount={sortedLeads.length} />
             <div className={`${card} border rounded-md overflow-hidden`} data-testid="leads-list-view">
               {/* Mobile cards */}
               <div className="sm:hidden divide-y divide-[var(--border-color)]">
@@ -404,6 +414,7 @@ export default function LeadsCRM() {
                 </table>
               </div>
             </div>
+            </>
           );
         })()}
 
