@@ -4,7 +4,7 @@ import { certsApi } from '../../lib/api';
 import { toast } from 'sonner';
 
 const PINK = '#e94560';
-const TOKENS = ['{Name}', '{Theme}', '{Date}', '{Conducted By}'];
+const TOKENS = ['{Name}', '{Theme}', '{Date}', '{School}', '{Conducted By}'];
 
 /**
  * PdfTemplateUploader — create a "PDF token-merge" certificate template.
