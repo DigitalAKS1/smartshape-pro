@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import {
   Megaphone, Send, Users, Plus, TrendingUp, CheckCircle, Clock,
-  AlertCircle, BarChart2, RefreshCw, Play, Eye,
+  AlertCircle, BarChart2, RefreshCw, Play, Eye, Trash2,
   Check, Calendar, Key, Mail, AtSign,
   PieChart, Target, Inbox, X, Search, UserX,
   Smartphone as PhoneIcon, FileText, Star, Gift, Activity,
 } from 'lucide-react';
+import DOMPurify from 'dompurify';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Label } from '../ui/label';
@@ -14,6 +15,7 @@ import { toast } from 'sonner';
 import { contactRoles as contactRolesApi, contacts as contactsApi, email as emailApi, tags as tagsApi } from '../../lib/api';
 import { STATUS_CHIP, mapCampaign, personalize } from '../../lib/marketingUtils';
 import AudienceFilterBuilder from './AudienceFilterBuilder';
+import HtmlBodyEditor from '../email/HtmlBodyEditor';
 
 const TMPL_CATS = ['All', 'intro', 'catalogue', 'offer', 'followup', 'reengagement', 'seasonal'];
 const TMPL_CAT_META = {
@@ -37,7 +39,7 @@ function EmailCampaignsSubTab({ tk, campaigns, setCampaigns, roles, contacts, te
   const [previewContact, setPreviewContact] = useState(0);
   const [eContactSearch, setEContactSearch] = useState('');
   const [eContactTagFilter, setEContactTagFilter] = useState('');
-  const [form, setForm] = useState({ name: '', audience_mode: 'filter', audience_filter: {}, contact_ids: [], template_id: '', subject: '', message: '', schedule: 'draft', schedule_at: '' });
+  const [form, setForm] = useState({ name: '', audience_mode: 'filter', audience_filter: {}, contact_ids: [], template_id: '', subject: '', message: '', body_html: '', schedule: 'draft', schedule_at: '' });
 
   function eFilteredContactsForPicker() {
     let result = contacts;
@@ -67,11 +69,11 @@ function EmailCampaignsSubTab({ tk, campaigns, setCampaigns, roles, contacts, te
   function closeCreate() {
     setShowCreate(false); setStep(1);
     setEContactSearch(''); setEContactTagFilter('');
-    setForm({ name: '', audience_mode: 'filter', audience_filter: {}, contact_ids: [], template_id: '', subject: '', message: '', schedule: 'draft', schedule_at: '' });
+    setForm({ name: '', audience_mode: 'filter', audience_filter: {}, contact_ids: [], template_id: '', subject: '', message: '', body_html: '', schedule: 'draft', schedule_at: '' });
   }
 
   function pickTemplate(tmpl) {
-    setForm(p => ({ ...p, template_id: tmpl.template_id, subject: tmpl.subject || '', message: tmpl.body }));
+    setForm(p => ({ ...p, template_id: tmpl.template_id, subject: tmpl.subject || '', message: tmpl.body, body_html: tmpl.body_html || tmpl.body || '' }));
   }
 
   async function createCampaign() {
@@ -103,6 +105,7 @@ function EmailCampaignsSubTab({ tk, campaigns, setCampaigns, roles, contacts, te
         template_id: form.template_id || null,
         subject: form.subject.trim(),
         message: form.message.trim(),
+        body_html: form.body_html || '',
         audience_filter,
         audience_label: audienceLabel,
         scheduled_at: form.schedule === 'schedule' ? form.schedule_at : null,
@@ -123,6 +126,15 @@ function EmailCampaignsSubTab({ tk, campaigns, setCampaigns, roles, contacts, te
       toast.success(`${queued} emails queued for ${camp.name}`);
     } catch (e) { toast.error(e?.response?.data?.detail || 'Failed to launch campaign'); }
     finally { setLaunching(null); }
+  }
+
+  async function removeCampaign(camp) {
+    if (!window.confirm(`Delete campaign "${camp.name}"?\nThis also stops any emails still queued to send.`)) return;
+    try {
+      await emailApi.deleteCampaign(camp.campaign_id);
+      setCampaigns(prev => prev.filter(c => c.id !== camp.id));
+      toast.success('Campaign deleted');
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Failed to delete campaign'); }
   }
 
   return (
@@ -190,6 +202,11 @@ function EmailCampaignsSubTab({ tk, campaigns, setCampaigns, roles, contacts, te
                     className={`h-8 w-8 rounded-lg ${tk.hov} flex items-center justify-center`} title="Preview email">
                     <Eye className={`h-4 w-4 ${tk.tm}`} />
                   </button>
+                  <button onClick={() => removeCampaign(c)}
+                    className={`h-8 w-8 rounded-lg ${tk.hov} flex items-center justify-center`}
+                    title="Delete campaign (admin can delete launched/queued)">
+                    <Trash2 className="h-4 w-4 text-red-400" />
+                  </button>
                 </div>
               </div>
             </div>
@@ -232,7 +249,7 @@ function EmailCampaignsSubTab({ tk, campaigns, setCampaigns, roles, contacts, te
               <div className="bg-white/3 border-b border-[var(--border-color)] px-4 py-3 space-y-1.5">
                 <div className="flex gap-3 items-baseline">
                   <span className={`text-[10px] font-semibold ${tk.tm} w-12 flex-shrink-0`}>From</span>
-                  <span className={`text-xs ${tk.t2}`}>SmartShape Team &lt;noreply@smartshape.in&gt;</span>
+                  <span className={`text-xs ${tk.t2}`}>SmartShape Team &lt;info@smartshape.in&gt;</span>
                 </div>
                 <div className="flex gap-3 items-baseline">
                   <span className={`text-[10px] font-semibold ${tk.tm} w-12 flex-shrink-0`}>To</span>
@@ -247,10 +264,17 @@ function EmailCampaignsSubTab({ tk, campaigns, setCampaigns, roles, contacts, te
                   </span>
                 </div>
               </div>
-              <div className="p-4 min-h-[80px]">
-                <p className={`text-[11px] ${tk.t2} whitespace-pre-wrap leading-relaxed`}>
-                  {personalize(previewCamp.message, previewSampleE) || '(No body content)'}
-                </p>
+              <div className="p-4 min-h-[80px] bg-white">
+                {previewCamp.body_html ? (
+                  <div
+                    className="text-[12px] leading-relaxed"
+                    dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(personalize(previewCamp.body_html, previewSampleE)) }}
+                  />
+                ) : (
+                  <p className={`text-[11px] ${tk.t2} whitespace-pre-wrap leading-relaxed`}>
+                    {personalize(previewCamp.message, previewSampleE) || '(No body content)'}
+                  </p>
+                )}
               </div>
             </div>
             <div className={`flex items-center justify-between text-[11px] ${tk.tm}`}>
@@ -398,17 +422,36 @@ function EmailCampaignsSubTab({ tk, campaigns, setCampaigns, roles, contacts, te
                   value={form.subject} onChange={e => setForm(p => ({ ...p, subject: e.target.value }))} />
               </div>
               <div>
-                <Label className={`${tk.t2} text-xs mb-1.5 block`}>Email Body</Label>
-                <textarea rows={6} className={`w-full rounded-xl border px-3 py-2.5 text-xs resize-none ${tk.inp}`}
-                  placeholder="Write the email body. Use {name} and {school_name} for personalisation."
-                  value={form.message} onChange={e => setForm(p => ({ ...p, message: e.target.value }))} />
+                <div className="flex items-center justify-between mb-1.5">
+                  <Label className={`${tk.t2} text-xs block`}>Email Design (rich text / paste HTML) *</Label>
+                  <div className="flex gap-1">
+                    <button type="button"
+                      onClick={() => setForm(p => ({ ...p, body_html: (p.body_html || '') + '{name}' }))}
+                      className="text-[10px] font-mono px-1.5 py-0.5 rounded-md bg-[var(--bg-primary)] border border-[var(--border-color)] text-[var(--accent)] hover:bg-[var(--bg-hover)]">
+                      + {'{name}'}
+                    </button>
+                    <button type="button"
+                      onClick={() => setForm(p => ({ ...p, body_html: (p.body_html || '') + '{school_name}' }))}
+                      className="text-[10px] font-mono px-1.5 py-0.5 rounded-md bg-[var(--bg-primary)] border border-[var(--border-color)] text-[var(--accent)] hover:bg-[var(--bg-hover)]">
+                      + {'{school_name}'}
+                    </button>
+                  </div>
+                </div>
+                <HtmlBodyEditor value={form.body_html} onChange={(html) => setForm(f => ({ ...f, body_html: html }))} />
+                <p className={`text-[10px] ${tk.tm} mt-1.5`}>This is the design recipients see. Use {'{name}'} and {'{school_name}'} anywhere for personalisation.</p>
               </div>
+              <details className="group">
+                <summary className={`text-[11px] font-medium ${tk.tm} cursor-pointer select-none`}>Plain-text fallback (optional)</summary>
+                <textarea rows={4} className={`w-full mt-2 rounded-xl border px-3 py-2.5 text-xs resize-none ${tk.inp}`}
+                  placeholder="Plain-text version shown to inboxes that can't render HTML. Use {name} and {school_name} for personalisation."
+                  value={form.message} onChange={e => setForm(p => ({ ...p, message: e.target.value }))} />
+              </details>
             </div>
           ) : (
             <div className="space-y-4 py-1">
               <div className={`border ${tk.bdr} rounded-xl overflow-hidden`}>
                 <div className={`bg-[var(--bg-primary)] border-b ${tk.bdr} px-4 py-3`}>
-                  <p className={`text-[10px] ${tk.tm} mb-0.5`}>From: SmartShape Team &lt;noreply@smartshape.in&gt;</p>
+                  <p className={`text-[10px] ${tk.tm} mb-0.5`}>From: SmartShape Team &lt;info@smartshape.in&gt;</p>
                   <p className={`text-[10px] ${tk.tm} mb-0.5`}>To: audience resolved on launch</p>
                   <p className={`text-xs font-semibold ${tk.t1}`}>
                     {form.subject.replace('{name}', 'Ramesh').replace('{school_name}', 'Delhi Public School') || '(No subject)'}
@@ -552,7 +595,7 @@ function EmailTemplatesSubTab({ tk, templates, setTemplates }) {
             </DialogHeader>
             <div className={`border ${tk.bdr} rounded-xl overflow-hidden text-xs`}>
               <div className={`bg-[var(--bg-primary)] border-b ${tk.bdr} px-4 py-3 space-y-1`}>
-                <div className="flex gap-2"><span className={`${tk.tm} w-12`}>From</span><span className={`${tk.t2}`}>SmartShape Team &lt;noreply@smartshape.in&gt;</span></div>
+                <div className="flex gap-2"><span className={`${tk.tm} w-12`}>From</span><span className={`${tk.t2}`}>SmartShape Team &lt;info@smartshape.in&gt;</span></div>
                 <div className="flex gap-2"><span className={`${tk.tm} w-12`}>To</span><span className={`${tk.t2}`}>Ramesh Kumar &lt;ramesh@dpsdwarka.edu.in&gt;</span></div>
                 <div className="flex gap-2">
                   <span className={`${tk.tm} w-12`}>Subject</span>

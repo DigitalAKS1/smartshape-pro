@@ -682,12 +682,16 @@ async def update_email_campaign(campaign_id: str, request: Request):
 
 @router.delete("/email/campaigns/{campaign_id}")
 async def delete_email_campaign(campaign_id: str, request: Request):
-    await get_current_user(request)
+    user = await get_current_user(request)
     camp = await db.email_campaigns.find_one({"campaign_id": campaign_id})
     if not camp:
         raise HTTPException(404, "Campaign not found")
-    if camp.get("status") in ("sent", "queued"):
-        raise HTTPException(400, "Cannot delete a launched campaign")
+    # Draft is freely deletable; a launched (queued/scheduled/sent/completed) campaign
+    # may only be deleted by an admin — who can also cancel a still-sending one.
+    if camp.get("status") not in ("draft", None) and get_team(user) != "admin":
+        raise HTTPException(403, "Only an admin can delete a launched campaign")
+    # Stop any still-pending sends for this campaign, then remove it.
+    await db.email_scheduled.delete_many({"campaign_id": campaign_id, "status": "pending"})
     await db.email_campaigns.delete_one({"campaign_id": campaign_id})
     return {"ok": True}
 
@@ -745,6 +749,7 @@ async def launch_email_campaign(campaign_id: str, request: Request):
             "subject": personalized_subject,
             "message": personalized_body,
             "body_html": personalized_html,
+            "reply_to": (camp.get("created_by") or user["email"]),
             "status": "pending",
             "queued_at": now,
             "sent_at": None,
@@ -790,7 +795,7 @@ async def send_test_email(request: Request):
     text = personalize((body.get("body_text") or plain_from_html(html) or "Test").strip(), user.get("name", ""), "")
     import asyncio
     from scheduler import _smtp_send
-    await asyncio.to_thread(_smtp_send, se, ap, sn, user["email"], f"[TEST] {subject}", text, html or None)
+    await asyncio.to_thread(_smtp_send, se, ap, sn, user["email"], f"[TEST] {subject}", text, html or None, user["email"])
     return {"sent": True, "to": user["email"]}
 
 
@@ -846,6 +851,7 @@ async def send_now(request: Request):
             "subject": personalize(subject, first, school),
             "message": personalize(text_tmpl, first, school),
             "body_html": personalize_html(html_tmpl, first, school),
+            "reply_to": user["email"],
             "status": "pending", "queued_at": now, "sent_at": None, "type": "campaign",
         })
         queued += 1

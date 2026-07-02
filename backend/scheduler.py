@@ -57,11 +57,14 @@ async def _wa_cfg():
 # SMTP — sync, runs via asyncio.to_thread
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _smtp_send(sender_email, app_password, sender_name, to_email, subject, body, body_html=None):
+def _smtp_send(sender_email, app_password, sender_name, to_email, subject, body, body_html=None, reply_to=None):
     msg = MIMEMultipart("alternative")
     msg["From"] = f"{sender_name} <{sender_email}>"
     msg["To"] = to_email
     msg["Subject"] = subject
+    if reply_to:
+        # replies go to the user who sent it (e.g. the salesperson), not the shared mailbox
+        msg["Reply-To"] = reply_to
     if body_html:
         msg["List-Unsubscribe"] = f"<mailto:{sender_email}?subject=unsubscribe>"
         msg["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
@@ -200,6 +203,7 @@ async def process_email_queue():
                 msg.get("subject", "Message from SmartShape"),
                 body_text,
                 body_html,
+                msg.get("reply_to"),
             )
             await db.email_scheduled.update_one(
                 {"scheduled_id": msg["scheduled_id"]},
@@ -221,6 +225,15 @@ async def process_email_queue():
             )
 
         await asyncio.sleep(0.5)  # respect Gmail sending rate
+
+    # Mark campaigns "completed" once their queue has fully drained — otherwise a
+    # fully-sent campaign shows "Queued" forever (its status is never advanced).
+    for cid in {m.get("campaign_id") for m in pending if m.get("campaign_id")}:
+        if await db.email_scheduled.count_documents({"campaign_id": cid, "status": "pending"}) == 0:
+            await db.email_campaigns.update_one(
+                {"campaign_id": cid, "status": {"$in": ["queued", "scheduled"]}},
+                {"$set": {"status": "completed", "completed_at": now_iso}},
+            )
 
 
 # ══════════════════════════════════════════════════════════════════════════════

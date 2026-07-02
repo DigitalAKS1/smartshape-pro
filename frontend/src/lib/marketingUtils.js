@@ -23,6 +23,7 @@ export function mapCampaign(c) {
     audience_count: c.audience_count || 0,
     template_id: c.template_id || null,
     message: c.message || '',
+    body_html: c.body_html || '',
     subject: c.subject || '',
     audience_filter: c.audience_filter || {},
     stats: {
