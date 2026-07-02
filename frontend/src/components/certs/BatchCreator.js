@@ -16,12 +16,13 @@ const cleanNameJS = (s) =>
     .map(w => w.replace(/[A-Za-z]+/g, m => m.charAt(0).toUpperCase() + m.slice(1).toLowerCase()))
     .join(' ');
 
-/* Smart CSV/paste → rows. Detects email (@) and phone (digits) regardless of column order. */
+/* Smart CSV/paste → rows. Detects email (@) and phone (digits) in any column order;
+   the remaining text columns map to name (first) then school (second+). */
 const parseRows = (text) =>
   (text || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean).map(line => {
     const cells = line.split(',').map(c => c.trim()).filter(c => c !== '');
     if (cells.length === 0) return null;
-    // skip a header row (e.g. "Name,Email,...") with no long digit run
+    // skip a header row (e.g. "Name,School,Email,...") with no long digit run
     if (/^(name|full ?name|attendee|participant)/i.test(cells[0]) && !cells.some(c => /\d{6,}/.test(c))) return null;
     let email = '', phone = '';
     const rest = [];
@@ -30,8 +31,10 @@ const parseRows = (text) =>
       else if (!phone && /^[+()\-\s]*\d[\d()\-\s]{5,}$/.test(c)) phone = c.replace(/[^\d+]/g, '');
       else rest.push(c);
     });
-    const name = (rest.join(' ').trim() || cells[0]).trim();
-    return name ? { title: '', name, phone, email, school: '' } : null;
+    // first free-text column = name, any further free-text column(s) = school
+    const name = (rest[0] || cells[0]).trim();
+    const school = rest.slice(1).join(' ').trim();
+    return name ? { title: '', name, phone, email, school } : null;
   }).filter(Boolean);
 
 /**
@@ -357,11 +360,11 @@ export default function BatchCreator({ templates = [], onCreated, onCancel }) {
                 <Upload className="h-4 w-4" /> Upload CSV
               </button>
               <input ref={fileRef} type="file" accept=".csv,text/csv,text/plain" className="hidden" onChange={handleFile} />
-              <span className={`text-xs ${textMuted}`}>columns auto-detected (name / phone / email, any order)</span>
+              <span className={`text-xs ${textMuted}`}>columns auto-detected: name, school, phone, email (phone/email any order)</span>
             </div>
             <div className="flex flex-col sm:flex-row gap-2">
               <textarea className={`${inputCls} font-mono resize-y flex-1`} rows={2}
-                placeholder={'Paste rows: Amit Sharma, 9000000001, amit@example.com'} value={pasteText} onChange={e => setPasteText(e.target.value)} />
+                placeholder={'Paste rows: Amit Sharma, Delhi Public School, 9000000001, amit@example.com'} value={pasteText} onChange={e => setPasteText(e.target.value)} />
               <button type="button" onClick={handlePaste}
                 className={`inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg border border-[var(--border-color)] text-sm ${textSec} hover:bg-[var(--bg-hover)] self-start`}>
                 <Plus className="h-4 w-4" /> Add to list
