@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   Megaphone, Send, Users, Plus, TrendingUp, CheckCircle, Clock,
-  AlertCircle, BarChart2, RefreshCw, Play, Eye, Trash2,
+  AlertCircle, BarChart2, RefreshCw, Play, Eye, Trash2, Pencil,
   Check, Calendar, Key, Mail, AtSign,
   PieChart, Target, Inbox, X, Search, UserX,
   Smartphone as PhoneIcon, FileText, Star, Gift, Activity,
@@ -36,6 +36,7 @@ function EmailCampaignsSubTab({ tk, campaigns, setCampaigns, roles, contacts, te
   const [step, setStep] = useState(1);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [editingId, setEditingId] = useState(null);
   const [previewCamp, setPreviewCamp] = useState(null);
   const [previewContact, setPreviewContact] = useState(0);
   const [eContactSearch, setEContactSearch] = useState('');
@@ -68,9 +69,22 @@ function EmailCampaignsSubTab({ tk, campaigns, setCampaigns, roles, contacts, te
   const previewSampleE = sampleContacts[previewContact] || { name: 'Ramesh Kumar', first_name: 'Ramesh', company: 'Delhi Public School', email: 'ramesh@dpsdwarka.edu.in' };
 
   function closeCreate() {
-    setShowCreate(false); setStep(1);
+    setShowCreate(false); setStep(1); setEditingId(null);
     setEContactSearch(''); setEContactTagFilter('');
     setForm({ name: '', audience_mode: 'filter', audience_filter: {}, contact_ids: [], template_id: '', subject: '', message: '', body_html: '', schedule: 'draft', schedule_at: '' });
+  }
+
+  function openEdit(camp) {
+    const af = camp.audience_filter || {};
+    const mode = af.contact_ids?.length ? 'select_contacts' : (af.not_purchased ? 'not_purchased' : 'filter');
+    setForm({
+      name: camp.name || '', audience_mode: mode,
+      audience_filter: mode === 'filter' ? af : {}, contact_ids: af.contact_ids || [],
+      template_id: camp.template_id || '', subject: camp.subject || '',
+      message: camp.message || '', body_html: camp.body_html || '',
+      schedule: 'draft', schedule_at: '',
+    });
+    setEditingId(camp.campaign_id); setStep(1); setShowCreate(true);
   }
 
   function pickTemplate(tmpl) {
@@ -101,7 +115,7 @@ function EmailCampaignsSubTab({ tk, campaigns, setCampaigns, roles, contacts, te
         if (audience_filter.tags?.length) parts.push(`${audience_filter.tags.length} tag(s)`);
         audienceLabel = parts.length ? parts.join(' · ') : 'All Contacts';
       }
-      const res = await emailApi.createCampaign({
+      const payload = {
         name: form.name.trim(),
         template_id: form.template_id || null,
         subject: form.subject.trim(),
@@ -110,11 +124,19 @@ function EmailCampaignsSubTab({ tk, campaigns, setCampaigns, roles, contacts, te
         audience_filter,
         audience_label: audienceLabel,
         scheduled_at: form.schedule === 'schedule' ? form.schedule_at : null,
-      });
-      setCampaigns(prev => [mapCampaign(res.data), ...prev]);
-      closeCreate();
-      toast.success('Email campaign created as draft');
-    } catch { toast.error('Failed to create campaign'); }
+      };
+      if (editingId) {
+        const res = await emailApi.updateCampaign(editingId, payload);
+        setCampaigns(prev => prev.map(c => c.campaign_id === editingId ? mapCampaign(res.data) : c));
+        closeCreate();
+        toast.success('Campaign updated');
+      } else {
+        const res = await emailApi.createCampaign(payload);
+        setCampaigns(prev => [mapCampaign(res.data), ...prev]);
+        closeCreate();
+        toast.success('Email campaign created as draft');
+      }
+    } catch { toast.error('Failed to save campaign'); }
     finally { setSaving(false); }
   }
 
@@ -208,6 +230,12 @@ function EmailCampaignsSubTab({ tk, campaigns, setCampaigns, roles, contacts, te
                       {launching === c.id ? <RefreshCw className="h-3 w-3 animate-spin" /> : <Play className="h-3 w-3" />}
                       Launch
                     </Button>
+                  )}
+                  {c.status === 'draft' && (
+                    <button onClick={() => openEdit(c)}
+                      className={`h-8 w-8 rounded-lg ${tk.hov} flex items-center justify-center`} title="Edit draft">
+                      <Pencil className={`h-4 w-4 ${tk.tm}`} />
+                    </button>
                   )}
                   <button onClick={() => { setPreviewCamp(c); setPreviewContact(0); }}
                     className={`h-8 w-8 rounded-lg ${tk.hov} flex items-center justify-center`} title="Preview email">
@@ -306,7 +334,7 @@ function EmailCampaignsSubTab({ tk, campaigns, setCampaigns, roles, contacts, te
       <Dialog open={showCreate} onOpenChange={closeCreate}>
         <DialogContent className={`${tk.card} border ${tk.bdr} w-[calc(100vw-2rem)] max-w-lg max-h-[90vh] overflow-y-auto`}>
           <DialogHeader>
-            <DialogTitle className={tk.t1}>New Email Campaign</DialogTitle>
+            <DialogTitle className={tk.t1}>{editingId ? 'Edit Email Campaign' : 'New Email Campaign'}</DialogTitle>
             <DialogDescription className={tk.tm}>Step {step} of 2 — {step === 1 ? 'Audience & Content' : 'Preview & Schedule'}</DialogDescription>
           </DialogHeader>
           {step === 1 ? (
@@ -509,7 +537,7 @@ function EmailCampaignsSubTab({ tk, campaigns, setCampaigns, roles, contacts, te
                 onClick={() => setStep(2)} disabled={!form.name.trim()}>Next: Preview →</Button>
             ) : (
               <Button size="sm" className="bg-[var(--accent)] hover:bg-[var(--accent)]/90 text-white"
-                onClick={createCampaign} disabled={saving}>{saving ? 'Saving…' : 'Create Campaign'}</Button>
+                onClick={createCampaign} disabled={saving}>{saving ? 'Saving…' : editingId ? 'Save Changes' : 'Create Campaign'}</Button>
             )}
           </DialogFooter>
         </DialogContent>
@@ -526,8 +554,24 @@ function EmailTemplatesSubTab({ tk, templates, setTemplates }) {
   const [form, setForm] = useState(BLANK_EMAIL_TMPL);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [editingId, setEditingId] = useState(null);
 
   const filtered = filterCat === 'All' ? templates : templates.filter(t => t.category === filterCat);
+
+  function closeDialog() { setShowCreate(false); setForm(BLANK_EMAIL_TMPL); setEditingId(null); }
+
+  function openEdit(tmpl) {
+    // System (default) templates are re-seeded on reload, so editing one in place would revert.
+    // Load its content as a new "(custom)" copy instead; user templates edit in place.
+    const isSystem = tmpl.created_by === 'system';
+    setForm({
+      name: isSystem ? `${tmpl.name} (custom)` : (tmpl.name || ''),
+      category: tmpl.category || 'intro', subject: tmpl.subject || '',
+      body: tmpl.body || '', body_html: tmpl.body_html || '',
+    });
+    setEditingId(isSystem ? null : tmpl.template_id);
+    setShowCreate(true);
+  }
 
   async function sendTest() {
     if (!form.subject.trim() || !(form.body_html || form.body || '').trim()) { toast.error('Add a subject and body first'); return; }
@@ -549,11 +593,16 @@ function EmailTemplatesSubTab({ tk, templates, setTemplates }) {
       const vars = [];
       if (all.includes('{name}')) vars.push('name');
       if (all.includes('{school_name}')) vars.push('school_name');
-      const res = await emailApi.createTemplate({ ...form, variables: vars });
-      setTemplates(prev => [...prev, res.data]);
-      setShowCreate(false);
-      setForm(BLANK_EMAIL_TMPL);
-      toast.success('Email template saved');
+      if (editingId) {
+        const res = await emailApi.updateTemplate(editingId, { ...form, variables: vars });
+        setTemplates(prev => prev.map(t => t.template_id === editingId ? res.data : t));
+        toast.success('Template updated');
+      } else {
+        const res = await emailApi.createTemplate({ ...form, variables: vars });
+        setTemplates(prev => [...prev, res.data]);
+        toast.success('Email template saved');
+      }
+      closeDialog();
     } catch { toast.error('Failed to save template'); }
     finally { setSaving(false); }
   }
@@ -568,7 +617,7 @@ function EmailTemplatesSubTab({ tk, templates, setTemplates }) {
           <p className={`text-xs ${tk.tm} mt-0.5`}>Reusable email messages — select when creating campaigns</p>
         </div>
         <Button size="sm" className="h-8 gap-1 bg-[var(--accent)] hover:bg-[var(--accent)]/90 text-white text-xs flex-shrink-0"
-          onClick={() => setShowCreate(true)}>
+          onClick={() => { setForm(BLANK_EMAIL_TMPL); setEditingId(null); setShowCreate(true); }}>
           <Plus className="h-3 w-3" /> New Template
         </Button>
       </div>
@@ -594,10 +643,16 @@ function EmailTemplatesSubTab({ tk, templates, setTemplates }) {
                   <p className={`text-sm font-semibold ${tk.t1} leading-tight`}>{t.name}</p>
                   <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${m.bg} ${m.col} font-medium mt-1 inline-block`}>{m.label}</span>
                 </div>
-                <button onClick={() => setPreview(t)}
-                  className={`h-7 w-7 rounded-lg ${tk.hov} flex items-center justify-center flex-shrink-0`}>
-                  <Eye className={`h-3.5 w-3.5 ${tk.tm}`} />
-                </button>
+                <div className="flex items-center gap-0.5 flex-shrink-0">
+                  <button onClick={() => openEdit(t)} title="Edit template"
+                    className={`h-7 w-7 rounded-lg ${tk.hov} flex items-center justify-center`}>
+                    <Pencil className={`h-3.5 w-3.5 ${tk.tm}`} />
+                  </button>
+                  <button onClick={() => setPreview(t)} title="Preview"
+                    className={`h-7 w-7 rounded-lg ${tk.hov} flex items-center justify-center`}>
+                    <Eye className={`h-3.5 w-3.5 ${tk.tm}`} />
+                  </button>
+                </div>
               </div>
               {t.subject && <p className={`text-[11px] font-medium ${tk.t2} leading-tight`}>✉ {t.subject}</p>}
               <p className={`text-[11px] ${tk.tm} leading-relaxed line-clamp-3`}>{t.body}</p>
@@ -659,10 +714,10 @@ function EmailTemplatesSubTab({ tk, templates, setTemplates }) {
         </Dialog>
       )}
 
-      <Dialog open={showCreate} onOpenChange={setShowCreate}>
+      <Dialog open={showCreate} onOpenChange={(o) => { if (o) setShowCreate(true); else closeDialog(); }}>
         <DialogContent className={`${tk.card} border ${tk.bdr} w-[calc(100vw-2rem)] max-w-lg max-h-[90vh] overflow-y-auto`}>
           <DialogHeader>
-            <DialogTitle className={tk.t1}>New Email Template</DialogTitle>
+            <DialogTitle className={tk.t1}>{editingId ? 'Edit Email Template' : 'New Email Template'}</DialogTitle>
             <DialogDescription className={tk.tm}>Reusable email for campaigns. Use {'{name}'} and {'{school_name}'} for personalisation.</DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-1">
@@ -714,14 +769,14 @@ function EmailTemplatesSubTab({ tk, templates, setTemplates }) {
           </div>
           <DialogFooter className="gap-2">
             <Button variant="outline" size="sm" className={`border-[var(--border-color)] ${tk.t2}`}
-              onClick={() => setShowCreate(false)}>Cancel</Button>
+              onClick={closeDialog}>Cancel</Button>
             <Button variant="outline" size="sm" className={`border-[var(--border-color)] ${tk.t2} gap-1 mr-auto`}
               onClick={sendTest} disabled={testing || !form.subject.trim() || !(form.body_html || form.body || '').trim()}
               title="Send this template to your own inbox to check it">
               {testing ? <RefreshCw className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />} Send test to me
             </Button>
             <Button size="sm" className="bg-[var(--accent)] hover:bg-[var(--accent)]/90 text-white"
-              onClick={create} disabled={saving}>{saving ? 'Saving…' : 'Save Template'}</Button>
+              onClick={create} disabled={saving}>{saving ? 'Saving…' : editingId ? 'Save Changes' : 'Save Template'}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
