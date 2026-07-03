@@ -35,6 +35,7 @@ function EmailCampaignsSubTab({ tk, campaigns, setCampaigns, roles, contacts, te
   const [launching, setLaunching] = useState(null);
   const [step, setStep] = useState(1);
   const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
   const [previewCamp, setPreviewCamp] = useState(null);
   const [previewContact, setPreviewContact] = useState(0);
   const [eContactSearch, setEContactSearch] = useState('');
@@ -126,6 +127,16 @@ function EmailCampaignsSubTab({ tk, campaigns, setCampaigns, roles, contacts, te
       toast.success(`${queued} emails queued for ${camp.name}`);
     } catch (e) { toast.error(e?.response?.data?.detail || 'Failed to launch campaign'); }
     finally { setLaunching(null); }
+  }
+
+  async function sendTest() {
+    if (!form.subject.trim() || !(form.body_html || form.message || '').trim()) { toast.error('Add a subject and body first'); return; }
+    setTesting(true);
+    try {
+      const res = await emailApi.sendTest({ subject: form.subject, body_html: form.body_html, body_text: form.message });
+      toast.success(`Test email sent to ${res.data?.to || 'your inbox'} — check before launching`);
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Failed to send test — check Email Setup (sender + Gmail app password)'); }
+    finally { setTesting(false); }
   }
 
   async function removeCampaign(camp) {
@@ -487,6 +498,11 @@ function EmailCampaignsSubTab({ tk, campaigns, setCampaigns, roles, contacts, te
             <Button variant="outline" size="sm" className={`border-[var(--border-color)] ${tk.t2}`}
               onClick={step === 1 ? closeCreate : () => setStep(1)}>
               {step === 1 ? 'Cancel' : 'Back'}
+            </Button>
+            <Button variant="outline" size="sm" className={`border-[var(--border-color)] ${tk.t2} gap-1 mr-auto`}
+              onClick={sendTest} disabled={testing || !form.subject.trim() || !(form.body_html || form.message || '').trim()}
+              title="Send this exact email to your own inbox to check it before launching">
+              {testing ? <RefreshCw className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />} Send test to me
             </Button>
             {step === 1 ? (
               <Button size="sm" className="bg-[var(--accent)] hover:bg-[var(--accent)]/90 text-white"
