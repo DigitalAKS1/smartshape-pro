@@ -34,9 +34,27 @@ def _fallback_sanitize(html: str) -> str:
     return html
 
 
+def _sanitize_email_doc(html: str) -> str:
+    """For staff-authored FULL email designs (a <style> block or a whole <html> document):
+    KEEP the structure + CSS + layout so the design renders, and strip ONLY the executable
+    vectors (script/iframe/object/embed/form, on*= handlers, javascript: URLs, CSS expression()).
+    Contact-sourced values are separately HTML-escaped via personalize_html, so this is safe."""
+    html = re.sub(r"(?is)<(script|iframe|object|embed|form)\b[^>]*>.*?</\1\s*>", "", html)
+    html = re.sub(r"(?is)<(script|iframe|object|embed|form)\b[^>]*/?>", "", html)
+    html = re.sub(r'(?i)\son\w+\s*=\s*("[^"]*"|\'[^\']*\'|[^\s>]+)', "", html)   # onload=, onclick=…
+    html = re.sub(r'(?i)(href|src)\s*=\s*(["\']?)\s*javascript:[^"\'>\s]*', r'\1=\2#', html)
+    html = re.sub(r"(?i)expression\s*\(", "", html)
+    return html
+
+
 def sanitize_html(html: str) -> str:
     if not html:
         return ""
+    low = html.lower()
+    # Staff-authored email designs — preserve <style>/layout/full document; strip only JS vectors.
+    if "<style" in low or "<html" in low or "<!doctype" in low:
+        return _sanitize_email_doc(html)
+    # Plain fragments — strict allow-list via bleach (fallback regex if bleach missing).
     try:
         import bleach  # lazy — a missing dep must never crash app startup
         cleaned = bleach.clean(

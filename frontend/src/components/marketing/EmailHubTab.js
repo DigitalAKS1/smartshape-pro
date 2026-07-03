@@ -303,14 +303,13 @@ function EmailCampaignsSubTab({ tk, campaigns, setCampaigns, roles, contacts, te
                   </span>
                 </div>
               </div>
-              <div className="p-4 min-h-[80px] bg-white">
+              <div className="min-h-[80px] bg-white">
                 {previewCamp.body_html ? (
-                  <div
-                    className="text-[12px] leading-relaxed"
-                    dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(personalize(previewCamp.body_html, previewSampleE)) }}
-                  />
+                  <iframe title="Email preview" sandbox="allow-same-origin" className="w-full block"
+                    style={{ height: '60vh', border: 0, background: '#fff' }}
+                    srcDoc={personalize(previewCamp.body_html, previewSampleE)} />
                 ) : (
-                  <p className={`text-[11px] ${tk.t2} whitespace-pre-wrap leading-relaxed`}>
+                  <p className={`text-[11px] ${tk.t2} whitespace-pre-wrap leading-relaxed p-4`}>
                     {personalize(previewCamp.message, previewSampleE) || '(No body content)'}
                   </p>
                 )}
@@ -496,13 +495,13 @@ function EmailCampaignsSubTab({ tk, campaigns, setCampaigns, roles, contacts, te
                     {form.subject.replace('{name}', 'Ramesh').replace('{school_name}', 'Delhi Public School') || '(No subject)'}
                   </p>
                 </div>
-                <div className="p-4 bg-white">
+                <div className="bg-white">
                   {form.body_html ? (
-                    <div className="text-xs leading-relaxed"
-                      dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(
-                        form.body_html.replace(/\{name\}/g, 'Ramesh').replace(/\{school_name\}/g, 'Delhi Public School')) }} />
+                    <iframe title="Email preview" sandbox="allow-same-origin" className="w-full block"
+                      style={{ height: '55vh', border: 0, background: '#fff' }}
+                      srcDoc={form.body_html.replace(/\{name\}/g, 'Ramesh').replace(/\{school_name\}/g, 'Delhi Public School')} />
                   ) : (
-                    <p className="text-xs text-[var(--text-secondary)] whitespace-pre-wrap leading-relaxed">
+                    <p className="text-xs text-[var(--text-secondary)] whitespace-pre-wrap leading-relaxed p-4">
                       {(form.message || '(No body)').replace('{name}', 'Ramesh').replace('{school_name}', 'Delhi Public School').substring(0, 300)}
                       {form.message.length > 300 ? '…' : ''}
                     </p>
@@ -693,13 +692,13 @@ function EmailTemplatesSubTab({ tk, templates, setTemplates }) {
                   </span>
                 </div>
               </div>
-              <div className="p-4 bg-white">
+              <div className="bg-white">
                 {preview.body_html ? (
-                  <div className="text-[12px] leading-relaxed"
-                    dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(
-                      (preview.body_html || '').replace(/\{name\}/g, 'Ramesh').replace(/\{school_name\}/g, 'Delhi Public School')) }} />
+                  <iframe title="Template preview" sandbox="allow-same-origin" className="w-full block"
+                    style={{ height: '55vh', border: 0, background: '#fff' }}
+                    srcDoc={(preview.body_html || '').replace(/\{name\}/g, 'Ramesh').replace(/\{school_name\}/g, 'Delhi Public School')} />
                 ) : (
-                  <p className={`text-[11px] ${tk.t2} leading-relaxed whitespace-pre-wrap`}>
+                  <p className={`text-[11px] ${tk.t2} leading-relaxed whitespace-pre-wrap p-4`}>
                     {(preview.body || '').replace('{name}', 'Ramesh').replace('{school_name}', 'Delhi Public School')}
                   </p>
                 )}
