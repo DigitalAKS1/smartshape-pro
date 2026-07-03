@@ -14,6 +14,7 @@ Five perpetual asyncio loops:
 import asyncio
 import logging
 import os
+import re
 import smtplib
 import uuid
 from datetime import datetime, timezone, timedelta
@@ -56,6 +57,66 @@ async def _wa_cfg():
 # ══════════════════════════════════════════════════════════════════════════════
 # SMTP — sync, runs via asyncio.to_thread
 # ══════════════════════════════════════════════════════════════════════════════
+
+# One contact's "email" field may hold several addresses jammed together with
+# commas, semicolons, spaces or newlines (common with imported data). Sending
+# that raw string to Gmail fails RFC-5321 validation ("not a valid address") or
+# crashes on an embedded newline ("folded header contains newline"). Extract the
+# real addresses so every reachable recipient still gets the mail.
+_ADDR_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
+
+
+def _clean_recipients(raw: str) -> list:
+    """Return the de-duplicated list of valid email addresses found in a field."""
+    if not raw:
+        return []
+    out = []
+    for a in _ADDR_RE.findall(raw):
+        a = a.strip().strip(".,;")
+        if a and a.lower() not in [x.lower() for x in out]:
+            out.append(a)
+    return out
+
+
+def _send_batch_sync(sender_email, app_password, sender_name, jobs):
+    """Send many messages over ONE SMTP connection (one login) — far faster and
+    kinder to Gmail than reconnecting per message. `jobs` is a list of dicts:
+    {scheduled_id, recipients[list], subject, body, body_html, reply_to}.
+    Returns (results, conn_error): results = [(scheduled_id, ok, error)];
+    conn_error set (str) if the connection/login itself failed → caller should
+    leave the whole batch pending and retry next cycle."""
+    try:
+        smtp = smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=30)
+        smtp.login(sender_email, app_password)
+    except Exception as exc:
+        return [], str(exc)[:250]
+    results = []
+    try:
+        for j in jobs:
+            try:
+                msg = MIMEMultipart("alternative")
+                msg["From"] = f"{sender_name} <{sender_email}>"
+                msg["To"] = ", ".join(j["recipients"])
+                msg["Subject"] = j.get("subject") or "Message from SmartShape"
+                if j.get("reply_to"):
+                    msg["Reply-To"] = j["reply_to"]
+                if j.get("body_html"):
+                    msg["List-Unsubscribe"] = f"<mailto:{sender_email}?subject=unsubscribe>"
+                    msg["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
+                msg.attach(MIMEText(j.get("body") or "", "plain"))
+                if j.get("body_html"):
+                    msg.attach(MIMEText(j["body_html"], "html"))
+                smtp.sendmail(sender_email, j["recipients"], msg.as_string())
+                results.append((j["scheduled_id"], True, None))
+            except Exception as exc:
+                results.append((j["scheduled_id"], False, str(exc)[:250]))
+    finally:
+        try:
+            smtp.quit()
+        except Exception:
+            pass
+    return results, None
+
 
 def _smtp_send(sender_email, app_password, sender_name, to_email, subject, body, body_html=None, reply_to=None):
     msg = MIMEMultipart("alternative")
@@ -169,9 +230,10 @@ async def process_email_queue():
         return
 
     sender_email, app_password, sender_name = cfg
+    # One connection per cycle handles a big batch fast, so pull a generous slice.
     pending = await db.email_scheduled.find(
         {"status": "pending"}, {"_id": 0}
-    ).limit(30).to_list(30)
+    ).limit(100).to_list(100)
 
     if not pending:
         return
@@ -179,52 +241,63 @@ async def process_email_queue():
     log.info(f"[email] processing {len(pending)} messages")
     now_iso = datetime.now(timezone.utc).isoformat()
 
+    jobs = []
     for msg in pending:
-        # field stored by email_routes is "email"; legacy records may use "to_email"
-        to_email = (msg.get("email") or msg.get("to_email") or "").strip()
-        if not to_email or "@" not in to_email:
+        # field stored by email_routes is "email"; legacy records may use "to_email".
+        # A field may contain several addresses (comma/space/newline) → split them.
+        recipients = _clean_recipients(msg.get("email") or msg.get("to_email") or "")
+        if not recipients:
             await db.email_scheduled.update_one(
                 {"scheduled_id": msg["scheduled_id"]},
                 {"$set": {"status": "failed", "error": "invalid_email", "sent_at": now_iso}},
             )
-            await db.email_campaigns.update_one(
-                {"campaign_id": msg["campaign_id"]}, {"$inc": {"failed_count": 1}}
-            )
+            if msg.get("campaign_id"):
+                await db.email_campaigns.update_one(
+                    {"campaign_id": msg["campaign_id"]}, {"$inc": {"failed_count": 1}}
+                )
             continue
+        jobs.append({
+            "scheduled_id": msg["scheduled_id"],
+            "campaign_id": msg.get("campaign_id"),
+            "recipients": recipients,
+            "subject": msg.get("subject", "Message from SmartShape"),
+            # field stored by email_routes is "message"; legacy records may use "body"
+            "body": msg.get("message") or msg.get("body") or "",
+            "body_html": msg.get("body_html"),
+            "reply_to": msg.get("reply_to"),
+        })
 
-        # field stored by email_routes is "message"; legacy records may use "body"
-        body_text = msg.get("message") or msg.get("body") or ""
-        body_html = msg.get("body_html")
-
-        try:
-            await asyncio.to_thread(
-                _smtp_send, sender_email, app_password, sender_name,
-                to_email,
-                msg.get("subject", "Message from SmartShape"),
-                body_text,
-                body_html,
-                msg.get("reply_to"),
-            )
-            await db.email_scheduled.update_one(
-                {"scheduled_id": msg["scheduled_id"]},
-                {"$set": {"status": "sent", "sent_at": now_iso}},
-            )
-            await db.email_campaigns.update_one(
-                {"campaign_id": msg["campaign_id"]}, {"$inc": {"sent_count": 1}}
-            )
-            log.info(f"[email] sent → {to_email}")
-        except Exception as exc:
-            err = str(exc)[:250]
-            log.warning(f"[email] failed → {to_email}: {err}")
-            await db.email_scheduled.update_one(
-                {"scheduled_id": msg["scheduled_id"]},
-                {"$set": {"status": "failed", "error": err, "sent_at": now_iso}},
-            )
-            await db.email_campaigns.update_one(
-                {"campaign_id": msg["campaign_id"]}, {"$inc": {"failed_count": 1}}
-            )
-
-        await asyncio.sleep(0.5)  # respect Gmail sending rate
+    if jobs:
+        results, conn_err = await asyncio.to_thread(
+            _send_batch_sync, sender_email, app_password, sender_name, jobs
+        )
+        if conn_err:
+            # Connection/login itself failed — leave the batch pending, retry next cycle.
+            log.warning(f"[email] SMTP connect/login failed, deferring batch: {conn_err}")
+            return
+        jobmap = {j["scheduled_id"]: j for j in jobs}
+        for sid, ok, err in results:
+            j = jobmap.get(sid, {})
+            if ok:
+                await db.email_scheduled.update_one(
+                    {"scheduled_id": sid},
+                    {"$set": {"status": "sent", "sent_at": now_iso}},
+                )
+                if j.get("campaign_id"):
+                    await db.email_campaigns.update_one(
+                        {"campaign_id": j["campaign_id"]}, {"$inc": {"sent_count": 1}}
+                    )
+                log.info(f"[email] sent → {', '.join(j.get('recipients', []))}")
+            else:
+                log.warning(f"[email] failed → {', '.join(j.get('recipients', []))}: {err}")
+                await db.email_scheduled.update_one(
+                    {"scheduled_id": sid},
+                    {"$set": {"status": "failed", "error": err, "sent_at": now_iso}},
+                )
+                if j.get("campaign_id"):
+                    await db.email_campaigns.update_one(
+                        {"campaign_id": j["campaign_id"]}, {"$inc": {"failed_count": 1}}
+                    )
 
     # Mark campaigns "completed" once their queue has fully drained — otherwise a
     # fully-sent campaign shows "Queued" forever (its status is never advanced).
