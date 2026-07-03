@@ -457,11 +457,17 @@ function EmailCampaignsSubTab({ tk, campaigns, setCampaigns, roles, contacts, te
                     {form.subject.replace('{name}', 'Ramesh').replace('{school_name}', 'Delhi Public School') || '(No subject)'}
                   </p>
                 </div>
-                <div className="p-4 bg-white/2">
-                  <p className="text-xs text-[var(--text-secondary)] whitespace-pre-wrap leading-relaxed">
-                    {(form.message || '(No body)').replace('{name}', 'Ramesh').replace('{school_name}', 'Delhi Public School').substring(0, 300)}
-                    {form.message.length > 300 ? '…' : ''}
-                  </p>
+                <div className="p-4 bg-white">
+                  {form.body_html ? (
+                    <div className="text-xs leading-relaxed"
+                      dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(
+                        form.body_html.replace(/\{name\}/g, 'Ramesh').replace(/\{school_name\}/g, 'Delhi Public School')) }} />
+                  ) : (
+                    <p className="text-xs text-[var(--text-secondary)] whitespace-pre-wrap leading-relaxed">
+                      {(form.message || '(No body)').replace('{name}', 'Ramesh').replace('{school_name}', 'Delhi Public School').substring(0, 300)}
+                      {form.message.length > 300 ? '…' : ''}
+                    </p>
+                  )}
                 </div>
               </div>
               <div>
@@ -604,10 +610,16 @@ function EmailTemplatesSubTab({ tk, templates, setTemplates }) {
                   </span>
                 </div>
               </div>
-              <div className="p-4">
-                <p className={`text-[11px] ${tk.t2} leading-relaxed whitespace-pre-wrap`}>
-                  {(preview.body || '').replace('{name}', 'Ramesh').replace('{school_name}', 'Delhi Public School')}
-                </p>
+              <div className="p-4 bg-white">
+                {preview.body_html ? (
+                  <div className="text-[12px] leading-relaxed"
+                    dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(
+                      (preview.body_html || '').replace(/\{name\}/g, 'Ramesh').replace(/\{school_name\}/g, 'Delhi Public School')) }} />
+                ) : (
+                  <p className={`text-[11px] ${tk.t2} leading-relaxed whitespace-pre-wrap`}>
+                    {(preview.body || '').replace('{name}', 'Ramesh').replace('{school_name}', 'Delhi Public School')}
+                  </p>
+                )}
               </div>
             </div>
             <p className={`text-[11px] ${tk.tm}`}>Variables auto-filled with sample data for preview</p>
