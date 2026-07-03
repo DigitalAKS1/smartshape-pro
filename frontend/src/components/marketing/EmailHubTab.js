@@ -525,8 +525,19 @@ function EmailTemplatesSubTab({ tk, templates, setTemplates }) {
   const [showCreate, setShowCreate] = useState(false);
   const [form, setForm] = useState(BLANK_EMAIL_TMPL);
   const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
 
   const filtered = filterCat === 'All' ? templates : templates.filter(t => t.category === filterCat);
+
+  async function sendTest() {
+    if (!form.subject.trim() || !(form.body_html || form.body || '').trim()) { toast.error('Add a subject and body first'); return; }
+    setTesting(true);
+    try {
+      const res = await emailApi.sendTest({ subject: form.subject, body_html: form.body_html, body_text: form.body });
+      toast.success(`Test email sent to ${res.data?.to || 'your inbox'}`);
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Failed to send test — check Email Setup (sender + Gmail app password)'); }
+    finally { setTesting(false); }
+  }
 
   async function create() {
     if (!form.name.trim()) { toast.error('Template name is required'); return; }
@@ -704,6 +715,11 @@ function EmailTemplatesSubTab({ tk, templates, setTemplates }) {
           <DialogFooter className="gap-2">
             <Button variant="outline" size="sm" className={`border-[var(--border-color)] ${tk.t2}`}
               onClick={() => setShowCreate(false)}>Cancel</Button>
+            <Button variant="outline" size="sm" className={`border-[var(--border-color)] ${tk.t2} gap-1 mr-auto`}
+              onClick={sendTest} disabled={testing || !form.subject.trim() || !(form.body_html || form.body || '').trim()}
+              title="Send this template to your own inbox to check it">
+              {testing ? <RefreshCw className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />} Send test to me
+            </Button>
             <Button size="sm" className="bg-[var(--accent)] hover:bg-[var(--accent)]/90 text-white"
               onClick={create} disabled={saving}>{saving ? 'Saving…' : 'Save Template'}</Button>
           </DialogFooter>
