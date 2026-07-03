@@ -26,7 +26,7 @@ const TMPL_CAT_META = {
   reengagement: { label: 'Re-engagement',  col: 'text-red-400',    bg: 'bg-red-400/15' },
   seasonal:     { label: 'Seasonal',       col: 'text-cyan-500',   bg: 'bg-cyan-500/15' },
 };
-const BLANK_EMAIL_TMPL = { name: '', category: 'intro', subject: '', body: '' };
+const BLANK_EMAIL_TMPL = { name: '', category: 'intro', subject: '', body: '', body_html: '' };
 
 // ── Email Campaigns Sub-Tab ────────────────────────────────────────────────────
 function EmailCampaignsSubTab({ tk, campaigns, setCampaigns, roles, contacts, templates, allTags }) {
@@ -515,12 +515,13 @@ function EmailTemplatesSubTab({ tk, templates, setTemplates }) {
   async function create() {
     if (!form.name.trim()) { toast.error('Template name is required'); return; }
     if (!form.subject.trim()) { toast.error('Subject line is required'); return; }
-    if (!form.body.trim()) { toast.error('Email body is required'); return; }
+    if (!form.body.trim() && !(form.body_html || '').trim()) { toast.error('Add an email design (HTML) or a plain body'); return; }
     setSaving(true);
     try {
+      const all = `${form.subject} ${form.body} ${form.body_html || ''}`;
       const vars = [];
-      if (form.body.includes('{name}') || form.subject.includes('{name}')) vars.push('name');
-      if (form.body.includes('{school_name}') || form.subject.includes('{school_name}')) vars.push('school_name');
+      if (all.includes('{name}')) vars.push('name');
+      if (all.includes('{school_name}')) vars.push('school_name');
       const res = await emailApi.createTemplate({ ...form, variables: vars });
       setTemplates(prev => [...prev, res.data]);
       setShowCreate(false);
@@ -660,11 +661,28 @@ function EmailTemplatesSubTab({ tk, templates, setTemplates }) {
                 value={form.subject} onChange={e => setForm(p => ({ ...p, subject: e.target.value }))} />
             </div>
             <div>
-              <Label className={`${tk.t2} text-xs mb-1.5 block`}>Email Body</Label>
-              <textarea rows={8} className={`w-full rounded-xl border px-3 py-2.5 text-xs resize-none ${tk.inp}`}
-                placeholder="Write the full email body here. Use {name} and {school_name} for personalisation."
-                value={form.body} onChange={e => setForm(p => ({ ...p, body: e.target.value }))} />
-              <p className={`text-[11px] ${tk.tm} mt-1`}>{form.body.length} chars</p>
+              <div className="flex items-center justify-between mb-1.5">
+                <Label className={`${tk.t2} text-xs block`}>Email Design (rich text / paste HTML)</Label>
+                <div className="flex gap-1">
+                  <button type="button"
+                    onClick={() => setForm(p => ({ ...p, body_html: (p.body_html || '') + '{name}' }))}
+                    className="text-[10px] font-mono px-1.5 py-0.5 rounded-md bg-[var(--bg-primary)] border border-[var(--border-color)] text-[var(--accent)] hover:bg-[var(--bg-hover)]">
+                    + {'{name}'}
+                  </button>
+                  <button type="button"
+                    onClick={() => setForm(p => ({ ...p, body_html: (p.body_html || '') + '{school_name}' }))}
+                    className="text-[10px] font-mono px-1.5 py-0.5 rounded-md bg-[var(--bg-primary)] border border-[var(--border-color)] text-[var(--accent)] hover:bg-[var(--bg-hover)]">
+                    + {'{school_name}'}
+                  </button>
+                </div>
+              </div>
+              <HtmlBodyEditor value={form.body_html} onChange={(html) => setForm(f => ({ ...f, body_html: html }))} />
+              <details className="group mt-2">
+                <summary className={`text-[11px] font-medium ${tk.tm} cursor-pointer select-none`}>Plain-text fallback (optional)</summary>
+                <textarea rows={5} className={`w-full mt-2 rounded-xl border px-3 py-2.5 text-xs resize-none ${tk.inp}`}
+                  placeholder="Plain-text version for inboxes that can't render HTML. Use {name} and {school_name}."
+                  value={form.body} onChange={e => setForm(p => ({ ...p, body: e.target.value }))} />
+              </details>
             </div>
           </div>
           <DialogFooter className="gap-2">
