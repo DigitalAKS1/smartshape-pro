@@ -707,23 +707,26 @@ async def launch_email_campaign(campaign_id: str, request: Request):
 
     subject = (camp.get("subject") or "").strip()
     message = (camp.get("message") or "").strip()
-    if not message and camp.get("template_id"):
+    # HTML body (optional): campaign's own, else the linked template's.
+    body_html_tmpl = (camp.get("body_html") or "").strip()
+    if (not message or not body_html_tmpl or not subject) and camp.get("template_id"):
         tmpl = await db.email_templates.find_one({"template_id": camp["template_id"]})
         if tmpl:
-            message = tmpl.get("body", "")
+            if not message:
+                message = tmpl.get("body", "")
+            if not body_html_tmpl:
+                body_html_tmpl = (tmpl.get("body_html") or "").strip()
             if not subject:
                 subject = tmpl.get("subject", "")
-    if not message:
+    # A campaign is valid if it has EITHER a plain message OR an HTML design.
+    if not message and not body_html_tmpl:
         raise HTTPException(400, "No message content. Add a message or select a template.")
     if not subject:
         raise HTTPException(400, "No subject line. Add a subject or select a template.")
-
-    # HTML body (optional): campaign's own, else the linked template's. Sanitize + wrap once.
-    body_html_tmpl = (camp.get("body_html") or "").strip()
-    if not body_html_tmpl and camp.get("template_id"):
-        tmpl = await db.email_templates.find_one({"template_id": camp["template_id"]})
-        if tmpl:
-            body_html_tmpl = (tmpl.get("body_html") or "").strip()
+    # HTML-only campaign → derive a plain-text fallback so recipients without HTML still read it.
+    if not message and body_html_tmpl:
+        message = plain_from_html(body_html_tmpl)
+    # Sanitize + wrap the HTML once.
     body_html_tmpl = wrap_email_shell(sanitize_html(body_html_tmpl)) if body_html_tmpl else ""
 
     contacts = await _resolve_audience(camp.get("audience_filter", {}), user)
