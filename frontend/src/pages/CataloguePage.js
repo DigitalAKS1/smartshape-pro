@@ -61,7 +61,21 @@ export default function CataloguePage() {
     </div>
   );
 
-  const { quotation, package: pkg, dies, logo_url: logoUrl } = data;
+  const { quotation, package: pkg, dies: diesRaw, logo_url: logoUrl } = data;
+  const dies = diesRaw || [];
+
+  // A valid catalogue always carries its quotation. If a transient/partial response
+  // (e.g. during a backend restart) omits it, show a friendly notice instead of
+  // hard-crashing the whole page to a blank 500 for the school.
+  if (!quotation) return (
+    <div className="min-h-screen bg-[#0a0a12] flex items-center justify-center px-4">
+      <div className="text-center max-w-md">
+        <h1 className="text-3xl font-bold text-white mb-3">Catalogue unavailable</h1>
+        <p className="text-[#a0a0b0]">We couldn't load this catalogue right now. Please refresh in a moment, or contact your SMARTS-SHAPES representative.</p>
+        <Button onClick={() => window.location.reload()} className="mt-6 bg-[#e94560] hover:bg-[#d63651] text-white">Refresh</Button>
+      </div>
+    </div>
+  );
 
   // Derive actual limits from quotation lines (what was quoted, not package defaults)
   const lines = quotation.lines || [];
