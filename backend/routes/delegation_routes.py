@@ -1485,12 +1485,16 @@ async def _agenda_crm_tasks(email, dfrom, dto):
     for r in rows:
         done = r.get("status") in ("done", "completed")
         acts = ["open"] if done else ["complete", "reschedule", "open"]
+        # Contact-only tasks have no lead; deep-link to the contact instead.
+        link = (f"/leads?lead={r['lead_id']}" if r.get("lead_id")
+                else f"/leads?contact={r.get('contact_id', '')}")
         out.append(_ev(
             "task", "my_task", r.get("title") or "Task", r["due_date"],
-            r.get("task_id", ""), f"/leads?lead={r.get('lead_id', '')}",
+            r.get("task_id", ""), link,
             start_time=(r.get("due_time") or None), status=r.get("status"),
             priority=r.get("priority"), actions=acts,
-            meta={"lead_id": r.get("lead_id", ""), "lead_name": r.get("lead_name", "")},
+            meta={"lead_id": r.get("lead_id", ""), "lead_name": r.get("lead_name", ""),
+                  "contact_id": r.get("contact_id", ""), "contact_name": r.get("contact_name", "")},
         ))
     return out
 
@@ -1506,11 +1510,17 @@ async def _agenda_followups(email, dfrom, dto):
         ftype = r.get("followup_type") or "call"   # call|meeting|demo
         done = r.get("status") in ("done", "completed")
         acts = ["open"] if done else ["log_outcome", "reschedule", "open"]
+        # Contact-only follow-ups have no lead; deep-link to the contact instead.
+        link = (f"/leads?lead={r['lead_id']}" if r.get("lead_id")
+                else f"/leads?contact={r.get('contact_id', '')}")
+        name = r.get("lead_name") or r.get("contact_name") or r.get("lead_id", "")
         out.append(_ev(
-            "followup", ftype, f"{ftype.title()} · {r.get('lead_name', '') or r.get('lead_id', '')}".strip(" ·"),
-            r["followup_date"], r.get("followup_id", ""), f"/leads?lead={r.get('lead_id', '')}",
+            "followup", ftype, f"{ftype.title()} · {name}".strip(" ·"),
+            r["followup_date"], r.get("followup_id", ""), link,
             start_time=(r.get("followup_time") or None), status=r.get("status"), actions=acts,
-            meta={"lead_id": r.get("lead_id", ""), "outcome": r.get("outcome", "")},
+            meta={"lead_id": r.get("lead_id", ""), "lead_name": r.get("lead_name", ""),
+                  "contact_id": r.get("contact_id", ""), "contact_name": r.get("contact_name", ""),
+                  "outcome": r.get("outcome", "")},
         ))
     return out
 

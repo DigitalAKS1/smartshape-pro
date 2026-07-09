@@ -15,8 +15,10 @@ restore_bundle() re-inserts a backup's documents into their original collections
 effort: documents that already exist by their unique key are skipped).
 
 This module is intentionally domain-free (it imports nothing but the db handle) so both
-order_routes and crm_routes can use it without an import cycle. Keep each plan to ONE
-entry per collection — overlapping queries on the same collection would double-count.
+order_routes and crm_routes can use it without an import cycle. A plan may list the same
+collection more than once with different queries — snapshot_and_delete() merges all of a
+collection's queries into a single $or before running one find()/delete_many() pair, so
+the backup is always the exact union of what gets deleted (no double-count, no gaps).
 """
 
 import uuid
@@ -33,12 +35,33 @@ CHUNK = "cascade_chunk"
 
 async def preview_counts(plan) -> dict:
     """Read-only: how many docs each collection in the plan would delete."""
+    plan = _merge_plan(plan)
     counts = {}
     for coll, query in plan:
         n = await db[coll].count_documents(query)
         if n:
             counts[coll] = n
     return counts
+
+
+def _merge_plan(plan):
+    """Group plan entries by collection, combining each collection's queries into one.
+
+    A single query for a collection is used as-is; two or more are OR'd together so
+    exactly one find()/delete_many() runs per collection, and the snapshot is the exact
+    union of what gets deleted (a doc matching multiple queries is only counted once).
+    """
+    merged = {}
+    for coll, query in plan:
+        if coll not in merged:
+            merged[coll] = []
+        merged[coll].append(query)
+
+    out = []
+    for coll, queries in merged.items():
+        query = queries[0] if len(queries) == 1 else {"$or": queries}
+        out.append((coll, query))
+    return out
 
 
 async def snapshot_and_delete(plan, *, root_type: str, root_id: str, root_label: str,
@@ -48,6 +71,8 @@ async def snapshot_and_delete(plan, *, root_type: str, root_id: str, root_label:
     Returns {backup_id, counts, total}. Writes chunk docs, then the manifest, and only
     then deletes — so the backup is always complete before anything is removed.
     """
+    plan = _merge_plan(plan)
+
     collected, counts = {}, {}
     for coll, query in plan:
         docs = await db[coll].find(query, {"_id": 0}).to_list(_FETCH_CAP)

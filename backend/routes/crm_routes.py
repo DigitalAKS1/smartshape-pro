@@ -13,6 +13,7 @@ from auth_utils import get_current_user
 from rbac import get_team, require_superadmin, require_module
 from audit_backup import snapshot_and_delete, preview_counts
 from cascade_delete import build_school_plan, build_contact_plan
+import crm_contact_calls as cc
 
 router = APIRouter()
 
@@ -1235,8 +1236,16 @@ async def get_school_profile(school_id: str, request: Request):
     call_notes = []
     meetings = []
     dispatches = []
+    contact_ids = [c["contact_id"] for c in contacts_list if c.get("contact_id")]
+    # Calls may hang off this school's leads OR directly off its contacts.
+    call_or = []
     if lead_ids:
-        call_notes = await db.call_notes.find({"lead_id": {"$in": lead_ids}}, {"_id": 0}).sort("created_at", -1).to_list(None)
+        call_or.append({"lead_id": {"$in": lead_ids}})
+    if contact_ids:
+        call_or.append({"contact_id": {"$in": contact_ids}})
+    if call_or:
+        call_notes = await db.call_notes.find({"$or": call_or}, {"_id": 0}).sort("created_at", -1).to_list(None)
+    if lead_ids:
         meetings = await db.followups.find(
             {"lead_id": {"$in": lead_ids}, "followup_type": "meeting"}, {"_id": 0}
         ).sort("followup_date", -1).to_list(None)
@@ -1664,12 +1673,34 @@ async def remove_contact_tag(contact_id: str, tag_id: str, request: Request):
 @router.get("/contacts/{contact_id}/activity")
 async def get_contact_activity(contact_id: str, request: Request):
     """Unified activity timeline: WhatsApp campaigns, drip enrollments, greeting logs."""
-    await get_current_user(request)
+    user = await get_current_user(request)
     contact = await db.contacts.find_one({"contact_id": contact_id}, {"_id": 0})
     if not contact:
         raise HTTPException(404, "Contact not found")
+    if not await _user_can_mutate_contact(user, contact):
+        raise HTTPException(status_code=403, detail="Not authorized for this contact")
 
     items = []
+
+    # Calls + follow-ups — merged with the linked lead's rows so a converted
+    # contact shows ONE history rather than two.
+    tq = cc.timeline_query(contact_id, contact.get("lead_id"))
+    async for n in db.call_notes.find(tq, {"_id": 0}).sort("created_at", -1).limit(50):
+        items.append({
+            "type": "call",
+            "label": f"Call · {(n.get('outcome') or 'logged').replace('_', ' ').title()}",
+            "summary": n.get("content", ""),
+            "status": n.get("outcome", ""),
+            "at": n.get("created_at", ""),
+        })
+    async for f in db.followups.find(tq, {"_id": 0}).sort("followup_date", -1).limit(50):
+        items.append({
+            "type": "followup",
+            "label": f"Follow-up · {(f.get('followup_type') or 'call').title()}",
+            "summary": f.get("notes", ""),
+            "status": f.get("status", ""),
+            "at": f"{f.get('followup_date', '')}T{f.get('followup_time') or '00:00'}",
+        })
 
     # WhatsApp campaign messages sent to this contact
     async for msg in db.whatsapp_scheduled.find(
@@ -1713,7 +1744,8 @@ async def get_contact_activity(contact_id: str, request: Request):
                 "at": gl.get("sent_at", ""),
             })
 
-    # Sort all by `at` descending, return max 100
+    # Sort all by `at` descending; this endpoint returns the 100 most-recent
+    # items across all sources.
     items.sort(key=lambda x: x.get("at") or "", reverse=True)
     return items[:100]
 
@@ -3012,11 +3044,19 @@ async def add_call_note(lead_id: str, request: Request):
 # ==================== FOLLOW-UPS ====================
 
 @router.get("/followups")
-async def get_followups(request: Request, lead_id: Optional[str] = None):
+async def get_followups(request: Request, lead_id: Optional[str] = None,
+                        contact_id: Optional[str] = None):
     user = await get_current_user(request)
     team = get_team(user)
     query = {}
-    if lead_id:
+    if contact_id:
+        contact = await db.contacts.find_one({"contact_id": contact_id}, {"_id": 0})
+        if not contact:
+            raise HTTPException(404, "Contact not found")
+        if not await _user_can_mutate_contact(user, contact):
+            raise HTTPException(status_code=403, detail="Not authorized for this contact")
+        query["contact_id"] = contact_id
+    elif lead_id:
         query["lead_id"] = lead_id
     elif team == "admin":
         pass  # no filter — see all
@@ -3060,6 +3100,125 @@ async def update_followup(followup_id: str, request: Request):
     allowed = {k: body[k] for k in ("followup_date", "followup_time", "followup_type", "notes", "outcome", "status") if k in body}
     await db.followups.update_one({"followup_id": followup_id}, {"$set": allowed})
     return await db.followups.find_one({"followup_id": followup_id}, {"_id": 0})
+
+
+# ==================== CONTACT CALLS & FOLLOW-UPS ====================
+
+async def _get_contact_or_404(contact_id: str) -> dict:
+    contact = await db.contacts.find_one({"contact_id": contact_id}, {"_id": 0})
+    if not contact:
+        raise HTTPException(404, "Contact not found")
+    return contact
+
+
+async def _parse_json_body(request: Request) -> dict:
+    """Empty body -> {}; non-empty unparseable body -> 400 (never a bare 500)."""
+    raw_body = await request.body()
+    if not raw_body:
+        return {}
+    try:
+        return await request.json()
+    except Exception:
+        raise HTTPException(400, "Invalid JSON body")
+
+
+@router.post("/contacts/{contact_id}/calls")
+async def log_contact_call(contact_id: str, request: Request):
+    """Record a call against a contact and denormalise the outcome onto it."""
+    user = await get_current_user(request)
+    contact = await _get_contact_or_404(contact_id)
+    if not await _user_can_mutate_contact(user, contact):
+        raise HTTPException(status_code=403, detail="Not authorized for this contact")
+    body = await _parse_json_body(request)
+    outcome = (body.get("outcome") or "").strip()
+    if not cc.is_valid_outcome(outcome):
+        raise HTTPException(422, f"outcome must be one of {list(cc.CALL_OUTCOMES)}")
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    note = cc.build_call_note(contact, user, outcome, body.get("content", ""), now_iso)
+    await db.call_notes.insert_one(dict(note))
+
+    await db.contacts.update_one({"contact_id": contact_id}, {"$set": {
+        "last_call_outcome": outcome, "last_call_at": now_iso}})
+    await touch_last_activity("contact", contact_id)
+    if contact.get("school_id"):
+        await touch_last_activity("school", contact["school_id"])
+    if contact.get("lead_id"):
+        await touch_last_activity("lead", contact["lead_id"])
+
+    return await db.call_notes.find_one({"note_id": note["note_id"]}, {"_id": 0})
+
+
+@router.post("/contacts/{contact_id}/followups")
+async def add_contact_followup(contact_id: str, request: Request):
+    """Schedule a follow-up on a contact AND generate the reminder task."""
+    user = await get_current_user(request)
+    contact = await _get_contact_or_404(contact_id)
+    if not await _user_can_mutate_contact(user, contact):
+        raise HTTPException(status_code=403, detail="Not authorized for this contact")
+    body = await _parse_json_body(request)
+    date = (body.get("followup_date") or "").strip()
+    if not date:
+        raise HTTPException(422, "followup_date is required")
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    fu = cc.build_followup(contact, user, date, body.get("followup_time", ""),
+                           body.get("followup_type", "call"), body.get("notes", ""), now_iso)
+    task = cc.build_task_for_followup(contact, user, fu, now_iso)
+
+    # Both writes must land: the follow-up is useless without its reminder.
+    # NOTE: this is a best-effort compensating delete, NOT a transaction — true
+    # multi-document atomicity would require a replica-set session, which this
+    # deployment does not use.
+    await db.followups.insert_one(dict(fu))
+    try:
+        await db.tasks.insert_one(dict(task))
+    except Exception:
+        try:
+            await db.followups.delete_one({"followup_id": fu["followup_id"]})
+        except Exception:
+            pass
+        raise HTTPException(500, "Could not create the reminder task; follow-up not saved")
+
+    await db.contacts.update_one({"contact_id": contact_id}, {"$set": {
+        "next_followup_date": fu["followup_date"], "next_followup_time": fu["followup_time"]}})
+    await touch_last_activity("contact", contact_id)
+
+    return {
+        "followup": await db.followups.find_one({"followup_id": fu["followup_id"]}, {"_id": 0}),
+        "task": await db.tasks.find_one({"task_id": task["task_id"]}, {"_id": 0}),
+    }
+
+
+@router.patch("/contacts/{contact_id}/followups/{followup_id}/complete")
+async def complete_contact_followup(contact_id: str, followup_id: str, request: Request):
+    """Close a follow-up, close its task, and recompute the contact's next step."""
+    user = await get_current_user(request)
+    contact = await _get_contact_or_404(contact_id)
+    if not await _user_can_mutate_contact(user, contact):
+        raise HTTPException(status_code=403, detail="Not authorized for this contact")
+    body = await _parse_json_body(request)
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    res = await db.followups.update_one(
+        {"followup_id": followup_id, "contact_id": contact_id},
+        {"$set": {"status": "completed", "outcome": body.get("outcome", ""),
+                  "completed_at": now_iso, "completed_by": user["email"]}})
+    if res.matched_count == 0:
+        raise HTTPException(404, "Follow-up not found for this contact")
+
+    await db.tasks.update_many({"followup_id": followup_id},
+                               {"$set": {"status": "done", "outcome": body.get("outcome", "")}})
+
+    # Next pending follow-up (if any) becomes the contact's next step.
+    nxt = await db.followups.find(
+        {"contact_id": contact_id, "status": "pending"}, {"_id": 0}
+    ).sort("followup_date", 1).to_list(1)
+    await db.contacts.update_one({"contact_id": contact_id}, {"$set": {
+        "next_followup_date": nxt[0]["followup_date"] if nxt else "",
+        "next_followup_time": nxt[0].get("followup_time", "") if nxt else ""}})
+    await touch_last_activity("contact", contact_id)
+    return {"ok": True}
 
 
 # ==================== PHYSICAL DISPATCHES ====================

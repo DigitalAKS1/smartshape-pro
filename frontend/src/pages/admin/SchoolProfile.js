@@ -22,6 +22,7 @@ import SchoolLeadsSection from '../../components/school/SchoolLeadsSection';
 import SchoolLeadQuickCreate from '../../components/school/SchoolLeadQuickCreate';
 import ConvertContactDialog from '../../components/school/ConvertContactDialog';
 import EnrollDripDialog from '../../components/school/EnrollDripDialog';
+import ContactDetailPanel from '../../components/crm/ContactDetailPanel';
 import {
   SchoolSalesSection, SchoolMarketingSection,
   SchoolVisitsSection, SchoolActivityFeed,
@@ -101,6 +102,64 @@ export default function SchoolProfile() {
   const [leadCreateOpen, setLeadCreateOpen] = useState(false);
   const [enrollOpen, setEnrollOpen] = useState(false);
   const [convertTarget, setConvertTarget] = useState(null);
+
+  // Contact detail panel (call-logging + follow-ups) — built locally, this page doesn't use useLeadsCRM
+  const [detailContact, setDetailContact] = useState(null);
+  const [contactActivity, setContactActivity] = useState([]);
+  const [contactFollowups, setContactFollowups] = useState([]);
+  const activeContactIdRef = useRef(null);
+
+  const loadContactDetail = async (contactId) => {
+    try {
+      const [act, fus] = await Promise.all([
+        contactsApi.getActivity(contactId),
+        contactsApi.listFollowups(contactId),
+      ]);
+      if (activeContactIdRef.current !== contactId) return;   // stale response: another contact is open now
+      setContactActivity(act.data || []);
+      setContactFollowups(fus.data || []);
+    } catch { toast.error('Failed to load contact activity'); }
+  };
+
+  const openContactPanel = async (c) => {
+    activeContactIdRef.current = c.contact_id;
+    setDetailContact(c);
+    await loadContactDetail(c.contact_id);
+  };
+
+  const closeContactPanel = (v) => {          // passed to the panel as setDetailContact
+    if (!v) activeContactIdRef.current = null;
+    setDetailContact(v);
+  };
+
+  const logContactCall = async (outcome, content) => {
+    if (!detailContact) return;
+    try {
+      await contactsApi.logCall(detailContact.contact_id, { outcome, content });
+      toast.success('Call logged');
+      await loadContactDetail(detailContact.contact_id);
+      sp.reload();                             // refresh the CALLS metric + "Never contacted" badge
+    } catch { toast.error('Failed to log call'); }
+  };
+
+  const addContactFollowup = async (form) => {
+    if (!detailContact || !(form.followup_date || '').trim()) { toast.error('Pick a date'); return; }
+    try {
+      await contactsApi.addFollowup(detailContact.contact_id, form);
+      toast.success('Follow-up scheduled — reminder task created');
+      await loadContactDetail(detailContact.contact_id);
+    } catch { toast.error('Failed to schedule follow-up'); }
+  };
+
+  const completeContactFollowup = async (followupId, outcome = '') => {
+    if (!detailContact) return;
+    try {
+      await contactsApi.completeFollowup(detailContact.contact_id, followupId, { outcome });
+      toast.success('Follow-up completed');
+      await loadContactDetail(detailContact.contact_id);
+    } catch { toast.error('Failed to complete follow-up'); }
+  };
+
   useEffect(() => {
     const grab = (api, set) => api.getAll().then(r => set(Array.isArray(r.data) ? r.data : [])).catch(() => {});
     grab(groupsApi, setGroupsList);
@@ -285,7 +344,8 @@ export default function SchoolProfile() {
               setExpandedContact={sp.setExpandedContact}
               openAddContact={sp.openAddContact}
               openEditContact={sp.openEditContact}
-              onConvert={(c) => setConvertTarget(c)} />
+              onConvert={(c) => setConvertTarget(c)}
+              onOpenContact={openContactPanel} />
           )}
 
           {sp.activeTab === 'leads' && (
@@ -376,6 +436,13 @@ export default function SchoolProfile() {
       <ConvertContactDialog open={!!convertTarget} onOpenChange={(v) => { if (!v) setConvertTarget(null); }}
         contact={convertTarget} spList={spList} onDone={sp.reload} />
       <EnrollDripDialog open={enrollOpen} onOpenChange={setEnrollOpen} leads={leads} onDone={sp.reload} />
+
+      <ContactDetailPanel
+        detailContact={detailContact} setDetailContact={closeContactPanel}
+        contactActivity={contactActivity} contactFollowups={contactFollowups}
+        logContactCall={logContactCall} addContactFollowup={addContactFollowup}
+        completeContactFollowup={completeContactFollowup}
+      />
 
     </AdminLayout>
   );

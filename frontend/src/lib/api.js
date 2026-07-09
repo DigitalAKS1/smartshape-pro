@@ -277,6 +277,11 @@ export const contacts = {
   addTag: (contactId, tagId) => API.post(`/contacts/${contactId}/tags`, { tag_id: tagId }),
   removeTag: (contactId, tagId) => API.delete(`/contacts/${contactId}/tags/${tagId}`),
   getActivity: (id) => API.get(`/contacts/${id}/activity`),
+  logCall: (id, data) => API.post(`/contacts/${id}/calls`, data),
+  addFollowup: (id, data) => API.post(`/contacts/${id}/followups`, data),
+  completeFollowup: (id, followupId, data = {}) =>
+    API.patch(`/contacts/${id}/followups/${followupId}/complete`, data),
+  listFollowups: (id) => API.get('/followups', { params: { contact_id: id } }),
   importCsv: (file, { tagIds = [], globalNotes = '' } = {}) => {
     const fd = new FormData();
     fd.append('file', file);

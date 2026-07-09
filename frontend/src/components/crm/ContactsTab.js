@@ -2,7 +2,6 @@ import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '../ui/button';
 import { useTheme } from '../../contexts/ThemeContext';
-import { formatDate } from '../../lib/utils';
 import {
   Phone, MessageSquare, Mail, Edit2, Trash2, UserPlus, Plus,
   Building2, ArrowRightCircle, Download, Upload, ChevronLeft,
@@ -12,6 +11,7 @@ import { adminApi } from '../../lib/api';
 import { toast } from 'sonner';
 import MultiFilterBar from './MultiFilterBar';
 import { deriveFilterOptions, buildCrmContext, matchesCrmFilter } from '../../lib/crmFilter';
+import { CallStatusBadge } from './ContactDetailPanel';
 
 export default function ContactsTab({
   contactsList, leadsList,
@@ -34,9 +34,7 @@ export default function ContactsTab({
   setContactImportOpen,
   setActiveTab,
   openDetail,
-  expandedContactId,
-  contactActivity,
-  expandContactActivity,
+  openContactPanel,
   fetchData,
   user,
 }) {
@@ -209,7 +207,10 @@ export default function ContactsTab({
           {/* Mobile: contact cards */}
           <div className="sm:hidden space-y-2" data-testid="contacts-list-mobile">
             {paginated.map(contact => (
-              <div key={contact.contact_id} className={`${card} border rounded-md p-3 flex items-start justify-between gap-2 ${contact.converted_to_lead ? 'opacity-60' : ''}`}>
+              <div key={contact.contact_id}
+                onClick={() => openContactPanel(contact)}
+                data-testid={`contact-card-${contact.contact_id}`}
+                className={`${card} border rounded-md p-3 flex items-start justify-between gap-2 cursor-pointer ${contact.converted_to_lead ? 'opacity-60' : ''}`}>
                 <div className="flex-1 min-w-0">
                   <p className={`${textPri} font-medium text-sm truncate`}>{contact.name}</p>
                   <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
@@ -242,21 +243,22 @@ export default function ContactsTab({
                     </div>
                   )}
                   <div className="flex items-center gap-3 mt-1.5 flex-wrap">
-                    <a href={`tel:${contact.phone}`} className={`text-xs ${textSec} flex items-center gap-1`}><Phone className="h-3 w-3" />{contact.phone}</a>
-                    {contact.email && <a href={`mailto:${contact.email}`} className={`text-xs ${textSec} flex items-center gap-1 max-w-[160px] truncate`}><Mail className="h-3 w-3" />{contact.email}</a>}
+                    <a href={`tel:${contact.phone}`} onClick={e => e.stopPropagation()} className={`text-xs ${textSec} flex items-center gap-1`}><Phone className="h-3 w-3" />{contact.phone}</a>
+                    {contact.email && <a href={`mailto:${contact.email}`} onClick={e => e.stopPropagation()} className={`text-xs ${textSec} flex items-center gap-1 max-w-[160px] truncate`}><Mail className="h-3 w-3" />{contact.email}</a>}
                   </div>
-                  <div className="flex items-center gap-1.5 mt-1">
+                  <div className="flex items-center gap-1.5 mt-1 flex-wrap">
                     {contact.converted_to_lead
                       ? <span className="inline-block text-[10px] px-2 py-0.5 rounded bg-green-500/20 text-green-400 font-medium">Converted</span>
                       : <span className="inline-block text-[10px] px-2 py-0.5 rounded bg-blue-500/20 text-blue-400 font-medium">Active</span>}
-                    {!contact.converted_to_lead && completionBadge(calcContactCompletion(contact), () => openEditContact(contact))}
+                    {!contact.converted_to_lead && completionBadge(calcContactCompletion(contact), (e) => { e.stopPropagation(); openEditContact(contact); })}
+                    <span onClick={e => e.stopPropagation()}><CallStatusBadge contact={contact} /></span>
                   </div>
                 </div>
                 <div className="flex flex-col gap-0.5 flex-shrink-0">
-                  <Button size="sm" variant="ghost" onClick={() => openWaForContact(contact)} className="text-green-500 h-9 w-9 p-0"><MessageSquare className="h-4 w-4" /></Button>
-                  {!contact.converted_to_lead && <Button size="sm" variant="ghost" onClick={() => openConvert(contact)} className="text-[#e94560] h-9 w-9 p-0" data-testid={`convert-contact-${contact.contact_id}`}><ArrowRightCircle className="h-4 w-4" /></Button>}
-                  <Button size="sm" variant="ghost" onClick={() => openEditContact(contact)} className={`${textSec} h-9 w-9 p-0`}><Edit2 className="h-3.5 w-3.5" /></Button>
-                  <Button size="sm" variant="ghost" onClick={() => deleteContact(contact.contact_id)} className="text-red-400 h-9 w-9 p-0"><Trash2 className="h-3.5 w-3.5" /></Button>
+                  <Button size="sm" variant="ghost" onClick={(e) => { e.stopPropagation(); openWaForContact(contact); }} className="text-green-500 h-9 w-9 p-0"><MessageSquare className="h-4 w-4" /></Button>
+                  {!contact.converted_to_lead && <Button size="sm" variant="ghost" onClick={(e) => { e.stopPropagation(); openConvert(contact); }} className="text-[#e94560] h-9 w-9 p-0" data-testid={`convert-contact-${contact.contact_id}`}><ArrowRightCircle className="h-4 w-4" /></Button>}
+                  <Button size="sm" variant="ghost" onClick={(e) => { e.stopPropagation(); openEditContact(contact); }} className={`${textSec} h-9 w-9 p-0`}><Edit2 className="h-3.5 w-3.5" /></Button>
+                  <Button size="sm" variant="ghost" onClick={(e) => { e.stopPropagation(); deleteContact(contact.contact_id); }} className="text-red-400 h-9 w-9 p-0"><Trash2 className="h-3.5 w-3.5" /></Button>
                 </div>
               </div>
             ))}
@@ -274,6 +276,7 @@ export default function ContactsTab({
                   <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden lg:table-cell cursor-pointer select-none`} onClick={() => toggleSort('source')}>Source{sortIndicator('source')}</th>
                   <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden lg:table-cell cursor-pointer select-none`} onClick={() => toggleSort('assigned_name')}>Owner{sortIndicator('assigned_name')}</th>
                   <th className={`text-center text-xs uppercase py-3 px-3 ${textMuted} hidden xl:table-cell cursor-pointer select-none`} onClick={() => toggleSort('last_activity_date')}>Last Touch{sortIndicator('last_activity_date')}</th>
+                  <th className={`text-center text-xs uppercase py-3 px-3 ${textMuted} hidden lg:table-cell`}>Call Status</th>
                   <th className={`text-center text-xs uppercase py-3 px-3 ${textMuted}`}>Status</th>
                   <th className={`text-right text-xs uppercase py-3 px-3 ${textMuted}`}>Actions</th>
                 </tr></thead>
@@ -281,7 +284,7 @@ export default function ContactsTab({
                   {paginated.map(contact => (
                     <React.Fragment key={contact.contact_id}>
                       <tr className={`border-t border-[var(--border-color)] hover:bg-[var(--bg-hover)] cursor-pointer ${contact.converted_to_lead ? 'opacity-55' : ''}`} data-testid={`contact-row-${contact.contact_id}`}
-                        onClick={() => expandContactActivity(contact.contact_id)}>
+                        onClick={() => openContactPanel(contact)}>
                         <td className="py-2.5 px-3">
                           <div className="flex items-center gap-1.5">
                             <p className={`${textPri} font-medium text-sm`}>{contact.name}</p>
@@ -341,6 +344,9 @@ export default function ContactsTab({
                             </span>
                           ) : <span className={`text-[11px] ${textMuted}`}>—</span>}
                         </td>
+                        <td className="py-2.5 px-3 text-center hidden lg:table-cell">
+                          <CallStatusBadge contact={contact} />
+                        </td>
                         <td className="py-2.5 px-3 text-center">
                           {contact.converted_to_lead ? (
                             <button
@@ -365,31 +371,6 @@ export default function ContactsTab({
                           <Button size="sm" variant="ghost" onClick={() => deleteContact(contact.contact_id)} className="text-red-400 h-7 px-1.5" data-testid={`delete-contact-${contact.contact_id}`}><Trash2 className="h-3 w-3" /></Button>
                         </td>
                       </tr>
-                      {expandedContactId === contact.contact_id && (
-                        <tr>
-                          <td colSpan="9" className={`px-4 py-3 ${isDark ? 'bg-[var(--bg-hover)]' : 'bg-[#f8fafc]'} border-t border-[var(--border-color)]`}>
-                            <p className={`text-xs font-semibold ${textSec} mb-2`}>Activity Timeline</p>
-                            {contactActivity.length === 0 ? (
-                              <p className={`text-xs ${textMuted}`}>No marketing activity recorded yet</p>
-                            ) : (
-                              <div className="space-y-1.5">
-                                {contactActivity.slice(0, 10).map((act, i) => (
-                                  <div key={i} className="flex items-center gap-2 text-xs">
-                                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium capitalize flex-shrink-0 ${
-                                      act.type === 'whatsapp' ? 'bg-green-500/20 text-green-400'
-                                      : act.type === 'drip' ? 'bg-yellow-500/20 text-yellow-600'
-                                      : 'bg-pink-500/20 text-pink-400'
-                                    }`}>{act.type}</span>
-                                    <span className={`flex-1 ${textPri} truncate`}>{act.label}</span>
-                                    {act.status && <span className={`${textMuted} text-[10px] flex-shrink-0`}>{act.status}</span>}
-                                    <span className={`${textMuted} flex-shrink-0`}>{act.at ? formatDate(act.at) : '—'}</span>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-                          </td>
-                        </tr>
-                      )}
                     </React.Fragment>
                   ))}
                 </tbody>

@@ -27,6 +27,7 @@ import ForecastBar from '../../components/crm/ForecastBar';
 import SchoolFormDialog from '../../components/crm/SchoolFormDialog';
 import ContactFormDialog from '../../components/crm/ContactFormDialog';
 import ContactsTab from '../../components/crm/ContactsTab';
+import ContactDetailPanel from '../../components/crm/ContactDetailPanel';
 import TasksTab from '../../components/crm/TasksTab';
 import OwnerDeleteButton from '../../components/common/OwnerDeleteButton';
 import MultiFilterBar from '../../components/crm/MultiFilterBar';
@@ -333,9 +334,7 @@ export default function LeadsCRM() {
             setContactImportOpen={crm.setContactImportOpen}
             setActiveTab={crm.setActiveTab}
             openDetail={crm.openDetail}
-            expandedContactId={crm.expandedContactId}
-            contactActivity={crm.contactActivity}
-            expandContactActivity={crm.expandContactActivity}
+            openContactPanel={crm.openContactPanel}
             fetchData={crm.fetchData}
             user={crm.user}
           />
@@ -965,6 +964,16 @@ export default function LeadsCRM() {
         })()}
 
         {/* ── DIALOGS ───────────────────────────────────────────────── */}
+
+        <ContactDetailPanel
+          detailContact={crm.detailContact}
+          setDetailContact={crm.setDetailContact}
+          contactActivity={crm.contactActivity}
+          contactFollowups={crm.contactFollowups}
+          logContactCall={crm.logContactCall}
+          addContactFollowup={crm.addContactFollowup}
+          completeContactFollowup={crm.completeContactFollowup}
+        />
 
         <LeadDetailPanel
           detailLead={crm.detailLead}

@@ -120,8 +120,25 @@ export default function useLeadsCRM() {
   const fileRef = useRef(null);
 
   // ── Contact activity ──────────────────────────────────────────────────────────
-  const [expandedContactId, setExpandedContactId] = useState(null);
+  const [detailContact, _setDetailContact] = useState(null);
   const [contactActivity, setContactActivity] = useState([]);
+  const [contactFollowups, setContactFollowups] = useState([]);
+  // Tracks which contact's panel is currently open, so late-arriving responses
+  // from a previously-open contact (loadContactDetail) can be detected and
+  // dropped instead of overwriting a since-opened contact's data. A ref (not
+  // state) is required because loadContactDetail is async — reading
+  // `detailContact` after an `await` would close over the value from render
+  // time the async call started, which goes stale the instant the user opens
+  // a different contact (or closes the panel) before the request resolves.
+  const activeContactIdRef = useRef(null);
+
+  // Wraps the raw setter so closing the panel (setDetailContact(null)) also
+  // clears the "currently open" marker, and opening a contact updates it —
+  // keeping the exported `setDetailContact` name/behavior intact for callers.
+  const setDetailContact = useCallback((val) => {
+    activeContactIdRef.current = val ? val.contact_id : null;
+    _setDetailContact(val);
+  }, []);
 
   // ─────────────────────────────────────────────────────────────────────────────
   // DATA FETCH
@@ -563,13 +580,54 @@ export default function useLeadsCRM() {
     setWaOpen(true);
   };
 
-  const expandContactActivity = async (contactId) => {
-    if (expandedContactId === contactId) { setExpandedContactId(null); return; }
+  const loadContactDetail = async (contactId) => {
     try {
-      const res = await contactsApi.getActivity(contactId);
-      setContactActivity(res.data || []);
-      setExpandedContactId(contactId);
-    } catch { toast.error('Failed to load activity'); }
+      const [act, fus] = await Promise.all([
+        contactsApi.getActivity(contactId),
+        contactsApi.listFollowups(contactId),
+      ]);
+      // Drop stale responses: if the user has since opened a different
+      // contact (or closed the panel) while this request was in flight,
+      // activeContactIdRef.current will no longer match — silently ignore.
+      if (activeContactIdRef.current !== contactId) return;
+      setContactActivity(act.data || []);
+      setContactFollowups(fus.data || []);
+    } catch { toast.error('Failed to load contact activity'); }
+  };
+
+  const openContactPanel = async (contact) => {
+    setDetailContact(contact); // sets activeContactIdRef.current before awaiting below
+    await loadContactDetail(contact.contact_id);
+  };
+
+  const logContactCall = async (outcome, content) => {
+    if (!detailContact) return;
+    try {
+      await contactsApi.logCall(detailContact.contact_id, { outcome, content });
+      toast.success('Call logged');
+      await loadContactDetail(detailContact.contact_id);
+      await fetchData();
+    } catch { toast.error('Failed to log call'); }
+  };
+
+  const addContactFollowup = async (form) => {
+    if (!detailContact || !form.followup_date?.trim()) { toast.error('Pick a date'); return; }
+    try {
+      await contactsApi.addFollowup(detailContact.contact_id, form);
+      toast.success('Follow-up scheduled — reminder task created');
+      await loadContactDetail(detailContact.contact_id);
+      await fetchData();
+    } catch { toast.error('Failed to schedule follow-up'); }
+  };
+
+  const completeContactFollowup = async (followupId, outcome = '') => {
+    if (!detailContact) return;
+    try {
+      await contactsApi.completeFollowup(detailContact.contact_id, followupId, { outcome });
+      toast.success('Follow-up completed');
+      await loadContactDetail(detailContact.contact_id);
+      await fetchData();
+    } catch { toast.error('Failed to complete follow-up'); }
   };
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -719,8 +777,9 @@ export default function useLeadsCRM() {
     importNotes, setImportNotes,
     importing,
     importResult,
-    expandedContactId,
-    contactActivity,
+    detailContact, setDetailContact, openContactPanel,
+    contactActivity, contactFollowups,
+    logContactCall, addContactFollowup, completeContactFollowup,
 
     // State — Lead import
     importDialogOpen, setImportDialogOpen,
@@ -749,7 +808,6 @@ export default function useLeadsCRM() {
     openConvert, handleConvert,
     handleContactImport, resetImportDialog,
     downloadSampleCsv, handleContactExport,
-    expandContactActivity,
 
     // Utility
     daysSince, touchAgeCls,

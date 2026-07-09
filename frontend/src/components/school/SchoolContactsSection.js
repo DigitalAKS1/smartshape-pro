@@ -37,7 +37,7 @@ export default function SchoolContactsSection({
   contacts, isDark, tk,
   expandedContact, setExpandedContact,
   openAddContact, openEditContact,
-  onConvert,
+  onConvert, onOpenContact,
 }) {
   const navigate = useNavigate();
 
@@ -70,7 +70,8 @@ export default function SchoolContactsSection({
         <div className={`${tk.card} border ${tk.border} rounded-2xl overflow-hidden divide-y ${tk.divide}`}>
           {contacts.map(c => (
             <div key={c.contact_id}>
-              <div className="px-5 py-4 flex items-center gap-4">
+              <div className="px-5 py-4 flex items-center gap-4 cursor-pointer"
+                onClick={() => onOpenContact && onOpenContact(c)}>
                 <div className={`w-10 h-10 rounded-full flex-shrink-0 flex items-center justify-center text-sm font-black ${
                   c.converted_to_lead
                     ? 'bg-emerald-500/15 text-emerald-600'
@@ -91,12 +92,12 @@ export default function SchoolContactsSection({
                   </div>
                   <div className="flex items-center gap-4 mt-1 flex-wrap">
                     {c.phone && (
-                      <a href={`tel:${c.phone}`} className={`text-xs ${tk.tm} hover:text-[#e94560] flex items-center gap-1 transition-colors`}>
+                      <a href={`tel:${c.phone}`} onClick={(e) => e.stopPropagation()} className={`text-xs ${tk.tm} hover:text-[#e94560] flex items-center gap-1 transition-colors`}>
                         <Phone className="h-3 w-3" />{c.phone}
                       </a>
                     )}
                     {c.email && (
-                      <a href={`mailto:${c.email}`} className={`text-xs ${tk.tm} hover:text-[#e94560] flex items-center gap-1 truncate max-w-[180px] transition-colors`}>
+                      <a href={`mailto:${c.email}`} onClick={(e) => e.stopPropagation()} className={`text-xs ${tk.tm} hover:text-[#e94560] flex items-center gap-1 truncate max-w-[180px] transition-colors`}>
                         <Mail className="h-3 w-3" />{c.email}
                       </a>
                     )}
@@ -105,22 +106,22 @@ export default function SchoolContactsSection({
 
                 <div className="flex items-center gap-1 flex-shrink-0">
                   {c.phone && (
-                    <a href={`https://wa.me/${c.phone.replace(/\D/g, '')}`} target="_blank" rel="noreferrer">
+                    <a href={`https://wa.me/${c.phone.replace(/\D/g, '')}`} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>
                       <Button size="sm" variant="ghost" className="text-emerald-500 h-8 w-8 p-0" title="WhatsApp">
                         <MessageSquare className="h-3.5 w-3.5" />
                       </Button>
                     </a>
                   )}
                   <Button size="sm" variant="ghost"
-                    onClick={() => openEditContact(c)}
+                    onClick={(e) => { e.stopPropagation(); openEditContact(c); }}
                     className={`${tk.tm} h-8 w-8 p-0 hover:text-[#e94560]`}>
                     <Edit2 className="h-3.5 w-3.5" />
                   </Button>
                   {onConvert && !c.converted_to_lead && (
-                    <button onClick={() => onConvert(c)} className="text-[var(--text-muted)] hover:text-[#e94560] h-8 px-2 text-xs" title="Convert to lead" data-testid={`convert-${c.contact_id}`}>↓</button>
+                    <button onClick={(e) => { e.stopPropagation(); onConvert(c); }} className="text-[var(--text-muted)] hover:text-[#e94560] h-8 px-2 text-xs" title="Convert to lead" data-testid={`convert-${c.contact_id}`}>↓</button>
                   )}
                   <Button size="sm" variant="ghost"
-                    onClick={() => setExpandedContact(expandedContact === c.contact_id ? null : c.contact_id)}
+                    onClick={(e) => { e.stopPropagation(); setExpandedContact(expandedContact === c.contact_id ? null : c.contact_id); }}
                     className={`${tk.tm} h-8 px-2.5 text-xs`}>
                     {expandedContact === c.contact_id ? '↑' : '↓'}
                   </Button>

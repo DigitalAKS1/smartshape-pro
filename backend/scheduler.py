@@ -697,7 +697,8 @@ async def build_and_enqueue_daily_digests():
                 {"_id": 0, "school_name": 1, "visit_time": 1, "visit_date": 1}).sort("visit_date", 1).to_list(50) if email else []
             fups = await db.followups.find(
                 {"assigned_to": email, "status": "pending", "followup_date": {"$lte": today}},
-                {"_id": 0, "followup_type": 1, "lead_name": 1, "followup_date": 1}).sort("followup_date", 1).to_list(50) if email else []
+                {"_id": 0, "followup_type": 1, "lead_name": 1, "contact_name": 1,
+                 "followup_date": 1}).sort("followup_date", 1).to_list(50) if email else []
             crm = await db.tasks.find(
                 {"assigned_to": email, "status": {"$nin": ["done", "completed"]}, "due_date": {"$lte": today}},
                 {"_id": 0, "title": 1, "due_date": 1}).sort("due_date", 1).to_list(50) if email else []
@@ -720,7 +721,11 @@ async def build_and_enqueue_daily_digests():
 
             section("\U0001F4CB Tasks", tasks, lambda t: f"{t.get('task_title', 'Task')} — {_due_label(t.get('due_date'), today)}")
             section("\U0001F4CD Visits", visits, lambda v: f"{v.get('school_name', 'Visit')}" + (f" · {v.get('visit_time')}" if v.get('visit_time') else ""))
-            section("\U0001F4DE Follow-ups", fups, lambda f: f"{(f.get('followup_type') or 'call').title()}: {f.get('lead_name', '')}".strip())
+            section("\U0001F4DE Follow-ups", fups,
+                    lambda f: (f"{(f.get('followup_type') or 'call').title()}: "
+                               f"{f.get('lead_name') or f.get('contact_name')}"
+                               if (f.get('lead_name') or f.get('contact_name'))
+                               else (f.get('followup_type') or 'call').title()))
             section("\U0001F5D2 CRM", crm, lambda c: f"{c.get('title', 'Task')} — {_due_label(c.get('due_date'), today)}")
             lines.append(f"Open ▶ {base}/today")
             message = "\n".join(lines).strip()
