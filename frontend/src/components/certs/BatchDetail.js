@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useCallback } from 'react';
 import {
   Zap, Send, ExternalLink, ArrowLeft, Download, Square,
-  CheckCircle, Clock, XCircle, Loader2, AlertTriangle, PauseCircle,
+  CheckCircle, Clock, XCircle, Loader2, AlertTriangle, PauseCircle, Trash2,
 } from 'lucide-react';
 import { certsApi } from '../../lib/api';
 
@@ -71,7 +71,7 @@ const ACTIVE_STATUSES = new Set(['generating', 'sending']);
  *   send       — (id) => Promise  (from hook)
  *   onBack     — callback to return to the batch list
  */
-export default function BatchDetail({ batch, loadBatch, generate, send, stop, onBack }) {
+export default function BatchDetail({ batch, loadBatch, generate, send, stop, clearGenerated, deleteBatch, onBack, onDeleted }) {
   const card      = 'bg-[var(--bg-card)] border-[var(--border-color)]';
   const textPri   = 'text-[var(--text-primary)]';
   const textSec   = 'text-[var(--text-secondary)]';
@@ -162,6 +162,27 @@ export default function BatchDetail({ batch, loadBatch, generate, send, stop, on
     a.remove();
   };
 
+  const handleClearGenerated = async () => {
+    if (!clearGenerated || isActive) return;
+    if (!window.confirm(
+      'Delete the generated certificate files for this batch?\n\n' +
+      'This frees storage. The attendee list is kept — you can Generate again anytime. ' +
+      'Download or send them first if you still need them.'
+    )) return;
+    await clearGenerated(batch_id);
+  };
+
+  const handleDeleteBatch = async () => {
+    if (!deleteBatch || isActive) return;
+    if (!window.confirm(
+      `Delete the entire batch "${title}"?\n\n` +
+      'This permanently removes the batch, all its attendees, and every generated file. ' +
+      'This cannot be undone.'
+    )) return;
+    const ok = await deleteBatch(batch_id);
+    if (ok && onDeleted) onDeleted();
+  };
+
   /* ─── render ─── */
   return (
     <div className="space-y-4">
@@ -241,6 +262,32 @@ export default function BatchDetail({ batch, loadBatch, generate, send, stop, on
             >
               <Square className="h-4 w-4" />
               Stop
+            </button>
+          )}
+
+          {clearGenerated && canDownload && (
+            <button
+              type="button"
+              onClick={handleClearGenerated}
+              disabled={isActive}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium border border-[var(--border-color)] text-[var(--text-secondary)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed hover:bg-[var(--bg-hover)]"
+              title="Delete the generated certificate files to free storage (attendee list is kept; you can regenerate)"
+            >
+              <Trash2 className="h-4 w-4 text-orange-500" />
+              Delete Files
+            </button>
+          )}
+
+          {deleteBatch && (
+            <button
+              type="button"
+              onClick={handleDeleteBatch}
+              disabled={isActive}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium border border-red-300 dark:border-red-900/50 text-red-600 dark:text-red-400 transition-colors disabled:opacity-40 disabled:cursor-not-allowed hover:bg-red-50 dark:hover:bg-red-900/20"
+              title="Delete the entire batch (attendees + all generated files). Cannot be undone."
+            >
+              <Trash2 className="h-4 w-4" />
+              Delete Batch
             </button>
           )}
         </div>

@@ -110,6 +110,30 @@ export function useCertificates() {
     }
   };
 
+  const clearGenerated = async (id) => {
+    try {
+      const r = await certsApi.clearGenerated(id);
+      toast.success(r?.data?.message || 'Certificate files deleted');
+      await loadBatch(id);
+      return true;
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Failed to delete certificate files');
+      return false;
+    }
+  };
+
+  const deleteBatch = async (id) => {
+    try {
+      await certsApi.deleteBatch(id);
+      toast.success('Batch deleted');
+      await loadBatches();
+      return true;
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Failed to delete batch');
+      return false;
+    }
+  };
+
   return {
     /* state */
     templates,
@@ -127,5 +151,7 @@ export function useCertificates() {
     generate,
     send,
     stop,
+    clearGenerated,
+    deleteBatch,
   };
 }

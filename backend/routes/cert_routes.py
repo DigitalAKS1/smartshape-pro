@@ -354,6 +354,71 @@ async def preview_item(item_id: str, request: Request):
     return FileResponse(out_path, media_type="application/pdf", filename="preview.pdf")
 
 
+# ── Cleanup: delete generated cert files / whole batch (admin) ─────────────────
+
+def _delete_cert_file(pdf_url: str) -> bool:
+    """Safely remove a generated cert PDF under CERT_DIR. Returns True if a file
+    was deleted. Path-traversal is rejected via safe_bg_path."""
+    if not pdf_url:
+        return False
+    from cert_engine import safe_bg_path
+    try:
+        local = safe_bg_path(CERT_DIR, pdf_url)
+    except ValueError:
+        return False
+    if os.path.isfile(local):
+        try:
+            os.remove(local)
+            return True
+        except OSError:
+            return False
+    return False
+
+
+@router.delete("/batches/{batch_id}/generated")
+async def clear_generated(batch_id: str, request: Request):
+    """Admin cleanup: delete the generated PDF files for a batch from disk and reset
+    its items to pending (attendee list + batch are kept, so it can be re-generated).
+    Frees storage after the certificates have been downloaded/sent."""
+    user = await get_current_user(request); require_admin(user)
+    batch = await db.cert_batches.find_one({"batch_id": batch_id}, {"_id": 0})
+    if not batch:
+        raise HTTPException(404, "Batch not found")
+    items = await db.cert_items.find({"batch_id": batch_id}, {"_id": 0}).to_list(5000)
+    removed = 0
+    for it in items:
+        if _delete_cert_file(it.get("pdf_url") or ""):
+            removed += 1
+    await db.cert_items.update_many(
+        {"batch_id": batch_id},
+        {"$set": {"gen_status": "pending", "pdf_url": None, "gen_error": None,
+                  "pdf_compressed": False}})
+    # reset generated count; batch goes back to draft so the user can regenerate
+    new_status = "draft" if batch.get("status") in ("ready", "done", "stopped") else batch.get("status")
+    await db.cert_batches.update_one(
+        {"batch_id": batch_id},
+        {"$set": {"counts.generated": 0, "status": new_status}})
+    return {"ok": True, "files_removed": removed, "message": f"Deleted {removed} certificate file(s)"}
+
+
+@router.delete("/batches/{batch_id}")
+async def delete_batch(batch_id: str, request: Request):
+    """Admin cleanup: delete an entire batch — its generated PDF files, all its
+    attendee items, and the batch record."""
+    user = await get_current_user(request); require_admin(user)
+    batch = await db.cert_batches.find_one({"batch_id": batch_id}, {"_id": 0})
+    if not batch:
+        raise HTTPException(404, "Batch not found")
+    items = await db.cert_items.find({"batch_id": batch_id}, {"_id": 0}).to_list(5000)
+    removed = 0
+    for it in items:
+        if _delete_cert_file(it.get("pdf_url") or ""):
+            removed += 1
+    await db.cert_items.delete_many({"batch_id": batch_id})
+    await db.cert_batches.delete_one({"batch_id": batch_id})
+    return {"ok": True, "files_removed": removed, "message": "Batch deleted"}
+
+
 # ── Bulk download (ZIP of individual PDFs, named per attendee) ─────────────────
 
 @router.get("/batches/{batch_id}/download")
@@ -367,7 +432,7 @@ async def download_batch_zip(batch_id: str, request: Request):
     if not items:
         raise HTTPException(400, "No generated certificates to download yet")
 
-    from cert_engine import safe_bg_path, sanitize_filename
+    from cert_engine import safe_bg_path, sanitize_filename, compress_pdf_file
     buf = io.BytesIO()
     used: Dict[str, int] = {}
     added = 0
@@ -380,6 +445,15 @@ async def download_batch_zip(batch_id: str, request: Request):
                 continue
             if not os.path.isfile(local):
                 continue
+            # Safety net: compress any file generated before compression existed
+            # (marked once so we never recompress an already-small file).
+            if not it.get("pdf_compressed"):
+                try:
+                    compress_pdf_file(local)
+                    await db.cert_items.update_one(
+                        {"item_id": it["item_id"]}, {"$set": {"pdf_compressed": True}})
+                except Exception:
+                    pass
             base = sanitize_filename(it.get("name", ""))
             n = used.get(base, 0) + 1
             used[base] = n

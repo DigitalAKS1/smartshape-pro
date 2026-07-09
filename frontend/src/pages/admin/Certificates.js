@@ -264,7 +264,13 @@ export default function Certificates() {
                 generate={s.generate}
                 send={s.send}
                 stop={s.stop}
+                clearGenerated={s.clearGenerated}
+                deleteBatch={s.deleteBatch}
                 onBack={() => {
+                  setSelectedBatchId(null);
+                  s.loadBatches();
+                }}
+                onDeleted={() => {
                   setSelectedBatchId(null);
                   s.loadBatches();
                 }}

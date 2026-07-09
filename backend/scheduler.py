@@ -1235,7 +1235,8 @@ async def _generate_pending_certs():
                     render_certificate_pdf(bg_path, out_path, tpl.get("fields", []),
                                            item, batch.get("shared_values", {}))
                 await db.cert_items.update_one({"item_id": it["item_id"]}, {"$set": {
-                    "gen_status": "generated", "pdf_url": f"/uploads/certificates/{out_name}"}})
+                    "gen_status": "generated", "pdf_url": f"/uploads/certificates/{out_name}",
+                    "pdf_compressed": True}})   # render fns already compress on save
                 await db.cert_batches.update_one({"batch_id": batch["batch_id"]},
                                                  {"$inc": {"counts.generated": 1}})
             except Exception as e:
