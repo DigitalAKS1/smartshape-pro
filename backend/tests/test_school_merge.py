@@ -225,9 +225,11 @@ def test_merge_real_reassigns_and_removes_duplicates(db):
         assert surv["city"] == "Delhi"           # from dup1
         assert surv["phone"] == "919000000001"   # NOT overwritten (already set)
 
-        # restorable: pre-image snapshot + removal snapshot both exist
+        # three pre-images: dup school shells, the CHILD docs (original school_id),
+        # and the removal bundle — see Vivek finding 5 (reversibility).
         assert "preimage_backup_id" in res and "removed_backup_id" in res
-        assert len(res["backups"]) == 2
+        assert "child_preimage_backup_id" in res
+        assert len(res["backups"]) == 3
         removed = await db.audit_backups.find_one(
             {"backup_id": res["removed_backup_id"], "kind": ab.MANIFEST})
         assert removed is not None and removed["counts"].get("schools") == 2

@@ -297,8 +297,9 @@ def test_phones_dry_run(db):
     async def go():
         await _seed_phones(db)
         res = await m.repair_phones(_Req({"dry_run": True}))
-        assert res["per_collection"]["contacts"] == {"recoverable": 1, "lossy": 1}
-        assert res["totals"] == {"recoverable": 1, "lossy": 1}
+        assert res["per_collection"]["contacts"] == {
+            "recoverable": 1, "lossy": 1, "needs_review": 0}
+        assert res["totals"] == {"recoverable": 1, "lossy": 1, "needs_review": 0}
         # untouched
         ct = await db.contacts.find_one({"contact_id": "ct_rec"}, {"_id": 0})
         assert ct["phone"] == "919000000002.0" and "phone_norm" not in ct

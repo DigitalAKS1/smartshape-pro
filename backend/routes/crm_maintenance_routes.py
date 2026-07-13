@@ -9,6 +9,7 @@ school_name/city/contact). Before deleting anything we must SEE what's there —
 especially how many blank schools still carry leads/contacts/quotes/orders,
 because those must NOT be blindly removed.
 """
+import re as _re
 import uuid
 from datetime import datetime, timezone
 
@@ -138,12 +139,35 @@ async def _blank_childless_ids() -> list:
     return [sid for sid in blank_ids if sid not in referenced]
 
 
-async def _bulk_delete_schools(ids: list, *, dry_run: bool, reason: str, actor: dict) -> dict:
+def _dedupe(ids) -> list:
+    """Order-preserving dedupe + drop blanks. Duplicate ids would otherwise
+    inflate confirm_count and multiply the dry-run blast radius for ONE school."""
+    seen = set()
+    return [x for x in (ids or []) if x and not (x in seen or seen.add(x))]
+
+
+async def _has_children(sid: str) -> bool:
+    """Live (non-deleted) children under a school, right now."""
+    for coll in _CHILD_COLLECTIONS:
+        if await db[coll].count_documents(
+                {"school_id": sid, "is_deleted": {"$ne": True}}):
+            return True
+    return False
+
+
+async def _bulk_delete_schools(ids: list, *, dry_run: bool, reason: str, actor: dict,
+                               require_childless: bool = False) -> dict:
     """Shared engine for both bulk-delete endpoints.
 
     dry_run=True  → per-school blast radius + grand totals, writes NOTHING.
     dry_run=False → snapshot_and_delete each school's full cascade (restorable),
                     recompute stock reservations once if any orders were touched.
+
+    require_childless=True (the delete-blank-childless path) RE-CHECKS, immediately
+    before each delete, that the school still has zero children — closing the
+    TOCTOU gap where a lead/contact gets attached between "compute the childless
+    set" and "execute the delete". Any school that gained children in that window
+    is SKIPPED (never deleted) and reported in `skipped`.
 
     Imports the cascade/backup helpers lazily so this module never forms an
     import cycle with crm_routes / order_routes.
@@ -151,7 +175,7 @@ async def _bulk_delete_schools(ids: list, *, dry_run: bool, reason: str, actor: 
     from cascade_delete import build_school_plan          # lazy — avoid cycle
     from audit_backup import snapshot_and_delete, preview_counts
 
-    ids = [i for i in (ids or []) if i]
+    ids = _dedupe(ids)
 
     per_school: list = []
     totals = {"schools": 0, "leads": 0, "contacts": 0, "quotations": 0, "orders": 0, "docs": 0}
@@ -187,17 +211,29 @@ async def _bulk_delete_schools(ids: list, *, dry_run: bool, reason: str, actor: 
         return {"dry_run": True, "schools": per_school, "totals": totals}
 
     backups: list = []
+    skipped: list = []
+    deleted = 0
     total_docs = 0
     any_orders = False
     for school, plan, label, touches_orders in planned:
+        sid = school["school_id"]
+        # TOCTOU guard: re-verify childlessness at EXECUTE time, not plan time.
+        if require_childless and await _has_children(sid):
+            skipped.append({"school_id": sid, "label": label,
+                            "reason": "gained children after selection"})
+            await _log_activity(
+                actor.get("email", ""), "bulk_cascade_delete_skipped", sid,
+                f"SKIPPED '{label}' — no longer childless at execute time")
+            continue
         result = await snapshot_and_delete(
-            plan, root_type="school", root_id=school["school_id"], root_label=label,
+            plan, root_type="school", root_id=sid, root_label=label,
             deleted_by=actor.get("email", ""), reason=reason)
         backups.append(result["backup_id"])
+        deleted += 1
         total_docs += result["total"]
         any_orders = any_orders or touches_orders
         await _log_activity(
-            actor.get("email", ""), "bulk_cascade_delete", school["school_id"],
+            actor.get("email", ""), "bulk_cascade_delete", sid,
             f"Deleted school '{label}' + {result['total']} related docs "
             f"(backup {result['backup_id']}; reason: {reason or 'n/a'})")
 
@@ -207,8 +243,8 @@ async def _bulk_delete_schools(ids: list, *, dry_run: bool, reason: str, actor: 
         await recompute_reservations()
         recomputed = True
 
-    return {"dry_run": False, "deleted": len(planned), "backups": backups,
-            "total_docs": total_docs, "recomputed": recomputed}
+    return {"dry_run": False, "deleted": deleted, "backups": backups,
+            "skipped": skipped, "total_docs": total_docs, "recomputed": recomputed}
 
 
 @router.post("/schools/bulk-delete")
@@ -217,7 +253,10 @@ async def bulk_delete_schools(request: Request):
 
     Body: {school_ids:[..], dry_run:true, confirm_count:<int>, reason:""}
     - dry_run defaults TRUE — a preview that writes nothing.
-    - to actually delete: dry_run=false AND confirm_count == len(school_ids),
+    - school_ids are DEDUPED first, so confirm_count is compared against the count
+      of DISTINCT schools (a repeated id can't inflate the guard, and the dry-run
+      blast radius reports one school once instead of N times).
+    - to actually delete: dry_run=false AND confirm_count == distinct id count,
       else 400 (a stale UI can never over-delete).
     Every delete is snapshotted into audit_backups first, so it is restorable."""
     user = await get_current_user(request)
@@ -226,12 +265,15 @@ async def bulk_delete_schools(request: Request):
     school_ids = body.get("school_ids") or []
     if not isinstance(school_ids, list):
         raise HTTPException(status_code=400, detail="school_ids must be a list")
+    school_ids = _dedupe(school_ids)
     dry_run = body.get("dry_run", True)
     reason = body.get("reason", "") or ""
 
     if not dry_run:
         if body.get("confirm_count") != len(school_ids):
-            raise HTTPException(status_code=400, detail="confirm_count mismatch")
+            raise HTTPException(
+                status_code=400,
+                detail=f"confirm_count mismatch (expected {len(school_ids)} distinct schools)")
 
     return await _bulk_delete_schools(
         school_ids, dry_run=bool(dry_run), reason=reason, actor=user)
@@ -246,7 +288,10 @@ async def delete_blank_childless_schools(request: Request):
     Body: {dry_run:true, confirm_count:<int>, reason:""}
     - dry_run defaults TRUE.
     - to delete: dry_run=false AND confirm_count == the current childless count,
-      else 400 (guards against the set having changed since the caller looked)."""
+      else 400 (guards against the set having changed since the caller looked).
+    - childlessness is RE-CHECKED per school immediately before its delete, so a
+      school that gained a lead/contact in the meantime is skipped, never deleted
+      (returned in `skipped`)."""
     user = await get_current_user(request)
     require_superadmin(user)
     body = await request.json()
@@ -259,7 +304,8 @@ async def delete_blank_childless_schools(request: Request):
             raise HTTPException(status_code=400, detail="confirm_count mismatch")
 
     return await _bulk_delete_schools(
-        ids, dry_run=bool(dry_run), reason=reason, actor=user)
+        ids, dry_run=bool(dry_run), reason=reason, actor=user,
+        require_childless=True)
 
 
 # ===========================================================================
@@ -291,21 +337,57 @@ _SCHOOL_ID_COLLECTIONS = (
     "fms_flows",
 )
 
+# LEGACY SHAPE: quotations/invoices may be linked to a school by school_name ONLY,
+# with NO school_id — quotation_routes stamps school_id only when the name lookup
+# resolved at save time, and cascade_delete.build_school_plan deliberately mirrors
+# this with a {"school_name": name} fallback. A merge that matched strictly on
+# school_id would leave such a row ORPHANED once the duplicate school row is
+# deleted (its name then resolves to no school at all). So for these two
+# collections we ALSO match blank/absent-school_id rows whose school_name equals
+# THAT duplicate's exact name — never a blanket name match, which would wrongly
+# capture rows already owned by a different school_id.
+_NAME_FALLBACK_COLLECTIONS = ("quotations", "invoices")
+
+
+def _merge_match_query(coll: str, merge_id: str, merge_name: str) -> dict:
+    """Docs belonging to `merge_id` — by school_id, plus (quotations/invoices only)
+    the legacy school_name-only rows for that school's exact name."""
+    if coll not in _NAME_FALLBACK_COLLECTIONS or not merge_name:
+        return {"school_id": merge_id}
+    return {"$or": [
+        {"school_id": merge_id},
+        {"school_id": {"$in": ["", None]}, "school_name": merge_name},
+        {"school_id": {"$exists": False}, "school_name": merge_name},
+    ]}
+
 
 def _blankish(v) -> bool:
     """True when a link field is absent/None/empty-string."""
     return not (v or "").strip() if isinstance(v, str) else v is None
 
 
+# A cell holding MORE THAN ONE value ("9876543210 / 9123456789") or an embedded
+# extension ("0120-4213000 ext 105"). normalize_phone() strips every non-digit and
+# CONCATENATES the runs, which silently fabricates a wrong number — so these must
+# never be auto-repaired. Detect them BEFORE normalizing.
+_MULTI_SEP_RE = _re.compile(r"[/,;|]")
+_EXT_RE = _re.compile(r"(?i)(?:ext\.?|extn\.?|x)\s*\d")
+_E164_MAX_DIGITS = 15   # ITU E.164 hard cap — anything longer is not one number
+
+
 def _phone_category(raw) -> str:
     """Classify a raw phone value for the repair pass.
 
-    - 'empty'       : no usable phone.
-    - 'lossy'       : scientific-notation (e.g. "9.17709E+11") — digits already
-                      gone, UNRECOVERABLE; must be flagged, never normalized.
-    - 'clean'       : already equals its normalized form.
-    - 'recoverable' : normalizing changes it (trailing '.0', spaces, +, -, or a
-                      numeric/float value) and yields a non-empty number.
+    - 'empty'        : no usable phone.
+    - 'lossy'        : scientific-notation (e.g. "9.17709E+11") — digits already
+                       gone, UNRECOVERABLE; flag, never normalize.
+    - 'needs_review' : normalizing would FABRICATE a number — a multi-value cell
+                       ("a / b"), an embedded extension ("... ext 105"), or a digit
+                       run longer than E.164 allows. Human must split/verify it, so
+                       we flag it and leave `phone` untouched (same policy as lossy).
+    - 'clean'        : already equals its normalized form.
+    - 'recoverable'  : a SINGLE number that normalizing merely tidies (trailing
+                       '.0', spaces, dashes, parens, +91, or a numeric/float value).
     """
     if raw is None:
         return "empty"
@@ -313,9 +395,19 @@ def _phone_category(raw) -> str:
         return "empty"
     if phone_is_lossy(raw):
         return "lossy"
+
+    if isinstance(raw, str):
+        s = raw.strip()
+        if _MULTI_SEP_RE.search(s) or _EXT_RE.search(s):
+            return "needs_review"
+
     norm = normalize_phone(raw)
     if not norm:
         return "empty"
+    if len(norm.lstrip("+")) > _E164_MAX_DIGITS:
+        # e.g. two numbers space-joined — no separator to catch, but the length
+        # proves it isn't a single dialable number.
+        return "needs_review"
     if isinstance(raw, str) and raw.strip() == norm:
         return "clean"
     return "recoverable"
@@ -397,7 +489,8 @@ async def _integrity_report() -> dict:
 
     # --- D6: phone hygiene, per collection ---------------------------------
     def _phone_stats(rows: list) -> dict:
-        stat = {"total": 0, "lossy": 0, "recoverable": 0, "clean": 0, "empty": 0}
+        stat = {"total": 0, "lossy": 0, "needs_review": 0,
+                "recoverable": 0, "clean": 0, "empty": 0}
         for r in rows:
             stat["total"] += 1
             stat[_phone_category(r.get("phone"))] += 1
@@ -611,31 +704,47 @@ async def repair_dangling_contact_links(request: Request):
 _PHONE_COLLECTIONS = ("schools", "contacts", "leads")
 
 
+_PHONE_ID_FIELD = {"schools": "school_id", "contacts": "contact_id", "leads": "lead_id"}
+
+
 async def _plan_phones():
     """Return {coll: {"recoverable": [(id_field, id_val, norm)],
-                      "lossy": [(id_field, id_val)]}} for the phone repair."""
-    id_field = {"schools": "school_id", "contacts": "contact_id", "leads": "lead_id"}
+                      "lossy": [(id_field, id_val)],
+                      "needs_review": [(id_field, id_val)]}} for the phone repair.
+
+    Only 'recoverable' rows are ever rewritten. 'lossy' and 'needs_review' are
+    FLAGGED ONLY — their `phone` is never overwritten, because normalizing them
+    would fabricate a wrong number (see _phone_category)."""
     plan = {}
     for coll in _PHONE_COLLECTIONS:
-        idf = id_field[coll]
+        idf = _PHONE_ID_FIELD[coll]
         rows = await db[coll].find({}, {"_id": 0, idf: 1, "phone": 1}).to_list(_CAP)
-        rec, lossy = [], []
+        rec, lossy, review = [], [], []
         for r in rows:
             cat = _phone_category(r.get("phone"))
             if cat == "recoverable":
                 rec.append((idf, r.get(idf), normalize_phone(r.get("phone"))))
             elif cat == "lossy":
                 lossy.append((idf, r.get(idf)))
-        plan[coll] = {"recoverable": rec, "lossy": lossy}
+            elif cat == "needs_review":
+                review.append((idf, r.get(idf)))
+        plan[coll] = {"recoverable": rec, "lossy": lossy, "needs_review": review}
     return plan
 
 
 @router.post("/repair/phones")
 async def repair_phones(request: Request):
-    """SUPERADMIN. For schools/contacts/leads: normalize recoverable phones
-    (phone + phone_norm), and flag lossy sci-notation with phone_needs_reimport
-    (phone untouched, phone_norm left blank). dry_run defaults TRUE; a real run
-    snapshots affected docs first. Idempotent."""
+    """SUPERADMIN. For schools/contacts/leads:
+
+      - recoverable  → rewrite phone + phone_norm to the normalized single number.
+      - lossy        → flag phone_needs_reimport=True; `phone` NEVER overwritten.
+      - needs_review → flag phone_needs_review=True; `phone` NEVER overwritten
+                       (multi-value cell / embedded extension / over-long digit run —
+                       normalizing would fabricate a wrong number).
+
+    dry_run defaults TRUE and reports all three buckets so the owner can see what
+    is being SKIPPED, not just what changes. A real run snapshots every touched doc
+    first. Idempotent."""
     user = await get_current_user(request)
     require_superadmin(user)
     body = await request.json()
@@ -643,7 +752,9 @@ async def repair_phones(request: Request):
     reason = body.get("reason", "") or ""
 
     plan = await _plan_phones()
-    per_coll = {c: {"recoverable": len(v["recoverable"]), "lossy": len(v["lossy"])}
+    per_coll = {c: {"recoverable": len(v["recoverable"]),
+                    "lossy": len(v["lossy"]),
+                    "needs_review": len(v["needs_review"])}
                 for c, v in plan.items()}
     result = {
         "dry_run": bool(dry_run),
@@ -651,6 +762,12 @@ async def repair_phones(request: Request):
         "totals": {
             "recoverable": sum(v["recoverable"] for v in per_coll.values()),
             "lossy": sum(v["lossy"] for v in per_coll.values()),
+            "needs_review": sum(v["needs_review"] for v in per_coll.values()),
+        },
+        # Sample the values we refuse to touch, so the owner can eyeball them.
+        "skipped_samples": {
+            c: [t[1] for t in (v["lossy"] + v["needs_review"])][:10]
+            for c, v in plan.items() if (v["lossy"] or v["needs_review"])
         },
     }
     if dry_run:
@@ -660,8 +777,10 @@ async def repair_phones(request: Request):
     from audit_backup import snapshot_only
     snap_plan = []
     for coll, v in plan.items():
-        idf = {"schools": "school_id", "contacts": "contact_id", "leads": "lead_id"}[coll]
-        touched_ids = [t[1] for t in v["recoverable"]] + [t[1] for t in v["lossy"]]
+        idf = _PHONE_ID_FIELD[coll]
+        touched_ids = ([t[1] for t in v["recoverable"]]
+                       + [t[1] for t in v["lossy"]]
+                       + [t[1] for t in v["needs_review"]])
         if touched_ids:
             snap_plan.append((coll, {idf: {"$in": touched_ids}}))
     if snap_plan:
@@ -675,15 +794,21 @@ async def repair_phones(request: Request):
         for idf, idv, norm in v["recoverable"]:
             await db[coll].update_one(
                 {idf: idv}, {"$set": {"phone": norm, "phone_norm": norm}})
+        # Flag-only paths: `phone` is deliberately NOT in the $set.
         for idf, idv in v["lossy"]:
             await db[coll].update_one(
                 {idf: idv},
                 {"$set": {"phone_needs_reimport": True, "phone_norm": ""}})
+        for idf, idv in v["needs_review"]:
+            await db[coll].update_one(
+                {idf: idv},
+                {"$set": {"phone_needs_review": True, "phone_norm": ""}})
 
     result["applied"] = per_coll
     await _log_activity(user.get("email", ""), "repair_phones", "repair-phones",
                         f"normalized {result['totals']['recoverable']}, "
-                        f"flagged {result['totals']['lossy']} lossy "
+                        f"flagged {result['totals']['lossy']} lossy + "
+                        f"{result['totals']['needs_review']} needs-review "
                         f"(reason: {reason or 'n/a'})")
     return result
 
@@ -765,11 +890,13 @@ async def duplicate_schools(request: Request):
     return {"groups": out, "group_count": len(out)}
 
 
-async def _move_children_counts(merge_id: str) -> dict:
-    """Per-collection count of docs whose school_id == merge_id (what a merge moves)."""
+async def _move_children_counts(merge_id: str, merge_name: str = "") -> dict:
+    """Per-collection count of the docs a merge would move — school_id matches PLUS
+    the legacy school_name-only quotations/invoices, so the dry-run preview is honest
+    (an owner must never see "0 quotations" and then silently orphan one)."""
     counts = {}
     for coll in _SCHOOL_ID_COLLECTIONS:
-        n = await db[coll].count_documents({"school_id": merge_id})
+        n = await db[coll].count_documents(_merge_match_query(coll, merge_id, merge_name))
         if n:
             counts[coll] = n
     return counts
@@ -782,9 +909,23 @@ async def merge_schools(request: Request):
     Body: {survivor_id, merge_ids:[...], dry_run:true, confirm:false, reason}
       - dry_run defaults TRUE → per-merge child move counts + survivor totals; no writes.
       - real run needs dry_run=false AND confirm==true.
-    Reassigns every child (school_id: merge_id -> survivor_id) across all
-    school_id-bearing collections, fills only-blank survivor fields from a merge
-    doc, then snapshot_and_delete's the emptied duplicate school rows (restorable).
+      - survivor AND every merge_id must exist and be NOT soft-deleted (400 otherwise),
+        so live children can never be reassigned onto a school the UI filters out.
+
+    Reassigns every child to the survivor across all school_id-bearing collections —
+    matching on school_id, plus the legacy school_name-only quotations/invoices (those
+    also get school_name rewritten to the survivor's, so they stay properly linked).
+    Fills only-blank survivor fields from the first merge doc that has a value, then
+    snapshot_and_delete's the emptied duplicate school rows.
+
+    REVERSIBILITY (read carefully): three backups are written BEFORE any change —
+    the duplicate school docs (preimage_backup_id), every child doc about to be
+    re-pointed (child_preimage_backup_id, so each child's ORIGINAL school_id is
+    preserved), and the removal bundle (removed_backup_id). restore_bundle() will
+    re-insert the deleted school shells, but it does NOT automatically revert the
+    child FK rewrite — un-merging means replaying the child pre-image to restore each
+    child's original school_id. The data to do so is captured; the undo is manual.
+
     Idempotent-ish: re-running with already-merged ids moves 0 children."""
     user = await get_current_user(request)
     require_superadmin(user)
@@ -800,28 +941,38 @@ async def merge_schools(request: Request):
         raise HTTPException(status_code=400, detail="survivor_id is required")
     if not isinstance(merge_ids, list) or not merge_ids:
         raise HTTPException(status_code=400, detail="merge_ids must be a non-empty list")
-    _seen = set()   # order-preserving dedup + drop blanks (fill is "first wins")
-    merge_ids = [x for x in merge_ids if x and not (x in _seen or _seen.add(x))]
+    merge_ids = _dedupe(merge_ids)   # order-preserving (field fill is "first wins")
     if not merge_ids:
         raise HTTPException(status_code=400, detail="merge_ids must be a non-empty list")
     if survivor_id in merge_ids:
         raise HTTPException(status_code=400, detail="survivor_id cannot be in merge_ids")
 
+    # Soft-deleted schools are NOT valid merge participants: a deleted survivor
+    # would swallow live children into a school every list view hides.
     survivor = await db.schools.find_one({"school_id": survivor_id}, {"_id": 0})
     if not survivor:
         raise HTTPException(status_code=400, detail=f"survivor school {survivor_id} not found")
+    if survivor.get("is_deleted"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"survivor school {survivor_id} is deleted — restore it before merging")
     merge_docs = []
     for mid in merge_ids:
         doc = await db.schools.find_one({"school_id": mid}, {"_id": 0})
         if not doc:
             raise HTTPException(status_code=400, detail=f"merge school {mid} not found")
+        if doc.get("is_deleted"):
+            raise HTTPException(
+                status_code=400, detail=f"merge school {mid} is deleted — nothing to merge")
         merge_docs.append(doc)
 
-    # Per-merge move counts + aggregate.
+    merge_names = {d["school_id"]: (d.get("school_name") or "").strip() for d in merge_docs}
+
+    # Per-merge move counts + aggregate (includes the school_name-only legacy rows).
     per_merge = {}
     moved_total = {}
     for mid in merge_ids:
-        counts = await _move_children_counts(mid)
+        counts = await _move_children_counts(mid, merge_names.get(mid, ""))
         per_merge[mid] = counts
         for coll, n in counts.items():
             moved_total[coll] = moved_total.get(coll, 0) + n
@@ -857,17 +1008,42 @@ async def merge_schools(request: Request):
         backed_up_by=user.get("email", ""), reason=reason)
     result["preimage_backup_id"] = pre["backup_id"]
 
-    # 2. Reassign every child FK survivor<-merge across school_id-bearing collections.
+    # 2. Pre-image snapshot of every CHILD doc about to be re-pointed, captured with
+    #    its ORIGINAL school_id/school_name. Without this an incorrect merge is
+    #    irreversible: the school shell restores, but nothing records where each
+    #    child came from. Uses the SAME queries as the reassignment below.
+    child_plan = []
+    for mid in merge_ids:
+        mname = merge_names.get(mid, "")
+        for coll in _SCHOOL_ID_COLLECTIONS:
+            child_plan.append((coll, _merge_match_query(coll, mid, mname)))
+    child_pre = await snapshot_only(
+        child_plan, root_type="school_merge_children", root_id=survivor_id,
+        root_label=f"pre-merge school_id of children moving into {survivor_id}",
+        backed_up_by=user.get("email", ""), reason=reason)
+    result["child_preimage_backup_id"] = child_pre["backup_id"]
+    result["child_preimage_counts"] = child_pre["counts"]
+
+    # 3. Reassign every child to the survivor. Per merge school (the school_name
+    #    fallback is name-specific). For quotations/invoices also rewrite school_name
+    #    to the survivor's, so a legacy name-linked row ends up correctly linked
+    #    instead of pointing at a name that no longer resolves to any school.
+    survivor_name = (survivor.get("school_name") or "").strip()
     applied_moves = {}
-    for coll in _SCHOOL_ID_COLLECTIONS:
-        r = await db[coll].update_many(
-            {"school_id": {"$in": merge_ids}}, {"$set": {"school_id": survivor_id}})
-        n = getattr(r, "modified_count", 0) or 0
-        if n:
-            applied_moves[coll] = n
+    for mid in merge_ids:
+        mname = merge_names.get(mid, "")
+        for coll in _SCHOOL_ID_COLLECTIONS:
+            set_doc = {"school_id": survivor_id}
+            if coll in _NAME_FALLBACK_COLLECTIONS and survivor_name:
+                set_doc["school_name"] = survivor_name
+            r = await db[coll].update_many(
+                _merge_match_query(coll, mid, mname), {"$set": set_doc})
+            n = getattr(r, "modified_count", 0) or 0
+            if n:
+                applied_moves[coll] = applied_moves.get(coll, 0) + n
     result["moved"] = applied_moves
 
-    # 3. Fill ONLY-blank survivor fields from the first merge doc that has a value.
+    # 4. Fill ONLY-blank survivor fields from the first merge doc that has a value.
     fillable = ("school_name", "city", "state", "pincode", "phone", "email",
                 "school_type", "school_strength", "assigned_to", "assigned_name")
     fill = {}
@@ -883,20 +1059,24 @@ async def merge_schools(request: Request):
         await db.schools.update_one({"school_id": survivor_id}, {"$set": fill})
         result["survivor_filled"] = fill
 
-    # 4. Snapshot-and-delete the now-empty duplicate school docs (restorable).
+    # 5. Snapshot-and-delete the now-empty duplicate school docs.
     del_res = await snapshot_and_delete(
         [("schools", {"school_id": {"$in": merge_ids}})],
         root_type="school_merge_removed", root_id=survivor_id,
         root_label=f"removed {len(merge_ids)} merged dup schools",
         deleted_by=user.get("email", ""), reason=reason)
     result["removed_backup_id"] = del_res["backup_id"]
-    result["backups"] = [pre["backup_id"], del_res["backup_id"]]
+    result["backups"] = [pre["backup_id"], child_pre["backup_id"], del_res["backup_id"]]
     result["merged"] = merge_ids
+    result["undo_note"] = (
+        "restore_bundle(removed_backup_id) re-creates the duplicate school rows. "
+        "The child FK rewrite is NOT auto-reverted: replay child_preimage_backup_id "
+        "to restore each child's original school_id/school_name.")
 
     for mid in merge_ids:
         await _log_activity(
             user.get("email", ""), "school_merge", mid,
             f"merged school {mid} into {survivor_id} "
-            f"(backups {pre['backup_id']}/{del_res['backup_id']}; "
+            f"(backups {pre['backup_id']}/{child_pre['backup_id']}/{del_res['backup_id']}; "
             f"reason: {reason or 'n/a'})")
     return result
