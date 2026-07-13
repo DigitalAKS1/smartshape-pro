@@ -858,6 +858,30 @@ async def _resolve_owner(raw: str):
     return await resolve_owner(db, raw)
 
 
+async def _apply_owner(body: dict, *, default_email: str, default_name: str):
+    """Resolve a request body's "Assign To" (a NAME or EMAIL, typed or picked) into
+    a real (assigned_to, assigned_name) on EVERY write path.
+
+    - blank `assigned_to`            → the caller's default (sales self / school owner).
+    - a name/email that resolves     → that user's (email, name).
+    - an unknown-but-syntactically-valid email → kept as-is (valid scoping key).
+    - an unresolvable NAME           → the default; a NAME is NEVER stored in
+                                        assigned_to (that would break scoping).
+
+    Always returns a non-blank assigned_name when assigned_to is set, so the UI
+    never renders a blank owner."""
+    raw = (body.get("assigned_to") or "").strip()
+    if not raw:
+        return default_email, default_name
+    owner_email, owner_name = await resolve_owner(db, raw)
+    if owner_email:
+        body_name = (body.get("assigned_name") or "").strip()
+        return owner_email, (owner_name or body_name or owner_email)
+    if "@" in raw:  # syntactically valid but unknown email — keep it
+        return raw, ((body.get("assigned_name") or "").strip() or raw)
+    return default_email, default_name  # unresolvable name → default, never the name
+
+
 async def _user_can_access_school(user: dict, school: dict) -> bool:
     """Mirror GET /schools sales scope: admin sees all; accounts/store none;
     sales sees owned/created schools + schools holding their leads."""
@@ -1128,8 +1152,8 @@ async def assign_school(school_id: str, request: Request):
     user = await get_current_user(request)
     require_module(user, "leads", "read_write")
     body = await request.json()
-    assigned_to = (body.get("assigned_to") or "").strip()
-    assigned_name = (body.get("assigned_name") or "").strip()
+    # Resolve name/email → real user; blank clears the owner (unassign).
+    assigned_to, assigned_name = await _apply_owner(body, default_email="", default_name="")
     school = await db.schools.find_one({"school_id": school_id}, {"_id": 0, "school_name": 1})
     if not school:
         raise HTTPException(status_code=404, detail="School not found")
@@ -1181,8 +1205,8 @@ async def bulk_assign_schools(request: Request):
     require_module(user, "leads", "read_write")
     body = await request.json()
     school_ids = body.get("school_ids") or []
-    assigned_to = (body.get("assigned_to") or "").strip()
-    assigned_name = (body.get("assigned_name") or "").strip()
+    # Resolve name/email → real user; blank clears the owner (unassign).
+    assigned_to, assigned_name = await _apply_owner(body, default_email="", default_name="")
     if not school_ids:
         raise HTTPException(status_code=400, detail="school_ids required")
     total = {"schools": 0, "contacts": 0, "leads": 0}
@@ -1452,9 +1476,11 @@ async def create_contact(request: Request):
         raise HTTPException(status_code=400, detail="Name and phone are required")
     contact_id = f"con_{uuid.uuid4().hex[:12]}"
     now_iso = datetime.now(timezone.utc).isoformat()
-    # Owner default: explicit, else the creating sales rep.
-    _default_owner = (body.get("assigned_to") or "").strip() or (user["email"] if get_team(user) == "sales" else "")
-    _default_owner_name = (body.get("assigned_name") or "").strip() or (user["name"] if _default_owner == user["email"] else "")
+    # Owner default: explicit (name/email resolved), else the creating sales rep.
+    _sales_self = user["email"] if get_team(user) == "sales" else ""
+    _sales_self_name = user["name"] if _sales_self else ""
+    _default_owner, _default_owner_name = await _apply_owner(
+        body, default_email=_sales_self, default_name=_sales_self_name)
 
     # Resolve school_id → company (FK wins over string if both supplied)
     school_id = body.get("school_id") or None
@@ -1497,15 +1523,13 @@ async def create_contact(request: Request):
             })
             school_id = new_sch_id
 
-    # Owner: explicit > the linked school's owner > creating-rep default.
-    c_assigned_to = (body.get("assigned_to") or "").strip()
-    c_assigned_name = (body.get("assigned_name") or "").strip()
-    if not c_assigned_to and school_id:
+    # Owner: explicit (resolved above into _default_owner) > linked school's owner
+    # > creating-rep default. When the body carried no owner, prefer the school's.
+    c_assigned_to, c_assigned_name = _default_owner, _default_owner_name
+    if not (body.get("assigned_to") or "").strip() and school_id:
         _s = await db.schools.find_one({"school_id": school_id}, {"_id": 0, "assigned_to": 1, "assigned_name": 1})
         if _s and _s.get("assigned_to"):
             c_assigned_to, c_assigned_name = _s["assigned_to"], _s.get("assigned_name", "")
-    if not c_assigned_to:
-        c_assigned_to, c_assigned_name = _default_owner, _default_owner_name
 
     contact_doc = {
         "contact_id": contact_id,
@@ -1821,9 +1845,11 @@ async def convert_contact_to_lead(contact_id: str, request: Request):
     body = await request.json()
     now_iso = datetime.now(timezone.utc).isoformat()
 
-    # Owner default for the convert flow: explicit > contact owner > creating sales rep.
-    _cv_owner = (body.get("assigned_to") or "").strip() or (contact.get("assigned_to") or "").strip() or (user["email"] if get_team(user) == "sales" else "")
-    _cv_owner_name = (body.get("assigned_name") or "").strip() or (contact.get("assigned_name") or "").strip() or (user["name"] if _cv_owner == user["email"] else "")
+    # Owner default for the convert flow: explicit (resolved) > contact owner > creating sales rep.
+    _cv_default = (contact.get("assigned_to") or "").strip() or (user["email"] if get_team(user) == "sales" else "")
+    _cv_default_name = (contact.get("assigned_name") or "").strip() or (user["name"] if _cv_default == user["email"] else "")
+    _cv_owner, _cv_owner_name = await _apply_owner(
+        body, default_email=_cv_default, default_name=_cv_default_name)
 
     # Inline school creation
     school_id = body.get("school_id", "")
@@ -1861,8 +1887,9 @@ async def convert_contact_to_lead(contact_id: str, request: Request):
         _ls = await db.schools.find_one({"school_id": school_id}, {"_id": 0, "assigned_to": 1, "assigned_name": 1})
         if _ls and _ls.get("assigned_to"):
             _school_owner, _school_owner_name = _ls["assigned_to"], _ls.get("assigned_name", "")
-    _eff_assigned_to = (body.get("assigned_to") or "").strip() or _school_owner or _cv_owner
-    _eff_assigned_name = (body.get("assigned_name") or "").strip() or _school_owner_name or _cv_owner_name
+    _eff_assigned_to, _eff_assigned_name = await _apply_owner(
+        body, default_email=_school_owner or _cv_owner,
+        default_name=_school_owner_name or _cv_owner_name)
     lead_doc = {
         "lead_id": lead_id,
         "school_id": school_id,
@@ -2307,9 +2334,11 @@ async def backfill_lead_contacts(request: Request):
 async def create_lead(request: Request):
     user = await get_current_user(request)
     body = await request.json()
-    # Owner for an inline new school: explicit, else the creating sales rep.
-    _ns_owner = (body.get("assigned_to") or "").strip() or (user["email"] if get_team(user) == "sales" else "")
-    _ns_owner_name = (body.get("assigned_name") or "").strip() or (user["name"] if _ns_owner == user["email"] else "")
+    # Owner for an inline new school: explicit (name/email resolved), else the creating sales rep.
+    _sales_self = user["email"] if get_team(user) == "sales" else ""
+    _sales_self_name = user["name"] if _sales_self else ""
+    _ns_owner, _ns_owner_name = await _apply_owner(
+        body, default_email=_sales_self, default_name=_sales_self_name)
 
     school_id = body.get("school_id")
     # Validate existing school_id refers to a real, non-deleted school
@@ -2351,9 +2380,10 @@ async def create_lead(request: Request):
         _ls = await db.schools.find_one({"school_id": school_id}, {"_id": 0, "assigned_to": 1, "assigned_name": 1})
         if _ls and _ls.get("assigned_to"):
             _school_owner, _school_owner_name = _ls["assigned_to"], _ls.get("assigned_name", "")
-    _body_assigned = (body.get("assigned_to") or "").strip()
-    _eff_assigned_to = _body_assigned or _school_owner or user["email"]
-    _eff_assigned_name = body.get("assigned_name", "") if _body_assigned else (_school_owner_name if _school_owner else user["name"])
+    # Effective owner: explicit (resolved) > linked school's owner > creator.
+    _eff_assigned_to, _eff_assigned_name = await _apply_owner(
+        body, default_email=_school_owner or user["email"],
+        default_name=_school_owner_name or user["name"])
     lead_doc = {
         "lead_id": lead_id,
         "school_id": school_id or "",
@@ -2443,6 +2473,16 @@ async def update_lead(lead_id: str, request: Request):
     allowed["updated_at"] = now_iso
     allowed["last_activity_date"] = now_iso
 
+    # Resolve any "Assign To" (name/email) to a real user; never store a raw name.
+    if "assigned_to" in body:
+        _ao, _an = await _apply_owner(
+            body, default_email=existing.get("assigned_to", ""),
+            default_name=existing.get("assigned_name", ""))
+        allowed["assigned_to"] = _ao
+        allowed["assigned_name"] = _an
+        if _ao and _ao != existing.get("assigned_to"):
+            allowed["assigned_date"] = now_iso
+
     if existing.get("is_locked") and user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Lead is locked after order conversion. Admin unlock required.")
 
@@ -2463,9 +2503,9 @@ async def update_lead(lead_id: str, request: Request):
         })
         allowed["pipeline_history"] = history
 
-    if "assigned_to" in body and body["assigned_to"] != existing.get("assigned_to"):
+    if allowed.get("assigned_to") and allowed["assigned_to"] != existing.get("assigned_to"):
         await log_activity(user["email"], "reassign_lead", "lead", lead_id,
-                           details=f"From {existing.get('assigned_name', existing.get('assigned_to'))} to {body.get('assigned_name', body['assigned_to'])}")
+                           details=f"From {existing.get('assigned_name', existing.get('assigned_to'))} to {allowed.get('assigned_name', allowed['assigned_to'])}")
 
     await db.leads.update_one({"lead_id": lead_id}, {"$set": allowed})
 
@@ -2750,6 +2790,13 @@ async def reassign_lead(request: Request):
         raise HTTPException(status_code=404, detail="Lead not found")
     if get_team(user) != "admin":
         raise HTTPException(status_code=403, detail="Only an admin can reassign leads")
+    # Resolve a typed/picked NAME or EMAIL to the real user; never store a raw name.
+    _r_email, _r_name = await resolve_owner(db, new_agent_email)
+    if _r_email:
+        new_agent_email = _r_email
+        new_agent_name = _r_name or new_agent_name or _r_email
+    elif "@" not in (new_agent_email or ""):
+        raise HTTPException(status_code=400, detail="Could not resolve assignee to a user")
     now_iso = datetime.now(timezone.utc).isoformat()
     history = lead.get("reassignments", []) or []
     history.append({
@@ -2766,6 +2813,7 @@ async def reassign_lead(request: Request):
     await db.leads.update_one({"lead_id": lead_id}, {"$set": {
         "assigned_to": new_agent_email,
         "assigned_name": new_agent_name,
+        "assigned_date": now_iso,
         "assignment_type": "manual",
         "reassignments": history,
         "reassignment_count": reassign_count,
@@ -2792,6 +2840,13 @@ async def bulk_assign_leads(request: Request):
     reason = (body.get("reason") or "Bulk assignment").strip()
     if not lead_ids or not new_agent_email:
         raise HTTPException(status_code=400, detail="lead_ids and new_agent_email required")
+    # Resolve a typed/picked NAME or EMAIL to the real user; never store a raw name.
+    _r_email, _r_name = await resolve_owner(db, new_agent_email)
+    if _r_email:
+        new_agent_email = _r_email
+        new_agent_name = _r_name or new_agent_name or _r_email
+    elif "@" not in (new_agent_email or ""):
+        raise HTTPException(status_code=400, detail="Could not resolve assignee to a user")
     now_iso = datetime.now(timezone.utc).isoformat()
     leads = await db.leads.find({"lead_id": {"$in": lead_ids}}, {"_id": 0}).to_list(10000)
     count = 0
@@ -2810,6 +2865,7 @@ async def bulk_assign_leads(request: Request):
         await db.leads.update_one({"lead_id": lead["lead_id"]}, {"$set": {
             "assigned_to": new_agent_email,
             "assigned_name": new_agent_name,
+            "assigned_date": now_iso,
             "assignment_type": "bulk",
             "reassignments": history,
             "reassignment_count": (lead.get("reassignment_count", 0) or 0) + 1,
