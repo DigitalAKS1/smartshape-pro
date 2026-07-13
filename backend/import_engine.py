@@ -9,6 +9,7 @@ import csv
 import datetime as _dt
 import io
 import re as _re
+import unicodedata as _ud
 from difflib import SequenceMatcher
 
 from openpyxl import load_workbook
@@ -51,6 +52,40 @@ def coerce_cell(v):
     if isinstance(v, (_dt.datetime, _dt.date)):
         return v.isoformat()
     return str(v).strip()
+
+
+# Common UTF-8-misread-as-cp1252/latin-1 artifacts seen in real exports
+# (e.g. a curly apostrophe ’ surfacing as "â€™" or a bare "â"). Multi-char
+# sequences MUST be listed before the bare "â" so they win.
+_MOJIBAKE = [
+    ("â€™", "'"), ("â€˜", "'"), ("â€œ", '"'), ("â€\x9d", '"'),
+    ("â€“", "-"), ("â€”", "-"), ("Ã©", "e"), ("â€", "'"), ("â", "'"),
+]
+
+
+def clean_text(s):
+    """Repair mojibake in a decoded cell and NFC-normalize. Safe on clean text
+    (no-op). Fixing this is not cosmetic: 'ST. XAVIERâS' vs 'St. Xavier's' are
+    the same school, and un-mangling the name lets ID/name dedup see that."""
+    if not s or not isinstance(s, str):
+        return s
+    for bad, good in _MOJIBAKE:
+        if bad in s:
+            s = s.replace(bad, good)
+    return _ud.normalize("NFC", s)
+
+
+_EMAIL_RE = _re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
+
+
+def first_email(cell) -> str:
+    """Collapse a multi-value email cell to the first valid address, lowercased.
+    Real exports pack several ('a@x.com / b@y.com', space- or newline-joined);
+    storing the blob breaks matching and mailing. Empty -> ''."""
+    if not cell:
+        return ""
+    found = _EMAIL_RE.findall(str(cell).replace("\n", " "))
+    return found[0].strip().lower() if found else ""
 
 
 def normalize_phone(raw) -> str:
@@ -119,7 +154,7 @@ def parse_table(filename: str, content: bytes) -> tuple[list[str], list[dict]]:
                 if r is None or all(c is None for c in r):
                     continue
                 rows.append({
-                    headers[i]: coerce_cell(v)
+                    headers[i]: clean_text(coerce_cell(v))
                     for i, v in enumerate(r)
                     if i < len(headers) and headers[i]
                 })
@@ -139,7 +174,7 @@ def parse_table(filename: str, content: bytes) -> tuple[list[str], list[dict]]:
     reader = csv.DictReader(io.StringIO(text or ""))
     headers = [h.strip() for h in (reader.fieldnames or [])]
     rows = [
-        {(k or "").strip(): (v or "").strip() for k, v in row.items()}
+        {(k or "").strip(): clean_text((v or "").strip()) for k, v in row.items()}
         for row in reader
     ]
     return headers, rows
@@ -298,6 +333,7 @@ def _now() -> str:
 # Module-level map: key -> (entity, maps_to|None)
 # Built from SEED_FIELDS tuple: (key, label, entity, type, maps_to, group, aliases)
 _CORE = {key: (entity, maps_to) for (key, _l, entity, _t, maps_to, _g, _a) in SEED_FIELDS}
+_FIELD_TYPE = {key: _t for (key, _l, _e, _t, _m, _g, _a) in SEED_FIELDS}
 
 
 def split_values(row_keyed: dict) -> dict:
@@ -324,6 +360,8 @@ def split_values(row_keyed: dict) -> dict:
     for key, val in row_keyed.items():
         if key in CONTROL_KEYS:         # control keys — not stored as fields
             continue
+        if _FIELD_TYPE.get(key) == "email":   # collapse 'a@x / b@y' -> first addr
+            val = first_email(val)
         meta = _CORE.get(key)
         if meta and meta[1]:            # known key with a native column mapping
             entity, native = meta
