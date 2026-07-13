@@ -1627,10 +1627,22 @@ async def delete_contact(contact_id: str, request: Request):
         {"contact_id": contact_id},
         {"$set": {"is_deleted": True, "deleted_at": now_iso, "deleted_by": user["email"]}}
     )
-    # Null out the back-reference on any lead that referenced this contact
+    # Null out the back-reference on any lead that referenced this contact, via
+    # EITHER link style so no dangling pointer survives (D1/D2):
+    #  - contact_id           = canonical link (create/import + unify migration)
+    #  - converted_from_contact = legacy convert-flow link
+    await db.leads.update_many(
+        {"contact_id": contact_id},
+        {"$unset": {"contact_id": ""}}
+    )
     await db.leads.update_many(
         {"converted_from_contact": contact_id},
         {"$unset": {"converted_from_contact": ""}}
+    )
+    # Clear this contact's own forward link so it can't point at a lead anymore.
+    await db.contacts.update_one(
+        {"contact_id": contact_id},
+        {"$unset": {"lead_id": "", "converted_to_lead": ""}}
     )
     # Null out referral references
     await db.leads.update_many(
@@ -2079,8 +2091,12 @@ async def get_leads(request: Request):
     settings = await get_crm_settings()
     quote_map = await _build_quote_map(leads)
 
-    # Batch-fetch linked contact names (P1-B)
-    cfc_ids = [l.get("converted_from_contact") for l in leads if l.get("converted_from_contact")]
+    # Batch-fetch linked contact names (P1-B). Resolve via EITHER link style so
+    # both create/import leads (contact_id) and convert-flow leads
+    # (converted_from_contact) show their contact — prefer contact_id (D1).
+    def _linked_cid(l):
+        return l.get("contact_id") or l.get("converted_from_contact")
+    cfc_ids = list({_linked_cid(l) for l in leads if _linked_cid(l)})
     linked_map = {}
     if cfc_ids:
         async for c in db.contacts.find(
@@ -2103,7 +2119,7 @@ async def get_leads(request: Request):
         lead["deal_value"] = resolve_lead_value(lead, quote_map)
         lead["probability"] = stage_probability(lead.get("stage", ""), settings)
         lead["weighted_value"] = round(lead["deal_value"] * lead["probability"] / 100, 2)
-        lead["linked_contact_name"] = linked_map.get(lead.get("converted_from_contact"))
+        lead["linked_contact_name"] = linked_map.get(_linked_cid(lead))
     return leads
 
 

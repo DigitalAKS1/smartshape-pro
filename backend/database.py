@@ -70,7 +70,14 @@ async def connect_db():
     await db.push_subscriptions.create_index("email", background=True)
 
     # ── Schools ─────────────────────────────────────────────────────────────
-    await db.schools.create_index("school_id", background=True)
+    # UNIQUE on school_id (D3). Non-fatal via _i(): on a DB that still has
+    # DUPLICATE school_id values (or an older NON-unique school_id index), this
+    # raises DuplicateKeyError / IndexOptionsConflict, which _i swallows so
+    # startup never crashes — the unique index simply isn't created yet.
+    # To land it cleanly: run /crm/maintenance/integrity-detect, dedup the
+    # reported duplicate school_id values, drop any old non-unique school_id
+    # index, then restart. NO auto-dedup here (never delete rows on startup).
+    await _i(db.schools.create_index("school_id", unique=True, background=True))
     await db.schools.create_index([("school_name", 1), ("is_deleted", 1)], background=True)
     await db.schools.create_index("is_deleted", background=True)
     await _i(db.schools.create_index("phone_norm", background=True))  # normalized dedup (P2.2)
@@ -82,6 +89,10 @@ async def connect_db():
     await db.contacts.create_index("lead_id", background=True)
 
     # ── Leads ───────────────────────────────────────────────────────────────
+    # UNIQUE on lead_id (D3). Non-fatal via _i(): pre-existing duplicate lead_id
+    # values make this a no-op (DuplicateKeyError swallowed) rather than crashing
+    # startup. Dedup via integrity-detect BEFORE relying on the constraint.
+    await _i(db.leads.create_index("lead_id", unique=True, background=True))
     await db.leads.create_index([("school_id", 1), ("is_deleted", 1)], background=True)
     await db.leads.create_index([("assigned_to", 1), ("is_deleted", 1)], background=True)
     await db.leads.create_index([("stage", 1), ("is_deleted", 1)], background=True)

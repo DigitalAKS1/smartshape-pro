@@ -107,6 +107,54 @@ async def snapshot_and_delete(plan, *, root_type: str, root_id: str, root_label:
     return {"backup_id": backup_id, "counts": counts, "total": sum(counts.values())}
 
 
+async def snapshot_only(plan, *, root_type: str, root_id: str, root_label: str,
+                        backed_up_by: str, reason: str = "") -> dict:
+    """Back up every doc matched by the plan into audit_backups WITHOUT deleting.
+
+    For reversible IN-PLACE migrations (unify-links / phone repair / dangling
+    repair): capture the exact pre-mutation image of every affected doc so a bad
+    migration can be reverted. Same chunk+manifest layout as snapshot_and_delete
+    (manifest written LAST = the "backup complete" marker), but no delete_many()
+    ever runs. Returns {backup_id, counts, total}.
+
+    NOTE: because the live docs are NOT removed, restore_bundle() cannot cleanly
+    re-insert them (unique-key duplicates are skipped). The manifest+chunks are
+    the pre-image record for a field-level manual/scripted revert.
+    """
+    plan = _merge_plan(plan)
+
+    collected, counts = {}, {}
+    for coll, query in plan:
+        docs = await db[coll].find(query, {"_id": 0}).to_list(_FETCH_CAP)
+        if docs:
+            collected[coll] = docs
+            counts[coll] = len(docs)
+
+    backup_id = f"bk_{uuid.uuid4().hex[:12]}"
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    seq = 0
+    for coll, docs in collected.items():
+        for i in range(0, len(docs), _CHUNK):
+            seq += 1
+            await db.audit_backups.insert_one({
+                "backup_id": backup_id, "kind": CHUNK,
+                "collection": coll, "seq": seq, "docs": docs[i:i + _CHUNK],
+            })
+
+    # Manifest LAST — its existence means the pre-image finished writing.
+    await db.audit_backups.insert_one({
+        "backup_id": backup_id, "kind": MANIFEST,
+        "root_type": root_type, "root_id": root_id, "root_label": root_label,
+        "deleted_by": backed_up_by, "deleted_at": now_iso, "reason": reason,
+        "counts": counts, "total": sum(counts.values()),
+        "migration": True,   # pre-image of an in-place migration, nothing deleted
+        "restored": False,
+    })
+
+    return {"backup_id": backup_id, "counts": counts, "total": sum(counts.values())}
+
+
 async def list_backups(limit: int = 100) -> list:
     """Recent backup manifests, newest first (no chunk payloads)."""
     return await db.audit_backups.find(
