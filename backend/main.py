@@ -38,6 +38,7 @@ from auth_utils import hash_password, verify_password
 # ── Route modules ──────────────────────────────────────────────────────────────
 from routes.auth_routes import router as auth_router
 from routes.crm_routes import router as crm_router
+from routes.crm_maintenance_routes import router as crm_maintenance_router
 from routes.quotation_routes import router as quotation_router
 from routes.inventory_routes import router as inventory_router
 from routes.product_type_routes import router as product_type_router
@@ -88,6 +89,7 @@ app.add_middleware(
 # ── Register routers (all under /api) ──────────────────────────────────────────
 app.include_router(auth_router, prefix="/api")
 app.include_router(crm_router, prefix="/api")
+app.include_router(crm_maintenance_router, prefix="/api")
 app.include_router(quotation_router, prefix="/api")
 app.include_router(inventory_router, prefix="/api")
 app.include_router(product_type_router, prefix="/api")

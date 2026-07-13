@@ -29,7 +29,15 @@ This is the living list. The owner adds here; nothing is dropped.
 | O16 | Filter **search across all data** (global search feeds the filter, not just leads) | B — Filter UX |
 | O17 | **Tag** filter is very important and must work in **Contacts and Schools** tabs too, not just Leads | B (master facet — covers it) |
 | O18 | **Dynamic fields**: add a field once in a **master area** → it auto-appears across the CRM (forms, **table view**, filter). Aligned, dynamic table. | A/field-registry — follow-on wave |
+| O19 | **~516 blank schools** (junk import) — investigate, then safe cleanup (snapshot + delete blank+childless on confirm) | Maintenance |
+| O20 | Admin **Select-all + Delete-all on the filtered set** (superadmin-gated, dry-run, snapshot, cascade) | Maintenance |
+| O21 | **Gmail-style search**: one box, free text + operators (`owner:` `city:` `stage:` `has:phone`) across all entities, with a filter dropdown | B — Filter UX |
 | _…_ | _(owner to add more here)_ | |
+
+**Phase 1.5 — Maintenance (blank-school cleanup):** read-only audit endpoint DONE
+(`GET /crm/maintenance/blank-schools-audit`, admin, 3 tests) — reports blank count, childless
+(safe) vs referenced, provenance. Destructive select-all/delete-all (O19 exec + O20) to follow with
+superadmin gate + dry-run + `audit_backup` snapshot + cascade, and its table UI after Rohan lands.
 
 **Decisions (owner, 2026-07-10):** build B + A-safe **in parallel**; **hold** A-risky prod
 migrations until B + A-safe ship (backup + staged later). O18 = follow-on wave after this one.
