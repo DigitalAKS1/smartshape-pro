@@ -60,6 +60,7 @@ async def connect_db():
     await _i(db.dies.create_index("code", unique=True))
     await _i(db.contacts.create_index("contact_id", unique=True))
     await _i(db.contacts.create_index("phone", background=True))   # dedup checks
+    await _i(db.contacts.create_index("phone_norm", background=True))  # normalized dedup (P2.2)
 
     # ── Auth / session ──────────────────────────────────────────────────────
     await db.login_attempts.create_index("identifier")
@@ -72,6 +73,7 @@ async def connect_db():
     await db.schools.create_index("school_id", background=True)
     await db.schools.create_index([("school_name", 1), ("is_deleted", 1)], background=True)
     await db.schools.create_index("is_deleted", background=True)
+    await _i(db.schools.create_index("phone_norm", background=True))  # normalized dedup (P2.2)
 
     # ── Contacts ────────────────────────────────────────────────────────────
     await db.contacts.create_index([("school_id", 1), ("is_deleted", 1)], background=True)
@@ -87,6 +89,7 @@ async def connect_db():
     await db.leads.create_index("created_at", background=True)
     await db.leads.create_index("converted_from_contact", background=True)
     await db.leads.create_index("referred_by_contact_id", background=True)
+    await _i(db.leads.create_index("phone_norm", background=True))  # normalized dedup (P2.2)
 
     # ── CRM child collections ───────────────────────────────────────────────
     await db.followups.create_index([("lead_id", 1), ("status", 1)], background=True)

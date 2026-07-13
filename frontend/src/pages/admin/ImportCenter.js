@@ -15,6 +15,7 @@ export default function ImportCenter() {
   const [result, setResult] = useState(null);
   const [logs, setLogs] = useState([]);
   const [activeTab, setActiveTab] = useState('import');
+  const [createLeads, setCreateLeads] = useState(false); // P2.6: opt-in lead creation
   // Manual picker state
   const [selectedSource, setSelectedSource] = useState(null);
   const fileRef = useRef(null);
@@ -110,9 +111,10 @@ export default function ImportCenter() {
     setImporting(true);
     try {
       const rows_keyed = buildRowsKeyed();
-      const res = await masterImport.execute({ rows_keyed, mapping, create_leads: false });
+      const res = await masterImport.execute({ rows_keyed, mapping, create_leads: createLeads });
       setResult(res.data);
-      toast.success(`Import complete: ${res.data.counts?.create || 0} created, ${res.data.counts?.update || 0} updated`);
+      const errCount = (res.data.errors || res.data.counts?.error) ? (res.data.errors?.length ?? res.data.counts?.error ?? 0) : 0;
+      toast.success(`Import complete: ${res.data.counts?.create || 0} created, ${res.data.counts?.update || 0} updated${errCount ? `, ${errCount} error(s)` : ''}`);
       setPreview(null); setMapping([]);
     } catch { toast.error('Import failed'); }
     setImporting(false);
@@ -346,6 +348,14 @@ export default function ImportCenter() {
                   </div>
                 )}
 
+                {/* Create-leads toggle (P2.6): opt in to generate leads for owned rows */}
+                <label className={`flex items-center gap-2 text-sm ${textSec} pt-1 cursor-pointer select-none`}>
+                  <input type="checkbox" checked={createLeads}
+                    onChange={(e) => setCreateLeads(e.target.checked)}
+                    data-testid="create-leads-toggle" className="accent-[#e94560]" />
+                  Also create a Lead for each row with an assigned owner
+                </label>
+
                 {/* Import action */}
                 <div className="flex items-center justify-between flex-wrap gap-2 pt-2">
                   <Button variant="outline" onClick={() => { setPreview(null); setMapping([]); }}
@@ -366,6 +376,20 @@ export default function ImportCenter() {
                 <p className={`text-sm ${textSec} mt-1`}>
                   {result.counts?.create ?? 0} created, {result.counts?.update ?? 0} updated, {result.counts?.error ?? 0} failed
                 </p>
+                {Array.isArray(result.warnings) && result.warnings.length > 0 && (
+                  <div className="mt-3 text-left text-xs text-yellow-400 max-h-40 overflow-auto" data-testid="import-warnings">
+                    {result.warnings.slice(0, 50).map((w, i) => (
+                      <div key={i}>Row {w.row + 1}: {w.entity}.{w.field} — {w.message} ({w.value})</div>
+                    ))}
+                  </div>
+                )}
+                {Array.isArray(result.errors) && result.errors.length > 0 && (
+                  <div className="mt-3 text-left text-xs text-red-400 max-h-40 overflow-auto" data-testid="import-errors">
+                    {result.errors.slice(0, 50).map((e, i) => (
+                      <div key={i}>Row {e.row + 1}: {e.error}</div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </div>

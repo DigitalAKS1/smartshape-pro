@@ -26,6 +26,26 @@ def normalize_header(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
+# Control keys are NOT stored as fields; they flow through the importer so
+# resolve_* can match by id and a re-upload updates in place instead of
+# duplicating. Values are the accepted normalized header forms.
+CONTROL_KEYS = {
+    "school_id":  {"school id", "schoolid"},
+    "contact_id": {"contact id", "contactid"},
+    "lead_id":    {"lead id", "leadid"},
+}
+
+
+def control_key_for(header: str):
+    """Return the control key ('school_id'|'contact_id'|'lead_id') a raw header
+    maps to, or None. Matches on the normalized header form."""
+    nh = normalize_header(header)
+    for key, aliases in CONTROL_KEYS.items():
+        if nh in aliases:
+            return key
+    return None
+
+
 # (key, label, entity, type, maps_to, group, [aliases...])
 SEED_FIELDS = [
     ("title",              "Title",                              "contact", "text",   "title",                "Contact", ["title"]),

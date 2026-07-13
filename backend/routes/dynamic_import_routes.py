@@ -25,6 +25,11 @@ from database import db
 
 router = APIRouter(tags=["dynamic-import"])
 
+# Upper bound on rows carried through preview→execute. Large enough that real
+# imports are never silently truncated (the old [:1000] slice dropped rows with
+# no warning); capped only to bound a single request's memory.
+MAX_IMPORT_ROWS = 50000
+
 
 # ---------------------------------------------------------------------------
 # Field definition CRUD
@@ -112,17 +117,19 @@ async def import_preview(
             counts["error"] += 1
             preview.append({"action": "error", "error": str(exc)})
 
+    truncated = len(keyed) > MAX_IMPORT_ROWS
     return {
         "headers": headers,
         "mapping": mapping,
         "rows_preview": preview,
-        "rows_keyed": keyed[:1000],
+        "rows_keyed": keyed[:MAX_IMPORT_ROWS],
         # rows_raw is keyed by SOURCE header so the UI can re-key any column
         # through the user's edited mapping (incl. columns that auto-mapped to
         # nothing but the user later assigns a field).
-        "rows_raw": rows[:1000],
+        "rows_raw": rows[:MAX_IMPORT_ROWS],
         "counts": counts,
         "total": len(keyed),
+        "truncated": truncated,   # true only past MAX_IMPORT_ROWS (never silent)
     }
 
 
@@ -142,10 +149,10 @@ async def import_execute(payload: dict, user: dict = Depends(get_current_user)):
     create_leads = bool(payload.get("create_leads"))
 
     # Defense-in-depth: only allow keys that are real registered field keys
-    # (plus the "school_id" control key). Drops anything a client injects that
-    # is not a known field, so it can never reach commit_row / custom_fields.
+    # (plus the id control keys). Drops anything a client injects that is not a
+    # known field, so it can never reach commit_row / custom_fields.
     allowed_keys = {f["key"] for f in await fr.list_fields(db)}
-    allowed_keys.add("school_id")
+    allowed_keys |= set(fr.CONTROL_KEYS)   # school_id / contact_id / lead_id
     rows = [{k: v for k, v in (kr or {}).items() if k in allowed_keys} for kr in rows]
 
     # Learn confirmed aliases: add normalized source header to each mapped field's aliases
@@ -157,16 +164,25 @@ async def import_execute(payload: dict, user: dict = Depends(get_current_user)):
             )
 
     counts = {"create": 0, "update": 0, "needs_review": 0, "error": 0}
-    for kr in rows:
+    errors: list = []      # {row, entity, error} — no longer swallowed to a count
+    warnings: list = []    # {row, entity, field, message} — e.g. lossy phones
+    for idx, kr in enumerate(rows):
         try:
             result = await ie.commit_row(db, kr, user, create_leads)
             counts[result["action"]] += 1
-        except Exception:
+            for w in (result.get("warnings") or []):
+                warnings.append({"row": idx, **w})
+        except Exception as exc:
             counts["error"] += 1
+            errors.append({"row": idx, "entity": "row", "error": str(exc)})
 
     log = {
         "by": user.get("email"),
         "counts": counts,
+        "errors": errors,
+        "warnings": warnings,
+        "total": len(rows),
+        "create_leads": create_leads,
         "at": datetime.now(timezone.utc).isoformat(),
     }
     insert_result = await db.import_logs.insert_one(dict(log))
@@ -190,7 +206,9 @@ async def import_template(
     """
     require_module(user, "settings", "read_write")
     fields = await fr.list_fields(db)
-    headers = (["School ID"] if with_ids else []) + [f["label"] for f in fields]
+    # id control columns first so a re-upload round-trips and upserts by id
+    id_cols = ["School ID", "Contact ID", "Lead ID"] if with_ids else []
+    headers = id_cols + [f["label"] for f in fields]
     rows = []
     if with_ids:
         async for s in db.schools.find(

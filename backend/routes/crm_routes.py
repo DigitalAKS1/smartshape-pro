@@ -814,7 +814,7 @@ async def _sales_lead_scope(email: str) -> list:
     return [{"assigned_to": email}, {"school_id": {"$in": owned}}]
 
 
-async def _resolve_owner(raw: str):
+async def resolve_owner(db, raw: str):
     """Map an owner value (an email OR a display name) to a real (email, name).
 
     Ownership everywhere is keyed by EMAIL (scoping is `assigned_to == user email`)
@@ -825,6 +825,9 @@ async def _resolve_owner(raw: str):
       • (raw, "")      when given an unknown but syntactically-valid email (keep it)
       • ("", raw)      when a name can't be matched — keep it as the display name only,
                        never as `assigned_to`, so scoping is never corrupted.
+
+    Takes the db handle explicitly so the import engine can reuse it with its own
+    (test) database; `_resolve_owner` below keeps the module-global default.
     """
     raw = (raw or "").strip()
     if not raw:
@@ -848,6 +851,11 @@ async def _resolve_owner(raw: str):
             if u and u.get("email"):
                 return u["email"], u.get("name", "") or raw
     return "", raw  # unresolved name — keep as label, do not corrupt assigned_to
+
+
+async def _resolve_owner(raw: str):
+    """Backward-compatible wrapper: resolve against the module-global db."""
+    return await resolve_owner(db, raw)
 
 
 async def _user_can_access_school(user: dict, school: dict) -> bool:
@@ -914,11 +922,13 @@ async def _assign_school_cascade(school_id: str, assigned_to: str, assigned_name
     now_iso = datetime.now(timezone.utc).isoformat()
     await db.schools.update_one(
         {"school_id": school_id},
-        {"$set": {"assigned_to": assigned_to, "assigned_name": assigned_name, "last_activity_date": now_iso}},
+        {"$set": {"assigned_to": assigned_to, "assigned_name": assigned_name,
+                  "assigned_date": now_iso, "last_activity_date": now_iso}},
     )
     cres = await db.contacts.update_many(
         {"school_id": school_id, "is_deleted": {"$ne": True}},
-        {"$set": {"assigned_to": assigned_to, "assigned_name": assigned_name}},
+        {"$set": {"assigned_to": assigned_to, "assigned_name": assigned_name,
+                  "assigned_date": now_iso}},
     )
     leads = await db.leads.find(
         {"school_id": school_id, "is_deleted": {"$ne": True}}, {"_id": 0}
@@ -936,6 +946,7 @@ async def _assign_school_cascade(school_id: str, assigned_to: str, assigned_name
         })
         await db.leads.update_one({"lead_id": lead["lead_id"]}, {"$set": {
             "assigned_to": assigned_to, "assigned_name": assigned_name,
+            "assigned_date": now_iso,
             "reassignments": history, "reassignment_count": (lead.get("reassignment_count", 0) or 0) + 1,
             "last_reassigned_at": now_iso, "last_reassigned_by": actor.get("email", ""),
             "last_reassignment_reason": "School reassigned",
