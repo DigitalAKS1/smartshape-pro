@@ -71,6 +71,12 @@ async def build_school_plan(school: dict):
         ("invoices", {"$or": inv_or}),
         # lead activity
         ("visit_plans", {"$or": [{"school_id": sid}, {"lead_id": lead_in}]}),
+        # field_visits = rep GPS check-in/out rows. Carries school_id, but reps also
+        # self-create them with only a school_name, and School-360 reads them with the
+        # same school_id-OR-school_name fallback — so mirror that fallback here (same
+        # shape as quotations/invoices above). Previously MISSING from this plan, which
+        # left a deleted school's visits orphaned instead of snapshotted + cascaded.
+        ("field_visits", {"$or": [{"school_id": sid}] + ([{"school_name": name}] if name else [])}),
         ("followups", {"lead_id": lead_in}),
         ("call_notes", {"lead_id": lead_in}),
         ("tasks", {"lead_id": lead_in}),

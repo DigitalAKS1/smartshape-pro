@@ -331,34 +331,97 @@ _CAP = 1000000
 # — every entry there filtered by a bare {"school_id": sid}. Children linked only via
 # lead_id/quotation_id/order_id (tasks, followups, call_notes, catalogue_selections,
 # order_items, payments, ...) follow their parent automatically and need no rewrite.
+# NOTE: field_visits belongs here too — sales reps write it on every GPS check-in
+# (field_routes) and it carries school_id. It was missing from BOTH this tuple and
+# cascade_delete.build_school_plan, so a merge left every field visit of the
+# duplicate pointing at a school_id that the merge then deleted (a dangling FK even
+# for perfectly clean rows). Added to both.
 _SCHOOL_ID_COLLECTIONS = (
     "leads", "contacts", "quotations", "orders", "dispatches", "invoices",
-    "visit_plans", "school_notifications", "school_requests", "teachers",
-    "fms_flows",
+    "visit_plans", "field_visits", "school_notifications", "school_requests",
+    "teachers", "fms_flows",
 )
 
-# LEGACY SHAPE: quotations/invoices may be linked to a school by school_name ONLY,
-# with NO school_id — quotation_routes stamps school_id only when the name lookup
-# resolved at save time, and cascade_delete.build_school_plan deliberately mirrors
-# this with a {"school_name": name} fallback. A merge that matched strictly on
-# school_id would leave such a row ORPHANED once the duplicate school row is
-# deleted (its name then resolves to no school at all). So for these two
-# collections we ALSO match blank/absent-school_id rows whose school_name equals
-# THAT duplicate's exact name — never a blanket name match, which would wrongly
-# capture rows already owned by a different school_id.
-_NAME_FALLBACK_COLLECTIONS = ("quotations", "invoices")
+# LEGACY SHAPE: quotations / invoices / field_visits may be linked to a school by
+# school_name ONLY, with NO school_id — quotation_routes stamps school_id only when
+# the name lookup resolved at save time, reps self-create field_visits with just a
+# name, and prod READS all three with a school_id-OR-school_name fallback
+# (crm_routes School-360, field_routes). A merge matching strictly on school_id
+# would leave such a row ORPHANED once the duplicate school row is deleted (its name
+# then resolves to no school at all).
+_NAME_FALLBACK_COLLECTIONS = ("quotations", "invoices", "field_visits")
+
+# Domain primary key per name-fallback collection (never _id — house rule).
+_DOC_ID_FIELD = {
+    "quotations": "quotation_id",
+    "invoices": "invoice_id",
+    "field_visits": "visit_id",
+}
+
+# Docs whose school_id is blank/absent — the only rows the name fallback may claim.
+_NO_SCHOOL_ID = {"$or": [{"school_id": {"$in": ["", None]}},
+                         {"school_id": {"$exists": False}}]}
 
 
-def _merge_match_query(coll: str, merge_id: str, merge_name: str) -> dict:
-    """Docs belonging to `merge_id` — by school_id, plus (quotations/invoices only)
-    the legacy school_name-only rows for that school's exact name."""
+async def _name_fallback_ids(coll: str, merge_name: str) -> list:
+    """Doc ids of legacy rows in `coll` that carry a school_name but NO school_id,
+    whose NORMALIZED name equals the merge school's normalized name.
+
+    Matching must use _norm_school_name — the SAME key the merge-candidate report
+    groups by — not raw string equality: the dirty data this importer produces
+    differs by case / double spaces / mojibake ("ST XAVIERS  HIGH SCHOOL" vs
+    "St Xaviers High School"), and an exact-match fallback silently misses exactly
+    those rows. Mongo can't normalize server-side, so we post-filter in Python.
+
+    Rows that already have a populated (different) school_id are NEVER candidates,
+    so the no-over-capture property holds.
+    """
+    target = _norm_school_name(merge_name)
+    if not target:
+        return []   # blank merge name disables the fallback entirely
+    idf = _DOC_ID_FIELD[coll]
+    rows = await db[coll].find(
+        _NO_SCHOOL_ID, {"_id": 0, idf: 1, "school_name": 1}).to_list(_CAP)
+    return [r[idf] for r in rows
+            if r.get(idf) and _norm_school_name(r.get("school_name")) == target]
+
+
+async def _merge_match_query(coll: str, merge_id: str, merge_name: str) -> dict:
+    """The query for docs belonging to `merge_id` — school_id matches, plus (for the
+    name-fallback collections) the legacy school_name-only rows resolved by
+    NORMALIZED name.
+
+    Resolve this ONCE per (merge_id, coll) and reuse it for the dry-run counts, the
+    child pre-image snapshot AND the reassignment — the three must never drift (the
+    reassignment itself changes school_id, so re-resolving afterwards would return a
+    different set)."""
+    base = {"school_id": merge_id}
     if coll not in _NAME_FALLBACK_COLLECTIONS or not merge_name:
-        return {"school_id": merge_id}
-    return {"$or": [
-        {"school_id": merge_id},
-        {"school_id": {"$in": ["", None]}, "school_name": merge_name},
-        {"school_id": {"$exists": False}, "school_name": merge_name},
-    ]}
+        return base
+    ids = await _name_fallback_ids(coll, merge_name)
+    if not ids:
+        return base
+    return {"$or": [base, {_DOC_ID_FIELD[coll]: {"$in": ids}}]}
+
+
+async def _ambiguous_name_rivals(merge_ids: list, survivor_id: str,
+                                 merge_name: str) -> list:
+    """Live schools OUTSIDE this merge that share the duplicate's normalized name.
+
+    When a chain name repeats ("DAV Public School", "Kendriya Vidyalaya"), a
+    blank-school_id legacy row matching that name could belong to any of them. The
+    ground truth is unknowable from the data, so we still move it with the merge —
+    but the operator must SEE the guess instead of it happening silently."""
+    target = _norm_school_name(merge_name)
+    if not target:
+        return []
+    others = await db.schools.find(
+        {"is_deleted": {"$ne": True}}, {"_id": 0, "school_id": 1, "school_name": 1},
+    ).to_list(_CAP)
+    excluded = set(merge_ids) | {survivor_id}
+    return [o["school_id"] for o in others
+            if o.get("school_id") not in excluded
+            and _norm_school_name(o.get("school_name")) == target]
 
 
 def _blankish(v) -> bool:
@@ -373,6 +436,36 @@ def _blankish(v) -> bool:
 _MULTI_SEP_RE = _re.compile(r"[/,;|]")
 _EXT_RE = _re.compile(r"(?i)(?:ext\.?|extn\.?|x)\s*\d")
 _E164_MAX_DIGITS = 15   # ITU E.164 hard cap — anything longer is not one number
+_DIGITS_RE = _re.compile(r"\d")
+_COMPLETE_NUMBER_DIGITS = 10   # a 10-digit run is already a whole Indian mobile
+
+
+def _has_trailing_extra_group(s: str) -> bool:
+    """True when a COMPLETE number is followed by MORE digit groups across a plain
+    space — i.e. a bare extension or a second number typed with no separator char
+    and no 'ext' keyword ("9876543210 105", "9876543210 9123456789").
+
+    Discriminator: walk the whitespace-separated digit groups accumulating digits.
+    If the digits seen so far already form a complete number (>=10) while groups
+    still REMAIN, the tail is extra — normalizing would glue it on and fabricate a
+    wrong number.
+
+    A normally-grouped single number never trips this, because no PROPER PREFIX of
+    its groups reaches 10 digits:
+        "+91 98765 43210" -> 2, 7, 12   (10 only reached at the LAST group) -> ok
+        "0120 421 3000"   -> 4, 7, 11   (ditto)                             -> ok
+        "(0120) 421-3000" -> 4, 11                                          -> ok
+    but "9876543210 105"  -> 10 with a group still to come                  -> flag.
+    """
+    groups = [t for t in s.split() if _DIGITS_RE.search(t)]
+    if len(groups) < 2:
+        return False
+    seen = 0
+    for i, g in enumerate(groups):
+        seen += len(_re.sub(r"\D", "", g))
+        if seen >= _COMPLETE_NUMBER_DIGITS and i < len(groups) - 1:
+            return True
+    return False
 
 
 def _phone_category(raw) -> str:
@@ -382,9 +475,11 @@ def _phone_category(raw) -> str:
     - 'lossy'        : scientific-notation (e.g. "9.17709E+11") — digits already
                        gone, UNRECOVERABLE; flag, never normalize.
     - 'needs_review' : normalizing would FABRICATE a number — a multi-value cell
-                       ("a / b"), an embedded extension ("... ext 105"), or a digit
-                       run longer than E.164 allows. Human must split/verify it, so
-                       we flag it and leave `phone` untouched (same policy as lossy).
+                       ("a / b"), an embedded extension ("... ext 105"), a BARE
+                       extension / second number after a plain space
+                       ("9876543210 105"), or a digit run longer than E.164 allows.
+                       Human must split/verify it, so we flag it and leave `phone`
+                       untouched (same policy as lossy).
     - 'clean'        : already equals its normalized form.
     - 'recoverable'  : a SINGLE number that normalizing merely tidies (trailing
                        '.0', spaces, dashes, parens, +91, or a numeric/float value).
@@ -398,15 +493,15 @@ def _phone_category(raw) -> str:
 
     if isinstance(raw, str):
         s = raw.strip()
-        if _MULTI_SEP_RE.search(s) or _EXT_RE.search(s):
+        if (_MULTI_SEP_RE.search(s) or _EXT_RE.search(s)
+                or _has_trailing_extra_group(s)):
             return "needs_review"
 
     norm = normalize_phone(raw)
     if not norm:
         return "empty"
     if len(norm.lstrip("+")) > _E164_MAX_DIGITS:
-        # e.g. two numbers space-joined — no separator to catch, but the length
-        # proves it isn't a single dialable number.
+        # Belt-and-braces: any run past the E.164 cap cannot be one dialable number.
         return "needs_review"
     if isinstance(raw, str) and raw.strip() == norm:
         return "clean"
@@ -890,13 +985,26 @@ async def duplicate_schools(request: Request):
     return {"groups": out, "group_count": len(out)}
 
 
-async def _move_children_counts(merge_id: str, merge_name: str = "") -> dict:
+async def _resolve_merge_queries(merge_ids: list, merge_names: dict) -> dict:
+    """{(merge_id, coll): query} resolved ONCE, up-front, for every merge school.
+
+    Single source of truth for the dry-run counts, the child pre-image snapshot and
+    the reassignment, so those three can never disagree about which rows move."""
+    queries = {}
+    for mid in merge_ids:
+        mname = merge_names.get(mid, "")
+        for coll in _SCHOOL_ID_COLLECTIONS:
+            queries[(mid, coll)] = await _merge_match_query(coll, mid, mname)
+    return queries
+
+
+async def _move_children_counts(merge_id: str, queries: dict) -> dict:
     """Per-collection count of the docs a merge would move — school_id matches PLUS
-    the legacy school_name-only quotations/invoices, so the dry-run preview is honest
-    (an owner must never see "0 quotations" and then silently orphan one)."""
+    the legacy school_name-only rows, so the dry-run preview is honest (an owner must
+    never see "0 quotations" and then silently orphan one)."""
     counts = {}
     for coll in _SCHOOL_ID_COLLECTIONS:
-        n = await db[coll].count_documents(_merge_match_query(coll, merge_id, merge_name))
+        n = await db[coll].count_documents(queries[(merge_id, coll)])
         if n:
             counts[coll] = n
     return counts
@@ -968,14 +1076,50 @@ async def merge_schools(request: Request):
 
     merge_names = {d["school_id"]: (d.get("school_name") or "").strip() for d in merge_docs}
 
+    # Resolve WHICH rows move exactly once — reused verbatim for the counts below,
+    # the child pre-image snapshot and the reassignment, so they cannot drift.
+    queries = await _resolve_merge_queries(merge_ids, merge_names)
+
     # Per-merge move counts + aggregate (includes the school_name-only legacy rows).
     per_merge = {}
     moved_total = {}
     for mid in merge_ids:
-        counts = await _move_children_counts(mid, merge_names.get(mid, ""))
+        counts = await _move_children_counts(mid, queries)
         per_merge[mid] = counts
         for coll, n in counts.items():
             moved_total[coll] = moved_total.get(coll, 0) + n
+
+    # AMBIGUITY (finding D): a name-fallback row claimed for a duplicate whose
+    # normalized name is ALSO borne by a live school outside this merge could just
+    # as well belong to that school. We still move it (the truth isn't in the data),
+    # but the operator must see the guess rather than have it made silently.
+    ambiguous_rows = 0
+    ambiguous_samples = []
+    rivals_by_merge = {}
+    for mid in merge_ids:
+        rivals = await _ambiguous_name_rivals(merge_ids, survivor_id, merge_names.get(mid, ""))
+        if not rivals:
+            continue
+        rivals_by_merge[mid] = rivals
+        for coll in _NAME_FALLBACK_COLLECTIONS:
+            fb_ids = await _name_fallback_ids(coll, merge_names.get(mid, ""))
+            ambiguous_rows += len(fb_ids)
+            for doc_id in fb_ids[:5]:
+                ambiguous_samples.append({
+                    "collection": coll,
+                    "doc_id": doc_id,
+                    "school_name": merge_names.get(mid, ""),
+                    "claimed_for": mid,
+                    "also_matches_schools": rivals,
+                })
+    ambiguity = {
+        "count": ambiguous_rows,
+        "samples": ambiguous_samples[:20],
+        "rival_schools": rivals_by_merge,
+        "note": ("These rows have NO school_id and their name also matches a live "
+                 "school outside this merge — they will be attributed to the survivor. "
+                 "Verify before confirming."),
+    } if ambiguous_rows else {"count": 0, "samples": [], "rival_schools": {}}
 
     # Survivor's resulting headline totals (current + everything moving in).
     survivor_now = await _school_child_counts(survivor_id)
@@ -992,6 +1136,7 @@ async def merge_schools(request: Request):
         "moved": moved_total,
         "survivor_children_before": survivor_now,
         "survivor_children_after": survivor_after,
+        "ambiguous_name_fallback_rows": ambiguity,
     }
     if dry_run:
         return result
@@ -1012,11 +1157,8 @@ async def merge_schools(request: Request):
     #    its ORIGINAL school_id/school_name. Without this an incorrect merge is
     #    irreversible: the school shell restores, but nothing records where each
     #    child came from. Uses the SAME queries as the reassignment below.
-    child_plan = []
-    for mid in merge_ids:
-        mname = merge_names.get(mid, "")
-        for coll in _SCHOOL_ID_COLLECTIONS:
-            child_plan.append((coll, _merge_match_query(coll, mid, mname)))
+    child_plan = [(coll, queries[(mid, coll)])
+                  for mid in merge_ids for coll in _SCHOOL_ID_COLLECTIONS]
     child_pre = await snapshot_only(
         child_plan, root_type="school_merge_children", root_id=survivor_id,
         root_label=f"pre-merge school_id of children moving into {survivor_id}",
@@ -1024,20 +1166,18 @@ async def merge_schools(request: Request):
     result["child_preimage_backup_id"] = child_pre["backup_id"]
     result["child_preimage_counts"] = child_pre["counts"]
 
-    # 3. Reassign every child to the survivor. Per merge school (the school_name
-    #    fallback is name-specific). For quotations/invoices also rewrite school_name
-    #    to the survivor's, so a legacy name-linked row ends up correctly linked
-    #    instead of pointing at a name that no longer resolves to any school.
+    # 3. Reassign every child to the survivor, using the SAME pre-resolved queries.
+    #    For the name-fallback collections also rewrite school_name to the survivor's,
+    #    so a legacy name-linked row ends up correctly linked instead of pointing at a
+    #    name that no longer resolves to any school.
     survivor_name = (survivor.get("school_name") or "").strip()
     applied_moves = {}
     for mid in merge_ids:
-        mname = merge_names.get(mid, "")
         for coll in _SCHOOL_ID_COLLECTIONS:
             set_doc = {"school_id": survivor_id}
             if coll in _NAME_FALLBACK_COLLECTIONS and survivor_name:
                 set_doc["school_name"] = survivor_name
-            r = await db[coll].update_many(
-                _merge_match_query(coll, mid, mname), {"$set": set_doc})
+            r = await db[coll].update_many(queries[(mid, coll)], {"$set": set_doc})
             n = getattr(r, "modified_count", 0) or 0
             if n:
                 applied_moves[coll] = applied_moves.get(coll, 0) + n
