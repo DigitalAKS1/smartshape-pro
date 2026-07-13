@@ -35,6 +35,7 @@ import FilterRail from '../../components/crm/FilterRail';
 import SearchFacetSuggestions from '../../components/crm/SearchFacetSuggestions';
 import DataCleanupPanel from '../../components/crm/DataCleanupPanel';
 import BulkDeleteSchoolsDialog from '../../components/crm/BulkDeleteSchoolsDialog';
+import AssignToPicker from '../../components/crm/AssignToPicker';
 import { useIsOwner } from '../../hooks/usePermission';
 import { deriveFilterOptions, buildCrmContext, matchesCrmFilter, hasActiveFilters } from '../../lib/crmFilter';
 import { describeParsedFilter } from '../../lib/crmMasterFilter';
@@ -126,16 +127,16 @@ export default function LeadsCRM() {
   const toggleSchoolSelect = (id) => setSelectedSchoolIds(prev => {
     const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n;
   });
-  const bulkAssignSchools = async (email, e) => {
-    if (e) e.target.value = '';
+  const [bulkAssignPick, setBulkAssignPick] = React.useState({ email: '', name: '' });
+  const bulkAssignSchools = async (email, name) => {
+    setBulkAssignPick({ email: '', name: '' }); // AssignToPicker resets itself after each pick, same as the old native <select>
     if (!email || selectedSchoolIds.size === 0) return;
-    const sp = crm.spList.find(s => s.email === email);
-    const name = sp?.name || '';
-    if (!window.confirm(`Assign ${selectedSchoolIds.size} school(s) to ${name}?\n\nThis moves ALL their leads & contacts to ${name}.`)) return;
+    const label = name || 'this owner';
+    if (!window.confirm(`Assign ${selectedSchoolIds.size} school(s) to ${label}?\n\nThis moves ALL their leads & contacts to ${label}.`)) return;
     try {
       const r = await schoolsApiObj.bulkAssign({ school_ids: Array.from(selectedSchoolIds), assigned_to: email, assigned_name: name });
       const c = r.data?.cascaded || {};
-      toast.success(`${c.schools ?? 0} school(s) → ${name} — moved ${c.leads ?? 0} leads, ${c.contacts ?? 0} contacts`);
+      toast.success(`${c.schools ?? 0} school(s) → ${label} — moved ${c.leads ?? 0} leads, ${c.contacts ?? 0} contacts`);
       setSelectedSchoolIds(new Set());
       crm.fetchData();
     } catch (err) { toast.error(err?.response?.data?.detail || 'Bulk assign failed'); }
@@ -755,12 +756,14 @@ export default function LeadsCRM() {
               {crm.user?.role === 'admin' && selectedSchoolIds.size > 0 && (
                 <div className={`${card} border rounded-md p-2.5 flex items-center gap-2 flex-wrap`} data-testid="school-bulk-bar">
                   <span className={`text-xs font-medium ${textPri}`}>{selectedSchoolIds.size} school(s) selected</span>
-                  <select defaultValue="" onChange={e => bulkAssignSchools(e.target.value, e)}
-                    className={`h-8 px-2 rounded text-xs bg-[var(--bg-primary)] border border-[var(--border-color)] ${textPri}`}
-                    data-testid="school-bulk-assign-select">
-                    <option value="">Assign owner to…</option>
-                    {crm.spList.map(sp => <option key={sp.email} value={sp.email}>{sp.name}</option>)}
-                  </select>
+                  <AssignToPicker
+                    value={bulkAssignPick.email}
+                    valueName={bulkAssignPick.name}
+                    users={crm.spList}
+                    onChange={(email, name) => { setBulkAssignPick({ email, name }); if (email) bulkAssignSchools(email, name); }}
+                    placeholder="Assign owner to…"
+                    className="w-48"
+                  />
                   <Button size="sm" variant="outline" onClick={() => setSelectedSchoolIds(new Set())} className={`border-[var(--border-color)] ${textSec} h-8`}>Clear</Button>
                   {/* Superadmin-only (O20): guarded bulk delete of the current selection,
                       same dry-run-preview -> confirm -> delete flow as Data Cleanup. */}

@@ -8,6 +8,7 @@ import useSchoolTypes from '../../hooks/useSchoolTypes';
 import { tags as tagsApi } from '../../lib/api';
 import InterestedProductField from './InterestedProductField';
 import AddressFields from './AddressFields';
+import AssignToPicker from './AssignToPicker';
 
 export default function LeadFormDialog({
   open, onOpenChange,
@@ -147,9 +148,12 @@ export default function LeadFormDialog({
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <Label className={`${textSec} text-xs`}>Assign To *</Label>
-              <select value={leadForm.assigned_to} onChange={e => setLeadForm({...leadForm, assigned_to: e.target.value})} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`}>
-                <option value="">Select</option>{spList.map(sp => <option key={sp.email} value={sp.email}>{sp.name}</option>)}
-              </select>
+              <AssignToPicker
+                value={leadForm.assigned_to}
+                valueName={leadForm.assigned_name}
+                users={spList}
+                onChange={(email, name) => setLeadForm({ ...leadForm, assigned_to: email, assigned_name: name })}
+              />
             </div>
             <div><Label className={`${textSec} text-xs`}>Next Follow-up</Label><Input type="date" value={leadForm.next_followup_date} onChange={e => setLeadForm({...leadForm, next_followup_date: e.target.value})} className={inputCls} /></div>
           </div>

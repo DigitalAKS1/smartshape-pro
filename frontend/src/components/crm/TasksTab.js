@@ -6,6 +6,7 @@ import { Label } from '../ui/label';
 import { useTheme } from '../../contexts/ThemeContext';
 import { AlertTriangle, CheckCircle } from 'lucide-react';
 import EmptyState, { EMPTY_STATES } from '../ui/EmptyState';
+import AssignToPicker from './AssignToPicker';
 
 export default function TasksTab({
   tasksList,
@@ -70,9 +71,12 @@ export default function TasksTab({
               </div>
               <div>
                 <Label className={`${textSec} text-xs`}>Assign To</Label>
-                <select value={taskForm.assigned_to} onChange={e => { const sp = spList.find(s => s.email === e.target.value); setTaskForm({...taskForm, assigned_to: e.target.value, assigned_name: sp?.name || ''}); }} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`}>
-                  <option value="">Select</option>{spList.map(sp => <option key={sp.email} value={sp.email}>{sp.name}</option>)}
-                </select>
+                <AssignToPicker
+                  value={taskForm.assigned_to}
+                  valueName={taskForm.assigned_name}
+                  users={spList}
+                  onChange={(email, name) => setTaskForm({ ...taskForm, assigned_to: email, assigned_name: name })}
+                />
               </div>
             </div>
             {taskForm.lead_name && <p className={`text-xs ${textMuted}`}>Lead: {taskForm.lead_name}</p>}

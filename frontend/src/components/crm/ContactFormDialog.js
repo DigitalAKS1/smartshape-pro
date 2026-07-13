@@ -15,6 +15,7 @@ import {
 import InterestedProductField from './InterestedProductField';
 import AddressFields from './AddressFields';
 import OwnerDeleteButton from '../common/OwnerDeleteButton';
+import AssignToPicker from './AssignToPicker';
 
 export default function ContactFormDialog({
   // Contact create/edit dialog
@@ -148,10 +149,13 @@ export default function ContactFormDialog({
               </div>
               <div>
                 <Label className={`${textSec} text-xs`}>Assigned To</Label>
-                <select value={contactForm.assigned_to || ''} onChange={e => setContactForm({...contactForm, assigned_to: e.target.value})} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`}>
-                  <option value="">Unassigned</option>
-                  {spList.map(sp => <option key={sp.email} value={sp.email}>{sp.name}</option>)}
-                </select>
+                <AssignToPicker
+                  value={contactForm.assigned_to || ''}
+                  valueName={contactForm.assigned_name || ''}
+                  users={spList}
+                  onChange={(email, name) => setContactForm({ ...contactForm, assigned_to: email, assigned_name: name })}
+                  placeholder="Unassigned — type a name or email…"
+                />
               </div>
             </div>
 
@@ -260,10 +264,13 @@ export default function ContactFormDialog({
 
               <div>
                 <Label className={`${textSec} text-xs`}>Assign To</Label>
-                <select value={convertForm.assigned_to} onChange={e => setConvertForm({...convertForm, assigned_to: e.target.value})} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`} data-testid="convert-assign-to">
-                  <option value={user?.email}>{user?.name} (Me)</option>
-                  {spList.filter(s => s.email !== user?.email).map(sp => <option key={sp.email} value={sp.email}>{sp.name}</option>)}
-                </select>
+                <AssignToPicker
+                  value={convertForm.assigned_to}
+                  valueName={convertForm.assigned_name || (convertForm.assigned_to === user?.email ? user?.name : '')}
+                  users={spList}
+                  onChange={(email, name) => setConvertForm({ ...convertForm, assigned_to: email, assigned_name: name })}
+                  placeholder={`${user?.name || 'Me'} — type a name or email…`}
+                />
               </div>
             </div>
           )}

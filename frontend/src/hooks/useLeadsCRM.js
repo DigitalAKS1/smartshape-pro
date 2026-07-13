@@ -91,7 +91,7 @@ export default function useLeadsCRM() {
     contact_phone: '', contact_email: '', source: '', source_id: '',
     lead_type: 'warm', interested_product: '', priority: 'medium',
     next_followup_date: '', likely_closure_date: '', assignment_type: 'manual',
-    assigned_to: '', notes: '', expected_value: '', tags: [], referred_by_contact_id: '', referral_reward_status: 'none',
+    assigned_to: '', assigned_name: '', notes: '', expected_value: '', tags: [], referred_by_contact_id: '', referral_reward_status: 'none',
   });
   const [newSchool, setNewSchool] = useState({ school_name: '', school_type: 'CBSE', phone: '', email: '', city: '', state: '', pincode: '', school_strength: 0 });
 
@@ -102,7 +102,7 @@ export default function useLeadsCRM() {
 
   // ── Task dialog ───────────────────────────────────────────────────────────────
   const [taskDialogOpen, setTaskDialogOpen] = useState(false);
-  const [taskForm, setTaskForm] = useState({ title: '', type: 'follow_up', lead_id: '', lead_name: '', assigned_to: '', due_date: '', due_time: '', priority: 'medium' });
+  const [taskForm, setTaskForm] = useState({ title: '', type: 'follow_up', lead_id: '', lead_name: '', assigned_to: '', assigned_name: '', due_date: '', due_time: '', priority: 'medium' });
 
   // ── Contact state ─────────────────────────────────────────────────────────────
   const [contactDialogOpen, setContactDialogOpen] = useState(false);
@@ -204,7 +204,7 @@ export default function useLeadsCRM() {
   const openCreateLead = () => {
     setEditLead(null);
     setAddNewSchool(false);
-    setLeadForm({ school_id: '', contact_id: '', contact_name: '', designation: '', contact_role_id: '', contact_phone: '', contact_email: '', source: '', source_id: '', lead_type: 'warm', interested_product: '', priority: 'medium', next_followup_date: '', likely_closure_date: '', assignment_type: 'manual', assigned_to: '', notes: '', expected_value: '', tags: [], referred_by_contact_id: '', referral_reward_status: 'none' });
+    setLeadForm({ school_id: '', contact_id: '', contact_name: '', designation: '', contact_role_id: '', contact_phone: '', contact_email: '', source: '', source_id: '', lead_type: 'warm', interested_product: '', priority: 'medium', next_followup_date: '', likely_closure_date: '', assignment_type: 'manual', assigned_to: '', assigned_name: '', notes: '', expected_value: '', tags: [], referred_by_contact_id: '', referral_reward_status: 'none' });
     setNewTagInput('');
     setNewSchool({ school_name: '', school_type: 'CBSE', phone: '', email: '', city: '', state: '', pincode: '', school_strength: 0 });
     setLeadDialogOpen(true);
@@ -252,8 +252,14 @@ export default function useLeadsCRM() {
         const sch = schoolsList.find(s => s.school_id === leadForm.school_id);
         if (sch) payload.company_name = sch.school_name;
       }
-      const sp = spList.find(s => s.email === leadForm.assigned_to);
-      if (sp) payload.assigned_name = sp.name;
+      // AssignToPicker already keeps leadForm.assigned_name in sync with
+      // assigned_to (incl. a free-typed email with a blank name); this is only
+      // a defensive backfill for any older/other code path that set assigned_to
+      // without a name.
+      if (!payload.assigned_name && payload.assigned_to) {
+        const sp = spList.find(s => s.email === payload.assigned_to);
+        if (sp) payload.assigned_name = sp.name;
+      }
       if (editLead) {
         await leadsApi.update(editLead.lead_id, payload);
         toast.success('Lead updated');
@@ -455,14 +461,17 @@ export default function useLeadsCRM() {
   // TASK HANDLERS
   // ─────────────────────────────────────────────────────────────────────────────
   const openCreateTask = (lead) => {
-    setTaskForm({ title: '', type: 'follow_up', lead_id: lead?.lead_id || '', lead_name: lead?.company_name || '', assigned_to: lead?.assigned_to || '', due_date: '', due_time: '', priority: 'medium' });
+    setTaskForm({ title: '', type: 'follow_up', lead_id: lead?.lead_id || '', lead_name: lead?.company_name || '', assigned_to: lead?.assigned_to || '', assigned_name: lead?.assigned_name || '', due_date: '', due_time: '', priority: 'medium' });
     setTaskDialogOpen(true);
   };
 
   const saveTask = async () => {
     if (!taskForm.title || !taskForm.due_date) { toast.error('Title and due date required'); return; }
-    const sp = spList.find(s => s.email === taskForm.assigned_to);
-    await tasksApi.create({ ...taskForm, assigned_name: sp?.name || '' });
+    // AssignToPicker already keeps taskForm.assigned_name in sync with
+    // assigned_to (incl. a free-typed email with a blank name); this is only
+    // a defensive backfill.
+    const assignedName = taskForm.assigned_name || spList.find(s => s.email === taskForm.assigned_to)?.name || '';
+    await tasksApi.create({ ...taskForm, assigned_name: assignedName });
     setTaskDialogOpen(false); fetchData(); toast.success('Task created');
   };
 
@@ -473,13 +482,13 @@ export default function useLeadsCRM() {
   // ─────────────────────────────────────────────────────────────────────────────
   const openCreateContact = () => {
     setEditContact(null);
-    setContactForm({ name: '', phone: '', email: '', school_id: '', company: '', designation: '', contact_role_id: '', source: '', source_id: '', notes: '', birthday: '', tag_ids: [], assigned_to: user?.email || '' });
+    setContactForm({ name: '', phone: '', email: '', school_id: '', company: '', designation: '', contact_role_id: '', source: '', source_id: '', notes: '', birthday: '', tag_ids: [], assigned_to: user?.email || '', assigned_name: user?.name || '' });
     setContactDialogOpen(true);
   };
 
   const openEditContact = (c) => {
     setEditContact(c);
-    setContactForm({ name: c.name, phone: c.phone, email: c.email || '', school_id: c.school_id || '', company: c.company || '', designation: c.designation || '', contact_role_id: c.contact_role_id || '', source: c.source || '', source_id: c.source_id || '', notes: c.notes || '', birthday: c.birthday || '', tag_ids: c.tag_ids || [], assigned_to: c.assigned_to || '' });
+    setContactForm({ name: c.name, phone: c.phone, email: c.email || '', school_id: c.school_id || '', company: c.company || '', designation: c.designation || '', contact_role_id: c.contact_role_id || '', source: c.source || '', source_id: c.source_id || '', notes: c.notes || '', birthday: c.birthday || '', tag_ids: c.tag_ids || [], assigned_to: c.assigned_to || '', assigned_name: c.assigned_name || '' });
     setContactDialogOpen(true);
   };
 
@@ -526,7 +535,7 @@ export default function useLeadsCRM() {
 
   const openConvert = (c) => {
     setConvertContact(c);
-    setConvertForm({ school_id: '', lead_type: 'warm', priority: 'medium', interested_product: '', assigned_to: user?.email || '' });
+    setConvertForm({ school_id: '', lead_type: 'warm', priority: 'medium', interested_product: '', assigned_to: user?.email || '', assigned_name: user?.name || '' });
     setConvertAddNewSchool(false);
     setConvertNewSchool({ school_name: '', school_type: 'CBSE', city: '', state: '', pincode: '', phone: '', school_strength: 0 });
     setConvertDialogOpen(true);
@@ -536,8 +545,14 @@ export default function useLeadsCRM() {
     if (submitBusyRef.current) return;
     submitBusyRef.current = true;
     try {
-      const sp = spList.find(s => s.email === convertForm.assigned_to);
-      const payload = { ...convertForm, assigned_name: sp?.name || user?.name || '' };
+      // AssignToPicker keeps convertForm.assigned_name in sync with assigned_to
+      // (incl. a free-typed email with a blank name); these are only a
+      // defensive backfill for the "still defaulted to me" / spList cases.
+      const assignedName = convertForm.assigned_name
+        || (convertForm.assigned_to === user?.email ? user?.name : '')
+        || spList.find(s => s.email === convertForm.assigned_to)?.name
+        || '';
+      const payload = { ...convertForm, assigned_name: assignedName };
       if (convertAddNewSchool && convertNewSchool.school_name) {
         payload.new_school = convertNewSchool;
         payload.school_id = '';

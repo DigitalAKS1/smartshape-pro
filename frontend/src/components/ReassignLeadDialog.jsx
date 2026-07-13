@@ -6,6 +6,7 @@ import { Label } from './ui/label';
 import { leads as leadsApi, salesPersons as spApi } from '../lib/api';
 import { toast } from 'sonner';
 import { UserCog, AlertTriangle } from 'lucide-react';
+import AssignToPicker from './crm/AssignToPicker';
 
 /**
  * Props:
@@ -17,6 +18,7 @@ import { UserCog, AlertTriangle } from 'lucide-react';
 export default function ReassignLeadDialog({ open, onOpenChange, lead, leadIds, onSuccess }) {
   const [spList, setSpList] = useState([]);
   const [agentEmail, setAgentEmail] = useState('');
+  const [agentName, setAgentName] = useState('');
   const [reason, setReason] = useState('');
   const [saving, setSaving] = useState(false);
 
@@ -26,21 +28,23 @@ export default function ReassignLeadDialog({ open, onOpenChange, lead, leadIds, 
 
   useEffect(() => {
     if (!open) return;
-    setAgentEmail(''); setReason('');
+    setAgentEmail(''); setAgentName(''); setReason('');
     spApi.getAll().then((r) => setSpList(r.data || [])).catch(() => setSpList([]));
   }, [open]);
 
   const handleSubmit = async () => {
     if (!agentEmail) { toast.error('Please select an agent'); return; }
     if (!reason.trim()) { toast.error('Reason is mandatory'); return; }
-    const sp = spList.find((s) => s.email === agentEmail);
+    // AssignToPicker keeps agentName in sync with agentEmail (incl. a
+    // free-typed email with a blank name); this is only a defensive backfill.
+    const agentNameToSend = agentName || spList.find((s) => s.email === agentEmail)?.name || '';
     setSaving(true);
     try {
       if (isBulk) {
-        const res = await leadsApi.bulkAssign({ lead_ids: leadIds, new_agent_email: agentEmail, new_agent_name: sp?.name || '', reason });
+        const res = await leadsApi.bulkAssign({ lead_ids: leadIds, new_agent_email: agentEmail, new_agent_name: agentNameToSend, reason });
         toast.success(`${res.data.assigned} lead(s) reassigned`);
       } else {
-        await leadsApi.reassign({ lead_id: lead.lead_id, new_agent_email: agentEmail, new_agent_name: sp?.name || '', reason });
+        await leadsApi.reassign({ lead_id: lead.lead_id, new_agent_email: agentEmail, new_agent_name: agentNameToSend, reason });
         toast.success('Lead reassigned');
       }
       onOpenChange(false);
@@ -74,15 +78,13 @@ export default function ReassignLeadDialog({ open, onOpenChange, lead, leadIds, 
           )}
           <div>
             <Label className="text-[var(--text-secondary)] text-xs">New Agent *</Label>
-            <select
+            <AssignToPicker
               value={agentEmail}
-              onChange={(e) => setAgentEmail(e.target.value)}
-              className="w-full h-10 px-3 bg-[var(--bg-primary)] border border-[var(--border-color)] text-[var(--text-primary)] rounded-md text-sm"
-              data-testid="reassign-agent-select"
-            >
-              <option value="">Select agent</option>
-              {spList.map((sp) => <option key={sp.email} value={sp.email}>{sp.name}</option>)}
-            </select>
+              valueName={agentName}
+              users={spList}
+              onChange={(email, name) => { setAgentEmail(email); setAgentName(name); }}
+              placeholder="Type a name or email…"
+            />
           </div>
           <div>
             <Label className="text-[var(--text-secondary)] text-xs">Reason * (mandatory)</Label>
