@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { STAGES, SCHOOL_TYPES } from '../lib/crmConstants';
 import { deriveFilterOptions } from '../lib/crmFilter';
-import { buildMasterContexts, computeMasterFiltered, makeCountFor, tabKind } from '../lib/crmMasterFilter';
+import { buildMasterContexts, computeMasterFiltered, makeCountFor, tabKind, parseSearchQuery, mergeFilters } from '../lib/crmMasterFilter';
 import {
   schools as schoolsApi,
   leads as leadsApi,
@@ -711,9 +711,18 @@ export default function useLeadsCRM() {
     schoolsList, leadsList, contactsList, rolesList,
   }), [schoolsList, leadsList, contactsList, rolesList]);
 
+  // O21 — Gmail-style search: `owner:parul city:rohini hot` parses into real
+  // facet ids + residual free text. The parsed operators are merged with the
+  // rail's own `masterFilter` ONLY for matching/counting (read-time) — the
+  // rail's clickable checkbox state is never mutated by typing, so removing a
+  // word from the search box can't accidentally un-toggle a rail selection
+  // (and vice versa). `effectiveFilter` is what every match/count actually uses.
+  const parsedQuery = useMemo(() => parseSearchQuery(searchTerm, filterOptions), [searchTerm, filterOptions]);
+  const effectiveFilter = useMemo(() => mergeFilters(masterFilter, parsedQuery.filter), [masterFilter, parsedQuery.filter]);
+
   const masterFiltered = useMemo(() => computeMasterFiltered({
-    schoolsList, contactsList, leadsList, contexts: masterContexts, searchTerm, masterFilter,
-  }), [schoolsList, contactsList, leadsList, masterContexts, searchTerm, masterFilter]);
+    schoolsList, contactsList, leadsList, contexts: masterContexts, searchTerm: parsedQuery.text, masterFilter: effectiveFilter,
+  }), [schoolsList, contactsList, leadsList, masterContexts, parsedQuery.text, effectiveFilter]);
 
   // Live "if this facet value were added, how many rows remain" for the
   // *current tab's* entity type — feeds FilterRail's per-option counts and the
@@ -721,8 +730,8 @@ export default function useLeadsCRM() {
   const activeTabKind = tabKind(activeTab);
   const activeTabList = activeTabKind === 'school' ? schoolsList : activeTabKind === 'contact' ? contactsList : leadsList;
   const masterCountFor = useMemo(() => makeCountFor({
-    kind: activeTabKind, list: activeTabList, ctx: masterContexts[activeTabKind], searchTerm, masterFilter,
-  }), [activeTabKind, activeTabList, masterContexts, searchTerm, masterFilter]);
+    kind: activeTabKind, list: activeTabList, ctx: masterContexts[activeTabKind], searchTerm: parsedQuery.text, masterFilter: effectiveFilter,
+  }), [activeTabKind, activeTabList, masterContexts, parsedQuery.text, effectiveFilter]);
 
   // Filtered leads (for list / pipeline / kanban / table views) — starts from
   // the master-filtered lead pool, then layers the existing per-tab detail
@@ -752,6 +761,7 @@ export default function useLeadsCRM() {
     filterRole, setFilterRole,
     filterContactTag, setFilterContactTag,
     masterFilter, setMasterFilter, masterFiltered, filterOptions, masterCountFor, activeTabKind,
+    parsedQuery, effectiveFilter,
     sortConfig, toggleSort, sortIndicator, sortData,
     contactPage, setContactPage, contactsPerPage,
     leadView, setLeadView,

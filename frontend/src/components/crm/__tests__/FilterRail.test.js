@@ -94,3 +94,44 @@ test('Clear all only appears once a filter is active, and resets it', () => {
   expect(onChange).toHaveBeenCalledWith({});
   unmount();
 });
+
+// ── Phase 3: Dates section (Import Date / Assigned Date range) ─────────────────
+
+test('Dates section renders native date inputs and picking a from-date sets import_date_from', () => {
+  const onChange = jest.fn();
+  const { container, unmount } = mount(
+    <FilterRail options={options} value={{}} onChange={onChange} countFor={() => 1} />
+  );
+  act(() => container.querySelector('[data-testid="facet-toggle-dates"]').click());
+  const fromInput = container.querySelector('[data-testid="date-import-from"]');
+  expect(fromInput.getAttribute('type')).toBe('date');
+  act(() => setInputValue(fromInput, '2026-07-01'));
+  expect(onChange).toHaveBeenCalledWith({ import_date_from: '2026-07-01' });
+  unmount();
+});
+
+test('Assigned Date range writes assigned_date_from/to independently of import_date', () => {
+  const onChange = jest.fn();
+  const { container, unmount } = mount(
+    <FilterRail options={options} value={{ import_date_from: '2026-07-01' }} onChange={onChange} countFor={() => 1} />
+  );
+  act(() => container.querySelector('[data-testid="facet-toggle-dates"]').click());
+  const toInput = container.querySelector('[data-testid="date-assigned-to"]');
+  act(() => setInputValue(toInput, '2026-07-31'));
+  expect(onChange).toHaveBeenCalledWith({ import_date_from: '2026-07-01', assigned_date_to: '2026-07-31' });
+  unmount();
+});
+
+test('an active date range shows a removable header chip and counts toward Clear all', () => {
+  const onChange = jest.fn();
+  const { container, unmount } = mount(
+    <FilterRail options={options} value={{ import_date_from: '2026-07-01', import_date_to: '2026-07-10' }} onChange={onChange} countFor={() => 1} />
+  );
+  const chip = Array.from(container.querySelectorAll('span')).find((s) => s.textContent.includes('Import Date: 2026-07-01 → 2026-07-10'));
+  expect(chip).toBeTruthy();
+  expect(container.querySelector('[data-testid="filter-rail-clear-all"]')).toBeTruthy();
+  const removeBtn = chip.querySelector('button');
+  act(() => removeBtn.click());
+  expect(onChange).toHaveBeenCalledWith({});
+  unmount();
+});

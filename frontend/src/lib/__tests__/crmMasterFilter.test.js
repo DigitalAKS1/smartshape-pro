@@ -1,6 +1,8 @@
 import {
   matchesGlobalSearch, buildMasterContexts, computeMasterFiltered, makeCountFor, tabKind,
+  parseSearchQuery, mergeFilters, describeParsedFilter,
 } from '../crmMasterFilter';
+import { UNASSIGNED } from '../crmFilter';
 
 const schools = [
   { school_id: 's_roh', school_name: 'Rohini Public School', city: 'Rohini', school_type: 'CBSE' },
@@ -92,5 +94,121 @@ describe('tabKind', () => {
     expect(tabKind('pipeline')).toBe('lead');
     expect(tabKind('tasks')).toBe('lead');
     expect(tabKind('reports')).toBe('lead');
+  });
+});
+
+// ── O21: Gmail-style search query language ──────────────────────────────────
+
+const qOptions = {
+  owners: [{ id: 'parul@ss.in', name: 'Parul Kanchan' }, { id: 'amit@ss.in', name: 'Amit' }],
+  cities: ['Rohini', 'New Delhi'],
+  sources: ['Referral', 'Website'],
+  school_types: ['CBSE', 'ICSE'],
+  stages: [{ id: 'demo', label: 'Demo' }, { id: 'won', label: 'Won' }],
+  tags: [{ id: 't_hot', name: 'Hot Lead', color: '#f00' }],
+};
+
+describe('parseSearchQuery', () => {
+  test('plain free text, no operators', () => {
+    expect(parseSearchQuery('hot leads', qOptions)).toEqual({ filter: {}, text: 'hot leads' });
+  });
+
+  test('owner: resolves by quoted full name, case-insensitive', () => {
+    const out = parseSearchQuery('owner:"parul kanchan"', qOptions);
+    expect(out).toEqual({ filter: { owners: ['parul@ss.in'] }, text: '' });
+  });
+
+  test('owner: resolves by bare email id, case-insensitive', () => {
+    const out = parseSearchQuery('owner:PARUL@SS.IN', qOptions);
+    expect(out.filter).toEqual({ owners: ['parul@ss.in'] });
+  });
+
+  test('city: source: type: stage: tag: all resolve to real option ids', () => {
+    expect(parseSearchQuery('city:rohini', qOptions).filter).toEqual({ cities: ['Rohini'] });
+    expect(parseSearchQuery('source:referral', qOptions).filter).toEqual({ sources: ['Referral'] });
+    expect(parseSearchQuery('type:cbse', qOptions).filter).toEqual({ school_types: ['CBSE'] });
+    expect(parseSearchQuery('stage:demo', qOptions).filter).toEqual({ lead_stages: ['demo'] });
+    expect(parseSearchQuery('stage:"Won"', qOptions).filter).toEqual({ lead_stages: ['won'] }); // resolves by label too
+    expect(parseSearchQuery('tag:"hot lead"', qOptions).filter).toEqual({ tags: ['t_hot'] });
+  });
+
+  test('has:phone / has:email -> has facet; unknown has: value falls back to text', () => {
+    expect(parseSearchQuery('has:phone', qOptions).filter).toEqual({ has: ['phone'] });
+    expect(parseSearchQuery('has:email', qOptions).filter).toEqual({ has: ['email'] });
+    const bad = parseSearchQuery('has:fax', qOptions);
+    expect(bad.filter).toEqual({});
+    expect(bad.text).toBe('has:fax');
+  });
+
+  test('is:unassigned maps to the UNASSIGNED owner sentinel; unknown is: falls back to text', () => {
+    expect(parseSearchQuery('is:unassigned', qOptions).filter).toEqual({ owners: [UNASSIGNED] });
+    const bad = parseSearchQuery('is:cold', qOptions);
+    expect(bad.filter).toEqual({});
+    expect(bad.text).toBe('is:cold');
+  });
+
+  test('unknown operator key stays as free text verbatim', () => {
+    expect(parseSearchQuery('foo:bar', qOptions)).toEqual({ filter: {}, text: 'foo:bar' });
+  });
+
+  test('a recognized operator with an unresolvable (typo) value falls back to free text', () => {
+    const out = parseSearchQuery('owner:nobody', qOptions);
+    expect(out.filter).toEqual({});
+    expect(out.text).toBe('owner:nobody');
+  });
+
+  test('mixes operators with free text, and dedups repeated operator values', () => {
+    const out = parseSearchQuery('owner:"Parul Kanchan" city:rohini hot lead owner:parul@ss.in', qOptions);
+    expect(out.filter).toEqual({ owners: ['parul@ss.in'], cities: ['Rohini'] });
+    expect(out.text).toBe('hot lead');
+  });
+
+  test('a bare quoted phrase with no operator is kept intact as free text', () => {
+    expect(parseSearchQuery('"hot lead" city:rohini', qOptions)).toEqual({ filter: { cities: ['Rohini'] }, text: 'hot lead' });
+  });
+
+  test('multiple different owners OR-within the same owners facet', () => {
+    const out = parseSearchQuery('owner:parul@ss.in owner:amit@ss.in', qOptions);
+    expect(out.filter.owners.sort()).toEqual(['amit@ss.in', 'parul@ss.in']);
+  });
+
+  test('empty/blank term', () => {
+    expect(parseSearchQuery('', qOptions)).toEqual({ filter: {}, text: '' });
+    expect(parseSearchQuery(undefined, qOptions)).toEqual({ filter: {}, text: '' });
+  });
+});
+
+describe('mergeFilters', () => {
+  test('unions array-valued facets from both sides, deduping', () => {
+    const out = mergeFilters({ owners: ['a@ss.in'] }, { owners: ['a@ss.in', 'b@ss.in'] });
+    expect(out.owners.sort()).toEqual(['a@ss.in', 'b@ss.in']);
+  });
+  test('facet only on one side passes through untouched', () => {
+    expect(mergeFilters({ cities: ['Rohini'] }, {})).toEqual({ cities: ['Rohini'] });
+    expect(mergeFilters({}, { sources: ['Referral'] })).toEqual({ sources: ['Referral'] });
+  });
+  test('does not mutate either input', () => {
+    const a = { owners: ['a@ss.in'] };
+    const b = { owners: ['b@ss.in'] };
+    mergeFilters(a, b);
+    expect(a.owners).toEqual(['a@ss.in']);
+    expect(b.owners).toEqual(['b@ss.in']);
+  });
+});
+
+describe('describeParsedFilter', () => {
+  test('renders human-readable chip labels, resolving ids back to names', () => {
+    const chips = describeParsedFilter({ owners: ['parul@ss.in'], cities: ['Rohini'], has: ['phone'] }, qOptions);
+    const labels = chips.map((c) => c.label);
+    expect(labels).toContain('Owner: Parul Kanchan');
+    expect(labels).toContain('City: Rohini');
+    expect(labels).toContain('Has: phone');
+  });
+  test('renders Unassigned for the UNASSIGNED sentinel', () => {
+    const chips = describeParsedFilter({ owners: [UNASSIGNED] }, qOptions);
+    expect(chips[0].label).toBe('Owner: Unassigned');
+  });
+  test('empty filter -> no chips', () => {
+    expect(describeParsedFilter({}, qOptions)).toEqual([]);
   });
 });

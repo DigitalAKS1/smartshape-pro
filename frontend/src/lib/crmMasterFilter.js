@@ -11,7 +11,7 @@
 //      are unit-testable without mounting the hook or any component. These are
 //      literally what feeds the `masterFiltered.{schools,contacts,leads}.length`
 //      numbers that the LeadsCRM tab badges render (O5, honest counts).
-import { buildCrmContext, matchesCrmFilter } from './crmFilter';
+import { buildCrmContext, matchesCrmFilter, UNASSIGNED, FACET_LABELS } from './crmFilter';
 
 const norm = (v) => (v == null ? '' : String(v)).toLowerCase();
 
@@ -74,4 +74,118 @@ export function tabKind(activeTab) {
   if (activeTab === 'schools') return 'school';
   if (activeTab === 'contacts') return 'contact';
   return 'lead';
+}
+
+// ── O21: Gmail-style search query language ──────────────────────────────────
+//
+// `owner:parul city:"New Delhi" hot leads` -> operators become real facet ids
+// (case-insensitive, resolved against the live options — never raw strings the
+// engine wouldn't recognize), residual words stay as free text for
+// matchesGlobalSearch. Kept pure/framework-free like the rest of this module.
+
+// operator key -> masterFilter facet key (array-valued, matches crmFilter.js).
+const OPERATOR_FACET = {
+  owner: 'owners', city: 'cities', source: 'sources', type: 'school_types',
+  stage: 'lead_stages', tag: 'tags',
+};
+
+function resolveOperatorValue(key, rawVal, options) {
+  const v = rawVal.toLowerCase();
+  if (key === 'owner') {
+    const hit = (options.owners || []).find((o) => o.name.toLowerCase() === v || o.id.toLowerCase() === v);
+    return hit ? hit.id : null;
+  }
+  if (key === 'city') return (options.cities || []).find((c) => c.toLowerCase() === v) ?? null;
+  if (key === 'source') return (options.sources || []).find((s) => s.toLowerCase() === v) ?? null;
+  if (key === 'type') return (options.school_types || []).find((t) => t.toLowerCase() === v) ?? null;
+  if (key === 'stage') {
+    const hit = (options.stages || []).find((s) => s.id.toLowerCase() === v || s.label.toLowerCase() === v);
+    return hit ? hit.id : null;
+  }
+  if (key === 'tag') {
+    const hit = (options.tags || []).find((t) => t.name.toLowerCase() === v);
+    return hit ? hit.id : null;
+  }
+  if (key === 'has') return ['phone', 'email'].includes(v) ? v : null;
+  if (key === 'is') return v === 'unassigned' ? UNASSIGNED : null;
+  return null; // unrecognized operator key
+}
+
+// key:"quoted value" | key:bareValue | "quoted phrase" | bareWord
+const TOKEN_RE = /([a-zA-Z]+):"([^"]*)"|([a-zA-Z]+):(\S+)|"([^"]*)"|(\S+)/g;
+
+/**
+ * Parse a raw search-box string into structured facets + residual free text.
+ * Supported operators: owner: city: source: type: stage: tag: has: is:
+ * Quote multi-word values: `owner:"Parul Kanchan"`. An unrecognized operator
+ * key, or a recognized one whose value doesn't resolve to a real option
+ * (typos), falls back to free text — a typo returns "no matches on this
+ * word" instead of silently zeroing the whole result set forever.
+ * @returns {{filter: object, text: string}}
+ */
+export function parseSearchQuery(term, options = {}) {
+  const raw = String(term || '');
+  const filter = {};
+  const words = [];
+  const pushFacet = (facetKey, id) => {
+    filter[facetKey] = filter[facetKey] || [];
+    if (!filter[facetKey].includes(id)) filter[facetKey].push(id);
+  };
+
+  TOKEN_RE.lastIndex = 0;
+  let m;
+  while ((m = TOKEN_RE.exec(raw)) !== null) {
+    const [, qKey, qVal, bKey, bVal, quotedPhrase, bareWord] = m;
+    const key = (qKey || bKey || '').toLowerCase();
+    const val = qVal !== undefined ? qVal : bVal;
+
+    if (quotedPhrase !== undefined) { if (quotedPhrase.trim()) words.push(quotedPhrase); continue; }
+    if (bareWord !== undefined) { words.push(bareWord); continue; }
+
+    const resolved = resolveOperatorValue(key, val, options);
+    if (resolved == null) { words.push(`${key}:${val}`); continue; } // unresolved -> free text
+
+    const facetKey = key === 'has' || key === 'is' ? (key === 'is' ? 'owners' : 'has') : OPERATOR_FACET[key];
+    pushFacet(facetKey, resolved);
+  }
+
+  return { filter, text: words.join(' ').trim() };
+}
+
+// Combine the FilterRail's clicked-in `masterFilter` with a query's parsed
+// operator filter — union array-valued facets so e.g. `owner:parul` typed
+// into search and an Owner checkbox both apply (OR-within is already how the
+// engine treats a facet's own array). Rail state itself is left untouched;
+// callers merge only for matching/counting (see useLeadsCRM).
+export function mergeFilters(a = {}, b = {}) {
+  const out = { ...a };
+  Object.keys(b).forEach((key) => {
+    const bv = b[key];
+    if (Array.isArray(bv)) {
+      const av = Array.isArray(out[key]) ? out[key] : [];
+      out[key] = Array.from(new Set([...av, ...bv]));
+    } else if (bv !== undefined) {
+      out[key] = bv;
+    }
+  });
+  return out;
+}
+
+const QUERY_FACET_LABELS = { ...FACET_LABELS, has: 'Has' };
+
+// Human-readable chips for "here's what your search query applied" (O21 —
+// visible feedback for the parsed operators). Pure/presentational data only;
+// mirrors FilterRail's own chip formatting for a consistent look.
+export function describeParsedFilter(filter = {}, options = {}) {
+  const nameFor = (facet, id) => {
+    if (facet === 'owners') return id === UNASSIGNED ? 'Unassigned' : (options.owners || []).find((o) => o.id === id)?.name || id;
+    if (facet === 'tags') return (options.tags || []).find((t) => t.id === id)?.name || id;
+    if (facet === 'lead_stages') return (options.stages || []).find((s) => s.id === id)?.label || id;
+    return id;
+  };
+  const chips = [];
+  Object.keys(QUERY_FACET_LABELS).forEach((facet) => {
+    (filter[facet] || []).forEach((id) => chips.push({ facet, id, label: `${QUERY_FACET_LABELS[facet]}: ${nameFor(facet, id)}` }));
+  });
+  return chips;
 }

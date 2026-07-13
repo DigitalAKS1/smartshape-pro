@@ -1,4 +1,4 @@
-import { matchesCrmFilter, buildCrmContext, deriveFilterOptions, countActive, suggestFacets } from '../crmFilter';
+import { matchesCrmFilter, buildCrmContext, deriveFilterOptions, countActive, hasActiveFilters, suggestFacets } from '../crmFilter';
 
 const schools = [
   { school_id: 's_big', school_type: 'CBSE', school_strength: 700, city: 'Delhi' },
@@ -139,4 +139,68 @@ test('suggestFacets hides already-applied values', () => {
   const out = suggestFacets('roh', sugOpts, { applied: { cities: ['Rohini'] } });
   expect(out.map(s => `${s.facet}:${s.id}`)).not.toContain('cities:Rohini');
   expect(out.map(s => `${s.facet}:${s.id}`)).toContain('tags:t_roh');
+});
+
+// ── Date-range facets (Phase 3: import_date / assigned_date) ───────────────────
+
+const withDates = (o) => c({ import_date: '2026-07-10T09:00:00+00:00', assigned_date: '2026-07-12T18:30:00+00:00', ...o });
+
+test('no date range set = no constraint', () => {
+  expect(matchesCrmFilter(withDates({}), {}, cctx)).toBe(true);
+  expect(matchesCrmFilter(withDates({ import_date: '' }), {}, cctx)).toBe(true);
+});
+
+test('import_date range includes the whole day at each bound', () => {
+  const f = { import_date_from: '2026-07-10', import_date_to: '2026-07-10' };
+  expect(matchesCrmFilter(withDates({}), f, cctx)).toBe(true);
+  expect(matchesCrmFilter(withDates({ import_date: '2026-07-09T23:59:00+00:00' }), f, cctx)).toBe(false);
+  expect(matchesCrmFilter(withDates({ import_date: '2026-07-11T00:01:00+00:00' }), f, cctx)).toBe(false);
+});
+
+test('import_date range is a plain "YYYY-MM-DD" without a time component too', () => {
+  const f = { import_date_from: '2026-07-01', import_date_to: '2026-07-31' };
+  expect(matchesCrmFilter(withDates({ import_date: '2026-07-15' }), f, cctx)).toBe(true);
+});
+
+test('open-ended range (only from, or only to)', () => {
+  expect(matchesCrmFilter(withDates({}), { import_date_from: '2026-07-10' }, cctx)).toBe(true);
+  expect(matchesCrmFilter(withDates({}), { import_date_from: '2026-07-11' }, cctx)).toBe(false);
+  expect(matchesCrmFilter(withDates({}), { import_date_to: '2026-07-09' }, cctx)).toBe(false);
+});
+
+test('a row with no date on that field fails an active range (not silently passed)', () => {
+  expect(matchesCrmFilter(withDates({ import_date: '' }), { import_date_from: '2026-01-01' }, cctx)).toBe(false);
+});
+
+test('assigned_date range is independent of import_date range (AND across both if both set)', () => {
+  const f = { import_date_from: '2026-07-10', import_date_to: '2026-07-10', assigned_date_from: '2026-07-01', assigned_date_to: '2026-07-11' };
+  expect(matchesCrmFilter(withDates({}), f, cctx)).toBe(false); // assigned_date (07-12) is outside 07-01..07-11
+  expect(matchesCrmFilter(withDates({ assigned_date: '2026-07-05T00:00:00+00:00' }), f, cctx)).toBe(true);
+});
+
+test('hasActiveFilters / countActive count date ranges', () => {
+  expect(hasActiveFilters({ import_date_from: '2026-07-01' })).toBe(true);
+  expect(hasActiveFilters({})).toBe(false);
+  expect(countActive({ import_date_from: '2026-07-01', import_date_to: '2026-07-31' })).toBe(1); // one facet, two bounds
+  expect(countActive({ import_date_from: '2026-07-01', assigned_date_to: '2026-07-31' })).toBe(2);
+});
+
+// ── `has:` field-presence facet (O21 search operators) ──────────────────────────
+
+test('has:phone / has:email check the right field per kind', () => {
+  expect(matchesCrmFilter(c({ phone: '999' }), { has: ['phone'] }, cctx)).toBe(true);
+  expect(matchesCrmFilter(c({ phone: '' }), { has: ['phone'] }, cctx)).toBe(false);
+  expect(matchesCrmFilter(leads[0], { has: ['phone'] }, lctx)).toBe(false); // lead has no `phone`, only `contact_phone`
+  expect(matchesCrmFilter({ ...leads[0], contact_phone: '999' }, { has: ['phone'] }, lctx)).toBe(true);
+});
+
+test('has: is AND across multiple requirements', () => {
+  const f = { has: ['phone', 'email'] };
+  expect(matchesCrmFilter(c({ phone: '999', email: 'a@b.com' }), f, cctx)).toBe(true);
+  expect(matchesCrmFilter(c({ phone: '999', email: '' }), f, cctx)).toBe(false);
+});
+
+test('has: participates in hasActiveFilters/countActive', () => {
+  expect(hasActiveFilters({ has: ['phone'] })).toBe(true);
+  expect(countActive({ has: ['phone', 'email'] })).toBe(1);
 });

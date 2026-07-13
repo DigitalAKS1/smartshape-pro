@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import {
   SlidersHorizontal, X, ChevronDown, ChevronRight, ChevronLeft,
-  Search, User, MapPin, Building2, Radio, GitBranch, Tag as TagIcon,
+  Search, User, MapPin, Building2, Radio, GitBranch, Tag as TagIcon, CalendarRange,
 } from 'lucide-react';
 import { UNASSIGNED, FACET_LABELS, countActive } from '../../lib/crmFilter';
 
@@ -108,6 +108,52 @@ function OwnerSection({ owners, values, onToggle, countFor, defaultOpen = true }
   );
 }
 
+// Phase 3 — Import Date / Assigned Date range facets, native <input type=date>
+// (O8/O9). Both ranges write plain "YYYY-MM-DD" strings straight into the
+// master filter (`import_date_from/to`, `assigned_date_from/to`) — exactly
+// the keys crmFilter.js's `matchesCrmFilter` already understands.
+function DatesSection({ filt, onSetRange, defaultOpen = false }) {
+  const [open, setOpen] = useState(defaultOpen);
+  const active = ['import_date_from', 'import_date_to', 'assigned_date_from', 'assigned_date_to']
+    .filter((k) => filt[k] != null && filt[k] !== '').length;
+  const dateInputCls = 'flex-1 min-w-0 text-[11px] px-1.5 py-1 rounded-md border border-[var(--border-color)] bg-[var(--bg-primary)] text-[var(--text-primary)]';
+
+  return (
+    <div className="border-b border-[var(--border-color)] last:border-0">
+      <button type="button" onClick={() => setOpen((o) => !o)}
+        className="w-full flex items-center gap-2 px-3 py-2.5 text-left hover:bg-[var(--bg-hover)] transition-colors"
+        data-testid="facet-toggle-dates">
+        <CalendarRange className="h-3.5 w-3.5 text-[var(--accent)] flex-shrink-0" />
+        <span className="text-xs font-semibold text-[var(--text-primary)] flex-1">Dates</span>
+        {active > 0 && (
+          <span className="text-[10px] font-bold px-1.5 rounded-full bg-[var(--accent)] text-white">{active}</span>
+        )}
+        {open ? <ChevronDown className="h-3.5 w-3.5 text-[var(--text-muted)]" /> : <ChevronRight className="h-3.5 w-3.5 text-[var(--text-muted)]" />}
+      </button>
+      {open && (
+        <div className="px-3 pb-3 space-y-3">
+          <div>
+            <p className="text-[11px] font-medium text-[var(--text-secondary)] mb-1">Import Date</p>
+            <div className="flex items-center gap-1.5">
+              <input type="date" value={filt.import_date_from || ''} onChange={(e) => onSetRange('import_date_from', e.target.value)} data-testid="date-import-from" className={dateInputCls} />
+              <span className="text-[10px] text-[var(--text-muted)]">to</span>
+              <input type="date" value={filt.import_date_to || ''} onChange={(e) => onSetRange('import_date_to', e.target.value)} data-testid="date-import-to" className={dateInputCls} />
+            </div>
+          </div>
+          <div>
+            <p className="text-[11px] font-medium text-[var(--text-secondary)] mb-1">Assigned Date</p>
+            <div className="flex items-center gap-1.5">
+              <input type="date" value={filt.assigned_date_from || ''} onChange={(e) => onSetRange('assigned_date_from', e.target.value)} data-testid="date-assigned-from" className={dateInputCls} />
+              <span className="text-[10px] text-[var(--text-muted)]">to</span>
+              <input type="date" value={filt.assigned_date_to || ''} onChange={(e) => onSetRange('assigned_date_to', e.target.value)} data-testid="date-assigned-to" className={dateInputCls} />
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /**
  * Left filter rail — collapsible sidebar, Zoho-Bigin style (O15).
  * @param {object} options    deriveFilterOptions() output: {owners,cities,school_types,sources,stages,tags}
@@ -130,6 +176,25 @@ export default function FilterRail({ options = {}, value, onChange, resultCount,
   };
   const clearAll = () => onChange({});
 
+  const setRange = (key, val) => {
+    const next = { ...filt };
+    if (val) next[key] = val; else delete next[key];
+    onChange(next);
+  };
+  const clearDateRange = (prefix) => {
+    const next = { ...filt };
+    delete next[`${prefix}_from`];
+    delete next[`${prefix}_to`];
+    onChange(next);
+  };
+  const dateChipText = (prefix, label) => {
+    const from = filt[`${prefix}_from`];
+    const to = filt[`${prefix}_to`];
+    if (!from && !to) return null;
+    if (from && to) return `${label}: ${from} → ${to}`;
+    return from ? `${label}: from ${from}` : `${label}: until ${to}`;
+  };
+
   const chipLabel = (key, id) => {
     if (key === 'owners') return id === UNASSIGNED ? 'Unassigned' : (options.owners || []).find((o) => o.id === id)?.name || id;
     if (key === 'tags') return (options.tags || []).find((t) => t.id === id)?.name || id;
@@ -140,6 +205,11 @@ export default function FilterRail({ options = {}, value, onChange, resultCount,
   Object.keys(FACET_LABELS).forEach((key) => {
     (filt[key] || []).forEach((id) => chips.push({ key, id, text: `${FACET_LABELS[key]}: ${chipLabel(key, id)}` }));
   });
+  const dateChips = [];
+  const importDateText = dateChipText('import_date', 'Import Date');
+  if (importDateText) dateChips.push({ prefix: 'import_date', text: importDateText });
+  const assignedDateText = dateChipText('assigned_date', 'Assigned Date');
+  if (assignedDateText) dateChips.push({ prefix: 'assigned_date', text: assignedDateText });
 
   const header = (
     <div className="sticky top-0 z-10 bg-[var(--bg-card)] border-b border-[var(--border-color)] px-3 py-3">
@@ -162,12 +232,20 @@ export default function FilterRail({ options = {}, value, onChange, resultCount,
           </button>
         )}
       </div>
-      {chips.length > 0 && (
+      {(chips.length > 0 || dateChips.length > 0) && (
         <div className="flex flex-wrap gap-1 mt-2">
           {chips.map((c) => (
             <span key={`${c.key}:${c.id}`} className="inline-flex items-center gap-1 text-[10px] pl-2 pr-1 py-0.5 rounded-full bg-[var(--accent)]/15 text-[var(--accent)] font-medium">
               {c.text}
               <button type="button" onClick={() => toggle(c.key, c.id)} aria-label={`Remove ${c.text}`} className="hover:opacity-70">
+                <X className="h-2.5 w-2.5" />
+              </button>
+            </span>
+          ))}
+          {dateChips.map((dc) => (
+            <span key={dc.prefix} className="inline-flex items-center gap-1 text-[10px] pl-2 pr-1 py-0.5 rounded-full bg-[var(--accent)]/15 text-[var(--accent)] font-medium">
+              {dc.text}
+              <button type="button" onClick={() => clearDateRange(dc.prefix)} aria-label={`Remove ${dc.text}`} className="hover:opacity-70">
                 <X className="h-2.5 w-2.5" />
               </button>
             </span>
@@ -192,6 +270,7 @@ export default function FilterRail({ options = {}, value, onChange, resultCount,
           opts={(options.stages || []).map((s) => ({ id: s.id, label: s.label }))} values={filt.lead_stages || []} onToggle={toggle} countFor={countFor} />
         <FacetSection facetKey="tags" label="Tag" Icon={TagIcon}
           opts={(options.tags || []).map((t) => ({ id: t.id, label: t.name, color: t.color }))} values={filt.tags || []} onToggle={toggle} countFor={countFor} />
+        <DatesSection filt={filt} onSetRange={setRange} />
       </div>
     </div>
   );

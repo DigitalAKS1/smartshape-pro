@@ -34,6 +34,7 @@ import MultiFilterBar from '../../components/crm/MultiFilterBar';
 import FilterRail from '../../components/crm/FilterRail';
 import SearchFacetSuggestions from '../../components/crm/SearchFacetSuggestions';
 import { deriveFilterOptions, buildCrmContext, matchesCrmFilter, hasActiveFilters } from '../../lib/crmFilter';
+import { describeParsedFilter } from '../../lib/crmMasterFilter';
 
 export default function LeadsCRM() {
   const navigate = useNavigate();
@@ -60,6 +61,10 @@ export default function LeadsCRM() {
     });
     crm.setSearchTerm('');
   };
+
+  // O21 — human-readable feedback for whatever the search box's owner:/city:/...
+  // operators resolved into (crm.parsedQuery.filter), shown next to the search box.
+  const queryChips = describeParsedFilter(crm.parsedQuery.filter, crm.filterOptions);
 
   // Theme shorthand
   const card = isDark ? 'bg-[var(--bg-card)] border-[var(--border-color)]' : 'bg-white border-[var(--border-color)]';
@@ -241,7 +246,7 @@ export default function LeadsCRM() {
           <div className="flex-1 min-w-0 space-y-5">
 
         {/* ── Forecast + needs-attention summary ─────────────────────── */}
-        <ForecastBar leads={crm.masterFiltered.leads} filterActive={hasActiveFilters(crm.masterFilter) || !!crm.searchTerm.trim()} />
+        <ForecastBar leads={crm.masterFiltered.leads} filterActive={hasActiveFilters(crm.effectiveFilter) || !!crm.parsedQuery.text.trim()} />
 
         {/* ── View Toggle + Bulk Actions ─────────────────────────────── */}
         {crm.activeTab === 'pipeline' && (
@@ -306,15 +311,18 @@ export default function LeadsCRM() {
         <div className="sticky top-14 lg:static z-20 -mx-4 sm:mx-0 px-4 sm:px-0 py-2 sm:py-0 bg-[var(--bg-primary)] sm:bg-transparent border-b sm:border-0 border-[var(--border-color)] flex flex-col sm:flex-row gap-2">
           <div className="relative flex-1">
             <Search className={`absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 ${textMuted}`} />
-            <Input value={crm.searchTerm} onChange={e => crm.setSearchTerm(e.target.value)} placeholder="Search school, contact, phone, city..." className={`pl-10 ${inputCls}`} data-testid="search-input" />
-            {/* Global search feeds the master filter (O16); typing "Rohini" suggests
-                "City: Rohini · N" so it becomes a real, reusable filter (O3) instead of
-                a one-off text match. Plain text search still works if ignored. */}
+            <Input value={crm.searchTerm} onChange={e => crm.setSearchTerm(e.target.value)}
+              placeholder='Search, or owner:parul city:rohini has:phone is:unassigned...' className={`pl-10 ${inputCls}`} data-testid="search-input" />
+            {/* O21 — Gmail-style query language: owner:/city:/source:/type:/stage:/tag:/
+                has:/is: parse live into real filters (crm.parsedQuery), applied ON TOP of
+                the rail's own selections for matching (crm.effectiveFilter) without ever
+                touching the rail's state. Residual free text still drives suggestions
+                (O3) and matchesGlobalSearch untouched, so plain typing still just works. */}
             <SearchFacetSuggestions
-              term={crm.searchTerm}
+              term={crm.parsedQuery.text}
               options={crm.filterOptions}
               countFor={crm.masterCountFor}
-              applied={crm.masterFilter}
+              applied={crm.effectiveFilter}
               onAdd={addSuggestedFacet}
             />
           </div>
@@ -330,6 +338,23 @@ export default function LeadsCRM() {
             {crm.tagsList.map(t => <option key={t.tag_id} value={t.tag_id}>{t.name}</option>)}
           </select>
         </div>
+
+        {/* Active search-query operator chips (O21) — visible feedback for what
+            owner:/city:/... parsed out of the search box, so it's never a silent
+            filter. Sits in normal flow (not overlapping the suggestions dropdown). */}
+        {queryChips.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5 -mt-2" data-testid="query-chips">
+            <span className={`text-[11px] ${textMuted}`}>Search applied:</span>
+            {queryChips.map(qc => (
+              <span key={`${qc.facet}:${qc.id}`} className="text-[10px] px-2 py-0.5 rounded-full bg-[var(--accent)] text-white font-medium">
+                {qc.label}
+              </span>
+            ))}
+            <button type="button" onClick={() => crm.setSearchTerm('')} className="text-[10px] px-2 py-0.5 rounded-full border border-[var(--border-color)] text-[var(--text-muted)] hover:text-[var(--accent)]">
+              Clear search
+            </button>
+          </div>
+        )}
 
         {/* ── Tabs ──────────────────────────────────────────────────── */}
         <div className={`flex gap-1 ${card} border rounded-md p-1 overflow-x-auto`}>
@@ -427,7 +452,8 @@ export default function LeadsCRM() {
                     <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} cursor-pointer select-none`} onClick={() => crm.toggleSort('lead_type')}>Type{crm.sortIndicator('lead_type')}</th>
                     <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} cursor-pointer select-none`} onClick={() => crm.toggleSort('stage')}>Stage{crm.sortIndicator('stage')}</th>
                     <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} cursor-pointer select-none`} onClick={() => crm.toggleSort('lead_score')}>Score{crm.sortIndicator('lead_score')}</th>
-                    <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden lg:table-cell`}>Assigned</th>
+                    <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden lg:table-cell cursor-pointer select-none`} onClick={() => crm.toggleSort('assigned_name')} data-testid="sort-assigned">Assigned{crm.sortIndicator('assigned_name')}</th>
+                    <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden xl:table-cell cursor-pointer select-none`} onClick={() => crm.toggleSort('assigned_date')} data-testid="sort-assigned-date">Assigned Date{crm.sortIndicator('assigned_date')}</th>
                     <th className={`text-right text-xs uppercase py-3 px-3 ${textMuted}`}>Actions</th>
                   </tr></thead>
                   <tbody>
@@ -448,6 +474,7 @@ export default function LeadsCRM() {
                           <td className="py-2.5 px-3"><span className={`text-xs px-2 py-0.5 rounded font-medium border ${stg.color}`}>{stg.label}</span></td>
                           <td className="py-2.5 px-3"><span className="font-mono text-sm text-[#e94560]">{lead.lead_score || 0}</span></td>
                           <td className={`py-2.5 px-3 hidden lg:table-cell text-sm ${textSec}`}>{lead.assigned_name?.split(' ')[0]}</td>
+                          <td className={`py-2.5 px-3 hidden xl:table-cell text-xs ${textMuted}`}>{lead.assigned_date ? lead.assigned_date.slice(0, 10) : '—'}</td>
                           <td className="py-2.5 px-3 text-right" onClick={e => e.stopPropagation()}>
                             <Button size="sm" variant="ghost" onClick={() => crm.openEditLead(lead)} className={`${textSec} h-7`}><Edit2 className="h-3 w-3" /></Button>
                             <Button size="sm" variant="ghost" onClick={async () => { if (!window.confirm('Delete this lead?')) return; await leadsApiObj.delete(lead.lead_id); crm.fetchData(); toast.success('Deleted'); }} className="text-red-400 h-7"><Trash2 className="h-3 w-3" /></Button>
@@ -455,7 +482,7 @@ export default function LeadsCRM() {
                         </tr>
                       );
                     })}
-                    {sortedLeads.length === 0 && <tr><td colSpan="7"><EmptyState {...(crm.searchTerm ? EMPTY_STATES.searchResult : EMPTY_STATES.leads)} compact /></td></tr>}
+                    {sortedLeads.length === 0 && <tr><td colSpan="9"><EmptyState {...(crm.searchTerm ? EMPTY_STATES.searchResult : EMPTY_STATES.leads)} compact /></td></tr>}
                   </tbody>
                 </table>
               </div>
@@ -635,7 +662,8 @@ export default function LeadsCRM() {
                     <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden sm:table-cell cursor-pointer select-none`} onClick={() => crm.toggleSort('lead_type')}>Type{crm.sortIndicator('lead_type')}</th>
                     <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden md:table-cell cursor-pointer select-none`} onClick={() => crm.toggleSort('stage')}>Stage{crm.sortIndicator('stage')}</th>
                     <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden lg:table-cell cursor-pointer select-none`} onClick={() => crm.toggleSort('lead_score')}>Score{crm.sortIndicator('lead_score')}<FieldTooltip text="Lead Score (0–100) calculated from engagement, recency, and deal size. Higher = hotter lead." /></th>
-                    <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden lg:table-cell`}>Assigned</th>
+                    <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden lg:table-cell cursor-pointer select-none`} onClick={() => crm.toggleSort('assigned_name')} data-testid="sort-assigned">Assigned{crm.sortIndicator('assigned_name')}</th>
+                    <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden xl:table-cell cursor-pointer select-none`} onClick={() => crm.toggleSort('assigned_date')} data-testid="sort-assigned-date">Assigned Date{crm.sortIndicator('assigned_date')}</th>
                     <th className={`text-right text-xs uppercase py-3 px-3 ${textMuted}`}>Actions</th>
                   </tr></thead>
                   <tbody>
@@ -659,6 +687,7 @@ export default function LeadsCRM() {
                           </td>
                           <td className="py-2.5 px-3 hidden lg:table-cell"><span className="font-mono text-sm text-[#e94560]">{lead.lead_score || 0}</span></td>
                           <td className={`py-2.5 px-3 hidden lg:table-cell text-sm ${textSec}`}>{lead.assigned_name?.split(' ')[0]}</td>
+                          <td className={`py-2.5 px-3 hidden xl:table-cell text-xs ${textMuted}`}>{lead.assigned_date ? lead.assigned_date.slice(0, 10) : '—'}</td>
                           <td className="py-2.5 px-3 text-right" onClick={e => e.stopPropagation()}>
                             <Button size="sm" variant="ghost" onClick={() => crm.openEditLead(lead)} className={`${textSec} h-7`} data-testid={`edit-lead-${lead.lead_id}`}><Edit2 className="h-3 w-3" /></Button>
                             <Button size="sm" variant="ghost" onClick={async () => { if (!window.confirm('Delete this lead?')) return; await leadsApiObj.delete(lead.lead_id); crm.fetchData(); toast.success('Deleted'); }} className="text-red-400 h-7" data-testid={`delete-lead-${lead.lead_id}`}><Trash2 className="h-3 w-3" /></Button>
@@ -666,7 +695,7 @@ export default function LeadsCRM() {
                         </tr>
                       );
                     })}
-                    {sortedLeads.length === 0 && <tr><td colSpan="7"><EmptyState {...(crm.searchTerm ? EMPTY_STATES.searchResult : EMPTY_STATES.leads)} compact /></td></tr>}
+                    {sortedLeads.length === 0 && <tr><td colSpan="8"><EmptyState {...(crm.searchTerm ? EMPTY_STATES.searchResult : EMPTY_STATES.leads)} compact /></td></tr>}
                   </tbody>
                 </table>
               </div>
@@ -773,7 +802,8 @@ export default function LeadsCRM() {
                       <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden md:table-cell`}>Contact</th>
                       <th className={`text-center text-xs uppercase py-3 px-3 ${textMuted} hidden lg:table-cell cursor-pointer select-none`} onClick={() => crm.toggleSort('school_strength')}>Strength{crm.sortIndicator('school_strength')}</th>
                       <th className={`text-center text-xs uppercase py-3 px-3 ${textMuted} hidden lg:table-cell`}>Profile</th>
-                      <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden md:table-cell`}>Owner</th>
+                      <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden md:table-cell cursor-pointer select-none`} onClick={() => crm.toggleSort('assigned_name')} data-testid="sort-school-assigned">Owner{crm.sortIndicator('assigned_name')}</th>
+                      <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden xl:table-cell cursor-pointer select-none`} onClick={() => crm.toggleSort('assigned_date')} data-testid="sort-school-assigned-date">Assigned Date{crm.sortIndicator('assigned_date')}</th>
                       <th className={`text-center text-xs uppercase py-3 px-3 ${textMuted}`}>Leads</th>
                       <th className={`text-right text-xs uppercase py-3 px-3 ${textMuted}`}>Actions</th>
                     </tr></thead>
@@ -810,6 +840,7 @@ export default function LeadsCRM() {
                               {completionBadge(crm.calcSchoolCompletion(sch), () => crm.openEditSchool(sch))}
                             </td>
                             <td className="py-2.5 px-3 hidden md:table-cell" onClick={e => e.stopPropagation()}>{renderOwnerControl(sch)}</td>
+                            <td className={`py-2.5 px-3 hidden xl:table-cell text-xs ${textMuted}`}>{sch.assigned_date ? sch.assigned_date.slice(0, 10) : '—'}</td>
                             <td className="py-2.5 px-3 text-center"><span className="bg-[#e94560]/20 text-[#e94560] px-2 py-0.5 rounded text-xs font-bold">{schLeads.length}</span></td>
                             <td className="py-2.5 px-3 text-right" onClick={e => e.stopPropagation()}>
                               <Button size="sm" variant="ghost" onClick={e => { e.stopPropagation(); crm.openEditSchool(sch); }} className={`${textSec} h-7`} data-testid={`edit-school-${sch.school_id}`}><Edit2 className="h-3 w-3" /></Button>
@@ -819,7 +850,7 @@ export default function LeadsCRM() {
                           </tr>
                         );
                       })}
-                      {schFiltered.length === 0 && <tr><td colSpan={crm.user?.role === 'admin' ? 10 : 9} className={`py-12 text-center ${textMuted}`}>No schools match your search</td></tr>}
+                      {schFiltered.length === 0 && <tr><td colSpan={crm.user?.role === 'admin' ? 11 : 10} className={`py-12 text-center ${textMuted}`}>No schools match your search</td></tr>}
                     </tbody>
                   </table>
                 </div>

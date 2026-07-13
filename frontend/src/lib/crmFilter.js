@@ -56,19 +56,41 @@ export function buildCrmContext(kind, { schools = [], leads = [], contacts = [],
 const arr = (v) => (Array.isArray(v) ? v : []);
 const nonEmpty = (v) => arr(v).length > 0;
 
+const hasDateRange = (f, key) => f[`${key}_from`] != null || f[`${key}_to`] != null;
+
 export function hasActiveFilters(f) {
   if (!f) return false;
   return nonEmpty(f.sources) || nonEmpty(f.lead_stages) || nonEmpty(f.roles) ||
     nonEmpty(f.school_types) || nonEmpty(f.cities) || nonEmpty(f.tags) ||
-    nonEmpty(f.owners) || f.min_strength != null || f.max_strength != null;
+    nonEmpty(f.owners) || nonEmpty(f.has) || f.min_strength != null || f.max_strength != null ||
+    hasDateRange(f, 'import_date') || hasDateRange(f, 'assigned_date');
 }
 
 export function countActive(f) {
   if (!f) return 0;
   let n = 0;
-  ['sources', 'lead_stages', 'roles', 'school_types', 'cities', 'tags', 'owners'].forEach(k => { if (nonEmpty(f[k])) n++; });
+  ['sources', 'lead_stages', 'roles', 'school_types', 'cities', 'tags', 'owners', 'has'].forEach(k => { if (nonEmpty(f[k])) n++; });
   if (f.min_strength != null || f.max_strength != null) n++;
+  if (hasDateRange(f, 'import_date')) n++;
+  if (hasDateRange(f, 'assigned_date')) n++;
   return n;
+}
+
+// Row's `field` (an ISO datetime/date string, e.g. "2026-07-13T10:58:39+00:00"
+// or plain "2026-07-13") is within the picked [from,to] date range (both plain
+// "YYYY-MM-DD", inclusive). Only the date portion is compared, so a `to` bound
+// still includes every row from that whole day. Absent range = no constraint;
+// a range that IS set excludes rows with no date on that field at all.
+function withinDateRange(row, field, filter) {
+  const from = filter[`${field}_from`];
+  const to = filter[`${field}_to`];
+  if (from == null && to == null) return true;
+  const raw = row[field];
+  if (!raw) return false;
+  const d = String(raw).slice(0, 10);
+  if (from != null && d < from) return false;
+  if (to != null && d > to) return false;
+  return true;
 }
 
 export function matchesCrmFilter(row, filter, ctx) {
@@ -80,6 +102,23 @@ export function matchesCrmFilter(row, filter, ctx) {
     const owner = (row.assigned_to || '').trim();
     const ok = f.owners.some(o => (o === UNASSIGNED ? !owner : o === owner));
     if (!ok) return false;
+  }
+
+  // import_date / assigned_date live on schools, contacts AND leads alike
+  // (Phase 2 backend writes both on every entity), so no kind-branching needed.
+  if (!withinDateRange(row, 'import_date', f)) return false;
+  if (!withinDateRange(row, 'assigned_date', f)) return false;
+
+  // `has: [...]` — field-presence checks (O21 `has:phone` / `has:email` search
+  // operators). The phone/email field name differs per kind: leads store the
+  // contact's phone/email under contact_phone/contact_email, not phone/email.
+  if (nonEmpty(f.has)) {
+    const phoneField = kind === 'lead' ? 'contact_phone' : 'phone';
+    const emailField = kind === 'lead' ? 'contact_email' : 'email';
+    for (const want of f.has) {
+      if (want === 'phone' && !String(row[phoneField] || '').trim()) return false;
+      if (want === 'email' && !String(row[emailField] || '').trim()) return false;
+    }
   }
 
   // Source lives on leads/contacts. A school row has none, so roll up through
