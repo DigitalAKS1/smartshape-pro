@@ -264,6 +264,15 @@ export const schools = {
   cascadeDelete: (id, reason = '') => API.delete(`/schools/${id}/cascade`, { params: { reason } }),
 };
 
+// CRM data-cleanup / maintenance (O19-O20) — admin-readable audit, superadmin-only
+// guarded bulk-delete. Every delete call defaults dry_run:true server-side too;
+// the caller must pass dry_run explicitly to actually delete.
+export const crmMaintenance = {
+  blankSchoolsAudit: () => API.get('/crm/maintenance/blank-schools-audit'),
+  bulkDeleteSchools: (data) => API.post('/crm/maintenance/schools/bulk-delete', data),
+  deleteBlankChildlessSchools: (data) => API.post('/crm/maintenance/schools/delete-blank-childless', data),
+};
+
 // Contacts
 export const contacts = {
   getAll: () => API.get('/contacts'),

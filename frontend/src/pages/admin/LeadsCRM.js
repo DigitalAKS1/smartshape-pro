@@ -33,6 +33,9 @@ import OwnerDeleteButton from '../../components/common/OwnerDeleteButton';
 import MultiFilterBar from '../../components/crm/MultiFilterBar';
 import FilterRail from '../../components/crm/FilterRail';
 import SearchFacetSuggestions from '../../components/crm/SearchFacetSuggestions';
+import DataCleanupPanel from '../../components/crm/DataCleanupPanel';
+import BulkDeleteSchoolsDialog from '../../components/crm/BulkDeleteSchoolsDialog';
+import { useIsOwner } from '../../hooks/usePermission';
 import { deriveFilterOptions, buildCrmContext, matchesCrmFilter, hasActiveFilters } from '../../lib/crmFilter';
 import { describeParsedFilter } from '../../lib/crmMasterFilter';
 
@@ -40,7 +43,11 @@ export default function LeadsCRM() {
   const navigate = useNavigate();
   const { isDark } = useTheme();
   const crm = useLeadsCRM();
+  const isOwner = useIsOwner();
   const [leadsFilter, setLeadsFilter] = React.useState({});
+  // Bulk delete on the current Schools-tab selection (O20) — superadmin only;
+  // shares BulkDeleteSchoolsDialog with DataCleanupPanel's "childless" flow.
+  const [bulkDeleteOpen, setBulkDeleteOpen] = React.useState(false);
 
   // Honest N-of-M for the FilterRail header + the current tab's badge (O5),
   // per entity kind — schools/contacts/leads all read crm.masterFiltered.
@@ -730,13 +737,18 @@ export default function LeadsCRM() {
               {crm.user?.role === 'admin' && (() => {
                 const unassignedCount = crm.schoolsList.filter(s => !(s.assigned_to || '').trim()).length;
                 return (
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <button onClick={() => setUnassignedOnly(v => !v)}
-                      className={`text-xs px-3 py-1 rounded-full font-semibold border transition-all ${unassignedOnly ? 'bg-[#e94560] text-white border-[#e94560]' : `border-[var(--border-color)] ${textSec} hover:border-[#e94560] hover:text-[#e94560]`}`}
-                      data-testid="filter-unassigned-schools">
-                      Unassigned{unassignedCount > 0 ? ` · ${unassignedCount}` : ''}
-                    </button>
-                    {unassignedOnly && <span className={`text-xs ${textMuted}`}>Showing {schFiltered.length} owner-less school{schFiltered.length !== 1 ? 's' : ''} — assign below</span>}
+                  <div className="flex items-center gap-2 flex-wrap justify-between">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <button onClick={() => setUnassignedOnly(v => !v)}
+                        className={`text-xs px-3 py-1 rounded-full font-semibold border transition-all ${unassignedOnly ? 'bg-[#e94560] text-white border-[#e94560]' : `border-[var(--border-color)] ${textSec} hover:border-[#e94560] hover:text-[#e94560]`}`}
+                        data-testid="filter-unassigned-schools">
+                        Unassigned{unassignedCount > 0 ? ` · ${unassignedCount}` : ''}
+                      </button>
+                      {unassignedOnly && <span className={`text-xs ${textMuted}`}>Showing {schFiltered.length} owner-less school{schFiltered.length !== 1 ? 's' : ''} — assign below</span>}
+                    </div>
+                    {/* Superadmin-only (info@smartshape.in) junk-data cleanup — hidden for
+                        every other account, incl. regular admins (O19/O20). */}
+                    <DataCleanupPanel onCleaned={crm.fetchData} />
                   </div>
                 );
               })()}
@@ -750,6 +762,14 @@ export default function LeadsCRM() {
                     {crm.spList.map(sp => <option key={sp.email} value={sp.email}>{sp.name}</option>)}
                   </select>
                   <Button size="sm" variant="outline" onClick={() => setSelectedSchoolIds(new Set())} className={`border-[var(--border-color)] ${textSec} h-8`}>Clear</Button>
+                  {/* Superadmin-only (O20): guarded bulk delete of the current selection,
+                      same dry-run-preview -> confirm -> delete flow as Data Cleanup. */}
+                  {isOwner && (
+                    <Button size="sm" onClick={() => setBulkDeleteOpen(true)} data-testid="school-bulk-delete-btn"
+                      className="bg-red-600 hover:bg-red-700 text-white h-8 ml-auto">
+                      <Trash2 className="mr-1 h-3 w-3" /> Delete selected
+                    </Button>
+                  )}
                 </div>
               )}
               {/* Mobile: school cards */}
@@ -1044,6 +1064,14 @@ export default function LeadsCRM() {
         </div>
 
         {/* ── DIALOGS ───────────────────────────────────────────────── */}
+
+        <BulkDeleteSchoolsDialog
+          open={bulkDeleteOpen}
+          onOpenChange={setBulkDeleteOpen}
+          mode="selected"
+          schoolIds={Array.from(selectedSchoolIds)}
+          onDeleted={() => { setSelectedSchoolIds(new Set()); crm.fetchData(); }}
+        />
 
         <ContactDetailPanel
           detailContact={crm.detailContact}
