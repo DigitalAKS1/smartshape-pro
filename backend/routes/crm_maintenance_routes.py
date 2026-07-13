@@ -276,9 +276,20 @@ async def delete_blank_childless_schools(request: Request):
 # idempotent / re-runnable.
 # ===========================================================================
 
-from import_engine import normalize_phone, phone_is_lossy  # reuse the one true normalizer
+from import_engine import normalize_phone, phone_is_lossy, clean_text  # reuse the one true helpers
 
 _CAP = 1000000
+
+# Collections that carry a school_id FIELD on their documents (so a merge must
+# reassign that field survivor<-duplicate). Derived from cascade_delete.build_school_plan
+# — every entry there filtered by a bare {"school_id": sid}. Children linked only via
+# lead_id/quotation_id/order_id (tasks, followups, call_notes, catalogue_selections,
+# order_items, payments, ...) follow their parent automatically and need no rewrite.
+_SCHOOL_ID_COLLECTIONS = (
+    "leads", "contacts", "quotations", "orders", "dispatches", "invoices",
+    "visit_plans", "school_notifications", "school_requests", "teachers",
+    "fms_flows",
+)
 
 
 def _blankish(v) -> bool:
@@ -674,4 +685,218 @@ async def repair_phones(request: Request):
                         f"normalized {result['totals']['recoverable']}, "
                         f"flagged {result['totals']['lossy']} lossy "
                         f"(reason: {reason or 'n/a'})")
+    return result
+
+
+# ===========================================================================
+# PHASE 4b — SCHOOL DEDUP / MERGE (name-collision merge the ID-upsert can't do)
+# ---------------------------------------------------------------------------
+# Two schools with the SAME (normalized) name but DIFFERENT school_ids can't be
+# merged by the ID-based import upsert. Merge = FK-reassign every child from the
+# duplicate(s) onto a survivor school_id, then snapshot-and-delete the emptied
+# duplicate school doc (restorable). Superadmin-gated, dry_run defaults TRUE,
+# every write snapshotted first.
+# ===========================================================================
+
+
+def _norm_school_name(name) -> str:
+    """Canonical key for name-collision grouping: mojibake-repaired, lowercased,
+    trimmed, internal whitespace collapsed. 'ST. XAVIERâ€™S  High School ' and
+    'St. Xavier's High School' collapse to the same key."""
+    cleaned = clean_text(name) if isinstance(name, str) else ""
+    cleaned = (cleaned or "").strip().lower()
+    return " ".join(cleaned.split())
+
+
+async def _school_child_counts(sid: str) -> dict:
+    """Non-deleted child counts for one school across the headline collections."""
+    out = {}
+    for coll in _CHILD_COLLECTIONS:
+        out[coll] = await db[coll].count_documents(
+            {"school_id": sid, "is_deleted": {"$ne": True}})
+    return out
+
+
+@router.get("/duplicate-schools")
+async def duplicate_schools(request: Request):
+    """SUPERADMIN, READ-ONLY. Group non-deleted schools by NORMALIZED name and
+    return every group with >1 distinct school_id — the merge-candidate report.
+    Groups sorted by total children desc. No writes."""
+    user = await get_current_user(request)
+    require_superadmin(user)
+
+    schools = await db.schools.find(
+        {"is_deleted": {"$ne": True}},
+        {"_id": 0, "school_id": 1, "school_name": 1, "city": 1, "created_at": 1},
+    ).to_list(_CAP)
+
+    groups = {}
+    for s in schools:
+        key = _norm_school_name(s.get("school_name"))
+        if not key:
+            continue   # blank-name rows are the delete-blank-childless job, not merge
+        groups.setdefault(key, []).append(s)
+
+    out = []
+    for key, members in groups.items():
+        distinct_ids = {m["school_id"] for m in members}
+        if len(distinct_ids) < 2:
+            continue
+        detailed = []
+        group_total = 0
+        for m in members:
+            children = await _school_child_counts(m["school_id"])
+            group_total += sum(children.values())
+            detailed.append({
+                "school_id": m["school_id"],
+                "school_name": m.get("school_name", ""),
+                "city": m.get("city", ""),
+                "created_at": m.get("created_at", ""),
+                "children": children,
+            })
+        detailed.sort(key=lambda d: sum(d["children"].values()), reverse=True)
+        out.append({
+            "normalized_name": key,
+            "total_children": group_total,
+            "schools": detailed,
+        })
+
+    out.sort(key=lambda g: g["total_children"], reverse=True)
+    return {"groups": out, "group_count": len(out)}
+
+
+async def _move_children_counts(merge_id: str) -> dict:
+    """Per-collection count of docs whose school_id == merge_id (what a merge moves)."""
+    counts = {}
+    for coll in _SCHOOL_ID_COLLECTIONS:
+        n = await db[coll].count_documents({"school_id": merge_id})
+        if n:
+            counts[coll] = n
+    return counts
+
+
+@router.post("/schools/merge")
+async def merge_schools(request: Request):
+    """SUPERADMIN. Merge duplicate schools into one survivor.
+
+    Body: {survivor_id, merge_ids:[...], dry_run:true, confirm:false, reason}
+      - dry_run defaults TRUE → per-merge child move counts + survivor totals; no writes.
+      - real run needs dry_run=false AND confirm==true.
+    Reassigns every child (school_id: merge_id -> survivor_id) across all
+    school_id-bearing collections, fills only-blank survivor fields from a merge
+    doc, then snapshot_and_delete's the emptied duplicate school rows (restorable).
+    Idempotent-ish: re-running with already-merged ids moves 0 children."""
+    user = await get_current_user(request)
+    require_superadmin(user)
+    body = await request.json()
+
+    survivor_id = (body.get("survivor_id") or "").strip()
+    merge_ids = body.get("merge_ids") or []
+    dry_run = body.get("dry_run", True)
+    confirm = bool(body.get("confirm", False))
+    reason = body.get("reason", "") or ""
+
+    if not survivor_id:
+        raise HTTPException(status_code=400, detail="survivor_id is required")
+    if not isinstance(merge_ids, list) or not merge_ids:
+        raise HTTPException(status_code=400, detail="merge_ids must be a non-empty list")
+    _seen = set()   # order-preserving dedup + drop blanks (fill is "first wins")
+    merge_ids = [x for x in merge_ids if x and not (x in _seen or _seen.add(x))]
+    if not merge_ids:
+        raise HTTPException(status_code=400, detail="merge_ids must be a non-empty list")
+    if survivor_id in merge_ids:
+        raise HTTPException(status_code=400, detail="survivor_id cannot be in merge_ids")
+
+    survivor = await db.schools.find_one({"school_id": survivor_id}, {"_id": 0})
+    if not survivor:
+        raise HTTPException(status_code=400, detail=f"survivor school {survivor_id} not found")
+    merge_docs = []
+    for mid in merge_ids:
+        doc = await db.schools.find_one({"school_id": mid}, {"_id": 0})
+        if not doc:
+            raise HTTPException(status_code=400, detail=f"merge school {mid} not found")
+        merge_docs.append(doc)
+
+    # Per-merge move counts + aggregate.
+    per_merge = {}
+    moved_total = {}
+    for mid in merge_ids:
+        counts = await _move_children_counts(mid)
+        per_merge[mid] = counts
+        for coll, n in counts.items():
+            moved_total[coll] = moved_total.get(coll, 0) + n
+
+    # Survivor's resulting headline totals (current + everything moving in).
+    survivor_now = await _school_child_counts(survivor_id)
+    survivor_after = dict(survivor_now)
+    for mid in merge_ids:
+        for coll in _CHILD_COLLECTIONS:
+            survivor_after[coll] = survivor_after.get(coll, 0) + per_merge[mid].get(coll, 0)
+
+    result = {
+        "dry_run": bool(dry_run),
+        "survivor_id": survivor_id,
+        "merge_ids": merge_ids,
+        "per_merge_moves": per_merge,
+        "moved": moved_total,
+        "survivor_children_before": survivor_now,
+        "survivor_children_after": survivor_after,
+    }
+    if dry_run:
+        return result
+    if not confirm:
+        raise HTTPException(status_code=400, detail="confirm must be true for a real merge")
+
+    from audit_backup import snapshot_only, snapshot_and_delete
+
+    # 1. Pre-image snapshot of the duplicate school docs BEFORE any change.
+    pre = await snapshot_only(
+        [("schools", {"school_id": {"$in": merge_ids}})],
+        root_type="school_merge", root_id=survivor_id,
+        root_label=f"merge {len(merge_ids)} dup schools into {survivor_id}",
+        backed_up_by=user.get("email", ""), reason=reason)
+    result["preimage_backup_id"] = pre["backup_id"]
+
+    # 2. Reassign every child FK survivor<-merge across school_id-bearing collections.
+    applied_moves = {}
+    for coll in _SCHOOL_ID_COLLECTIONS:
+        r = await db[coll].update_many(
+            {"school_id": {"$in": merge_ids}}, {"$set": {"school_id": survivor_id}})
+        n = getattr(r, "modified_count", 0) or 0
+        if n:
+            applied_moves[coll] = n
+    result["moved"] = applied_moves
+
+    # 3. Fill ONLY-blank survivor fields from the first merge doc that has a value.
+    fillable = ("school_name", "city", "state", "pincode", "phone", "email",
+                "school_type", "school_strength", "assigned_to", "assigned_name")
+    fill = {}
+    for f in fillable:
+        cur = survivor.get(f)
+        if cur in (None, "", 0):
+            for doc in merge_docs:
+                v = doc.get(f)
+                if v not in (None, "", 0):
+                    fill[f] = v
+                    break
+    if fill:
+        await db.schools.update_one({"school_id": survivor_id}, {"$set": fill})
+        result["survivor_filled"] = fill
+
+    # 4. Snapshot-and-delete the now-empty duplicate school docs (restorable).
+    del_res = await snapshot_and_delete(
+        [("schools", {"school_id": {"$in": merge_ids}})],
+        root_type="school_merge_removed", root_id=survivor_id,
+        root_label=f"removed {len(merge_ids)} merged dup schools",
+        deleted_by=user.get("email", ""), reason=reason)
+    result["removed_backup_id"] = del_res["backup_id"]
+    result["backups"] = [pre["backup_id"], del_res["backup_id"]]
+    result["merged"] = merge_ids
+
+    for mid in merge_ids:
+        await _log_activity(
+            user.get("email", ""), "school_merge", mid,
+            f"merged school {mid} into {survivor_id} "
+            f"(backups {pre['backup_id']}/{del_res['backup_id']}; "
+            f"reason: {reason or 'n/a'})")
     return result
