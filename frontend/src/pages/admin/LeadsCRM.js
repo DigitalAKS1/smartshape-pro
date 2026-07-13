@@ -31,13 +31,35 @@ import ContactDetailPanel from '../../components/crm/ContactDetailPanel';
 import TasksTab from '../../components/crm/TasksTab';
 import OwnerDeleteButton from '../../components/common/OwnerDeleteButton';
 import MultiFilterBar from '../../components/crm/MultiFilterBar';
-import { deriveFilterOptions, buildCrmContext, matchesCrmFilter } from '../../lib/crmFilter';
+import FilterRail from '../../components/crm/FilterRail';
+import SearchFacetSuggestions from '../../components/crm/SearchFacetSuggestions';
+import { deriveFilterOptions, buildCrmContext, matchesCrmFilter, hasActiveFilters } from '../../lib/crmFilter';
 
 export default function LeadsCRM() {
   const navigate = useNavigate();
   const { isDark } = useTheme();
   const crm = useLeadsCRM();
   const [leadsFilter, setLeadsFilter] = React.useState({});
+
+  // Honest N-of-M for the FilterRail header + the current tab's badge (O5),
+  // per entity kind — schools/contacts/leads all read crm.masterFiltered.
+  const activeContacts = (list) => list.filter(c => !c.converted_to_lead).length;
+  const railTotals = {
+    schools: { result: crm.masterFiltered.schools.length, total: crm.schoolsList.length },
+    contacts: { result: activeContacts(crm.masterFiltered.contacts), total: activeContacts(crm.contactsList) },
+    list: { result: crm.filteredLeads.length, total: crm.leadsList.length },
+    pipeline: { result: crm.filteredLeads.length, total: crm.leadsList.length },
+    tasks: { result: crm.tasksList.length, total: crm.tasksList.length },
+    reports: { result: crm.leadsList.length, total: crm.leadsList.length },
+  }[crm.activeTab] || { result: 0, total: 0 };
+
+  const addSuggestedFacet = (s) => {
+    crm.setMasterFilter(f => {
+      const cur = f[s.facet] || [];
+      return cur.includes(s.id) ? f : { ...f, [s.facet]: [...cur, s.id] };
+    });
+    crm.setSearchTerm('');
+  };
 
   // Theme shorthand
   const card = isDark ? 'bg-[var(--bg-card)] border-[var(--border-color)]' : 'bg-white border-[var(--border-color)]';
@@ -203,8 +225,23 @@ export default function LeadsCRM() {
           </div>
         </div>
 
+        {/* ── Filter rail + main content ───────────────────────────────
+            Left rail (O15) applies the master filter to schools/contacts/
+            leads together (O4); everything to its right — forecast, tabs,
+            tab content — reads crm.masterFiltered so counts stay honest (O5). */}
+        <div className="flex flex-col lg:flex-row gap-4 items-start">
+          <FilterRail
+            options={crm.filterOptions}
+            value={crm.masterFilter}
+            onChange={crm.setMasterFilter}
+            resultCount={railTotals.result}
+            totalCount={railTotals.total}
+            countFor={crm.masterCountFor}
+          />
+          <div className="flex-1 min-w-0 space-y-5">
+
         {/* ── Forecast + needs-attention summary ─────────────────────── */}
-        <ForecastBar />
+        <ForecastBar leads={crm.masterFiltered.leads} filterActive={hasActiveFilters(crm.masterFilter) || !!crm.searchTerm.trim()} />
 
         {/* ── View Toggle + Bulk Actions ─────────────────────────────── */}
         {crm.activeTab === 'pipeline' && (
@@ -270,6 +307,16 @@ export default function LeadsCRM() {
           <div className="relative flex-1">
             <Search className={`absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 ${textMuted}`} />
             <Input value={crm.searchTerm} onChange={e => crm.setSearchTerm(e.target.value)} placeholder="Search school, contact, phone, city..." className={`pl-10 ${inputCls}`} data-testid="search-input" />
+            {/* Global search feeds the master filter (O16); typing "Rohini" suggests
+                "City: Rohini · N" so it becomes a real, reusable filter (O3) instead of
+                a one-off text match. Plain text search still works if ignored. */}
+            <SearchFacetSuggestions
+              term={crm.searchTerm}
+              options={crm.filterOptions}
+              countFor={crm.masterCountFor}
+              applied={crm.masterFilter}
+              onAdd={addSuggestedFacet}
+            />
           </div>
           <select value={crm.filterType} onChange={e => crm.setFilterType(e.target.value)} className={`h-10 px-3 rounded-md text-sm ${inputCls}`} data-testid="filter-select">
             <option value="all">All Types</option>
@@ -290,11 +337,11 @@ export default function LeadsCRM() {
             <button key={tab} onClick={() => crm.setActiveTab(tab)}
               className={`flex-shrink-0 px-3 py-2 rounded text-xs sm:text-sm font-medium transition-all capitalize ${crm.activeTab === tab ? 'bg-[#e94560] text-white' : `${textSec} ${hoverBg}`}`}
               data-testid={`tab-${tab}`}>
-              {tab === 'contacts' ? `Contacts (${crm.contactsList.filter(c => !c.converted_to_lead).length})`
+              {tab === 'contacts' ? `Contacts (${activeContacts(crm.masterFiltered.contacts)})`
                 : tab === 'pipeline' ? 'Pipeline'
                 : tab === 'list' ? `Leads (${crm.filteredLeads.length})`
                 : tab === 'tasks' ? `Tasks (${crm.tasksList.length})`
-                : tab === 'schools' ? `Schools (${crm.schoolsList.length})`
+                : tab === 'schools' ? `Schools (${crm.masterFiltered.schools.length})`
                 : 'Reports'}
             </button>
           ))}
@@ -303,7 +350,7 @@ export default function LeadsCRM() {
         {/* ── CONTACTS TAB ──────────────────────────────────────────── */}
         {crm.activeTab === 'contacts' && (
           <ContactsTab
-            contactsList={crm.contactsList}
+            contactsList={crm.masterFiltered.contacts}
             leadsList={crm.leadsList}
             schoolsList={crm.schoolsList}
             sourcesList={crm.sourcesList}
@@ -643,11 +690,10 @@ export default function LeadsCRM() {
 
         {/* ── SCHOOLS TAB ───────────────────────────────────────────── */}
         {crm.activeTab === 'schools' && (() => {
-          let schFiltered = crm.schoolsList;
-          if (crm.searchTerm) {
-            const s = crm.searchTerm.toLowerCase();
-            schFiltered = schFiltered.filter(sc => (sc.school_name || '').toLowerCase().includes(s) || (sc.email || '').toLowerCase().includes(s) || (sc.city || '').toLowerCase().includes(s) || (sc.phone || '').includes(s) || (sc.primary_contact_name || '').toLowerCase().includes(s));
-          }
+          // masterFiltered.schools already applies the search box + the left
+          // FilterRail (Owner/City/Type/Source/Stage/Tag — O17) identically to
+          // how leads/contacts get filtered; `unassignedOnly` layers on top.
+          let schFiltered = crm.masterFiltered.schools;
           if (unassignedOnly) schFiltered = schFiltered.filter(sc => !(sc.assigned_to || '').trim());
           schFiltered = crm.sortData(schFiltered, crm.sortConfig.key, crm.sortConfig.dir);
           return (
@@ -962,6 +1008,9 @@ export default function LeadsCRM() {
             </div>
           );
         })()}
+
+          </div>
+        </div>
 
         {/* ── DIALOGS ───────────────────────────────────────────────── */}
 

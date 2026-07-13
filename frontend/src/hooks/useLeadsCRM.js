@@ -1,6 +1,8 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { STAGES, SCHOOL_TYPES } from '../lib/crmConstants';
+import { deriveFilterOptions } from '../lib/crmFilter';
+import { buildMasterContexts, computeMasterFiltered, makeCountFor, tabKind } from '../lib/crmMasterFilter';
 import {
   schools as schoolsApi,
   leads as leadsApi,
@@ -47,6 +49,10 @@ export default function useLeadsCRM() {
   const [filterTag, setFilterTag] = useState('');
   const [filterRole, setFilterRole] = useState('');
   const [filterContactTag, setFilterContactTag] = useState('');
+  // Master filter (left FilterRail, O4): applies to schools/contacts/leads alike,
+  // across every tab. Detail filters (filterType/filterTag/filterRole/MultiFilterBar
+  // above) stay as per-tab refinements layered on top of this.
+  const [masterFilter, setMasterFilter] = useState({});
   const [sortConfig, setSortConfig] = useState({ key: '', dir: 'asc' });
   const [contactPage, setContactPage] = useState(1);
   const contactsPerPage = 10;
@@ -690,12 +696,38 @@ export default function useLeadsCRM() {
     return contact.designation || null;
   };
 
-  // Filtered leads (for pipeline / kanban / table views)
-  const filteredLeads = leadsList.filter(l => {
-    if (searchTerm) {
-      const s = searchTerm.toLowerCase();
-      if (!((l.company_name || '').toLowerCase().includes(s) || (l.contact_name || '').toLowerCase().includes(s) || (l.contact_phone || '').includes(s) || (l.school_city || '').toLowerCase().includes(s))) return false;
-    }
+  // ─────────────────────────────────────────────────────────────────────────────
+  // MASTER FILTER (left FilterRail — O1,O4,O5,O16,O17) — applies search + the
+  // rail's facets to schools/contacts/leads identically, so every tab and badge
+  // can read the same honest counts. Built on the already-shipped crmFilter.js
+  // engine via the thin crmMasterFilter.js glue (kept out of crmFilter.js itself).
+  // ─────────────────────────────────────────────────────────────────────────────
+  const filterOptions = useMemo(() => deriveFilterOptions({
+    contacts: contactsList, leads: leadsList, schools: schoolsList,
+    sources: sourcesList, roles: rolesList, tags: tagsList, salespersons: spList,
+  }), [contactsList, leadsList, schoolsList, sourcesList, rolesList, tagsList, spList]);
+
+  const masterContexts = useMemo(() => buildMasterContexts({
+    schoolsList, leadsList, contactsList, rolesList,
+  }), [schoolsList, leadsList, contactsList, rolesList]);
+
+  const masterFiltered = useMemo(() => computeMasterFiltered({
+    schoolsList, contactsList, leadsList, contexts: masterContexts, searchTerm, masterFilter,
+  }), [schoolsList, contactsList, leadsList, masterContexts, searchTerm, masterFilter]);
+
+  // Live "if this facet value were added, how many rows remain" for the
+  // *current tab's* entity type — feeds FilterRail's per-option counts and the
+  // search-suggestion trailing count.
+  const activeTabKind = tabKind(activeTab);
+  const activeTabList = activeTabKind === 'school' ? schoolsList : activeTabKind === 'contact' ? contactsList : leadsList;
+  const masterCountFor = useMemo(() => makeCountFor({
+    kind: activeTabKind, list: activeTabList, ctx: masterContexts[activeTabKind], searchTerm, masterFilter,
+  }), [activeTabKind, activeTabList, masterContexts, searchTerm, masterFilter]);
+
+  // Filtered leads (for list / pipeline / kanban / table views) — starts from
+  // the master-filtered lead pool, then layers the existing per-tab detail
+  // filters (lead-type / school-type quick-select + tag) on top.
+  const filteredLeads = masterFiltered.leads.filter(l => {
     if (filterType !== 'all') {
       if (['hot', 'warm', 'cold'].includes(filterType) && l.lead_type !== filterType) return false;
       if (SCHOOL_TYPES.includes(filterType) && l.school_type !== filterType) return false;
@@ -719,6 +751,7 @@ export default function useLeadsCRM() {
     filterTag, setFilterTag,
     filterRole, setFilterRole,
     filterContactTag, setFilterContactTag,
+    masterFilter, setMasterFilter, masterFiltered, filterOptions, masterCountFor, activeTabKind,
     sortConfig, toggleSort, sortIndicator, sortData,
     contactPage, setContactPage, contactsPerPage,
     leadView, setLeadView,

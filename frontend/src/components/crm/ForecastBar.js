@@ -22,7 +22,14 @@ function Stat({ label, value, sub, icon: Icon, tone }) {
   );
 }
 
-export default function ForecastBar() {
+// `leads` (optional): the current master-filtered lead pool from useLeadsCRM
+// (O5). Money figures (pipeline value / weighted forecast) stay pipeline-wide —
+// they need the backend's quotation-linked values + admin-tunable stage
+// probabilities, which aren't available client-side — but "Needs attention"
+// is filtered exactly by intersecting with `leads`, since that's just row
+// membership. `filterActive` shows a small note so the distinction is honest,
+// not silently inconsistent.
+export default function ForecastBar({ leads, filterActive = false }) {
   const [fc, setFc] = useState(null);
   const [attn, setAttn] = useState([]);
 
@@ -41,7 +48,9 @@ export default function ForecastBar() {
 
   if (!fc) return null;
 
-  const reasonCount = (code) => attn.filter((x) => (x.reasons || []).includes(code)).length;
+  const filteredIds = filterActive && Array.isArray(leads) ? new Set(leads.map((l) => l.lead_id)) : null;
+  const scopedAttn = filteredIds ? attn.filter((x) => filteredIds.has(x.lead_id)) : attn;
+  const reasonCount = (code) => scopedAttn.filter((x) => (x.reasons || []).includes(code)).length;
   const byStage = fc.by_stage || {};
   const topStage = STAGES
     .filter((s) => byStage[s.id])
@@ -50,14 +59,14 @@ export default function ForecastBar() {
 
   return (
     <div className="grid grid-cols-2 lg:grid-cols-4 gap-2" data-testid="crm-forecast-bar">
-      <Stat label="Open pipeline value" value={inr(fc.total_value)} icon={TrendingUp} />
-      <Stat label="Weighted forecast" value={inr(fc.total_weighted)} icon={TrendingUp} tone="accent" />
+      <Stat label="Open pipeline value" value={inr(fc.total_value)} icon={TrendingUp} sub={filterActive ? 'Whole pipeline (unaffected by filter)' : undefined} />
+      <Stat label="Weighted forecast" value={inr(fc.total_weighted)} icon={TrendingUp} tone="accent" sub={filterActive ? 'Whole pipeline (unaffected by filter)' : undefined} />
       <Stat
         label="Needs attention"
-        value={String(attn.length)}
-        tone={attn.length ? 'warn' : 'ok'}
+        value={String(scopedAttn.length)}
+        tone={scopedAttn.length ? 'warn' : 'ok'}
         icon={AlertTriangle}
-        sub={`${reasonCount('overdue')} overdue · ${reasonCount('stuck')} stuck · ${reasonCount('no_next_action')} no next step`}
+        sub={`${reasonCount('overdue')} overdue · ${reasonCount('stuck')} stuck · ${reasonCount('no_next_action')} no next step${filterActive ? ' · filtered' : ''}`}
       />
       <Stat
         label="Top weighted stage"
