@@ -28,7 +28,11 @@ This is the living list. The owner adds here; nothing is dropped.
 | O15 | Filter area lives in a **left sidebar / filter rail**, NOT a top bar (Zoho-Bigin style) | B — Filter UX |
 | O16 | Filter **search across all data** (global search feeds the filter, not just leads) | B — Filter UX |
 | O17 | **Tag** filter is very important and must work in **Contacts and Schools** tabs too, not just Leads | B (master facet — covers it) |
+| O18 | **Dynamic fields**: add a field once in a **master area** → it auto-appears across the CRM (forms, **table view**, filter). Aligned, dynamic table. | A/field-registry — follow-on wave |
 | _…_ | _(owner to add more here)_ | |
+
+**Decisions (owner, 2026-07-10):** build B + A-safe **in parallel**; **hold** A-risky prod
+migrations until B + A-safe ship (backup + staged later). O18 = follow-on wave after this one.
 
 ---
 
@@ -112,6 +116,71 @@ Tag/City/Source/Stage/Owner/Type all live in the rail and apply across **every**
 - **A10** One-time backfill of `school_id` FKs, then drop name-fallback joins in School-360 (D8).
 - **A11** Repair phone data: strip recoverable (`.0`, spaces, `+91`); flag unrecoverable sci-notation
   rows for re-import from source (O13). _Read-only detect first; repair on a snapshot._
+
+---
+
+## Phased roadmap (detail)
+
+Each phase ends with an independently shippable, testable deliverable. Owner reviews at each ✅ gate.
+
+### Phase 0 — Foundations ✅ DONE
+| Task | Deliverable | Evidence |
+| --- | --- | --- |
+| P0.1 | Ownership scoping fix — reassign removes previous owner (O2) | `1730f67`, 7 pytest |
+| P0.2 | Filter engine — Owner facet, source roll-up, `suggestFacets` (O3, O6) | `a6ccf06`, 17 jest |
+| P0.3 | Diagnosis + consolidated program (O1–O18) | `8a4b061` |
+
+### Phase 1 — Leads Filter UX  ·  Rohan (frontend)  ·  runs parallel with Phase 2
+Zoho-Bigin quality bar (O14). Acceptance: filter lives in a left rail (O15); every tab badge +
+ForecastBar reflect the active filter (O5); Owner picker is searchable (O11); Tag/City/Source/Stage/
+Owner apply on Schools, Contacts and Leads (O17); rail is visually distinct from the search bar (O10).
+| Task | Deliverable |
+| --- | --- |
+| P1.1 | `FilterRail.js` — collapsible left sidebar; vertical facet groups each with a live count; searchable Owner picker; Clear-all; sticky `N of M` header |
+| P1.2 | `useLeadsCRM`: `masterFilter` state + `masterFiltered = {schools,contacts,leads}` memo; all badges + ForecastBar read it |
+| P1.3 | Top search → global match across all 3 entities (O16) + `suggestFacets` chips that drop into the rail (O3) |
+| P1.4 | `MultiFilterBar` demoted to per-tab **detail** facets (Lead type, Strength, Designation) under the rail |
+| P1.5 | Component/jest tests + `craco build` clean |
+
+### Phase 2 — Import safety (A-safe)  ·  Arjun (backend)  ·  runs parallel with Phase 1
+Acceptance: a phone in any sheet imports as digits, never `E+11`/`.0` (O13); Assign To resolves a
+name to the rep's email so imported rows are truly owned (O7); a School/Contact/Lead ID round-trips
+and updates in place on re-import (O12); `import_date` + `assigned_date` are written (O8, O9). No prod
+migration, no live-DB access; tests use `smartshape_test`.
+| Task | Deliverable |
+| --- | --- |
+| P2.1 | Text-safe parser: integral numerics `str(int(v))`, ISO dates, phone/id columns as text; warn on sci-notation CSV cells |
+| P2.2 | `normalize_phone()` → store `phone_norm` (indexed); every dedup path uses it (D6) |
+| P2.3 | `assigned_to` name→email resolution on import (reuse `_resolve_owner`) (O7) |
+| P2.4 | New fields `import_date` (at import) + `assigned_date` (on any assign, incl. cascade/reassign) (O8, O9) |
+| P2.5 | ID upsert precedence id → name+city → phone for all 3 entities; honor well-formed supplied id; add `contact_id`/`lead_id` control keys (O12) |
+| P2.6 | Enable lead creation from import (drop hardcoded `create_leads:false`); dry-run + per-row error report; stop silent >1000-row truncation |
+| P2.7 | pytest coverage (force-add to `backend/tests`) |
+
+### Phase 3 — Dates into filter + sort  ·  Rohan + Arjun  ·  after P1 + P2.4
+| Task | Deliverable |
+| --- | --- |
+| P3.1 | `import_date` + `assigned_date` as rail facets (date-range) |
+| P3.2 | Sortable table columns: Assigned Date, Assign To (O9) |
+
+### Phase 4 — Deep integrity (A-risky) ·  HELD — needs Atlas backup + staged sign-off
+| Task | Deliverable |
+| --- | --- |
+| P4.1 | Read-only detect pass: counts of dangling `lead.contact_id`, duplicate `school_id`/`lead_id`, phone rows (`E+11` lost vs `.0` recoverable) |
+| P4.2 | Fresh Atlas backup before any write |
+| P4.3 | Unify link model `lead.contact_id ⇄ contact.lead_id`; migrate `converted_from_contact` (D1) |
+| P4.4 | Delete-cascade cleanup: contact-delete repoints `lead.contact_id`; school soft-delete handles children (D2, D5) |
+| P4.5 | De-dup `school_id`/`lead_id`, then unique indexes (D3) |
+| P4.6 | Backfill `school_id` FKs, drop name-fallback joins in School-360 (D8) |
+| P4.7 | Phone repair: strip recoverable; flag unrecoverable for source re-import (A11) |
+
+### Phase 5 — Dynamic fields (O18) ·  follow-on wave
+| Task | Deliverable |
+| --- | --- |
+| P5.1 | Master field-registry UI: define field (name, type, entity, options) |
+| P5.2 | `custom_fields` map on School/Contact/Lead (no migration) |
+| P5.3 | Auto-render defined fields in the entity forms |
+| P5.4 | Auto-column in the table view + auto-facet in the filter rail |
 
 ---
 
