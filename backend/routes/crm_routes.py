@@ -770,10 +770,38 @@ async def _resolve_tags(tag_names_or_ids: list, creator_email: str) -> list:
 
 # ==================== SCHOOL MASTER ====================
 
+def _owner_clause(email: str) -> dict:
+    """Sales ownership as a Mongo query fragment: a record is mine when it is
+    assigned to me, OR I created it AND it is still unassigned.
+
+    The `created_by` fallback only applies while `assigned_to` is blank/absent —
+    so the moment a school (or its contacts/leads) is assigned to someone else,
+    the original creator loses access. This is what makes a reassignment truly
+    remove the record from the previous owner. Keep `_owns` (below) in lockstep."""
+    return {"$or": [
+        {"assigned_to": email},
+        {"$and": [
+            {"created_by": email},
+            {"$or": [{"assigned_to": {"$in": ["", None]}},
+                     {"assigned_to": {"$exists": False}}]},
+        ]},
+    ]}
+
+
+def _owns(doc: dict, email: str) -> bool:
+    """In-memory mirror of `_owner_clause`, for guard checks on a single doc."""
+    if not doc:
+        return False
+    if doc.get("assigned_to") == email:
+        return True
+    return doc.get("created_by") == email and not (doc.get("assigned_to") or "")
+
+
 async def _owned_school_ids(email: str) -> list:
-    """School ids a sales user owns (assigned to them) or created — excludes deleted."""
+    """School ids a sales user owns — assigned to them, or created by them while
+    still unassigned (see `_owner_clause`). Excludes deleted."""
     cur = db.schools.find(
-        {"$or": [{"assigned_to": email}, {"created_by": email}], "is_deleted": {"$ne": True}},
+        {**_owner_clause(email), "is_deleted": {"$ne": True}},
         {"_id": 0, "school_id": 1},
     )
     return [s["school_id"] async for s in cur]
@@ -833,7 +861,7 @@ async def _user_can_access_school(user: dict, school: dict) -> bool:
     if team in ("accounts", "store"):
         return False
     email = user["email"]
-    if school.get("assigned_to") == email or school.get("created_by") == email:
+    if _owns(school, email):
         return True
     sid = school.get("school_id")
     if sid:
@@ -873,7 +901,7 @@ async def _user_can_mutate_contact(user: dict, contact: dict) -> bool:
     if team in ("accounts", "store"):
         return False
     email = user["email"]
-    if contact.get("created_by") == email or contact.get("assigned_to") == email:
+    if _owns(contact, email):
         return True
     sid = contact.get("school_id")
     if sid and sid in (await _owned_school_ids(email)):
@@ -930,8 +958,7 @@ async def get_schools(request: Request):
         own_leads = await db.leads.find({"assigned_to": user["email"]}, {"_id": 0, "school_id": 1}).to_list(10000)
         linked_school_ids = [l.get("school_id") for l in own_leads if l.get("school_id")]
         query = {"$or": [
-            {"assigned_to": user["email"]},
-            {"created_by": user["email"]},
+            *_owner_clause(user["email"])["$or"],
             {"school_id": {"$in": linked_school_ids}} if linked_school_ids else {"school_id": "__none__"},
         ]}
     query["is_deleted"] = {"$ne": True}
@@ -1398,8 +1425,7 @@ async def get_contacts(request: Request):
     else:  # sales — own + assigned + everything under owned schools
         owned = await _owned_school_ids(user["email"])
         query = {"$or": [
-            {"created_by": user["email"]},
-            {"assigned_to": user["email"]},
+            *_owner_clause(user["email"])["$or"],
             {"school_id": {"$in": owned}} if owned else {"contact_id": "__none__"},
         ]}
     query["is_deleted"] = {"$ne": True}
