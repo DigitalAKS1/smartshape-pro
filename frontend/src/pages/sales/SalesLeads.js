@@ -6,6 +6,7 @@ import { Search, Building2, Clock, LayoutGrid, AlignJustify, Phone, MessageSquar
 import { Input } from '../../components/ui/input';
 import { useSalesLeads } from '../../hooks/useSalesLeads';
 import { KanbanCard, STAGES, STAGE, TYPE_CLS, openWa } from '../../components/crm/SalesLeadCard';
+import { callViaBonvoice } from '../../components/crm/ContactDetailPanel';
 import { BottomSheet, LeadActionSheet } from '../../components/crm/SalesLeadDetailSheet';
 
 const card   = 'bg-[var(--bg-card)] border border-[var(--border-color)]';
@@ -149,10 +150,10 @@ export default function SalesLeads() {
                   )}
                   {lead.contact_phone && (
                     <div className="flex gap-2">
-                      <a href={`tel:${lead.contact_phone}`} onClick={e => e.stopPropagation()}
+                      <button onClick={e => { e.stopPropagation(); callViaBonvoice({ kind: 'lead', ref_id: lead.lead_id }); }}
                         className="flex items-center gap-1 text-[11px] px-3 py-1.5 rounded-lg bg-blue-500/10 text-blue-400 font-medium">
                         <Phone className="h-3 w-3" /> Call
-                      </a>
+                      </button>
                       <button onClick={e => { e.stopPropagation(); openSheet(lead); }}
                         className="flex items-center gap-1 text-[11px] px-3 py-1.5 rounded-lg bg-green-500/10 text-green-400 font-medium">
                         <MessageSquare className="h-3 w-3" /> WhatsApp

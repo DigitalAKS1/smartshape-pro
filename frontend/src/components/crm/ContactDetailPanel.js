@@ -1,7 +1,20 @@
 import React, { useState, useEffect } from 'react';
+import { toast } from 'sonner';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
-import { Phone, X, Clock, CheckCircle2 } from 'lucide-react';
+import { Phone, PhoneCall, X, Clock, CheckCircle2 } from 'lucide-react';
+import { telephonyApi } from '../../lib/api';
+
+/** Trigger a Bonvoice click-to-call. Rings the rep's phone first, then the customer.
+ *  Surfaces the backend's 409/422 message when calling is off or the record has no phone. */
+export async function callViaBonvoice({ kind, ref_id }) {
+  try {
+    await telephonyApi.placeCall({ kind, ref_id });
+    toast.info('Ringing your phone… pick up to connect the call.');
+  } catch (e) {
+    toast.error(e.response?.data?.detail || 'Could not start the call');
+  }
+}
 
 export const CALL_OUTCOMES = [
   { value: 'connected',    label: 'Connected',         color: 'bg-green-100 text-green-700' },
@@ -90,6 +103,12 @@ export default function ContactDetailPanel({
 
         {tab === 'call' && (
           <div className="p-4 space-y-5">
+            {detailContact.phone && (
+              <Button onClick={() => callViaBonvoice({ kind: 'contact', ref_id: detailContact.contact_id })}
+                size="sm" className="w-full bg-green-600 hover:bg-green-700 text-white">
+                <PhoneCall className="h-3.5 w-3.5 mr-1" /> Call {detailContact.phone}
+              </Button>
+            )}
             <div>
               <p className="text-xs font-medium text-[var(--text-secondary)] mb-2">Log a call</p>
               <select value={outcome} onChange={e => setOutcome(e.target.value)}
@@ -146,6 +165,9 @@ export default function ContactDetailPanel({
               <div key={i} className="border-b border-[var(--border-color)] pb-2">
                 <p className="text-xs font-medium text-[var(--text-primary)]">{a.label}</p>
                 {a.summary && <p className="text-[11px] text-[var(--text-secondary)]">{a.summary}</p>}
+                {a.recording_url && (
+                  <audio controls preload="none" src={a.recording_url} className="mt-1 h-8 w-full max-w-[240px]" />
+                )}
                 <p className="text-[10px] text-[var(--text-secondary)]">{(a.at || '').slice(0, 10)}</p>
               </div>
             ))}

@@ -1764,6 +1764,7 @@ async def get_contact_activity(contact_id: str, request: Request):
             "label": f"Call · {(n.get('outcome') or 'logged').replace('_', ' ').title()}",
             "summary": n.get("content", ""),
             "status": n.get("outcome", ""),
+            "recording_url": n.get("recording_url", ""),
             "at": n.get("created_at", ""),
         })
     async for f in db.followups.find(tq, {"_id": 0}).sort("followup_date", -1).limit(50):

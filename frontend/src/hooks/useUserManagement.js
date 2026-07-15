@@ -16,7 +16,7 @@ export function useUserManagement() {
   const emptyForm = {
     email: '', password: '', name: '', role: 'sales_person',
     sales_role: 'executive',
-    designation: '', phone: '',
+    designation: '', phone: '', calling_number: '',
     assigned_modules: [],
     module_permissions: {},
   };
@@ -54,6 +54,7 @@ export function useUserManagement() {
       email: u.email, password: '', name: u.name, role: u.role,
       sales_role: u.sales_role || 'executive',
       designation: u.designation || '', phone: u.phone || '',
+      calling_number: u.calling_number || '',
       assigned_modules: u.assigned_modules || [],
       module_permissions: u.module_permissions || {},
     });
@@ -86,7 +87,8 @@ export function useUserManagement() {
       if (editUser) {
         const payload = {
           name: form.name, role: form.role, designation: form.designation,
-          phone: form.phone, assigned_modules: form.assigned_modules,
+          phone: form.phone, calling_number: form.calling_number,
+          assigned_modules: form.assigned_modules,
           module_permissions: form.module_permissions,
           ...(form.role === 'sales_person' ? { sales_role: form.sales_role } : {}),
         };

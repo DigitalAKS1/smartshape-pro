@@ -1,6 +1,6 @@
 import React from 'react';
 import AdminLayout from '../../components/layouts/AdminLayout';
-import { Building2, Mail, MessageSquare, Clock, MapPin, Shield, Sparkles, Video, Cloud, FileSpreadsheet, Bell, Lock, GraduationCap, LayoutGrid } from 'lucide-react';
+import { Building2, Mail, MessageSquare, Clock, MapPin, Shield, Sparkles, Video, Cloud, FileSpreadsheet, Bell, Lock, GraduationCap, LayoutGrid, Phone } from 'lucide-react';
 import useAppSettings from '../../hooks/useAppSettings';
 import CompanySettingsSection from '../../components/settings/CompanySettingsSection';
 import SecuritySection from '../../components/settings/SecuritySection';
@@ -15,6 +15,7 @@ import DailyDigestSection from '../../components/settings/DailyDigestSection';
 import OrdersReportSection from '../../components/settings/OrdersReportSection';
 import SchoolPortalSection from '../../components/settings/SchoolPortalSection';
 import WhatsAppConnectionSection from '../../components/settings/WhatsAppConnectionSection';
+import CallingSection from '../../components/settings/CallingSection';
 import SecurityTab from '../../components/settings/SecurityTab';
 import IntegrationsOverview from '../../components/settings/IntegrationsOverview';
 
@@ -30,6 +31,7 @@ const GROUPS = [
     { id: 'whatsapp',      label: 'WhatsApp',       icon: MessageSquare,   statusKey: 'whatsapp' },
     { id: 'scheduled',     label: 'Scheduled WA',   icon: Clock },
     { id: 'zoom',          label: 'Zoom',           icon: Video,           statusKey: 'zoom' },
+    { id: 'calling',       label: 'Calling',        icon: Phone,           statusKey: 'telephony' },
     { id: 'cloudinary',    label: 'Cloudinary',     icon: Cloud,           statusKey: 'cloudinary' },
     { id: 'ai',            label: 'AI',             icon: Sparkles,        statusKey: 'ai' },
     { id: 'sheets',        label: 'Google Sheets',  icon: FileSpreadsheet, statusKey: 'sheets' },
@@ -210,6 +212,10 @@ export default function AppSettings() {
 
             {s.activeTab === 'zoom' && (
               <ZoomSection configured={status?.zoom?.configured} onSaved={s.refreshStatus} />
+            )}
+
+            {s.activeTab === 'calling' && (
+              <CallingSection configured={status?.telephony?.configured} onSaved={s.refreshStatus} />
             )}
 
             {s.activeTab === 'cloudinary' && (

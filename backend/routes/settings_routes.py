@@ -323,6 +323,89 @@ async def get_school_portal_settings(request: Request):
     }
 
 
+# ==================== TELEPHONY (BONVOICE) SETTINGS ====================
+
+import secrets as _secrets
+
+
+def _telephony_webhook_url(secret: str) -> str:
+    base = os.environ.get("PUBLIC_BASE", "https://app.smartshape.in").rstrip("/")
+    return f"{base}/api/telephony/bonvoice/webhook?secret={secret}"
+
+
+@router.get("/settings/telephony")
+async def get_telephony_settings(request: Request):
+    user = await get_current_user(request)
+    # Never returns the password/token — settings-read is enough.
+    require_module(user, "settings", "read")
+    cfg = await db.settings.find_one({"type": "telephony"}, {"_id": 0}) or {}
+    secret = cfg.get("webhook_secret", "")
+    return {
+        "provider": "bonvoice",
+        "enabled": bool(cfg.get("enabled", False)),
+        "username": cfg.get("username", ""),
+        "password_set": bool((cfg.get("password") or "").strip()),
+        "caller_id_did": cfg.get("caller_id_did", ""),
+        "token_set": bool((cfg.get("token") or "").strip()),
+        "webhook_secret": secret,
+        "webhook_url": _telephony_webhook_url(secret) if secret else "",
+    }
+
+
+@router.put("/settings/telephony")
+async def save_telephony_settings(request: Request):
+    user = await get_current_user(request)
+    require_module(user, "settings", "read_write")
+    body = await request.json()
+    update = {"type": "telephony", "provider": "bonvoice",
+              "updated_at": datetime.now(timezone.utc).isoformat()}
+    if "enabled" in body:
+        update["enabled"] = bool(body["enabled"])
+    for k in ("username", "caller_id_did"):
+        if (body.get(k) or "").strip():
+            update[k] = body[k].strip()
+    pwd = (body.get("password") or "").strip()
+    if pwd and pwd != "***":
+        update["password"] = pwd
+        update["token"] = ""   # creds changed -> force re-auth on next call
+    # generate a webhook secret on first save if none exists yet
+    existing = await db.settings.find_one({"type": "telephony"}, {"_id": 0}) or {}
+    if not existing.get("webhook_secret"):
+        update["webhook_secret"] = _secrets.token_urlsafe(24)
+    await db.settings.update_one({"type": "telephony"}, {"$set": update}, upsert=True)
+    return {"message": "Telephony settings saved"}
+
+
+@router.post("/settings/telephony/rotate-secret")
+async def rotate_telephony_secret(request: Request):
+    user = await get_current_user(request)
+    require_module(user, "settings", "read_write")
+    new = _secrets.token_urlsafe(24)
+    await db.settings.update_one(
+        {"type": "telephony"},
+        {"$set": {"webhook_secret": new, "updated_at": datetime.now(timezone.utc).isoformat()}},
+        upsert=True)
+    return {"webhook_secret": new, "webhook_url": _telephony_webhook_url(new)}
+
+
+@router.post("/settings/integrations/telephony/test")
+async def test_telephony(request: Request):
+    user = await get_current_user(request)
+    require_module(user, "settings", "read_write")
+    from services import telephony_service
+    cfg = await telephony_service.get_config()
+    if not (cfg.get("username") and cfg.get("password")):
+        return {"ok": False, "detail": "Bonvoice not configured"}
+    try:
+        import httpx
+        from services.providers import bonvoice
+        async with httpx.AsyncClient(timeout=15) as http:
+            token = await bonvoice.get_token(cfg, http)
+        return {"ok": bool(token), "detail": "Token acquired" if token else "No token returned"}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "detail": str(e)[:200]}
+
+
 # ==================== INTEGRATION STATUS + TEST ====================
 
 @router.get("/settings/integrations/status")
@@ -340,6 +423,7 @@ async def integrations_status(request: Request):
     ai = await db.settings.find_one({"type": "ai"}, {"_id": 0})
     sheets = await db.settings.find_one({"type": "sheets"}, {"_id": 0})
     sp = await db.settings.find_one({"type": "school_portal"}, {"_id": 0})
+    tel = await db.settings.find_one({"type": "telephony"}, {"_id": 0})
 
     return {
         "gmail":      {"configured": _has(email, "sender_email", "gmail_app_password")},
@@ -349,6 +433,7 @@ async def integrations_status(request: Request):
         "ai":         {"configured": bool(ai and (ai.get("gemini_api_key") or "").strip())},
         "sheets":     {"configured": _has(sheets, "client_id", "client_secret")},
         "school_portal": {"configured": bool(sp and (sp.get("email_link_enabled") or sp.get("magic_link_enabled") or sp.get("google_enabled")))},
+        "telephony":  {"configured": _has(tel, "username", "password")},
     }
 
 

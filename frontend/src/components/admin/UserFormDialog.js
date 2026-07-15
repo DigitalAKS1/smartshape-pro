@@ -133,6 +133,8 @@ export function UserFormDialog({
             </div>
             <div><Label className={`${textSec} text-xs uppercase tracking-wide mb-1.5 block`}>Phone</Label>
               <Input value={form.phone} onChange={e => setForm({...form, phone: e.target.value})} className={inputCls} placeholder="+91-9876543210" /></div>
+            <div><Label className={`${textSec} text-xs uppercase tracking-wide mb-1.5 block`}>Calling Number<FieldTooltip text="The rep's phone that Bonvoice rings first for click-to-call. Defaults to Phone if blank." /></Label>
+              <Input value={form.calling_number} onChange={e => setForm({...form, calling_number: e.target.value})} className={inputCls} placeholder="Defaults to Phone" /></div>
           </div>
 
           {/* Designation + Role */}

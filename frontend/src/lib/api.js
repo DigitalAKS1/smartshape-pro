@@ -862,6 +862,15 @@ export const integrationsApi = {
   test: (which) => API.post(`/settings/integrations/${which}/test`),
 };
 
+// Telephony (Bonvoice click-to-call)
+export const telephonyApi = {
+  getConfig:    ()     => API.get('/settings/telephony'),
+  saveConfig:   (body) => API.put('/settings/telephony', body),
+  rotateSecret: ()     => API.post('/settings/telephony/rotate-secret'),
+  placeCall:    (body) => API.post('/telephony/call', body),
+  getCall:      (id)   => API.get(`/telephony/calls/${id}`),
+};
+
 // Cloudinary
 export const cloudinaryApi = {
   get: () => API.get('/settings/cloudinary'),

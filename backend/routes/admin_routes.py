@@ -199,7 +199,7 @@ async def admin_update_user(user_id: str, request: Request):
 
     body = await request.json()
     allowed_fields = {}
-    for key in ("name", "role", "phone", "designation", "sales_role", "assigned_modules", "is_active", "module_permissions"):
+    for key in ("name", "role", "phone", "calling_number", "designation", "sales_role", "assigned_modules", "is_active", "module_permissions"):
         if key in body:
             allowed_fields[key] = body[key]
 
@@ -224,6 +224,8 @@ async def admin_update_user(user_id: str, request: Request):
         sp_update["name"] = allowed_fields["name"]
     if "phone" in allowed_fields:
         sp_update["phone"] = allowed_fields["phone"]
+    if "calling_number" in allowed_fields:
+        sp_update["calling_number"] = allowed_fields["calling_number"]
     if "is_active" in allowed_fields:
         sp_update["is_active"] = allowed_fields["is_active"]
     if sp_update:

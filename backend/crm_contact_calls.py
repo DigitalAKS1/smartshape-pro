@@ -8,8 +8,9 @@ import uuid
 from typing import Any, Dict, Optional, Tuple
 
 # The only outcomes a logged call may carry. Order is the UI dropdown order.
+# "failed" is used by auto-logged provider (Bonvoice) calls that never connected.
 CALL_OUTCOMES: Tuple[str, ...] = (
-    "connected", "no_answer", "busy", "wrong_number", "callback",
+    "connected", "no_answer", "busy", "wrong_number", "callback", "failed",
 )
 
 
