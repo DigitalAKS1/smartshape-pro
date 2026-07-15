@@ -34,6 +34,7 @@ import MultiFilterBar from '../../components/crm/MultiFilterBar';
 import FilterRail from '../../components/crm/FilterRail';
 import SearchFacetSuggestions from '../../components/crm/SearchFacetSuggestions';
 import DataCleanupPanel from '../../components/crm/DataCleanupPanel';
+import DataHealthPanel from '../../components/crm/DataHealthPanel';
 import BulkDeleteSchoolsDialog from '../../components/crm/BulkDeleteSchoolsDialog';
 import AssignToPicker from '../../components/crm/AssignToPicker';
 import { useIsOwner } from '../../hooks/usePermission';
@@ -747,9 +748,12 @@ export default function LeadsCRM() {
                       </button>
                       {unassignedOnly && <span className={`text-xs ${textMuted}`}>Showing {schFiltered.length} owner-less school{schFiltered.length !== 1 ? 's' : ''} — assign below</span>}
                     </div>
-                    {/* Superadmin-only (info@smartshape.in) junk-data cleanup — hidden for
-                        every other account, incl. regular admins (O19/O20). */}
-                    <DataCleanupPanel onCleaned={crm.fetchData} />
+                    {/* Superadmin-only (info@smartshape.in) — hidden for every other
+                        account, incl. regular admins (O19/O20/O21 integrity suite). */}
+                    <div className="flex items-center gap-2">
+                      <DataCleanupPanel onCleaned={crm.fetchData} />
+                      <DataHealthPanel />
+                    </div>
                   </div>
                 );
               })()}

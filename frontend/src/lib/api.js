@@ -271,6 +271,15 @@ export const crmMaintenance = {
   blankSchoolsAudit: () => API.get('/crm/maintenance/blank-schools-audit'),
   bulkDeleteSchools: (data) => API.post('/crm/maintenance/schools/bulk-delete', data),
   deleteBlankChildlessSchools: (data) => API.post('/crm/maintenance/schools/delete-blank-childless', data),
+  // CRM Data Health (integrity suite) — read-only scan + guarded, dry-run-first
+  // migrations/repairs. Every write endpoint here defaults dry_run:true
+  // server-side too; the caller must pass dry_run explicitly to write.
+  integrityDetect: () => API.get('/crm/maintenance/integrity-detect'),
+  duplicateSchools: () => API.get('/crm/maintenance/duplicate-schools'),
+  mergeSchools: (data) => API.post('/crm/maintenance/schools/merge', data),
+  repairPhones: (data) => API.post('/crm/maintenance/repair/phones', data),
+  unifyLinks: (data) => API.post('/crm/maintenance/migrate/unify-links', data),
+  repairDanglingContactLinks: (data) => API.post('/crm/maintenance/repair/dangling-contact-links', data),
 };
 
 // Contacts
