@@ -14,8 +14,11 @@ generic importer registered earlier in main.py under admin_router.
 """
 
 from datetime import datetime, timezone
+from io import BytesIO
 
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
+from fastapi.responses import Response
+from openpyxl import Workbook
 
 from auth_utils import get_current_user
 from rbac import require_admin, require_module
@@ -117,6 +120,18 @@ async def import_preview(
             counts["error"] += 1
             preview.append({"action": "error", "error": str(exc)})
 
+    # Reassign-on-import: which EXISTING schools would change owner. Bounded scan
+    # (owner reassignment is typically a small, targeted import); the UI renders
+    # these as a confirm-before-commit review panel.
+    reassignments = []
+    for kr in keyed[:2000]:
+        try:
+            plan = await _reassign_plan_for_row(kr)
+            if plan and plan["status"] in ("reassign", "owner_unmatched"):
+                reassignments.append(plan)
+        except Exception:
+            pass
+
     truncated = len(keyed) > MAX_IMPORT_ROWS
     return {
         "headers": headers,
@@ -128,6 +143,7 @@ async def import_preview(
         # nothing but the user later assigns a field).
         "rows_raw": rows[:MAX_IMPORT_ROWS],
         "counts": counts,
+        "reassignments": reassignments,
         "total": len(keyed),
         "truncated": truncated,   # true only past MAX_IMPORT_ROWS (never silent)
     }
@@ -147,6 +163,8 @@ async def import_execute(payload: dict, user: dict = Depends(get_current_user)):
     require_module(user, "settings", "read_write")
     rows = payload.get("rows_keyed") or []
     create_leads = bool(payload.get("create_leads"))
+    # School ids the admin confirmed for cascade-reassignment in the review step.
+    confirm_ids = set(payload.get("confirm_reassign_school_ids") or [])
 
     # Defense-in-depth: only allow keys that are real registered field keys
     # (plus the id control keys). Drops anything a client injects that is not a
@@ -166,12 +184,28 @@ async def import_execute(payload: dict, user: dict = Depends(get_current_user)):
     counts = {"create": 0, "update": 0, "needs_review": 0, "error": 0}
     errors: list = []      # {row, entity, error} — no longer swallowed to a count
     warnings: list = []    # {row, entity, field, message} — e.g. lossy phones
+    reassigned = 0
     for idx, kr in enumerate(rows):
         try:
             result = await ie.commit_row(db, kr, user, create_leads)
             counts[result["action"]] += 1
             for w in (result.get("warnings") or []):
                 warnings.append({"row": idx, **w})
+            # Cascade-reassign an EXISTING school's owner when the admin confirmed
+            # this school in the review step (the review only lists schools whose
+            # owner genuinely changes). commit_row already sets the school's own
+            # assigned_to, but NOT all its contacts/leads — the cascade completes
+            # that (and _assign_school_cascade skips leads already on this owner,
+            # so it never writes spurious reassignment history).
+            if result["action"] == "update" and result.get("school_id") in confirm_ids:
+                from routes.crm_routes import resolve_owner, _assign_school_cascade
+                raw_owner = (ie.split_values(kr).get("lead") or {}).get("assigned_to", "")
+                if raw_owner:
+                    owner_email, owner_name = await resolve_owner(db, raw_owner)
+                    if owner_email:
+                        await _assign_school_cascade(
+                            result["school_id"], owner_email, owner_name, user)
+                        reassigned += 1
         except Exception as exc:
             counts["error"] += 1
             errors.append({"row": idx, "entity": "row", "error": str(exc)})
@@ -181,6 +215,7 @@ async def import_execute(payload: dict, user: dict = Depends(get_current_user)):
         "counts": counts,
         "errors": errors,
         "warnings": warnings,
+        "reassigned": reassigned,
         "total": len(rows),
         "create_leads": create_leads,
         "at": datetime.now(timezone.utc).isoformat(),
@@ -220,3 +255,124 @@ async def import_template(
                 "School/Institute Name": s.get("school_name", ""),
             })
     return {"headers": headers, "rows": rows}
+
+
+# ---------------------------------------------------------------------------
+# Master-data export (round-trips back through preview/execute)
+# ---------------------------------------------------------------------------
+
+def _cell(value) -> str:
+    """Coerce a field value to a plain string for export cells."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    return str(value)
+
+
+async def _build_export(db) -> dict:
+    """Build {headers, rows} for ALL schools, in the same column shape the
+    importer accepts, so the exported file can be re-imported cleanly.
+
+    The owner ("Assign To") cell is exported as the human NAME, not the email,
+    so an admin can hand-edit it; the importer resolves the name back to an email.
+    """
+    fields = await fr.list_fields(db)
+    headers = ["School ID"] + [f["label"] for f in fields]
+
+    primary_contact_by_school: dict = {}
+    async for c in db.contacts.find({"is_deleted": {"$ne": True}}):
+        sid = c.get("school_id")
+        if sid and sid not in primary_contact_by_school:
+            primary_contact_by_school[sid] = c
+
+    rows = []
+    async for school in db.schools.find({"is_deleted": {"$ne": True}}):
+        ms = fr.merge_fields(school)
+        contact = primary_contact_by_school.get(school.get("school_id"), {})
+        mc = fr.merge_fields(contact)
+
+        row = {"School ID": school.get("school_id", "")}
+        for f in fields:
+            if f.get("maps_to") == "assigned_to":
+                value = school.get("assigned_name") or school.get("assigned_to", "")
+            else:
+                src = mc if f.get("entity") == "contact" else ms
+                value = src.get(f.get("maps_to") or f["key"], "")
+            row[f["label"]] = _cell(value)
+        rows.append(row)
+
+    return {"headers": headers, "rows": rows}
+
+
+@router.get("/master-import/export")
+async def master_export(user: dict = Depends(get_current_user)):
+    """ALL school master-data as JSON {headers, rows} (re-importable shape)."""
+    require_module(user, "settings", "read_write")
+    return await _build_export(db)
+
+
+@router.get("/master-import/export.xlsx")
+async def master_export_xlsx(user: dict = Depends(get_current_user)):
+    """ALL school master-data as a downloadable .xlsx workbook."""
+    require_module(user, "settings", "read_write")
+    data = await _build_export(db)
+    headers = data["headers"]
+    wb = Workbook()
+    ws = wb.active
+    ws.append(headers)
+    for row in data["rows"]:
+        ws.append([row.get(h, "") for h in headers])
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=school-master-export.xlsx"},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Reassign-on-import: owner-change planning (Feature A)
+# ---------------------------------------------------------------------------
+
+async def _reassign_plan_for_row(kr: dict):
+    """Decide whether a keyed import row changes an EXISTING school's owner.
+
+    Returns None for create rows and rows with no owner cell. Otherwise a dict
+    whose ``status`` is one of "reassign" / "owner_unmatched" / "unchanged".
+    Only "reassign" and "owner_unmatched" are surfaced to the review UI; the
+    cascade itself runs in execute, gated on the admin's confirmed set.
+    """
+    from routes.crm_routes import resolve_owner  # lazy: avoid load-order cycle
+    parts = ie.split_values(kr)
+    raw_owner = (parts.get("lead") or {}).get("assigned_to", "")
+    school_name = (parts.get("school") or {}).get("school_name", "")
+    if not raw_owner:
+        return None
+    res = await ie.resolve_school(db, kr)
+    owner_email, owner_name = await resolve_owner(db, raw_owner)
+    if res["action"] != "update":
+        if not owner_email:
+            return {"status": "owner_unmatched", "school_id": None,
+                    "school_name": school_name, "raw_owner": raw_owner}
+        return None
+    sid = res["school_id"]
+    school = await db.schools.find_one(
+        {"school_id": sid}, {"_id": 0, "school_name": 1, "assigned_to": 1, "assigned_name": 1})
+    school = school or {}
+    if not owner_email:
+        return {"status": "owner_unmatched", "school_id": sid,
+                "school_name": school.get("school_name", "") or school_name, "raw_owner": raw_owner}
+    if owner_email == school.get("assigned_to", ""):
+        return {"status": "unchanged"}
+    contacts = await db.contacts.count_documents({"school_id": sid, "is_deleted": {"$ne": True}})
+    leads = await db.leads.count_documents({"school_id": sid, "is_deleted": {"$ne": True}})
+    return {
+        "status": "reassign", "school_id": sid,
+        "school_name": school.get("school_name", "") or school_name,
+        "from_name": school.get("assigned_name", "") or school.get("assigned_to", "") or "Unassigned",
+        "to_email": owner_email, "to_name": owner_name,
+        "counts": {"contacts": contacts, "leads": leads},
+    }

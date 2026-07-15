@@ -16,6 +16,9 @@ export default function ImportCenter() {
   const [logs, setLogs] = useState([]);
   const [activeTab, setActiveTab] = useState('import');
   const [createLeads, setCreateLeads] = useState(false); // P2.6: opt-in lead creation
+  const [exporting, setExporting] = useState(false);
+  // Reassign-on-import: school_id -> confirmed(bool) for owner changes on existing schools
+  const [confirmReassign, setConfirmReassign] = useState({});
   // Manual picker state
   const [selectedSource, setSelectedSource] = useState(null);
   const fileRef = useRef(null);
@@ -43,6 +46,12 @@ export default function ImportCenter() {
       const data = res.data;
       setPreview(data);
       setMapping(data.mapping ? data.mapping.map(m => ({ ...m })) : []);
+      // Pre-check every proposed reassignment so the default is "apply them".
+      const initial = {};
+      (data.reassignments || []).forEach(r => {
+        if (r.status === 'reassign' && r.school_id) initial[r.school_id] = true;
+      });
+      setConfirmReassign(initial);
     } catch { toast.error('Failed to preview file'); }
   };
 
@@ -111,13 +120,42 @@ export default function ImportCenter() {
     setImporting(true);
     try {
       const rows_keyed = buildRowsKeyed();
-      const res = await masterImport.execute({ rows_keyed, mapping, create_leads: createLeads });
+      const confirm_reassign_school_ids = Object.keys(confirmReassign).filter(id => confirmReassign[id]);
+      const res = await masterImport.execute({ rows_keyed, mapping, create_leads: createLeads, confirm_reassign_school_ids });
       setResult(res.data);
       const errCount = (res.data.errors || res.data.counts?.error) ? (res.data.errors?.length ?? res.data.counts?.error ?? 0) : 0;
-      toast.success(`Import complete: ${res.data.counts?.create || 0} created, ${res.data.counts?.update || 0} updated${errCount ? `, ${errCount} error(s)` : ''}`);
-      setPreview(null); setMapping([]);
+      const reMsg = res.data.reassigned ? `, ${res.data.reassigned} reassigned` : '';
+      toast.success(`Import complete: ${res.data.counts?.create || 0} created, ${res.data.counts?.update || 0} updated${reMsg}${errCount ? `, ${errCount} error(s)` : ''}`);
+      setPreview(null); setMapping([]); setConfirmReassign({});
     } catch { toast.error('Import failed'); }
     setImporting(false);
+  };
+
+  const handleExport = async (fmt) => {
+    setExporting(true);
+    try {
+      if (fmt === 'xlsx') {
+        const res = await masterImport.exportXlsx();
+        const url = window.URL.createObjectURL(new Blob([res.data]));
+        const a = document.createElement('a');
+        a.href = url; a.download = 'school-master-export.xlsx';
+        document.body.appendChild(a); a.click(); a.remove();
+        window.URL.revokeObjectURL(url);
+      } else {
+        const res = await masterImport.exportJson();
+        const { headers, rows } = res.data;
+        const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+        const lines = [headers.map(esc).join(',')].concat(
+          (rows || []).map(r => headers.map(h => esc(r[h])).join(',')));
+        const url = window.URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv' }));
+        const a = document.createElement('a');
+        a.href = url; a.download = 'school-master-export.csv';
+        document.body.appendChild(a); a.click(); a.remove();
+        window.URL.revokeObjectURL(url);
+      }
+      toast.success('Export ready');
+    } catch { toast.error('Export failed'); }
+    setExporting(false);
   };
 
   const handleDownloadTemplate = async () => {
@@ -180,10 +218,21 @@ export default function ImportCenter() {
             <div className={`${card} border rounded-md p-5 space-y-4`}>
               <div className="flex items-center justify-between">
                 <h2 className={`text-lg font-medium ${textPri}`}>Step 2: Upload File</h2>
-                <Button variant="outline" onClick={handleDownloadTemplate}
-                  className={`border-[var(--border-color)] ${textSec} text-xs flex items-center gap-1.5`}>
-                  <Download className="h-3.5 w-3.5" /> Download template (with IDs)
-                </Button>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <Button variant="outline" onClick={() => handleExport('xlsx')} disabled={exporting}
+                    className={`border-[var(--border-color)] ${textSec} text-xs flex items-center gap-1.5`}
+                    data-testid="export-all-btn">
+                    <Download className="h-3.5 w-3.5" /> {exporting ? 'Exporting…' : 'Export all (.xlsx)'}
+                  </Button>
+                  <Button variant="outline" onClick={() => handleExport('csv')} disabled={exporting}
+                    className={`border-[var(--border-color)] ${textSec} text-xs flex items-center gap-1.5`}>
+                    <Download className="h-3.5 w-3.5" /> Export (.csv)
+                  </Button>
+                  <Button variant="outline" onClick={handleDownloadTemplate}
+                    className={`border-[var(--border-color)] ${textSec} text-xs flex items-center gap-1.5`}>
+                    <Download className="h-3.5 w-3.5" /> Template (with IDs)
+                  </Button>
+                </div>
               </div>
               <div className="bg-[var(--bg-primary)] border-2 border-dashed border-[var(--border-color)] rounded-md p-8 text-center cursor-pointer hover:border-[#e94560]/40 transition-all"
                 onClick={() => fileRef.current?.click()} data-testid="import-upload-area">
@@ -356,9 +405,55 @@ export default function ImportCenter() {
                   Also create a Lead for each row with an assigned owner
                 </label>
 
+                {/* Reassignment review — owner changes on EXISTING schools */}
+                {Array.isArray(preview.reassignments) && preview.reassignments.length > 0 && (() => {
+                  const toReassign = preview.reassignments.filter(r => r.status === 'reassign');
+                  const unmatched = preview.reassignments.filter(r => r.status === 'owner_unmatched');
+                  const checkedCount = toReassign.filter(r => confirmReassign[r.school_id]).length;
+                  return (
+                    <div className="border border-[var(--border-color)] rounded-md p-4 space-y-3" data-testid="reassign-review">
+                      <div className="flex items-center justify-between flex-wrap gap-2">
+                        <h3 className={`text-sm font-semibold ${textPri}`}>Owner reassignments</h3>
+                        <span className={`text-xs ${textSec}`}>
+                          {checkedCount} of {toReassign.length} will be reassigned
+                          {unmatched.length > 0 && ` · ${unmatched.length} flagged`}
+                        </span>
+                      </div>
+                      <p className={`text-xs ${textMuted}`}>
+                        These existing schools change owner. Reassigning cascades to the school's
+                        contacts and leads (the old owner is replaced). Uncheck any you want to skip.
+                      </p>
+                      <div className="space-y-1 max-h-64 overflow-y-auto">
+                        {toReassign.map(r => (
+                          <label key={r.school_id}
+                            className="flex items-center gap-3 text-sm py-1.5 px-2 rounded hover:bg-[var(--bg-primary)] cursor-pointer">
+                            <input type="checkbox" checked={!!confirmReassign[r.school_id]}
+                              onChange={e => setConfirmReassign(prev => ({ ...prev, [r.school_id]: e.target.checked }))}
+                              className="accent-[#e94560]" />
+                            <span className={`flex-1 ${textPri}`}>{r.school_name || r.school_id}</span>
+                            <span className={`text-xs ${textSec}`}>
+                              {r.from_name} <span className="text-[#e94560]">⟶</span> {r.to_name}
+                            </span>
+                            <span className={`text-xs ${textMuted}`}>
+                              {r.counts?.contacts || 0}c · {r.counts?.leads || 0}l
+                            </span>
+                          </label>
+                        ))}
+                        {unmatched.map((r, i) => (
+                          <div key={`u${i}`} className="flex items-center gap-3 text-sm py-1.5 px-2 text-yellow-500">
+                            <XCircle className="h-4 w-4 shrink-0" />
+                            <span className="flex-1">{r.school_name || '(new row)'}</span>
+                            <span className="text-xs">won't reassign — “{r.raw_owner}” not found</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
+
                 {/* Import action */}
                 <div className="flex items-center justify-between flex-wrap gap-2 pt-2">
-                  <Button variant="outline" onClick={() => { setPreview(null); setMapping([]); }}
+                  <Button variant="outline" onClick={() => { setPreview(null); setMapping([]); setConfirmReassign({}); }}
                     className={`border-[var(--border-color)] ${textSec}`}>Cancel</Button>
                   <Button onClick={runExecute} disabled={importing || preview.total === 0}
                     className="bg-[#e94560] hover:bg-[#f05c75] text-white" data-testid="execute-import-btn">
