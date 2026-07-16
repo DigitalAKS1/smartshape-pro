@@ -36,13 +36,16 @@ async def upsert_contact(db, mapped: dict, form_id: str):
                 {"_id": 0, "school_id": 1})
             school_id = (school or {}).get("school_id")
 
-        ors = []
+        # Phone match takes priority over email match (two different existing
+        # contacts could each match one criterion — phone wins).
+        existing = None
         if norm:
-            ors += [{"phone_norm": norm}, {"phone": phone}]
-        if "@" in email:
-            ors.append({"email": email})
-        existing = await db.contacts.find_one(
-            {"$or": ors, "is_deleted": {"$ne": True}}, {"_id": 0})
+            existing = await db.contacts.find_one(
+                {"$or": [{"phone_norm": norm}, {"phone": phone}],
+                 "is_deleted": {"$ne": True}}, {"_id": 0})
+        if not existing and "@" in email:
+            existing = await db.contacts.find_one(
+                {"email": email, "is_deleted": {"$ne": True}}, {"_id": 0})
 
         if existing:
             fill = {}
@@ -72,6 +75,7 @@ async def upsert_contact(db, mapped: dict, form_id: str):
             "city": (mapped.get("city") or "").strip(),
             "school_id": school_id, "school_name": school_name,
             "company": school_name, "notes": "", "status": "active",
+            "is_deleted": False,
             "converted_to_lead": False, "lead_id": None,
             "source": "form", "source_form_id": form_id,
             "created_by": "public_form", "created_at": _now(),

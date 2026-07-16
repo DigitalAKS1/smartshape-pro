@@ -56,3 +56,19 @@ async def test_no_phone_no_email_returns_none(d):
     cid, sid = await upsert_contact(d, {"name": "X", "school": "Y"}, "form_abc")
     assert cid is None and sid is None
     assert await d.contacts.count_documents({}) == 0
+
+
+@pytest.mark.asyncio
+async def test_phone_match_wins_over_email_match(d):
+    await d.contacts.insert_one({
+        "contact_id": "con_phone1", "name": "Phone Person",
+        "phone": "+91 98765 43210", "phone_norm": "+919876543210",
+        "email": "", "designation": "", "city": "",
+        "school_id": None, "school_name": "", "status": "active"})
+    await d.contacts.insert_one({
+        "contact_id": "con_email1", "name": "Email Person",
+        "phone": "", "phone_norm": "", "email": "asha@example.com",
+        "designation": "", "city": "",
+        "school_id": None, "school_name": "", "status": "active"})
+    cid, _ = await upsert_contact(d, dict(MAPPED), "form_abc")
+    assert cid == "con_phone1"
