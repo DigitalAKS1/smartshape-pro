@@ -72,6 +72,7 @@ const NotFound = lazy(() => import('./pages/NotFound'));
 
 // Public page
 const CataloguePage = lazy(() => import('./pages/CataloguePage'));
+const PublicForm = lazy(() => import('./pages/PublicForm'));
 const CustomerPortal = lazy(() => import('./pages/CustomerPortal'));
 const CustomerLogin = lazy(() => import('./pages/CustomerLogin'));
 const GetApp = lazy(() => import('./pages/GetApp'));
@@ -171,6 +172,7 @@ function AppRouter() {
       <Route path="/login" element={<Login />} />
       <Route path="/register" element={<Register />} />
       <Route path="/catalogue/:token" element={<CataloguePage />} />
+      <Route path="/f/:token" element={<PublicForm />} />
       <Route path="/my-quote/:token" element={<CustomerPortal />} />
       <Route path="/customer-login" element={<CustomerLogin />} />
       <Route path="/school/login" element={<SchoolLogin />} />
