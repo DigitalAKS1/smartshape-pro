@@ -560,3 +560,77 @@ async def _enqueue_custom_confirm_email(form: dict, session: dict, reg: dict):
     await db.session_registrations.update_one(
         {"reg_id": reg["reg_id"]}, {"$addToSet": {"sent_stages": "confirm"}})
     return "queued"
+
+
+# ── Reminders ─────────────────────────────────────────────────────────────────
+
+async def enqueue_form_wa_stage(session: dict, reg: dict, stage: str) -> bool:
+    """WhatsApp companion to the email reminder stages (remind_24h/remind_1h).
+    Called by scheduler.process_webinar_lifecycle for form-linked sessions.
+    Idempotent per registration+stage via wa_sent_stages."""
+    form = await db.forms.find_one(
+        {"event.session_id": session.get("session_id"), "is_deleted": {"$ne": True}},
+        {"_id": 0})
+    if not form:
+        return False
+    if stage in (reg.get("wa_sent_stages") or []):
+        return False
+    msg = render_msg(
+        (form.get("messages") or {}).get("wa_reminder") or DEFAULT_WA_REMINDER,
+        _msg_ctx(form, reg))
+    if not await _enqueue_wa(reg.get("phone"), msg, f"form_{form['form_id']}"):
+        return False
+    await db.session_registrations.update_one(
+        {"reg_id": reg["reg_id"]}, {"$addToSet": {"wa_sent_stages": stage}})
+    return True
+
+
+@router.post("/forms/{form_id}/remind")
+async def send_reminder_now(form_id: str, request: Request):
+    """Manual blast: reminder email + WhatsApp to every registered attendee, now."""
+    user = await get_current_user(request)
+    form = await _get_form_or_404(form_id)
+    if not _can_manage(user, form):
+        raise HTTPException(403, "Not your form")
+    if form.get("type") != "event" or not (form.get("event") or {}).get("session_id"):
+        raise HTTPException(422, "Only event forms have reminders")
+    session = await db.training_sessions.find_one(
+        {"session_id": form["event"]["session_id"]}, {"_id": 0})
+    if not session:
+        raise HTTPException(404, "Linked session not found")
+
+    from routes.training_routes import _session_tokens
+    from webinar_templates_html import render_stage
+    from email_utils import (sanitize_html, personalize, personalize_html,
+                             plain_from_html, wrap_email_shell)
+    subject_t, inner = render_stage("remind_1h", _session_tokens(session))
+    html_t = wrap_email_shell(sanitize_html(inner))
+
+    regs = await db.session_registrations.find(
+        {"session_id": session["session_id"], "status": "registered"},
+        {"_id": 0}).to_list(5000)
+    emails = wa = 0
+    for reg in regs:
+        email = (reg.get("email") or "").strip().lower()
+        if email and "@" in email and \
+                not await db.email_suppressions.find_one({"email": email}):
+            first = (reg.get("name") or "").split(" ")[0]
+            school = reg.get("school_name") or "your school"
+            await db.email_scheduled.insert_one({
+                "scheduled_id": f"esched_{uuid.uuid4().hex[:10]}",
+                "campaign_id": f"form_{form_id}", "email": email,
+                "contact_name": reg.get("name", ""),
+                "subject": personalize(subject_t, first, school),
+                "message": personalize(plain_from_html(html_t), first, school),
+                "body_html": personalize_html(html_t, first, school),
+                "status": "pending", "type": "webinar",
+                "queued_at": _now(), "sent_at": None})
+            emails += 1
+        msg = render_msg(
+            (form.get("messages") or {}).get("wa_reminder") or DEFAULT_WA_REMINDER,
+            _msg_ctx(form, reg))
+        if await _enqueue_wa(reg.get("phone"), msg, f"form_{form_id}"):
+            wa += 1
+    await db.forms.update_one({"form_id": form_id}, {"$push": {"manual_reminders": {
+        "at": _now(), "by": user["email"], "emails": emails, "whatsapp": wa}}})
+    return {"emails": emails, "whatsapp": wa, "registrants": len(regs)}

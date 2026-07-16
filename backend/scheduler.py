@@ -1049,6 +1049,13 @@ async def process_webinar_lifecycle(now=None):
                 ).to_list(2000)
                 for reg in regs:
                     await _enqueue_webinar_stage(session, reg, stage)
+                    if stage in ("remind_24h", "remind_1h"):
+                        # WhatsApp companion for form-linked sessions (no-op otherwise)
+                        try:
+                            from routes.form_routes import enqueue_form_wa_stage
+                            await enqueue_form_wa_stage(session, reg, stage)
+                        except Exception as exc:
+                            log.warning(f"[webinar loop] form wa {stage}: {exc}")
         except Exception as exc:
             log.error(f"[webinar loop] session {session.get('session_id')} error: {exc}")
 
