@@ -633,6 +633,7 @@ async def send_reminder_now(form_id: str, request: Request):
             wa += 1
     await db.forms.update_one({"form_id": form_id}, {"$push": {"manual_reminders": {
         "at": _now(), "by": user["email"], "emails": emails, "whatsapp": wa}}})
+    return {"emails": emails, "whatsapp": wa, "registrants": len(regs)}
 
 
 # ── Responses + export ────────────────────────────────────────────────────────
@@ -708,4 +709,3 @@ async def export_xlsx(form_id: str, request: Request):
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition":
                  f'attachment; filename="{form_id}_responses.xlsx"'})
-    return {"emails": emails, "whatsapp": wa, "registrants": len(regs)}
