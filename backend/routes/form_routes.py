@@ -471,14 +471,23 @@ async def public_submit(token: str, request: Request):
             updates["registration_id"] = reg["reg_id"]
             # Confirmation email: custom template if set, else engine stage
             from routes.training_routes import _enqueue_webinar_stage
-            if not await _enqueue_custom_confirm_email(form, session, reg):
-                await _enqueue_webinar_stage(session, reg, "confirm")
-            updates["delivery.email"] = "queued" if reg.get("email") else "skipped"
-            # WhatsApp confirmation (instant)
-            wa_msg = render_msg(
-                (form.get("messages") or {}).get("wa_confirm") or DEFAULT_WA_CONFIRM,
-                _msg_ctx(form, reg))
-            wa_ok = await _enqueue_wa(reg.get("phone"), wa_msg, f"form_{form['form_id']}")
+            custom = await _enqueue_custom_confirm_email(form, session, reg)
+            if custom is None:
+                sent = await _enqueue_webinar_stage(session, reg, "confirm")
+                updates["delivery.email"] = "queued" if sent else "skipped"
+            else:
+                updates["delivery.email"] = custom
+            # WhatsApp confirmation (instant; idempotent per registration)
+            wa_ok = False
+            if "confirm" not in (reg.get("wa_sent_stages") or []):
+                wa_msg = render_msg(
+                    (form.get("messages") or {}).get("wa_confirm") or DEFAULT_WA_CONFIRM,
+                    _msg_ctx(form, reg))
+                wa_ok = await _enqueue_wa(reg.get("phone"), wa_msg, f"form_{form['form_id']}")
+                if wa_ok:
+                    await db.session_registrations.update_one(
+                        {"reg_id": reg["reg_id"]},
+                        {"$addToSet": {"wa_sent_stages": "confirm"}})
             updates["delivery.whatsapp"] = "queued" if wa_ok else "skipped"
     if updates:
         await db.form_responses.update_one(
@@ -518,23 +527,22 @@ async def _enqueue_wa(phone: str, message: str, campaign_id: str) -> bool:
     return True
 
 
-async def _enqueue_custom_confirm_email(form: dict, session: dict, reg: dict) -> bool:
+async def _enqueue_custom_confirm_email(form: dict, session: dict, reg: dict):
     """If the form owner customised the confirmation email, queue THAT instead
-    of the engine's stage template. Returns True when the custom path handled
-    the confirm stage (including guard-skips); False -> caller falls back to
-    _enqueue_webinar_stage(session, reg, "confirm")."""
+    of the engine's stage template. Returns None (no custom template — caller
+    uses engine stage) | "queued" | "skipped"."""
     msgs = form.get("messages") or {}
     subject_t = (msgs.get("email_subject") or "").strip()
     html_t = (msgs.get("email_html") or "").strip()
     if not (subject_t and html_t):
-        return False
+        return None
     if "confirm" in (reg.get("sent_stages") or []):
-        return True
+        return "skipped"
     email = (reg.get("email") or "").strip().lower()
     if not email or "@" not in email:
-        return True
+        return "skipped"
     if await db.email_suppressions.find_one({"email": email}):
-        return True
+        return "skipped"
     from email_utils import (sanitize_html, personalize, personalize_html,
                              plain_from_html, wrap_email_shell)
     ctx = _msg_ctx(form, reg)
@@ -551,4 +559,4 @@ async def _enqueue_custom_confirm_email(form: dict, session: dict, reg: dict) ->
         "status": "pending", "type": "webinar", "queued_at": _now(), "sent_at": None})
     await db.session_registrations.update_one(
         {"reg_id": reg["reg_id"]}, {"$addToSet": {"sent_stages": "confirm"}})
-    return True
+    return "queued"

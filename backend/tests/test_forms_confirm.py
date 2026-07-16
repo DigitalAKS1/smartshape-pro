@@ -82,6 +82,9 @@ async def test_duplicate_email_reuses_reg_no_second_confirm(ctx):
     assert await d.session_registrations.count_documents({}) == 1
     assert await d.email_scheduled.count_documents({}) == 1   # confirm sent once
     assert await d.form_responses.count_documents({}) == 2    # both responses kept
+    assert await d.whatsapp_scheduled.count_documents({}) == 1   # WA confirm sent once
+    resp2 = await d.form_responses.find({}, {"_id": 0}).sort("submitted_at", -1).to_list(2)
+    assert resp2[0]["delivery"] == {"email": "skipped", "whatsapp": "skipped"}
 
 
 @pytest.mark.asyncio
@@ -116,3 +119,15 @@ async def test_missing_phone_marks_whatsapp_skipped(ctx):
     resp = await d.form_responses.find_one({}, {"_id": 0})
     assert resp["delivery"]["whatsapp"] == "skipped"
     assert resp["delivery"]["email"] == "queued"
+
+
+@pytest.mark.asyncio
+async def test_suppressed_email_marks_delivery_skipped(ctx):
+    d, client, form = ctx
+    await d.email_suppressions.insert_one({"email": "asha@example.com"})
+    await client.post(f"/api/forms/public/{form['public_token']}/submit",
+                      json={"answers": _answers(form)})
+    assert await d.email_scheduled.count_documents({}) == 0
+    resp = await d.form_responses.find_one({}, {"_id": 0})
+    assert resp["delivery"]["email"] == "skipped"
+    assert resp["delivery"]["whatsapp"] == "queued"
