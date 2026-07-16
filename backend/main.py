@@ -66,6 +66,7 @@ from routes.procurement_routes import router as procurement_router
 from routes.cert_routes import router as cert_router
 from routes.dynamic_import_routes import router as dynamic_import_router
 from routes.telephony_routes import router as telephony_router
+from routes.form_routes import router as form_router
 from scheduler import start_scheduler
 
 # ── App instance ───────────────────────────────────────────────────────────────
@@ -118,6 +119,7 @@ app.include_router(procurement_router, prefix="/api")
 app.include_router(cert_router, prefix="/api")
 app.include_router(dynamic_import_router, prefix="/api")
 app.include_router(telephony_router, prefix="/api")
+app.include_router(form_router, prefix="/api")
 
 # ── Static files — uploaded WhatsApp attachments served publicly ───────────────
 _WA_UPLOADS = os.path.join(os.path.dirname(__file__), "uploads", "whatsapp")

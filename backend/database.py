@@ -62,6 +62,13 @@ async def connect_db():
     await _i(db.contacts.create_index("phone", background=True))   # dedup checks
     await _i(db.contacts.create_index("phone_norm", background=True))  # normalized dedup (P2.2)
 
+    # ── Forms builder ────────────────────────────────────────────────────────
+    await _i(db.forms.create_index("form_id", unique=True))
+    await _i(db.forms.create_index("public_token", unique=True))
+    await _i(db.form_responses.create_index("response_id", unique=True))
+    await _i(db.form_responses.create_index(
+        [("form_id", 1), ("submitted_at", -1)], background=True))
+
     # ── Auth / session ──────────────────────────────────────────────────────
     await db.login_attempts.create_index("identifier")
     await db.user_sessions.create_index([("user_id", 1), ("expires_at", 1)], background=True)

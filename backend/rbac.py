@@ -109,18 +109,19 @@ ROLE_DEFAULT_PERMISSIONS = {
         "dashboard": _R, "quotations": _RWD, "orders": _RW, "procurement": _RW,
         "invoices": _RWD, "accounts": _RW, "payroll": _RW, "analytics": _R,
         "field_sales": _R, "hr": _R, "leave_management": _RW, "settings": _R,
-        "delegation": _RW,
+        "delegation": _RW, "forms": _RW,
     },
     "store": {
         "dashboard": _R, "quotations": _R, "orders": _RW, "procurement": _RW,
         "inventory": _RWD, "stock_management": _RW, "purchase_alerts": _RW,
         "package_master": _RW, "physical_count": _RW, "store": _RW,
         "leave_management": _RW, "analytics": _R, "delegation": _RW,
+        "forms": _RW,
     },
     "sales_person": {
         "dashboard": _R, "quotations": _RW, "leads": _RW, "field_sales": _RW,
         "sales_portal": _RW, "leave_management": _RW, "analytics": _R,
-        "delegation": _RW,
+        "delegation": _RW, "forms": _RW,
     },
 }
 
