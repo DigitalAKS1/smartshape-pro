@@ -91,6 +91,9 @@ const ContentReview = lazy(() => import('./pages/admin/ContentReview'));
 const CompetitionsAdmin = lazy(() => import('./pages/admin/CompetitionsAdmin'));
 const PortalInbox = lazy(() => import('./pages/admin/PortalInbox'));
 const MeetingsAdmin = lazy(() => import('./pages/admin/MeetingsAdmin'));
+const FormsList = lazy(() => import('./pages/admin/FormsList'));
+const FormBuilder = lazy(() => import('./pages/admin/FormBuilder'));
+const FormResponses = lazy(() => import('./pages/admin/FormResponses'));
 
 // Lightweight fallback shown while a route chunk loads.
 function RouteFallback() {
@@ -180,6 +183,9 @@ function AppRouter() {
       <Route path="/teacher-review" element={<ProtectedRoute><ContentReview /></ProtectedRoute>} />
       <Route path="/competitions-admin" element={<ProtectedRoute><CompetitionsAdmin /></ProtectedRoute>} />
       <Route path="/meetings-admin" element={<ProtectedRoute><MeetingsAdmin /></ProtectedRoute>} />
+      <Route path="/forms" element={<ProtectedRoute><FormsList /></ProtectedRoute>} />
+      <Route path="/forms/:formId" element={<ProtectedRoute><FormBuilder /></ProtectedRoute>} />
+      <Route path="/forms/:formId/responses" element={<ProtectedRoute><FormResponses /></ProtectedRoute>} />
       <Route path="/get-app" element={<GetApp />} />
       <Route path="/privacy" element={<Privacy />} />
       <Route path="/terms" element={<Terms />} />

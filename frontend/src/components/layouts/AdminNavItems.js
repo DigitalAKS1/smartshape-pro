@@ -4,7 +4,7 @@ import {
   Smartphone, Layers, IndianRupee, UserCog, Store, MapPin, Target,
   CalendarDays, Calendar, ShoppingCart, Upload, Activity,
   Home, MoreHorizontal, Zap, Heart, Truck, Award, Video, Trophy, Inbox, CalendarClock,
-  SlidersHorizontal,
+  SlidersHorizontal, FormInput,
 } from 'lucide-react';
 
 /**
@@ -60,6 +60,7 @@ export const MODULE_ROUTE_MAP = {
   delegation: { path: '/delegation', icon: ClipboardList, label: 'Delegation System' },
   flow_management: { path: '/flow-management', icon: Zap, label: 'Flow Management' },
   certificates:    { path: '/certificates',    icon: Award, label: 'Certificates' },
+  forms: { path: '/forms', icon: FormInput, label: 'Forms' },
   sales_portal: { path: '/sales', icon: Smartphone, label: 'Sales Portal' },
   user_management: [
     { path: '/user-management', icon: Users, label: 'User Management' },
@@ -84,7 +85,7 @@ export const SIDEBAR_SECTIONS = [
   { label: 'Inventory & Supply', modules: ['inventory', 'stock_management', 'purchase_alerts', 'physical_count', 'package_master', 'store', 'procurement'] },
   { label: 'Finance & People',   modules: ['accounts', 'payroll', 'hr'] },
   { label: 'Operations',         modules: ['delegation', 'flow_management', 'analytics'] },
-  { label: 'School Engagement',  modules: ['school_portal', 'certificates'] },
+  { label: 'School Engagement',  modules: ['school_portal', 'certificates', 'forms'] },
   { label: 'Administration',     modules: ['user_management', 'settings', 'master_fields'] },
 ];
 
@@ -114,5 +115,6 @@ export function getPageTitle(pathname) {
   if (pathname.startsWith('/view-quotation/'))  return 'View Quotation';
   if (pathname.startsWith('/edit-quotation/'))  return 'Edit Quotation';
   if (pathname.startsWith('/catalogue/'))       return 'Catalogue';
+  if (pathname.startsWith('/forms'))            return 'Forms';
   return 'SmartShape Pro';
 }

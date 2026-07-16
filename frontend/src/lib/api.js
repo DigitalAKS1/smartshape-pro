@@ -1289,4 +1289,23 @@ export const pushApi = {
   test: () => API.post('/push/test'),
 };
 
+// ── Forms builder ───────────────────────────────────────────────────────────
+export const forms = {
+  list: () => API.get('/forms'),
+  create: (data) => API.post('/forms', data),
+  get: (id) => API.get(`/forms/${id}`),
+  update: (id, data) => API.put(`/forms/${id}`, data),
+  remove: (id) => API.delete(`/forms/${id}`),
+  setStatus: (id, status) => API.post(`/forms/${id}/status`, { status }),
+  responses: (id) => API.get(`/forms/${id}/responses`),
+  remind: (id) => API.post(`/forms/${id}/remind`),
+  exportUrl: (id, fmt) => `${BACKEND_URL}/api/forms/${id}/export.${fmt}`,
+};
+
+// Public registration page — plain axios, no credentials (catalogue pattern)
+export const publicForms = {
+  get: (token) => axios.get(`${BACKEND_URL}/api/forms/public/${token}`),
+  submit: (token, payload) => axios.post(`${BACKEND_URL}/api/forms/public/${token}/submit`, payload),
+};
+
 export default API;
