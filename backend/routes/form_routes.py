@@ -443,7 +443,9 @@ async def public_submit(token: str, request: Request):
 
     mapped = _mapped(form, clean)
     updates = {}
-    # -- Task 3 hook: CRM upsert fills updates["contact_id"/"school_id"] --
+    from services.form_crm import upsert_contact
+    contact_id, school_id = await upsert_contact(db, mapped, form["form_id"])
+    updates["contact_id"], updates["school_id"] = contact_id, school_id
     # -- Task 4 hook: event bridge + confirmations fill updates["registration_id"/"delivery.*"] --
     if updates:
         await db.form_responses.update_one(
