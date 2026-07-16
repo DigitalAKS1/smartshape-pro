@@ -86,6 +86,9 @@ async def test_submit_validation_and_honeypot(ctx):
     r = await client.post(f"/api/forms/public/{tok}/submit", json={"answers": _answers(form)})
     assert r.status_code == 200 and r.json()["ok"] is True
     assert await d.form_responses.count_documents({"form_id": form["form_id"]}) == 1
+    # non-dict JSON body must 422, not 500
+    r = await client.post(f"/api/forms/public/{tok}/submit", json=[1, 2, 3])
+    assert r.status_code == 422
 
 
 @pytest.mark.asyncio

@@ -4,6 +4,26 @@ import { publicForms } from '../lib/api';
 
 const ACCENT = '#e94560';
 
+const Shell = ({ children }) => (
+  <div style={{ minHeight: '100vh', background: '#f4f6fb', fontFamily: 'Arial, Helvetica, sans-serif' }}>
+    <div style={{ maxWidth: 560, margin: '0 auto', padding: '24px 16px' }}>
+      <div style={{ textAlign: 'center', marginBottom: 16 }}>
+        <span style={{ fontWeight: 800, fontSize: 20, color: '#1a1a2e' }}>
+          SMART<span style={{ color: ACCENT }}>SHAPE</span>
+        </span>
+      </div>
+      {children}
+      <p style={{ textAlign: 'center', color: '#9aa3b2', fontSize: 12, marginTop: 20 }}>
+        Powered by SmartShape Pro
+      </p>
+    </div>
+  </div>
+);
+const Card = ({ children }) => (
+  <div style={{ background: '#fff', borderRadius: 14, padding: 22,
+                boxShadow: '0 4px 18px rgba(26,26,46,.08)' }}>{children}</div>
+);
+
 export default function PublicForm() {
   const { token } = useParams();
   const [form, setForm] = useState(null);
@@ -49,26 +69,6 @@ export default function PublicForm() {
       }
     } finally { setSubmitting(false); }
   };
-
-  const Shell = ({ children }) => (
-    <div style={{ minHeight: '100vh', background: '#f4f6fb', fontFamily: 'Arial, Helvetica, sans-serif' }}>
-      <div style={{ maxWidth: 560, margin: '0 auto', padding: '24px 16px' }}>
-        <div style={{ textAlign: 'center', marginBottom: 16 }}>
-          <span style={{ fontWeight: 800, fontSize: 20, color: '#1a1a2e' }}>
-            SMART<span style={{ color: ACCENT }}>SHAPE</span>
-          </span>
-        </div>
-        {children}
-        <p style={{ textAlign: 'center', color: '#9aa3b2', fontSize: 12, marginTop: 20 }}>
-          Powered by SmartShape Pro
-        </p>
-      </div>
-    </div>
-  );
-  const Card = ({ children }) => (
-    <div style={{ background: '#fff', borderRadius: 14, padding: 22,
-                  boxShadow: '0 4px 18px rgba(26,26,46,.08)' }}>{children}</div>
-  );
 
   if (state === 'loading') return <Shell><Card><p style={{ color: '#667' }}>Loading…</p></Card></Shell>;
   if (state === 'missing') return <Shell><Card>
@@ -143,6 +143,7 @@ export default function PublicForm() {
           </div>
         )}
 
+        <form onSubmit={e => { e.preventDefault(); submit(); }}>
         {form.fields.map(f => (
           <div key={f.field_id} style={{ marginTop: 14 }}>
             <label style={{ fontWeight: 600, fontSize: 14, color: '#1a1a2e' }}>
@@ -190,12 +191,13 @@ export default function PublicForm() {
                style={{ position: 'absolute', left: '-5000px', height: 0, width: 0, opacity: 0 }}
                name="website" />
 
-        <button onClick={submit} disabled={submitting}
+        <button type="submit" disabled={submitting}
                 style={{ width: '100%', background: ACCENT, color: '#fff', border: 'none',
                          borderRadius: 10, padding: '14px 0', fontSize: 16, fontWeight: 700,
                          marginTop: 20, cursor: 'pointer', opacity: submitting ? .6 : 1 }}>
           {submitting ? 'Registering…' : 'Register'}
         </button>
+        </form>
       </Card>
     </Shell>
   );

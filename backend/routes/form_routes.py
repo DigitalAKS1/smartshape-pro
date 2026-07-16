@@ -8,14 +8,13 @@ are added by this module (Tasks 4-5).
 """
 from fastapi import APIRouter, HTTPException, Request
 from datetime import datetime, timezone
-import re, uuid, logging
+import re, uuid
 
 from database import db
 from auth_utils import get_current_user
 from rbac import get_team
 
 router = APIRouter()
-log = logging.getLogger("forms")
 
 FIELD_TYPES = {"text", "textarea", "dropdown", "multiple_choice", "checkbox", "number", "date"}
 MAP_TO_KEYS = {"name", "email", "phone", "school", "designation", "city"}
@@ -282,7 +281,7 @@ _RATE = {}   # {(ip, form_id): [epoch_seconds, ...]} — in-memory, single proce
 
 
 def _client_ip(request: Request) -> str:
-    fwd = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+    fwd = (request.headers.get("x-forwarded-for") or "").split(",")[-1].strip()
     return fwd or (request.client.host if request.client else "?")
 
 
@@ -417,10 +416,12 @@ async def public_submit(token: str, request: Request):
         body = await request.json()
     except Exception:
         raise HTTPException(422, "Invalid request body")
+    if not isinstance(body, dict):
+        raise HTTPException(422, "Invalid request body")
     ip = _client_ip(request)
     if not _rate_ok(ip, form["form_id"]):
         raise HTTPException(429, "Too many attempts — please try again in a few minutes")
-    if (body.get("website") or "").strip():     # honeypot: silent no-op success, no details
+    if str(body.get("website") or "").strip():     # honeypot: silent no-op success, no details
         return {"ok": True,
                 "thank_you": {"message": "Thank you! Your response has been recorded."}}
     if await db.form_responses.count_documents({"form_id": form["form_id"]}) >= MAX_RESPONSES:
@@ -568,12 +569,12 @@ async def enqueue_form_wa_stage(session: dict, reg: dict, stage: str) -> bool:
     """WhatsApp companion to the email reminder stages (remind_24h/remind_1h).
     Called by scheduler.process_webinar_lifecycle for form-linked sessions.
     Idempotent per registration+stage via wa_sent_stages."""
+    if stage in (reg.get("wa_sent_stages") or []):
+        return False
     form = await db.forms.find_one(
         {"event.session_id": session.get("session_id"), "is_deleted": {"$ne": True}},
         {"_id": 0})
     if not form:
-        return False
-    if stage in (reg.get("wa_sent_stages") or []):
         return False
     msg = render_msg(
         (form.get("messages") or {}).get("wa_reminder") or DEFAULT_WA_REMINDER,
@@ -599,11 +600,20 @@ async def send_reminder_now(form_id: str, request: Request):
     if not session:
         raise HTTPException(404, "Linked session not found")
 
-    from routes.training_routes import _session_tokens
-    from webinar_templates_html import render_stage
     from email_utils import (sanitize_html, personalize, personalize_html,
                              plain_from_html, wrap_email_shell)
-    subject_t, inner = render_stage("remind_1h", _session_tokens(session))
+    title = session.get("title", "")
+    link = session.get("meeting_link", "")
+    subject_t = f"Reminder: {title} — {session.get('date', '')} {session.get('time', '')}"
+    inner = (
+        f'<h2 style="color:#e94560;margin:0 0 8px;">Reminder: {title}</h2>'
+        f'<p>Dear {{name}}, this is a reminder for the session you registered for.</p>'
+        f'<p><strong>Date:</strong> {session.get("date", "")} &nbsp; '
+        f'<strong>Time:</strong> {session.get("time", "")} (IST)</p>'
+        + (f'<p><a href="{link}" style="background:#e94560;color:#fff;padding:12px 20px;'
+           f'border-radius:8px;text-decoration:none;display:inline-block;">Join the Session</a></p>'
+           if link else "")
+    )
     html_t = wrap_email_shell(sanitize_html(inner))
 
     regs = await db.session_registrations.find(
@@ -646,7 +656,40 @@ async def list_responses(form_id: str, request: Request):
         raise HTTPException(403, "Not your form")
     rows = await db.form_responses.find({"form_id": form_id}, {"_id": 0}) \
         .sort("submitted_at", -1).to_list(5000)
+    # Reconcile delivery ticks with actual queue outcomes (event forms)
+    if form.get("type") == "event":
+        cids = [f"form_{form_id}"]
+        sid = (form.get("event") or {}).get("session_id")
+        if sid:
+            cids.append(f"webinar_{sid}")
+        email_status, wa_status = {}, {}
+        async for e in db.email_scheduled.find(
+                {"campaign_id": {"$in": cids}}, {"_id": 0, "email": 1, "status": 1}):
+            k = (e.get("email") or "").lower()
+            if e.get("status") == "failed" or k not in email_status:
+                email_status[k] = e.get("status")
+        async for w in db.whatsapp_scheduled.find(
+                {"campaign_id": f"form_{form_id}"}, {"_id": 0, "phone": 1, "status": 1}):
+            k = w.get("phone") or ""
+            if w.get("status") == "failed" or k not in wa_status:
+                wa_status[k] = w.get("status")
+        by_map = {f["map_to"]: f["field_id"] for f in form.get("fields", []) if f.get("map_to")}
+        for r in rows:
+            ans, d = r.get("answers") or {}, dict(r.get("delivery") or {})
+            em = str(ans.get(by_map.get("email"), "") or "").strip().lower()
+            ph = str(ans.get(by_map.get("phone"), "") or "").strip()
+            if d.get("email") == "queued" and email_status.get(em) in ("sent", "failed"):
+                d["email"] = email_status[em]
+            if d.get("whatsapp") == "queued" and wa_status.get(ph) in ("sent", "failed"):
+                d["whatsapp"] = wa_status[ph]
+            r["delivery"] = d
     return {"form": form, "responses": rows, "count": len(rows)}
+
+
+def _cell_safe(v):
+    """Neutralize spreadsheet formula injection from public input."""
+    s = ", ".join(v) if isinstance(v, list) else ("" if v is None else str(v))
+    return "'" + s if s[:1] in ("=", "+", "-", "@") else s
 
 
 def _export_rows(form: dict, rows: list) -> list:
@@ -658,7 +701,7 @@ def _export_rows(form: dict, rows: list) -> list:
         vals = []
         for f in fields:
             v = ans.get(f["field_id"], "")
-            vals.append(", ".join(v) if isinstance(v, list) else v)
+            vals.append(_cell_safe(v))
         d = r.get("delivery") or {}
         out.append([r.get("submitted_at", "")] + vals +
                    [d.get("email", ""), d.get("whatsapp", "")])
