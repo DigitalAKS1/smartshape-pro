@@ -69,6 +69,7 @@ async def test_submit_validation_and_honeypot(ctx):
                           json={"website": "spam", "answers": _answers(form)})
     assert r.status_code == 200
     assert await d.form_responses.count_documents({}) == 0
+    assert "zoom_link" not in (r.json().get("thank_you") or {})
     # missing required field
     bad = _answers(form); bad.pop(list(bad)[0])
     r = await client.post(f"/api/forms/public/{tok}/submit", json={"answers": bad})

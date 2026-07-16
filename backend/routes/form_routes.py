@@ -413,12 +413,16 @@ async def public_submit(token: str, request: Request):
         raise HTTPException(404, "Form not found")
     if form.get("status") != "open":
         raise HTTPException(410, "Registrations are closed")
-    body = await request.json()
-    if (body.get("website") or "").strip():     # honeypot: silent no-op success
-        return {"ok": True, "thank_you": _thank_you(form)}
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(422, "Invalid request body")
     ip = _client_ip(request)
     if not _rate_ok(ip, form["form_id"]):
         raise HTTPException(429, "Too many attempts — please try again in a few minutes")
+    if (body.get("website") or "").strip():     # honeypot: silent no-op success, no details
+        return {"ok": True,
+                "thank_you": {"message": "Thank you! Your response has been recorded."}}
     if await db.form_responses.count_documents({"form_id": form["form_id"]}) >= MAX_RESPONSES:
         raise HTTPException(410, "Registrations are closed")
     clean, errors = validate_answers(form.get("fields", []), body.get("answers"))
