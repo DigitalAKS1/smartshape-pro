@@ -633,4 +633,79 @@ async def send_reminder_now(form_id: str, request: Request):
             wa += 1
     await db.forms.update_one({"form_id": form_id}, {"$push": {"manual_reminders": {
         "at": _now(), "by": user["email"], "emails": emails, "whatsapp": wa}}})
+
+
+# ── Responses + export ────────────────────────────────────────────────────────
+
+@router.get("/forms/{form_id}/responses")
+async def list_responses(form_id: str, request: Request):
+    user = await get_current_user(request)
+    form = await _get_form_or_404(form_id)
+    if not _can_manage(user, form):
+        raise HTTPException(403, "Not your form")
+    rows = await db.form_responses.find({"form_id": form_id}, {"_id": 0}) \
+        .sort("submitted_at", -1).to_list(5000)
+    return {"form": form, "responses": rows, "count": len(rows)}
+
+
+def _export_rows(form: dict, rows: list) -> list:
+    fields = form.get("fields", [])
+    out = [["Submitted At"] + [f["label"] for f in fields] +
+           ["Email Status", "WhatsApp Status"]]
+    for r in reversed(rows):        # oldest first in exports
+        ans = r.get("answers") or {}
+        vals = []
+        for f in fields:
+            v = ans.get(f["field_id"], "")
+            vals.append(", ".join(v) if isinstance(v, list) else v)
+        d = r.get("delivery") or {}
+        out.append([r.get("submitted_at", "")] + vals +
+                   [d.get("email", ""), d.get("whatsapp", "")])
+    return out
+
+
+@router.get("/forms/{form_id}/export.csv")
+async def export_csv(form_id: str, request: Request):
+    import csv as _csv, io as _io
+    from fastapi.responses import StreamingResponse
+    user = await get_current_user(request)
+    form = await _get_form_or_404(form_id)
+    if not _can_manage(user, form):
+        raise HTTPException(403, "Not your form")
+    rows = await db.form_responses.find({"form_id": form_id}, {"_id": 0}) \
+        .sort("submitted_at", -1).to_list(5000)
+    buf = _io.StringIO()
+    w = _csv.writer(buf)
+    for line in _export_rows(form, rows):
+        w.writerow(line)
+    buf.seek(0)
+    return StreamingResponse(iter([buf.getvalue()]), media_type="text/csv",
+                             headers={"Content-Disposition":
+                                      f'attachment; filename="{form_id}_responses.csv"'})
+
+
+@router.get("/forms/{form_id}/export.xlsx")
+async def export_xlsx(form_id: str, request: Request):
+    import io as _io
+    from fastapi.responses import StreamingResponse
+    from openpyxl import Workbook
+    user = await get_current_user(request)
+    form = await _get_form_or_404(form_id)
+    if not _can_manage(user, form):
+        raise HTTPException(403, "Not your form")
+    rows = await db.form_responses.find({"form_id": form_id}, {"_id": 0}) \
+        .sort("submitted_at", -1).to_list(5000)
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Responses"
+    for line in _export_rows(form, rows):
+        ws.append(line)
+    buf = _io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition":
+                 f'attachment; filename="{form_id}_responses.xlsx"'})
     return {"emails": emails, "whatsapp": wa, "registrants": len(regs)}
