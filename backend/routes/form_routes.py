@@ -446,8 +446,109 @@ async def public_submit(token: str, request: Request):
     from services.form_crm import upsert_contact
     contact_id, school_id = await upsert_contact(db, mapped, form["form_id"])
     updates["contact_id"], updates["school_id"] = contact_id, school_id
-    # -- Task 4 hook: event bridge + confirmations fill updates["registration_id"/"delivery.*"] --
+    if form.get("type") == "event" and (form.get("event") or {}).get("session_id"):
+        session = await db.training_sessions.find_one(
+            {"session_id": form["event"]["session_id"]}, {"_id": 0})
+        if session:
+            email_l = (mapped.get("email") or "").strip().lower()
+            reg = None
+            if "@" in email_l:
+                reg = await db.session_registrations.find_one(
+                    {"session_id": session["session_id"], "email": email_l})
+            if not reg:
+                reg = {"reg_id": f"reg_{uuid.uuid4().hex[:12]}",
+                       "session_id": session["session_id"],
+                       "name": mapped.get("name") or "",
+                       "email": email_l if "@" in email_l else "",
+                       "school_name": mapped.get("school") or "",
+                       "phone": mapped.get("phone") or "",
+                       "contact_id": updates.get("contact_id"),
+                       "status": "registered", "sent_stages": [],
+                       "wa_sent_stages": [], "registered_at": _now(),
+                       "source_form_id": form["form_id"]}
+                await db.session_registrations.insert_one(reg)
+                reg.pop("_id", None)
+            updates["registration_id"] = reg["reg_id"]
+            # Confirmation email: custom template if set, else engine stage
+            from routes.training_routes import _enqueue_webinar_stage
+            if not await _enqueue_custom_confirm_email(form, session, reg):
+                await _enqueue_webinar_stage(session, reg, "confirm")
+            updates["delivery.email"] = "queued" if reg.get("email") else "skipped"
+            # WhatsApp confirmation (instant)
+            wa_msg = render_msg(
+                (form.get("messages") or {}).get("wa_confirm") or DEFAULT_WA_CONFIRM,
+                _msg_ctx(form, reg))
+            wa_ok = await _enqueue_wa(reg.get("phone"), wa_msg, f"form_{form['form_id']}")
+            updates["delivery.whatsapp"] = "queued" if wa_ok else "skipped"
     if updates:
         await db.form_responses.update_one(
             {"response_id": response["response_id"]}, {"$set": updates})
     return {"ok": True, "thank_you": _thank_you(form)}
+
+
+# ── Confirmation / reminder messaging ─────────────────────────────────────────
+
+def render_msg(tmpl: str, ctx: dict) -> str:
+    out = tmpl or ""
+    for k, v in ctx.items():
+        out = out.replace("{" + k + "}", str(v or ""))
+    return out
+
+
+def _msg_ctx(form: dict, reg: dict) -> dict:
+    ev = form.get("event") or {}
+    first = (reg.get("name") or "").split(" ")[0]
+    return {"name": first or "there",
+            "school_name": reg.get("school_name") or "your school",
+            "title": form.get("title", ""), "theme": ev.get("theme", ""),
+            "date": ev.get("date", ""), "time": ev.get("time", ""),
+            "zoom_link": ev.get("meeting_link", ""),
+            "calendar_link": gcal_url(form)}
+
+
+async def _enqueue_wa(phone: str, message: str, campaign_id: str) -> bool:
+    """Queue one WhatsApp text via the existing wa_sender_loop queue."""
+    phone = (phone or "").strip()
+    if len(re.sub(r"\D", "", phone)) < 10:
+        return False
+    await db.whatsapp_scheduled.insert_one({
+        "scheduled_id": f"wsch_{uuid.uuid4().hex[:12]}", "campaign_id": campaign_id,
+        "status": "pending", "phone": phone, "message": message,
+        "created_at": _now()})
+    return True
+
+
+async def _enqueue_custom_confirm_email(form: dict, session: dict, reg: dict) -> bool:
+    """If the form owner customised the confirmation email, queue THAT instead
+    of the engine's stage template. Returns True when the custom path handled
+    the confirm stage (including guard-skips); False -> caller falls back to
+    _enqueue_webinar_stage(session, reg, "confirm")."""
+    msgs = form.get("messages") or {}
+    subject_t = (msgs.get("email_subject") or "").strip()
+    html_t = (msgs.get("email_html") or "").strip()
+    if not (subject_t and html_t):
+        return False
+    if "confirm" in (reg.get("sent_stages") or []):
+        return True
+    email = (reg.get("email") or "").strip().lower()
+    if not email or "@" not in email:
+        return True
+    if await db.email_suppressions.find_one({"email": email}):
+        return True
+    from email_utils import (sanitize_html, personalize, personalize_html,
+                             plain_from_html, wrap_email_shell)
+    ctx = _msg_ctx(form, reg)
+    html = wrap_email_shell(sanitize_html(render_msg(html_t, ctx)))
+    subject = render_msg(subject_t, ctx)
+    first, school = ctx["name"], ctx["school_name"]
+    await db.email_scheduled.insert_one({
+        "scheduled_id": f"esched_{uuid.uuid4().hex[:10]}",
+        "campaign_id": f"form_{form['form_id']}",
+        "email": email, "contact_name": reg.get("name", ""),
+        "subject": personalize(subject, first, school),
+        "message": personalize(plain_from_html(html), first, school),
+        "body_html": personalize_html(html, first, school),
+        "status": "pending", "type": "webinar", "queued_at": _now(), "sent_at": None})
+    await db.session_registrations.update_one(
+        {"reg_id": reg["reg_id"]}, {"$addToSet": {"sent_stages": "confirm"}})
+    return True

@@ -10,6 +10,7 @@ _DB_NAME = os.getenv("DB_NAME", "smartshape_test")
 assert _DB_NAME.endswith("_test") or _DB_NAME == "mtt_ci", f"refusing non-test DB: {_DB_NAME}"
 
 import routes.form_routes as fr
+import routes.training_routes as tr
 
 _MONGO_URL = os.getenv("MONGO_URL", "mongodb://localhost:27017")
 SALES = {"email": "rep@smartshape.in", "role": "sales_person", "module_permissions": {}}
@@ -20,7 +21,9 @@ async def ctx(monkeypatch):
     motor_client = AsyncIOMotorClient(_MONGO_URL)
     d = motor_client[_DB_NAME]
     orig_db = fr.db
+    orig_tr = tr.db
     fr.db = d
+    tr.db = d          # event bridge writes via training_routes.db
     fr._RATE.clear()
     async def fake_user(request):
         return SALES
@@ -34,6 +37,7 @@ async def ctx(monkeypatch):
                       "meeting_link": "https://zoom.us/j/999"}})).json()
         yield d, client, form
     fr.db = orig_db
+    tr.db = orig_tr
     for coll in ("forms", "form_responses", "training_sessions",
                  "session_registrations", "email_scheduled", "whatsapp_scheduled",
                  "contacts", "schools", "email_campaigns"):
