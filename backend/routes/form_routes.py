@@ -273,3 +273,175 @@ async def delete_form(form_id: str, request: Request):
     await db.forms.update_one({"form_id": form_id},
                               {"$set": {"is_deleted": True, "updated_at": _now()}})
     return {"ok": True}
+
+
+# ── Public endpoints (NO auth — the token is the secret, catalogue pattern) ───
+
+RATE_LIMIT, RATE_WINDOW, MAX_RESPONSES = 5, 600, 5000
+_RATE = {}   # {(ip, form_id): [epoch_seconds, ...]} — in-memory, single process
+
+
+def _client_ip(request: Request) -> str:
+    fwd = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+    return fwd or (request.client.host if request.client else "?")
+
+
+def _rate_ok(ip: str, form_id: str) -> bool:
+    import time as _t
+    now_s = _t.time()
+    key = (ip, form_id)
+    hits = [t for t in _RATE.get(key, []) if now_s - t < RATE_WINDOW]
+    if len(hits) >= RATE_LIMIT:
+        _RATE[key] = hits
+        return False
+    hits.append(now_s)
+    _RATE[key] = hits
+    if len(_RATE) > 10000:          # bot-flood memory backstop
+        _RATE.clear()
+    return True
+
+
+def validate_answers(fields: list, answers: dict):
+    """Returns (clean, errors). clean maps field_id -> str|list[str]."""
+    clean, errors = {}, {}
+    answers = answers if isinstance(answers, dict) else {}
+    for f in fields:
+        fid = f["field_id"]
+        val = answers.get(fid)
+        if isinstance(val, list):
+            val = [str(v)[:200] for v in val][:30]
+            empty = not val
+        else:
+            val = ("" if val is None else str(val)).strip()
+            empty = not val
+        if f.get("required") and empty:
+            errors[fid] = "This field is required"
+            continue
+        if empty:
+            clean[fid] = [] if f["type"] == "checkbox" else ""
+            continue
+        t = f["type"]
+        if t in ("dropdown", "multiple_choice"):
+            if val not in f.get("choices", []):
+                errors[fid] = "Invalid choice"
+                continue
+        elif t == "checkbox":
+            if not isinstance(val, list) or any(v not in f.get("choices", []) for v in val):
+                errors[fid] = "Invalid choice"
+                continue
+        elif t == "number":
+            try:
+                float(str(val).replace(",", ""))
+            except ValueError:
+                errors[fid] = "Must be a number"
+                continue
+            val = str(val)[:40]
+        elif t == "textarea":
+            val = str(val)[:2000]
+        elif t == "date":
+            val = str(val)[:40]
+        else:
+            val = str(val)[:200]
+        clean[fid] = val
+    return clean, errors
+
+
+def _mapped(form: dict, clean: dict) -> dict:
+    """{map_to: answer} for CRM + registration use."""
+    out = {}
+    for f in form.get("fields", []):
+        if f.get("map_to") and clean.get(f["field_id"]):
+            out[f["map_to"]] = clean[f["field_id"]]
+    return out
+
+
+def gcal_url(form: dict) -> str:
+    """Prefilled Google-Calendar 'add event' URL (works in WhatsApp texts)."""
+    from urllib.parse import urlencode
+    from datetime import timedelta
+    from webinar_lifecycle import session_start_ist
+    ev = form.get("event") or {}
+    start = session_start_ist({"date": ev.get("date"), "time": ev.get("time")})
+    if not start:
+        return ""
+    end = start + timedelta(minutes=int(ev.get("duration_min") or 60))
+    fmt = "%Y%m%dT%H%M%SZ"
+    details = f"Join: {ev.get('meeting_link', '')}" if ev.get("meeting_link") else ""
+    return "https://calendar.google.com/calendar/render?" + urlencode({
+        "action": "TEMPLATE", "text": form.get("title", ""),
+        "dates": f"{start.strftime(fmt)}/{end.strftime(fmt)}",
+        "details": details})
+
+
+def _thank_you(form: dict) -> dict:
+    ev = form.get("event") or {}
+    if form.get("type") != "event":
+        return {"message": "Thank you! Your response has been recorded."}
+    return {"message": "Registration confirmed! Check your email & WhatsApp for the joining details.",
+            "title": form.get("title", ""), "theme": ev.get("theme", ""),
+            "date": ev.get("date", ""), "time": ev.get("time", ""),
+            "zoom_link": ev.get("meeting_link", ""), "calendar_link": gcal_url(form)}
+
+
+@router.get("/forms/public/{token}")
+async def public_form(token: str):
+    form = await db.forms.find_one(
+        {"public_token": token, "is_deleted": {"$ne": True}}, {"_id": 0})
+    if not form:
+        raise HTTPException(404, "Form not found")
+    if form.get("status") != "open":
+        return {"status": "closed", "title": form.get("title", "")}
+    ev = form.get("event") or {}
+    return {
+        "status": "open",
+        "title": form.get("title", ""),
+        "description": form.get("description", ""),
+        "type": form.get("type", "general"),
+        "banner_url": form.get("banner_url", ""),
+        "fields": form.get("fields", []),
+        # meeting_link deliberately withheld — revealed only after registering
+        "event": {k: ev.get(k, "") for k in ("theme", "date", "time", "platform", "duration_min")},
+    }
+
+
+@router.post("/forms/public/{token}/submit")
+async def public_submit(token: str, request: Request):
+    import hashlib
+    form = await db.forms.find_one(
+        {"public_token": token, "is_deleted": {"$ne": True}}, {"_id": 0})
+    if not form:
+        raise HTTPException(404, "Form not found")
+    if form.get("status") != "open":
+        raise HTTPException(410, "Registrations are closed")
+    body = await request.json()
+    if (body.get("website") or "").strip():     # honeypot: silent no-op success
+        return {"ok": True, "thank_you": _thank_you(form)}
+    ip = _client_ip(request)
+    if not _rate_ok(ip, form["form_id"]):
+        raise HTTPException(429, "Too many attempts — please try again in a few minutes")
+    if await db.form_responses.count_documents({"form_id": form["form_id"]}) >= MAX_RESPONSES:
+        raise HTTPException(410, "Registrations are closed")
+    clean, errors = validate_answers(form.get("fields", []), body.get("answers"))
+    if errors:
+        raise HTTPException(422, detail={"field_errors": errors})
+
+    response = {
+        "response_id": f"fresp_{uuid.uuid4().hex[:12]}",
+        "form_id": form["form_id"],
+        "answers": clean,
+        "submitted_at": _now(),
+        "ip_hash": hashlib.sha256(ip.encode()).hexdigest()[:16],
+        "contact_id": None, "school_id": None, "registration_id": None,
+        "delivery": {"email": "skipped", "whatsapp": "skipped"},
+    }
+    await db.form_responses.insert_one(response)
+    response.pop("_id", None)
+
+    mapped = _mapped(form, clean)
+    updates = {}
+    # -- Task 3 hook: CRM upsert fills updates["contact_id"/"school_id"] --
+    # -- Task 4 hook: event bridge + confirmations fill updates["registration_id"/"delivery.*"] --
+    if updates:
+        await db.form_responses.update_one(
+            {"response_id": response["response_id"]}, {"$set": updates})
+    return {"ok": True, "thank_you": _thank_you(form)}
