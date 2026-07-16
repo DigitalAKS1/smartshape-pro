@@ -7,7 +7,7 @@ const ACCENT = '#e94560';
 export default function PublicForm() {
   const { token } = useParams();
   const [form, setForm] = useState(null);
-  const [state, setState] = useState('loading'); // loading|open|closed|missing|done
+  const [state, setState] = useState('loading'); // loading|open|closed|missing|error|done
   const [answers, setAnswers] = useState({});
   const [errors, setErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
@@ -20,7 +20,7 @@ export default function PublicForm() {
         if (r.data.status === 'closed') { setForm(r.data); setState('closed'); }
         else { setForm(r.data); setState('open'); }
       })
-      .catch(() => setState('missing'));
+      .catch(e => setState(e.response?.status === 404 ? 'missing' : 'error'));
   }, [token]);
 
   const setAns = (fid, v) => { setAnswers(a => ({ ...a, [fid]: v })); setErrors(e => ({ ...e, [fid]: null })); };
@@ -75,6 +75,15 @@ export default function PublicForm() {
     <h2 style={{ margin: 0 }}>Form not found</h2>
     <p style={{ color: '#667' }}>This link is invalid or has been removed.</p>
   </Card></Shell>;
+  if (state === 'error') return <Shell><Card>
+    <h2 style={{ margin: 0 }}>Something went wrong</h2>
+    <p style={{ color: '#667' }}>We couldn't load the form. Please check your internet and try again.</p>
+    <button onClick={() => window.location.reload()}
+            style={{ background: ACCENT, color: '#fff', border: 'none', borderRadius: 8,
+                     padding: '10px 22px', fontWeight: 700, cursor: 'pointer' }}>
+      Retry
+    </button>
+  </Card></Shell>;
   if (state === 'closed') return <Shell><Card>
     <h2 style={{ margin: 0 }}>{form?.title || 'Registrations closed'}</h2>
     <p style={{ color: '#667' }}>Registrations for this session are closed. Thank you for your interest!</p>
@@ -101,9 +110,11 @@ export default function PublicForm() {
                     fontWeight: 700, marginTop: 6 }}>
           📅 Add to Google Calendar
         </a>)}
-      <p style={{ color: '#889', fontSize: 13, marginTop: 14 }}>
-        The joining details were also sent to your email & WhatsApp.
-      </p>
+      {thanks?.zoom_link && (
+        <p style={{ color: '#889', fontSize: 13, marginTop: 14 }}>
+          The joining details were also sent to your email & WhatsApp.
+        </p>
+      )}
     </div>
   </Card></Shell>;
 
