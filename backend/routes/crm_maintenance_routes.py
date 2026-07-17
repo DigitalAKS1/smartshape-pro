@@ -18,6 +18,7 @@ from fastapi import APIRouter, HTTPException, Request
 from database import db
 from auth_utils import get_current_user
 from rbac import require_admin, require_superadmin
+import services.school_merge as school_merge
 
 router = APIRouter(prefix="/crm/maintenance", tags=["crm-maintenance"])
 
@@ -1027,6 +1028,72 @@ async def duplicate_schools(request: Request):
     return {"groups": out, "group_count": len(out)}
 
 
+# --- Fuzzy near-duplicate detection (name + city + address) ------------------
+# Complements /duplicate-schools (exact normalized-name): surfaces likely dups
+# that DON'T share an identical name — "St Xaviers School" vs "St. Xavier's High
+# School". Read-only; the operator reviews each pair and merges via the existing
+# guarded /schools/merge (now with a field-by-field picker). SUPERADMIN.
+
+_FUZZY_FIELDS = {"_id": 0, "school_id": 1, "school_name": 1, "city": 1, "state": 1,
+                 "address": 1, "phone": 1, "email": 1, "board": 1, "school_type": 1,
+                 "pincode": 1, "assigned_to": 1, "assigned_name": 1}
+
+
+@router.get("/duplicate-schools/fuzzy")
+async def duplicate_schools_fuzzy(request: Request):
+    """SUPERADMIN, READ-ONLY. Fuzzy-scored likely-duplicate school PAIRS on
+    name+city+address, highest score first, excluding pairs whose normalized
+    names are identical (those are the exact-name report) and pairs the operator
+    dismissed. No writes."""
+    user = await get_current_user(request)
+    require_superadmin(user)
+    schools = await db.schools.find({"is_deleted": {"$ne": True}}, _FUZZY_FIELDS).to_list(_CAP)
+
+    dismissed = set()
+    async for d in db.merge_dismissals.find({}, {"_id": 0, "pair": 1}):
+        p = d.get("pair") or []
+        if len(p) == 2:
+            dismissed.add(frozenset(p))
+
+    pairs = school_merge.find_candidates(schools)
+    out = []
+    for score, a, b in pairs:
+        # skip exact-name pairs — already covered by /duplicate-schools
+        if _norm_school_name(a.get("school_name")) == _norm_school_name(b.get("school_name")):
+            continue
+        if frozenset((a["school_id"], b["school_id"])) in dismissed:
+            continue
+        out.append({
+            "score": score, "a": a, "b": b,
+            "a_children": await _school_child_counts(a["school_id"]),
+            "b_children": await _school_child_counts(b["school_id"]),
+        })
+        if len(out) >= 100:
+            break
+    return {"candidates": out, "candidate_count": len(out)}
+
+
+@router.post("/duplicate-schools/dismiss")
+async def dismiss_duplicate_pair(request: Request):
+    """SUPERADMIN. Remember a 'not a duplicate' decision so the fuzzy report never
+    re-suggests the pair."""
+    user = await get_current_user(request)
+    require_superadmin(user)
+    body = await request.json()
+    a = (body.get("a_id") or "").strip()
+    b = (body.get("b_id") or "").strip()
+    if not a or not b:
+        raise HTTPException(status_code=400, detail="a_id and b_id required")
+    pair = sorted([a, b])
+    await db.merge_dismissals.update_one(
+        {"pair": pair},
+        {"$set": {"pair": pair, "by": user.get("email", ""),
+                  "at": datetime.now(timezone.utc).isoformat()}},
+        upsert=True,
+    )
+    return {"dismissed": pair}
+
+
 async def _resolve_merge_queries(merge_ids: list, merge_names: dict):
     """Resolve, ONCE and up-front, everything the merge needs to know about which
     rows move. Returns (queries, fallback_ids):
@@ -1116,6 +1183,10 @@ async def merge_schools(request: Request):
     dry_run = body.get("dry_run", True)
     confirm = bool(body.get("confirm", False))
     reason = body.get("reason", "") or ""
+    # Optional field-by-field picker (Google-Contacts style): {field: source} where
+    # source is "survivor" (keep) or a merge_id (take that school's value). Absent →
+    # the classic fill-only-blank behavior is unchanged.
+    field_choices = body.get("field_choices") or {}
 
     if not survivor_id:
         raise HTTPException(status_code=400, detail="survivor_id is required")
@@ -1146,6 +1217,7 @@ async def merge_schools(request: Request):
                 status_code=400, detail=f"merge school {mid} is deleted — nothing to merge")
         merge_docs.append(doc)
 
+    merge_by_id = {d["school_id"]: d for d in merge_docs}
     merge_names = {d["school_id"]: (d.get("school_name") or "").strip() for d in merge_docs}
 
     # Resolve WHICH rows move exactly once — reused verbatim for the counts below,
@@ -1277,6 +1349,29 @@ async def merge_schools(request: Request):
                 if v not in (None, "", 0):
                     fill[f] = v
                     break
+
+    # 4b. Explicit field-by-field choices OVERRIDE the blank-fill: for each field the
+    #     operator picked from a specific duplicate, overwrite the survivor with that
+    #     value (a blank choice is ignored so a picker can never wipe survivor data).
+    #     assigned_to/assigned_name are kept consistent as a pair.
+    _CHOOSABLE = set(fillable) | {"address", "board", "gstin", "website",
+                                  "primary_contact_name", "designation"}
+    owner_src = field_choices.get("assigned_to") or field_choices.get("assigned_name")
+    if owner_src in merge_by_id:
+        od = merge_by_id[owner_src]
+        if od.get("assigned_to") not in (None, ""):
+            fill["assigned_to"] = od.get("assigned_to", "")
+            fill["assigned_name"] = od.get("assigned_name", "")
+    for f, src in field_choices.items():
+        if f in ("assigned_to", "assigned_name") or f not in _CHOOSABLE:
+            continue
+        src_doc = merge_by_id.get(src)   # None when src is "survivor"/unknown → keep survivor
+        if src_doc is None:
+            continue
+        v = src_doc.get(f)
+        if v not in (None, ""):
+            fill[f] = v
+
     if fill:
         await db.schools.update_one({"school_id": survivor_id}, {"$set": fill})
         result["survivor_filled"] = fill

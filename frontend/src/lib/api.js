@@ -276,6 +276,8 @@ export const crmMaintenance = {
   // server-side too; the caller must pass dry_run explicitly to write.
   integrityDetect: () => API.get('/crm/maintenance/integrity-detect'),
   duplicateSchools: () => API.get('/crm/maintenance/duplicate-schools'),
+  duplicateSchoolsFuzzy: () => API.get('/crm/maintenance/duplicate-schools/fuzzy'),
+  dismissDuplicatePair: (a_id, b_id) => API.post('/crm/maintenance/duplicate-schools/dismiss', { a_id, b_id }),
   mergeSchools: (data) => API.post('/crm/maintenance/schools/merge', data),
   repairPhones: (data) => API.post('/crm/maintenance/repair/phones', data),
   unifyLinks: (data) => API.post('/crm/maintenance/migrate/unify-links', data),

@@ -3,7 +3,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/dialog';
 import { Button } from '../ui/button';
 import {
   Activity, ChevronDown, ChevronRight, Loader2, RefreshCw, GitMerge,
-  Phone, Link2, AlertTriangle, Database, ShieldAlert,
+  Phone, Link2, AlertTriangle, Database, ShieldAlert, X, SkipForward, CheckCircle,
 } from 'lucide-react';
 import { useIsOwner } from '../../hooks/usePermission';
 import { crmMaintenance } from '../../lib/api';
@@ -274,6 +274,194 @@ function DuplicateSchoolsSection() {
   );
 }
 
+// ── 2b. Fuzzy duplicates (Google-Contacts style, field-by-field) ─────────────
+
+const FUZZY_FIELDS = [
+  { key: 'school_name', label: 'Name' },
+  { key: 'city', label: 'City' },
+  { key: 'state', label: 'State' },
+  { key: 'address', label: 'Address' },
+  { key: 'phone', label: 'Phone' },
+  { key: 'email', label: 'Email' },
+  { key: 'board', label: 'Board' },
+  { key: 'school_type', label: 'Type' },
+  { key: 'pincode', label: 'Pincode' },
+  { key: 'assigned_name', label: 'Owner', choiceKey: 'assigned_to' },
+];
+const childTotal = (c) => (c ? (c.leads + c.contacts + c.quotations + c.orders) : 0);
+
+function FuzzyDuplicatesSection() {
+  const [cands, setCands] = useState(null);
+  const [idx, setIdx] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [survivor, setSurvivor] = useState('a');   // 'a' | 'b'
+  const [choice, setChoice] = useState({});        // field.key -> 'a' | 'b'
+  const [info, setInfo] = useState('');
+
+  const load = useCallback(() => {
+    setLoading(true); setError('');
+    crmMaintenance.duplicateSchoolsFuzzy()
+      .then(({ data }) => { setCands(data.candidates || []); setIdx(0); })
+      .catch((e) => setError(e.response?.data?.detail || 'Could not load fuzzy duplicates'))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const cur = cands && cands[idx];
+
+  // defaults whenever the current pair changes
+  React.useEffect(() => {
+    if (!cur) return;
+    const surv = childTotal(cur.b_children) > childTotal(cur.a_children) ? 'b' : 'a';
+    setSurvivor(surv);
+    const dup = surv === 'a' ? 'b' : 'a';
+    const sel = {};
+    FUZZY_FIELDS.forEach((f) => {
+      const sv = cur[surv]?.[f.key], dv = cur[dup]?.[f.key];
+      sel[f.key] = (!sv && dv) ? dup : surv;
+    });
+    setChoice(sel);
+  }, [cur]);
+
+  const drop = () => { setCands((prev) => prev.filter((_, i) => i !== idx)); setIdx((i) => Math.max(0, Math.min(i, (cands?.length || 1) - 2))); };
+
+  const doMerge = async () => {
+    if (!cur) return;
+    const dup = survivor === 'a' ? 'b' : 'a';
+    const survivor_id = cur[survivor].school_id;
+    const duplicate_id = cur[dup].school_id;
+    const field_choices = {};
+    FUZZY_FIELDS.forEach((f) => {
+      const side = choice[f.key] || survivor;
+      field_choices[f.choiceKey || f.key] = cur[side].school_id;  // survivor id = keep
+    });
+    setBusy(true); setError('');
+    try {
+      const { data } = await crmMaintenance.mergeSchools({
+        survivor_id, merge_ids: [duplicate_id], dry_run: false, confirm: true,
+        reason: 'fuzzy duplicate merge', field_choices,
+      });
+      const mv = data.moved || {};
+      const moved = Object.values(mv).reduce((a, b) => a + b, 0);
+      window.dispatchEvent?.(new Event('crm:data-changed'));
+      setError(''); drop();
+      // lightweight inline note
+      setInfo(`Merged — ${moved} child record(s) moved to the kept school.`);
+    } catch (e) {
+      setError(e.response?.data?.detail || 'Merge failed');
+    }
+    setBusy(false);
+  };
+
+  const doDismiss = async () => {
+    if (!cur) return;
+    setBusy(true);
+    try {
+      await crmMaintenance.dismissDuplicatePair(cur.a.school_id, cur.b.school_id);
+      drop();
+    } catch (e) { setError(e.response?.data?.detail || 'Dismiss failed'); }
+    setBusy(false);
+  };
+
+  if (!cands) {
+    return (
+      <div className="space-y-3">
+        <Button type="button" size="sm" onClick={load} disabled={loading} data-testid="find-fuzzy-btn"
+          variant="outline" className="border-[var(--accent)]/40 text-[var(--accent)] hover:bg-[var(--accent)]/10">
+          {loading ? <><Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> Scanning…</> : 'Find near-duplicates'}
+        </Button>
+        {error && <p className="text-xs text-red-400">{error}</p>}
+        <p className="text-xs text-[var(--text-muted)]">Fuzzy matches on name + city + address — catches duplicates that don’t share an identical name (handled by the section above).</p>
+      </div>
+    );
+  }
+
+  if (!cur) {
+    return (
+      <div className="space-y-2">
+        {info && <p className="text-xs text-green-400">{info}</p>}
+        <p className="text-xs text-[var(--text-muted)] flex items-center gap-1.5"><CheckCircle className="h-3.5 w-3.5 text-green-500" /> No near-duplicate pairs to review.</p>
+        <Button type="button" size="sm" variant="outline" onClick={load} className="text-[var(--text-secondary)]">
+          <RefreshCw className="mr-1.5 h-3.5 w-3.5" /> Re-scan
+        </Button>
+      </div>
+    );
+  }
+
+  const dup = survivor === 'a' ? 'b' : 'a';
+  const scorePct = Math.round((cur.score || 0) * 100);
+  const Header = ({ side }) => {
+    const s = cur[side]; const counts = side === 'a' ? cur.a_children : cur.b_children;
+    const keep = side === survivor;
+    return (
+      <button type="button" onClick={() => setSurvivor(side)}
+        className={`flex-1 text-left rounded-md border p-2.5 transition-all ${keep ? 'border-[var(--accent)] bg-[var(--accent)]/10' : 'border-[var(--border-color)]'}`}>
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-xs font-semibold text-[var(--text-primary)] truncate">{s.school_name || '(no name)'}</span>
+          <span className={`text-[9px] px-1.5 py-0.5 rounded-full shrink-0 ${keep ? 'bg-[var(--accent)] text-white' : 'text-[var(--text-muted)] border border-[var(--border-color)]'}`}>{keep ? 'KEEP' : 'merge in'}</span>
+        </div>
+        <div className="text-[10px] mt-0.5 text-[var(--text-muted)]">{counts.contacts}c · {counts.leads}l · {counts.orders}o · {counts.quotations}q</div>
+      </button>
+    );
+  };
+
+  return (
+    <div className="space-y-3" data-testid="fuzzy-duplicates">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <span className="text-xs text-[var(--text-muted)]">Pair {idx + 1} of {cands.length} · {scorePct}% match</span>
+        <Button type="button" size="sm" variant="ghost" onClick={load} className="text-[var(--text-muted)] h-7 px-2"><RefreshCw className="h-3.5 w-3.5" /></Button>
+      </div>
+      <p className="text-[11px] text-[var(--text-muted)]">Click a card to choose which school to <b>keep</b>, then pick the winning value per field. Merge moves the other’s contacts/leads/orders/quotes onto the kept school and removes it (reversible — triple backup).</p>
+      <div className="flex gap-2">{['a', 'b'].map((side) => <Header key={side} side={side} />)}</div>
+
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead><tr className="text-[var(--text-muted)]">
+            <th className="text-left py-1">Field</th>
+            <th className="text-left px-2">{cur.a.school_name || 'A'}</th>
+            <th className="text-left px-2">{cur.b.school_name || 'B'}</th>
+          </tr></thead>
+          <tbody>
+            {FUZZY_FIELDS.map((f) => {
+              const av = cur.a?.[f.key] ?? '', bv = cur.b?.[f.key] ?? '';
+              const sel = choice[f.key] || survivor;
+              const conflict = String(av || '') !== String(bv || '');
+              const Cell = ({ side, val }) => (
+                <td className="px-2 py-1">
+                  <label className={`flex items-start gap-1.5 rounded px-1.5 py-0.5 cursor-pointer ${sel === side ? 'bg-[var(--accent)]/15 ring-1 ring-[var(--accent)]' : ''}`}>
+                    <input type="radio" name={`fz_${f.key}`} checked={sel === side}
+                      onChange={() => setChoice((p) => ({ ...p, [f.key]: side }))} className="mt-0.5 accent-[var(--accent)]" />
+                    <span className={val ? 'text-[var(--text-primary)]' : 'text-[var(--text-muted)]'}>{val || '—'}</span>
+                  </label>
+                </td>
+              );
+              return (
+                <tr key={f.key} className={`border-t border-[var(--border-color)] ${conflict ? '' : 'opacity-60'}`}>
+                  <td className="py-1 text-[var(--text-secondary)]">{f.label}</td>
+                  <Cell side="a" val={av} /><Cell side="b" val={bv} />
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      {error && <p className="text-xs text-red-400">{error}</p>}
+
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="flex gap-2">
+          <Button type="button" size="sm" variant="outline" onClick={doDismiss} disabled={busy} data-testid="fuzzy-dismiss-btn" className="text-[var(--text-secondary)]"><X className="mr-1.5 h-3.5 w-3.5" /> Not a duplicate</Button>
+          <Button type="button" size="sm" variant="outline" onClick={() => setIdx((i) => (i + 1) % cands.length)} disabled={busy || cands.length < 2} className="text-[var(--text-secondary)]"><SkipForward className="mr-1.5 h-3.5 w-3.5" /> Skip</Button>
+        </div>
+        <Button type="button" size="sm" onClick={doMerge} disabled={busy} data-testid="fuzzy-merge-btn"
+          className="bg-[var(--accent)] text-white hover:opacity-90">
+          <GitMerge className="mr-1.5 h-3.5 w-3.5" /> {busy ? 'Merging…' : `Merge into “${cur[survivor].school_name || 'kept'}”`}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 // ── 3. Phone repair ──────────────────────────────────────────────────────────
 
 function PhoneRepairPreview({ data }) {
@@ -449,6 +637,10 @@ export default function DataHealthPanel() {
 
             <CollapsibleSection step={2} title="Duplicate Schools / Merge" Icon={GitMerge}>
               <DuplicateSchoolsSection />
+            </CollapsibleSection>
+
+            <CollapsibleSection step="2b" title="Fuzzy Duplicates (near-matches, field-by-field)" Icon={GitMerge}>
+              <FuzzyDuplicatesSection />
             </CollapsibleSection>
 
             <CollapsibleSection step={3} title="Phone Repair" Icon={Phone}>
