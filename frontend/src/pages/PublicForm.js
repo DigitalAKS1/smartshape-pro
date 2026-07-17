@@ -4,13 +4,18 @@ import { publicForms } from '../lib/api';
 
 const ACCENT = '#e94560';
 
-const Shell = ({ children }) => (
+const Shell = ({ logo, children }) => (
   <div style={{ minHeight: '100vh', background: '#f4f6fb', fontFamily: 'Arial, Helvetica, sans-serif' }}>
     <div style={{ maxWidth: 560, margin: '0 auto', padding: '24px 16px' }}>
       <div style={{ textAlign: 'center', marginBottom: 16 }}>
-        <span style={{ fontWeight: 800, fontSize: 20, color: '#1a1a2e' }}>
-          SMART<span style={{ color: ACCENT }}>SHAPE</span>
-        </span>
+        {logo ? (
+          <img src={logo} alt="SMARTS-SHAPES"
+               style={{ height: 60, maxWidth: 280, objectFit: 'contain' }} />
+        ) : (
+          <span style={{ fontWeight: 800, fontSize: 20, color: '#1a1a2e' }}>
+            SMART<span style={{ color: ACCENT }}>SHAPE</span>
+          </span>
+        )}
       </div>
       {children}
       <p style={{ textAlign: 'center', color: '#9aa3b2', fontSize: 12, marginTop: 20 }}>
@@ -70,12 +75,12 @@ export default function PublicForm() {
     } finally { setSubmitting(false); }
   };
 
-  if (state === 'loading') return <Shell><Card><p style={{ color: '#667' }}>Loading…</p></Card></Shell>;
-  if (state === 'missing') return <Shell><Card>
+  if (state === 'loading') return <Shell logo={form?.logo_url}><Card><p style={{ color: '#667' }}>Loading…</p></Card></Shell>;
+  if (state === 'missing') return <Shell logo={form?.logo_url}><Card>
     <h2 style={{ margin: 0 }}>Form not found</h2>
     <p style={{ color: '#667' }}>This link is invalid or has been removed.</p>
   </Card></Shell>;
-  if (state === 'error') return <Shell><Card>
+  if (state === 'error') return <Shell logo={form?.logo_url}><Card>
     <h2 style={{ margin: 0 }}>Something went wrong</h2>
     <p style={{ color: '#667' }}>We couldn't load the form. Please check your internet and try again.</p>
     <button onClick={() => window.location.reload()}
@@ -84,12 +89,12 @@ export default function PublicForm() {
       Retry
     </button>
   </Card></Shell>;
-  if (state === 'closed') return <Shell><Card>
+  if (state === 'closed') return <Shell logo={form?.logo_url}><Card>
     <h2 style={{ margin: 0 }}>{form?.title || 'Registrations closed'}</h2>
     <p style={{ color: '#667' }}>Registrations for this session are closed. Thank you for your interest!</p>
   </Card></Shell>;
 
-  if (state === 'done') return <Shell><Card>
+  if (state === 'done') return <Shell logo={form?.logo_url}><Card>
     <div style={{ textAlign: 'center' }}>
       <div style={{ fontSize: 44 }}>🎉</div>
       <h2 style={{ color: ACCENT, margin: '8px 0' }}>Registration Confirmed</h2>
@@ -126,7 +131,7 @@ export default function PublicForm() {
   });
 
   return (
-    <Shell>
+    <Shell logo={form?.logo_url}>
       {form.banner_url && (
         <img src={form.banner_url} alt="" style={{ width: '100%', borderRadius: 14, marginBottom: 12 }} />
       )}

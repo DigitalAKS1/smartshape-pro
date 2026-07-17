@@ -388,8 +388,11 @@ async def public_form(token: str):
         {"public_token": token, "is_deleted": {"$ne": True}}, {"_id": 0})
     if not form:
         raise HTTPException(404, "Form not found")
+    # Company logo for page branding (same public exposure as catalogue pages)
+    company = await db.settings.find_one({"type": "company"}, {"_id": 0, "logo_url": 1}) or {}
+    logo_url = company.get("logo_url", "")
     if form.get("status") != "open":
-        return {"status": "closed", "title": form.get("title", "")}
+        return {"status": "closed", "title": form.get("title", ""), "logo_url": logo_url}
     ev = form.get("event") or {}
     return {
         "status": "open",
@@ -397,6 +400,7 @@ async def public_form(token: str):
         "description": form.get("description", ""),
         "type": form.get("type", "general"),
         "banner_url": form.get("banner_url", ""),
+        "logo_url": logo_url,
         "fields": form.get("fields", []),
         # meeting_link deliberately withheld — revealed only after registering
         "event": {k: ev.get(k, "") for k in ("theme", "date", "time", "platform", "duration_min")},
