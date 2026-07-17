@@ -7,6 +7,7 @@ import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
 import { toast } from 'sonner';
 import { QRCodeCanvas } from 'qrcode.react';
+import HtmlBodyEditor from '../../components/email/HtmlBodyEditor';
 import {
   ArrowLeft, ArrowUp, ArrowDown, Trash2, Plus, Copy, Download,
   MessageCircle, Users, Save, Send, ExternalLink,
@@ -306,15 +307,21 @@ export default function FormBuilder() {
                         onChange={e => setMsg({ wa_reminder: e.target.value })}
                         className={`w-full rounded-md p-2 text-sm ${inputCls}`} />
             </div>
-            <div>
+            <div className="space-y-2">
               <Label className={`text-xs ${textMuted}`}>
                 Custom confirmation email (optional — leave blank to use the standard branded email with Zoom link + calendar button)
               </Label>
               <Input placeholder="Email subject" value={form.messages?.email_subject || ''}
                      onChange={e => setMsg({ email_subject: e.target.value })} className={inputCls} />
-              <textarea rows={8} placeholder="Email HTML body" value={form.messages?.email_html || ''}
-                        onChange={e => setMsg({ email_html: e.target.value })}
-                        className={`w-full rounded-md p-2 text-sm mt-2 font-mono ${inputCls}`} />
+              <HtmlBodyEditor value={form.messages?.email_html || ''}
+                              onChange={html => setMsg({ email_html: html })} />
+              {(form.messages?.email_html || '').trim() && (
+                <div>
+                  <Label className={`text-xs ${textMuted}`}>Preview (placeholders shown as-is)</Label>
+                  <div className="bg-white text-gray-900 rounded-md border border-[var(--border-color)] p-4 text-sm overflow-auto max-h-72"
+                       dangerouslySetInnerHTML={{ __html: form.messages.email_html }} />
+                </div>
+              )}
             </div>
           </div>
         )}
