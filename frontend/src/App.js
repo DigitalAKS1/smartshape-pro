@@ -51,6 +51,7 @@ const VisitCalendar = lazy(() => import('./pages/admin/VisitCalendar'));
 const OrdersManagement = lazy(() => import('./pages/admin/OrdersManagement'));
 const AppSettings = lazy(() => import('./pages/admin/AppSettings'));
 const ImportCenter = lazy(() => import('./pages/admin/ImportCenter'));
+const CallsLog = lazy(() => import('./pages/admin/CallsLog'));
 const ActivityLogsPage = lazy(() => import('./pages/admin/ActivityLogs'));
 const DispatchTracking = lazy(() => import('./pages/admin/DispatchTracking'));
 const SchoolProfile = lazy(() => import('./pages/admin/SchoolProfile'));
@@ -220,6 +221,7 @@ function AppRouter() {
       <Route path="/store" element={<ProtectedRoute><Store /></ProtectedRoute>} />
       <Route path="/field-sales" element={<ProtectedRoute><FieldSales /></ProtectedRoute>} />
       <Route path="/leads" element={<ProtectedRoute><LeadsCRM /></ProtectedRoute>} />
+      <Route path="/calls" element={<ProtectedRoute><CallsLog /></ProtectedRoute>} />
       <Route path="/edit-quotation/:id" element={<ProtectedRoute><EditQuotation /></ProtectedRoute>} />
       <Route path="/conversion" element={<ProtectedRoute><ConversionTracking /></ProtectedRoute>} />
       <Route path="/view-quotation/:id" element={<ProtectedRoute><ViewQuotation /></ProtectedRoute>} />

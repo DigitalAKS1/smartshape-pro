@@ -4,7 +4,7 @@ import {
   Smartphone, Layers, IndianRupee, UserCog, Store, MapPin, Target,
   CalendarDays, Calendar, ShoppingCart, Upload, Activity,
   Home, MoreHorizontal, Zap, Heart, Truck, Award, Video, Trophy, Inbox, CalendarClock,
-  SlidersHorizontal, FormInput,
+  SlidersHorizontal, FormInput, PhoneCall,
 } from 'lucide-react';
 
 /**
@@ -41,6 +41,7 @@ export const MODULE_ROUTE_MAP = {
   ],
   leads: [
     { path: '/leads', icon: Target, label: 'Leads & CRM' },
+    { path: '/calls', icon: PhoneCall, label: 'Call Log' },
     { path: '/crm-masters', icon: Layers, label: 'CRM Masters' },
     { path: '/dispatch-tracking', icon: Package, label: 'Dispatch Tracking' },
     { path: '/customer-engagement', icon: Heart, label: 'Customer Engagement' },
