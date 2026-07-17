@@ -86,3 +86,33 @@ async def test_xlsx_export(ctx):
     ws = wb.active
     data = [[c.value for c in row] for row in ws.iter_rows()]
     assert data[0][1] == "Name" and "Asha Verma" in data[1]
+
+
+@pytest.mark.asyncio
+async def test_share_responses_emails_xlsx(ctx, monkeypatch):
+    d, client, form = ctx
+    import scheduler
+    calls = {}
+    async def fake_cfg():
+        return ("info@smartshape.in", "app-pw", "SmartShape")
+    def fake_send(cfg, recipients, subject, body, xlsx, filename):
+        calls["recipients"] = recipients
+        calls["filename"] = filename
+        calls["xlsx_len"] = len(xlsx)
+    monkeypatch.setattr(scheduler, "_email_cfg", fake_cfg)
+    monkeypatch.setattr(fr, "_send_xlsx_email_sync", fake_send)
+    # no recipients -> 422
+    r0 = await client.post(f"/api/forms/{form['form_id']}/share-responses", json={"recipients": ""})
+    assert r0.status_code == 422
+    # valid recipients -> sends, dedups + parses list
+    r = await client.post(f"/api/forms/{form['form_id']}/share-responses",
+                          json={"recipients": "owner@smartshape.in, owner@smartshape.in team@x.co",
+                                "note": "here you go"})
+    assert r.status_code == 200
+    assert r.json()["count"] == 1
+    assert calls["recipients"] == ["owner@smartshape.in", "team@x.co"]
+    assert calls["xlsx_len"] > 0 and calls["filename"].endswith(".xlsx")
+    fr._CURRENT["user"] = OTHER
+    assert (await client.post(f"/api/forms/{form['form_id']}/share-responses",
+                             json={"recipients": "x@y.co"})).status_code == 403
+    fr._CURRENT["user"] = SALES

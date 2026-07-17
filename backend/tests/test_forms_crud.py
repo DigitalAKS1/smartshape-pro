@@ -100,3 +100,26 @@ async def test_soft_delete_and_status(ctx, monkeypatch):
     assert (await client.get(f"/api/forms/{fid}")).json()["status"] == "closed"
     assert (await client.delete(f"/api/forms/{fid}")).status_code == 200
     assert (await client.get(f"/api/forms/{fid}")).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_custom_slug_resolves_and_dedups(ctx, monkeypatch):
+    d, client = ctx
+    monkeypatch.setattr(fr, "get_current_user", _as(SALES))
+    fid = (await client.post("/api/forms", json={"title": "Session 5", "type": "general"})).json()["form_id"]
+    # set a custom slug
+    r = await client.put(f"/api/forms/{fid}", json={"slug": "Session 05 Independence!"})
+    assert r.status_code == 200
+    assert r.json()["slug"] == "session-05-independence"
+    # public resolver finds it by slug
+    pub = await client.get("/api/forms/public/session-05-independence")
+    assert pub.status_code == 200 and pub.json()["title"] == "Session 5"
+    # a second form cannot take the same slug
+    fid2 = (await client.post("/api/forms", json={"title": "Other", "type": "general"})).json()["form_id"]
+    dup = await client.put(f"/api/forms/{fid2}", json={"slug": "session-05-independence"})
+    assert dup.status_code == 409
+    # too-short slug rejected
+    assert (await client.put(f"/api/forms/{fid2}", json={"slug": "ab"})).status_code == 422
+    # clearing slug reverts to token-only
+    await client.put(f"/api/forms/{fid}", json={"slug": ""})
+    assert (await client.get("/api/forms/public/session-05-independence")).status_code == 404

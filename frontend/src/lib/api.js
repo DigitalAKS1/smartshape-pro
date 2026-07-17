@@ -1299,6 +1299,8 @@ export const forms = {
   setStatus: (id, status) => API.post(`/forms/${id}/status`, { status }),
   responses: (id) => API.get(`/forms/${id}/responses`),
   remind: (id) => API.post(`/forms/${id}/remind`),
+  shareResponses: (id, recipients, note) =>
+    API.post(`/forms/${id}/share-responses`, { recipients, note }),
   exportUrl: (id, fmt) => `${BACKEND_URL}/api/forms/${id}/export.${fmt}`,
 };
 

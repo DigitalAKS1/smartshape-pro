@@ -30,6 +30,7 @@ export default function FormBuilder() {
   const [tab, setTab] = useState('fields'); // fields | messages | share
   const [saving, setSaving] = useState(false);
   const [newCollab, setNewCollab] = useState('');
+  const [slugDraft, setSlugDraft] = useState('');
   const qrRef = useRef(null);
 
   const textPri = 'text-[var(--text-primary)]', textSec = 'text-[var(--text-secondary)]',
@@ -38,13 +39,20 @@ export default function FormBuilder() {
   const inputCls = 'bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]';
 
   useEffect(() => {
-    formsApi.get(formId).then(r => setForm(r.data))
+    formsApi.get(formId).then(r => { setForm(r.data); setSlugDraft(r.data.slug || ''); })
       .catch(() => { toast.error('Form not found'); nav('/forms'); });
   }, [formId, nav]);
 
   if (!form) return <AdminLayout><div className="p-8" /></AdminLayout>;
 
-  const publicUrl = `${window.location.origin}/f/${form.public_token}`;
+  const publicUrl = `${window.location.origin}/f/${form.slug || form.public_token}`;
+  const saveSlug = async () => {
+    try {
+      const r = await formsApi.update(form.form_id, { slug: slugDraft });
+      setForm(r.data);
+      toast.success(slugDraft ? 'Custom link saved' : 'Custom link removed');
+    } catch (e) { toast.error(e.response?.data?.detail || 'Could not save link'); }
+  };
   const isEvent = form.type === 'event';
   const set = (patch) => setForm({ ...form, ...patch });
   const setEvent = (patch) => set({ event: { ...(form.event || {}), ...patch } });
@@ -337,6 +345,20 @@ export default function FormBuilder() {
                   <ExternalLink className="h-4 w-4" />
                 </Button>
               </div>
+            </div>
+
+            <div>
+              <Label className={`text-xs ${textMuted}`}>Custom link name (optional — memorable link for this event)</Label>
+              <div className="flex items-center gap-2 mt-1">
+                <span className={`text-sm ${textMuted} whitespace-nowrap`}>{window.location.origin}/f/</span>
+                <Input value={slugDraft}
+                       onChange={e => setSlugDraft(e.target.value.toLowerCase().replace(/[^a-z0-9-]+/g, '-'))}
+                       placeholder="session-05-independence-day" className={`${inputCls} flex-1`} />
+                <Button variant="outline" onClick={saveSlug}>Save name</Button>
+              </div>
+              <p className={`text-[11px] ${textMuted} mt-1`}>
+                Letters, numbers and hyphens only. The random link keeps working too. Leave blank + Save to remove.
+              </p>
             </div>
             <div className="flex items-center gap-6">
               <div ref={qrRef} className="bg-white p-3 rounded-md">

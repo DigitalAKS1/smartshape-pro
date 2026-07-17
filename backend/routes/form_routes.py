@@ -8,11 +8,13 @@ are added by this module (Tasks 4-5).
 """
 from fastapi import APIRouter, HTTPException, Request
 from datetime import datetime, timezone
-import re, uuid
+import re, uuid, logging
 
 from database import db
 from auth_utils import get_current_user
 from rbac import get_team
+
+log = logging.getLogger("forms")
 
 router = APIRouter()
 
@@ -229,6 +231,20 @@ async def update_form(form_id: str, request: Request):
         updates["collaborators"] = [
             str(c).lower().strip() for c in (body.get("collaborators") or [])
             if "@" in str(c)][:20]
+    if "slug" in body:
+        raw = str(body.get("slug") or "").strip().lower()
+        if raw:
+            slug = re.sub(r"[^a-z0-9]+", "-", raw).strip("-")[:60]
+            if len(slug) < 3:
+                raise HTTPException(422, "Custom link must be at least 3 letters/numbers")
+            clash = await db.forms.find_one({
+                "form_id": {"$ne": form_id}, "is_deleted": {"$ne": True},
+                "$or": [{"slug": slug}, {"public_token": slug}]})
+            if clash:
+                raise HTTPException(409, "That custom link is already taken — try another")
+            updates["slug"] = slug
+        else:
+            updates["slug"] = None      # clearing reverts to the random link
     if "messages" in body:
         msgs = {**(form.get("messages") or _default_messages())}
         for k in ("email_subject", "email_html", "wa_confirm", "wa_reminder"):
@@ -385,7 +401,8 @@ def _thank_you(form: dict) -> dict:
 @router.get("/forms/public/{token}")
 async def public_form(token: str):
     form = await db.forms.find_one(
-        {"public_token": token, "is_deleted": {"$ne": True}}, {"_id": 0})
+        {"$or": [{"public_token": token}, {"slug": token}],
+         "is_deleted": {"$ne": True}}, {"_id": 0})
     if not form:
         raise HTTPException(404, "Form not found")
     # Company logo for page branding (same public exposure as catalogue pages)
@@ -411,7 +428,8 @@ async def public_form(token: str):
 async def public_submit(token: str, request: Request):
     import hashlib
     form = await db.forms.find_one(
-        {"public_token": token, "is_deleted": {"$ne": True}}, {"_id": 0})
+        {"$or": [{"public_token": token}, {"slug": token}],
+         "is_deleted": {"$ne": True}}, {"_id": 0})
     if not form:
         raise HTTPException(404, "Form not found")
     if form.get("status") != "open":
@@ -732,17 +750,9 @@ async def export_csv(form_id: str, request: Request):
                                       f'attachment; filename="{form_id}_responses.csv"'})
 
 
-@router.get("/forms/{form_id}/export.xlsx")
-async def export_xlsx(form_id: str, request: Request):
+def _build_xlsx_bytes(form: dict, rows: list) -> bytes:
     import io as _io
-    from fastapi.responses import StreamingResponse
     from openpyxl import Workbook
-    user = await get_current_user(request)
-    form = await _get_form_or_404(form_id)
-    if not _can_manage(user, form):
-        raise HTTPException(403, "Not your form")
-    rows = await db.form_responses.find({"form_id": form_id}, {"_id": 0}) \
-        .sort("submitted_at", -1).to_list(5000)
     wb = Workbook()
     ws = wb.active
     ws.title = "Responses"
@@ -750,9 +760,108 @@ async def export_xlsx(form_id: str, request: Request):
         ws.append(line)
     buf = _io.BytesIO()
     wb.save(buf)
-    buf.seek(0)
-    return StreamingResponse(
-        buf,
+    return buf.getvalue()
+
+
+@router.get("/forms/{form_id}/export.xlsx")
+async def export_xlsx(form_id: str, request: Request):
+    from fastapi.responses import Response
+    user = await get_current_user(request)
+    form = await _get_form_or_404(form_id)
+    if not _can_manage(user, form):
+        raise HTTPException(403, "Not your form")
+    rows = await db.form_responses.find({"form_id": form_id}, {"_id": 0}) \
+        .sort("submitted_at", -1).to_list(5000)
+    return Response(
+        content=_build_xlsx_bytes(form, rows),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition":
                  f'attachment; filename="{form_id}_responses.xlsx"'})
+
+
+def _clean_emails(raw) -> list:
+    """Parse a comma/space/newline separated string or list into valid emails."""
+    import re as _re
+    if isinstance(raw, str):
+        raw = _re.split(r"[,\s;]+", raw)
+    out, seen = [], set()
+    for e in (raw or []):
+        e = str(e).strip().lower()
+        if "@" in e and "." in e.split("@")[-1] and e not in seen:
+            seen.add(e)
+            out.append(e)
+    return out[:20]
+
+
+def _send_xlsx_email_sync(cfg, recipients, subject, body, xlsx_bytes, filename):
+    """Blocking SMTP send of one Excel attachment to several recipients.
+    Runs off-thread via asyncio.to_thread. cfg = (sender_email, app_password, sender_name)."""
+    import smtplib
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+    from email.mime.base import MIMEBase
+    from email import encoders
+    sender_email, app_password, sender_name = cfg
+    msg = MIMEMultipart()
+    msg["From"] = f"{sender_name} <{sender_email}>"
+    msg["To"] = ", ".join(recipients)
+    msg["Subject"] = subject
+    msg.attach(MIMEText(body, "plain"))
+    part = MIMEBase("application",
+                    "vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    part.set_payload(xlsx_bytes)
+    encoders.encode_base64(part)
+    part.add_header("Content-Disposition", f'attachment; filename="{filename}"')
+    msg.attach(part)
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=30) as smtp:
+        smtp.login(sender_email, app_password)
+        smtp.sendmail(sender_email, recipients, msg.as_string())
+
+
+@router.post("/forms/{form_id}/share-responses")
+async def share_responses(form_id: str, request: Request):
+    """Email the current registrations as an Excel attachment to chosen people.
+    Owner/collaborator/admin only. Synchronous send so the caller gets a real
+    success/failure (small, on-demand action — not the bulk queue)."""
+    import asyncio as _asyncio
+    user = await get_current_user(request)
+    form = await _get_form_or_404(form_id)
+    if not _can_manage(user, form):
+        raise HTTPException(403, "Not your form")
+    body = await request.json()
+    recipients = _clean_emails(body.get("recipients"))
+    if not recipients:
+        raise HTTPException(422, "Enter at least one valid email address")
+    note = str(body.get("note") or "").strip()[:500]
+
+    rows = await db.form_responses.find({"form_id": form_id}, {"_id": 0}) \
+        .sort("submitted_at", -1).to_list(5000)
+    xlsx = _build_xlsx_bytes(form, rows)
+
+    from scheduler import _email_cfg
+    cfg = await _email_cfg()
+    if not cfg:
+        raise HTTPException(400, "Email is not configured in App Settings yet")
+
+    title = form.get("title", "form")
+    safe = re.sub(r"[^A-Za-z0-9]+", "_", title).strip("_")[:50] or "responses"
+    subject = f"Registrations: {title} ({len(rows)})"
+    lines = [f"Hi,", "",
+             f'Attached are the current registrations for "{title}".',
+             f"Total: {len(rows)} registration(s) as of now."]
+    if note:
+        lines += ["", note]
+    lines += ["", f"Shared by {user.get('email','a SmartShape user')} via SmartShape."]
+    email_body = "\n".join(lines)
+
+    try:
+        await _asyncio.to_thread(
+            _send_xlsx_email_sync, cfg, recipients, subject, email_body,
+            xlsx, f"{safe}_registrations.xlsx")
+    except Exception as exc:
+        log.warning("[forms] share-responses send failed: %s", exc)
+        raise HTTPException(502, "Could not send the email — check the email settings")
+
+    await db.forms.update_one({"form_id": form_id}, {"$push": {"shared_reports": {
+        "at": _now(), "by": user.get("email", ""), "to": recipients, "count": len(rows)}}})
+    return {"sent_to": recipients, "count": len(rows)}

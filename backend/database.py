@@ -65,6 +65,10 @@ async def connect_db():
     # ── Forms builder ────────────────────────────────────────────────────────
     await _i(db.forms.create_index("form_id", unique=True))
     await _i(db.forms.create_index("public_token", unique=True))
+    # Custom link slug — unique only among forms that set one (sparse/partial).
+    await _i(db.forms.create_index(
+        "slug", unique=True,
+        partialFilterExpression={"slug": {"$type": "string"}}, background=True))
     await _i(db.form_responses.create_index("response_id", unique=True))
     await _i(db.form_responses.create_index(
         [("form_id", 1), ("submitted_at", -1)], background=True))
