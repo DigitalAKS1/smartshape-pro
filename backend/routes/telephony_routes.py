@@ -7,6 +7,9 @@ GET  /telephony/calls/{event_id} — inspect a call's lifecycle (debug/UI)
 The target phone is always resolved from the DB record (never trusted from the
 request body), so a rep cannot dial an arbitrary number through the company line.
 """
+import uuid
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, HTTPException, Request
 
 from database import db
@@ -15,6 +18,10 @@ from rbac import get_team
 from services import telephony_service
 
 router = APIRouter()
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 async def _resolve_target(kind: str, ref_id: str) -> dict:
@@ -82,3 +89,56 @@ async def get_telephony_call(event_id: str, request: Request):
     if not row:
         raise HTTPException(404, "Call not found")
     return row
+
+
+@router.get("/telephony/calls")
+async def list_telephony_calls(request: Request, limit: int = 100):
+    """Recent calls — a rep sees their own; admin sees everyone's (call log)."""
+    user = await get_current_user(request)
+    if get_team(user) not in ("sales", "admin"):
+        raise HTTPException(403, "No calling access")
+    q = {} if get_team(user) == "admin" else {"rep_email": user["email"]}
+    return await db.telephony_calls.find(q, {"_id": 0, "raw_events": 0}) \
+        .sort("created_at", -1).to_list(min(limit, 500))
+
+
+@router.post("/telephony/calls/{event_id}/forward")
+async def forward_telephony_call(event_id: str, request: Request):
+    """Forward the call's record to a colleague — sends them a CRM notification
+    with the context. Does not change ownership (a hand-off, not a reassign).
+    Bonvoice has no live-transfer API, so this is a CRM-level forward."""
+    user = await get_current_user(request)
+    if get_team(user) not in ("sales", "admin"):
+        raise HTTPException(403, "No calling access")
+    row = await db.telephony_calls.find_one({"event_id": event_id}, {"_id": 0})
+    if not row:
+        raise HTTPException(404, "Call not found")
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "Invalid JSON body")
+    to_email = (body.get("to_email") or "").strip()
+    note = (body.get("note") or "").strip()
+    if not to_email:
+        raise HTTPException(400, "to_email is required")
+    colleague = await db.salespersons.find_one({"email": to_email}, {"_id": 0, "name": 1}) \
+        or await db.users.find_one({"email": to_email}, {"_id": 0, "name": 1})
+    if not colleague:
+        raise HTTPException(404, "Colleague not found")
+
+    ref_type = "contact" if row.get("contact_id") else ("lead" if row.get("lead_id") else "school")
+    ref_id = row.get("contact_id") or row.get("lead_id") or row.get("school_id") or ""
+    phone = row.get("target_phone") or ""
+    body_txt = (f"{user.get('name', 'A colleague')} forwarded a call ({phone}) to you."
+                + (f" Note: {note}" if note else ""))
+    await db.crm_notifications.insert_one({
+        "notif_id": f"crmn_{uuid.uuid4().hex[:10]}",
+        "email": to_email, "type": "call_forward",
+        "title": "Call forwarded to you", "body": body_txt,
+        "ref_type": ref_type, "ref_id": ref_id, "from_name": user.get("name", ""),
+        "is_read": False, "created_at": _now(),
+    })
+    await db.telephony_calls.update_one({"event_id": event_id},
+        {"$set": {"forwarded_to": to_email, "forwarded_by": user["email"],
+                  "forwarded_at": _now()}})
+    return {"ok": True, "forwarded_to": to_email, "forwarded_to_name": colleague.get("name", "")}

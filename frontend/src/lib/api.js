@@ -868,11 +868,13 @@ export const integrationsApi = {
 
 // Telephony (Bonvoice click-to-call)
 export const telephonyApi = {
-  getConfig:    ()     => API.get('/settings/telephony'),
-  saveConfig:   (body) => API.put('/settings/telephony', body),
-  rotateSecret: ()     => API.post('/settings/telephony/rotate-secret'),
-  placeCall:    (body) => API.post('/telephony/call', body),
-  getCall:      (id)   => API.get(`/telephony/calls/${id}`),
+  getConfig:    ()        => API.get('/settings/telephony'),
+  saveConfig:   (body)    => API.put('/settings/telephony', body),
+  rotateSecret: ()        => API.post('/settings/telephony/rotate-secret'),
+  placeCall:    (body)    => API.post('/telephony/call', body),
+  getCall:      (id)      => API.get(`/telephony/calls/${id}`),
+  listCalls:    ()        => API.get('/telephony/calls'),
+  forward:      (id, body)=> API.post(`/telephony/calls/${id}/forward`, body),
 };
 
 // Cloudinary

@@ -3,17 +3,13 @@ import { toast } from 'sonner';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Phone, PhoneCall, X, Clock, CheckCircle2 } from 'lucide-react';
-import { telephonyApi } from '../../lib/api';
+import { startCall } from '../../lib/callBus';
 
-/** Trigger a Bonvoice click-to-call. Rings the rep's phone first, then the customer.
- *  Surfaces the backend's 409/422 message when calling is off or the record has no phone. */
-export async function callViaBonvoice({ kind, ref_id }) {
-  try {
-    await telephonyApi.placeCall({ kind, ref_id });
-    toast.info('Ringing your phone… pick up to connect the call.');
-  } catch (e) {
-    toast.error(e.response?.data?.detail || 'Could not start the call');
-  }
+/** Trigger a Bonvoice click-to-call and open the live call widget. Rings the rep's
+ *  phone first, then the customer. Surfaces the backend's 409/422 message when
+ *  calling is off or the record has no phone. */
+export async function callViaBonvoice({ kind, ref_id, label }) {
+  return startCall({ kind, ref_id, label });
 }
 
 export const CALL_OUTCOMES = [
@@ -104,7 +100,7 @@ export default function ContactDetailPanel({
         {tab === 'call' && (
           <div className="p-4 space-y-5">
             {detailContact.phone && (
-              <Button onClick={() => callViaBonvoice({ kind: 'contact', ref_id: detailContact.contact_id })}
+              <Button onClick={() => callViaBonvoice({ kind: 'contact', ref_id: detailContact.contact_id, label: detailContact.name })}
                 size="sm" className="w-full bg-green-600 hover:bg-green-700 text-white">
                 <PhoneCall className="h-3.5 w-3.5 mr-1" /> Call {detailContact.phone}
               </Button>

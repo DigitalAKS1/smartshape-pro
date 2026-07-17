@@ -2,6 +2,7 @@ import React, { Suspense, lazy } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { Toaster } from './components/ui/sonner';
+import CallWidget from './components/telephony/CallWidget';
 import ProtectedRoute from './components/ProtectedRoute';
 import OfflineBanner from './components/OfflineBanner';
 import { ThemeProvider } from './contexts/ThemeContext';
@@ -263,6 +264,7 @@ function App() {
           <AuthProvider>
             <AppRouter />
             <OfflineBanner />
+            <CallWidget />
             <Toaster position="top-right" />
           </AuthProvider>
         </BrowserRouter>

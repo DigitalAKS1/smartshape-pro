@@ -138,4 +138,40 @@ async def handle_webhook(content_type: str, raw_body: bytes,
     note = tm.build_webhook_call_note(row, now_iso)
     await db.call_notes.insert_one(dict(note))
     await _touch_last_activity(row, now_iso)
-    return {"ok": True, "event": "hangup", "note": note["note_id"]}
+    # Safety net: a call that never connected auto-creates a follow-up task for the
+    # rep, so a missed/busy/failed call is never silently forgotten.
+    task_id = None
+    if note["outcome"] in ("no_answer", "busy", "failed"):
+        task_id = await _create_missed_call_followup(row, note["outcome"], now_iso)
+    return {"ok": True, "event": "hangup", "note": note["note_id"], "followup_task": task_id}
+
+
+async def _create_missed_call_followup(row: Dict[str, Any], outcome: str, now_iso: str):
+    """Create a 'call back' follow-up task (today) for the rep who dialed."""
+    rep_email = row.get("rep_email") or ""
+    if not rep_email:
+        return None
+    task_id = f"task_{uuid.uuid4().hex[:12]}"
+    phone = row.get("target_phone") or ""
+    task = {
+        "task_id": task_id,
+        "title": f"Call back {phone} ({outcome.replace('_', ' ')})",
+        "description": f"Auto-created: previous call to {phone} was {outcome.replace('_', ' ')}.",
+        "type": "follow_up",
+        "contact_id": row.get("contact_id"),
+        "lead_id": row.get("lead_id"),
+        "school_id": row.get("school_id"),
+        "source": "bonvoice",
+        "event_id": row.get("event_id"),
+        "assigned_to": rep_email,
+        "assigned_name": row.get("rep_name") or "",
+        "due_date": now_iso[:10],
+        "due_time": "",
+        "priority": "high" if outcome != "no_answer" else "medium",
+        "status": "pending",
+        "outcome": "",
+        "created_by": "system",
+        "created_at": now_iso,
+    }
+    await db.tasks.insert_one(task)
+    return task_id

@@ -150,7 +150,7 @@ export default function SalesLeads() {
                   )}
                   {lead.contact_phone && (
                     <div className="flex gap-2">
-                      <button onClick={e => { e.stopPropagation(); callViaBonvoice({ kind: 'lead', ref_id: lead.lead_id }); }}
+                      <button onClick={e => { e.stopPropagation(); callViaBonvoice({ kind: 'lead', ref_id: lead.lead_id, label: lead.contact_name || lead.company_name }); }}
                         className="flex items-center gap-1 text-[11px] px-3 py-1.5 rounded-lg bg-blue-500/10 text-blue-400 font-medium">
                         <Phone className="h-3 w-3" /> Call
                       </button>
