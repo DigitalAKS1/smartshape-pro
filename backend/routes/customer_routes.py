@@ -247,9 +247,8 @@ async def update_customer_selection(token: str, request: Request):
         raise HTTPException(status_code=404, detail="Quotation not found")
 
     # The owning sales person may always edit; everyone else needs module access.
-    team = get_team(user)
     owns = (quot.get("sales_person_email", "").lower() == user.get("email", "").lower())
-    if not (team == "sales" and owns):
+    if not owns:
         require_module(user, "quotations", "read_write")
 
     selection = await db.catalogue_selections.find_one(

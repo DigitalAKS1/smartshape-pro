@@ -9,7 +9,7 @@ import json
 
 from database import db
 from auth_utils import get_current_user
-from rbac import get_team, require_teams, require_superadmin, require_module
+from rbac import get_team, require_teams, require_superadmin, require_module, sees_all
 from audit_backup import snapshot_and_delete
 from tally_export import gather_so, build_json, build_voucher_xml, build_envelope
 
@@ -105,12 +105,10 @@ async def recompute_reservations() -> dict:
 @router.get("/orders")
 async def get_orders(request: Request):
     user = await get_current_user(request)
-    team = get_team(user)
-    if team == "sales":
-        # Sales see only orders they created (from their quotations)
+    if not sees_all(user, "orders"):
+        # Own-scoped users see only orders they created (from their quotations)
         query = {"created_by": user["email"]}
     else:
-        # admin, accounts, store — see all orders
         query = {}
     orders = await db.orders.find(query, {"_id": 0}).sort("created_at", -1).to_list(10000)
     return orders
@@ -944,9 +942,7 @@ async def create_dispatch(request: Request):
 @router.get("/dispatches")
 async def get_dispatches(request: Request):
     user = await get_current_user(request)
-    team = get_team(user)
-    if team == "sales":
-        # Sales see dispatches for their own orders only
+    if not sees_all(user, "orders"):
         own_orders = await db.orders.find({"created_by": user["email"]}, {"_id": 0, "order_id": 1}).to_list(10000)
         order_ids = [o["order_id"] for o in own_orders]
         query = {"order_id": {"$in": order_ids}} if order_ids else {"order_id": "__none__"}
@@ -1107,9 +1103,8 @@ async def dispatch_slip_pdf(dispatch_id: str, request: Request):
 @router.get("/holds")
 async def get_holds(request: Request):
     user = await get_current_user(request)
-    team = get_team(user)
     holds = []
-    if team == "sales":
+    if not sees_all(user, "orders"):
         own_orders = await db.orders.find({"created_by": user["email"]}, {"_id": 0, "order_id": 1}).to_list(10000)
         order_ids = [o["order_id"] for o in own_orders]
         item_query = {"status": "on_hold", "order_id": {"$in": order_ids}} if order_ids else {"status": "on_hold", "order_id": "__none__"}

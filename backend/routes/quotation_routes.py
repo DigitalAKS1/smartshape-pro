@@ -10,7 +10,7 @@ import logging
 
 from database import db
 from auth_utils import get_current_user
-from rbac import get_team, require_teams, require_module
+from rbac import get_team, require_teams, require_module, sees_all
 from routes.drip_routes import _auto_enroll_quotation_sent
 from media_utils import gate_die_for_customer
 
@@ -359,12 +359,11 @@ async def backfill_quotation_leads(request: Request):
 @router.get("/quotations")
 async def get_quotations(request: Request, sales_person_id: Optional[str] = None):
     user = await get_current_user(request)
-    team = get_team(user)
     query = {}
     if sales_person_id:
         query["sales_person_id"] = sales_person_id
-    elif team == "sales":
-        # Sales only see their own quotations
+    elif not sees_all(user, "quotations"):
+        # Users whose quotations grant is own-scoped see only their own
         query["sales_person_email"] = user["email"]
     # admin, accounts, store: see all quotations
 
@@ -533,10 +532,9 @@ async def edit_quotation(quotation_id: str, request: Request):
 
     # Enforce write access (mirrors _get_quotation_for_po): store cannot edit;
     # sales can only edit their own quotations.
-    _team = get_team(user)
     require_module(user, "quotations", "read_write")
-    if _team == "sales" and existing.get("sales_person_email") != user.get("email"):
-        raise HTTPException(status_code=403, detail="Sales can only edit their own quotations")
+    if not sees_all(user, "quotations") and existing.get("sales_person_email") != user.get("email"):
+        raise HTTPException(status_code=403, detail="You can only edit your own quotations")
 
     # Save edit history when quotation has already been sent
     prev_status = existing.get("quotation_status", "draft")
@@ -610,10 +608,9 @@ async def update_quotation_status(quotation_id: str, status: str, request: Reque
     )
     if not quot:
         raise HTTPException(status_code=404, detail="Quotation not found")
-    _team = get_team(user)
     require_module(user, "quotations", "read_write")
-    if _team == "sales" and quot.get("sales_person_email") != user.get("email"):
-        raise HTTPException(status_code=403, detail="Sales can only edit their own quotations")
+    if not sees_all(user, "quotations") and quot.get("sales_person_email") != user.get("email"):
+        raise HTTPException(status_code=403, detail="You can only edit your own quotations")
     await db.quotations.update_one(
         {"quotation_id": quotation_id},
         {"$set": {"quotation_status": status}},
@@ -632,14 +629,13 @@ _PO_EXT = {"pdf", "jpg", "jpeg", "png", "doc", "docx"}
 
 
 async def _get_quotation_for_po(quotation_id: str, user: dict):
-    """Fetch the quotation and enforce write access (admin/accounts/sales-owner; not store)."""
-    team = get_team(user)
+    """Fetch the quotation and enforce write access via the quotations grant."""
     quot = await db.quotations.find_one({"quotation_id": quotation_id}, {"_id": 0})
     if not quot:
         raise HTTPException(status_code=404, detail="Quotation not found")
     require_module(user, "quotations", "read_write")
-    if team == "sales" and quot.get("sales_person_email") != user.get("email"):
-        raise HTTPException(status_code=403, detail="Sales can only manage PO for their own quotations")
+    if not sees_all(user, "quotations") and quot.get("sales_person_email") != user.get("email"):
+        raise HTTPException(status_code=403, detail="You can only manage PO for your own quotations")
     return quot
 
 
