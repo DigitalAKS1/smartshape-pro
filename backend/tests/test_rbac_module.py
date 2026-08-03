@@ -172,16 +172,41 @@ def test_has_module_is_non_raising():
     assert rbac.has_module(_muser(role="admin"), "payroll", "read_write_delete") is True
 
 
-def test_merged_presets_take_max_level_and_widest_scope():
+def test_merged_presets_take_max_level_with_scope_following_that_level():
     merged = rbac.default_permissions_for_roles(["sales_person", "store"])
-    # store contributes org-wide orders at read_write
+    # store contributes org-wide orders at read_write (sales grants nothing here)
     assert merged["orders"]["level"] == "read_write"
     assert merged["orders"]["scope"] == "all"
-    # sales contributes own-scoped leads
+    # sales contributes own-scoped leads (store grants nothing here)
     assert merged["leads"]["scope"] == "own"
-    # quotations exist in both: sales read_write/own vs store read/all -> max level, widest scope
+    # quotations exist in both: sales read_write/own vs store read/all -> the higher
+    # level (sales's read_write) wins outright and brings its own scope with it;
+    # scope is NOT independently maximised to "all".
     assert merged["quotations"]["level"] == "read_write"
-    assert merged["quotations"]["scope"] == "all"
+    assert merged["quotations"]["scope"] == "own"
+
+
+def test_merge_does_not_cross_multiply_level_and_scope():
+    """sales write-own + store read-all must NOT become write-all."""
+    merged = rbac.default_permissions_for_roles(["sales_person", "store"])
+    q = merged["quotations"]
+    assert q["level"] == "read_write"
+    assert q["scope"] == "own", "scope must follow the highest-level grant, not be maxed separately"
+
+
+def test_merge_widens_scope_only_on_equal_levels():
+    merged = rbac.default_permissions_for_roles(["sales_person", "store"])
+    # orders: only store grants it (read_write/all) -> unchanged
+    assert merged["orders"]["level"] == "read_write"
+    assert merged["orders"]["scope"] == "all"
+    # leads: only sales grants it (read_write/own) -> unchanged
+    assert merged["leads"]["scope"] == "own"
+
+
+def test_merge_is_order_independent():
+    a = rbac.default_permissions_for_roles(["sales_person", "store"])
+    b = rbac.default_permissions_for_roles(["store", "sales_person"])
+    assert a == b
 
 
 def test_merged_presets_with_admin_is_empty():

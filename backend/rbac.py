@@ -194,7 +194,13 @@ ROLE_DEFAULT_PERMISSIONS = {
 
 
 def default_permissions_for_roles(roles: list) -> dict:
-    """Merge the presets of every role held: max level, widest scope, OR'd download.
+    """Merge the presets of every role held.
+
+    Level takes the maximum. Scope follows the grant that supplied that maximum
+    level — it is NOT maximised independently, because doing so would invent a
+    privilege no single role grants (e.g. sales's write-own + store's read-all
+    cross-multiplying into write-all on quotations). Scope widens only when two
+    roles contribute the SAME level. can_download is OR'd.
 
     Admin returns {} — it bypasses all module checks.
     """
@@ -205,11 +211,16 @@ def default_permissions_for_roles(roles: list) -> dict:
         for mod, grant in ROLE_DEFAULT_PERMISSIONS.get(role, {}).items():
             cur = merged.get(mod)
             if cur is None:
-                merged[mod] = dict(grant)  # copy so the template is never mutated
+                merged[mod] = dict(grant)
                 continue
-            if LEVELS[grant["level"]] > LEVELS[cur["level"]]:
+            new_level = LEVELS[grant["level"]]
+            cur_level = LEVELS[cur["level"]]
+            if new_level > cur_level:
+                # Higher level wins outright, and brings its own scope with it.
                 cur["level"] = grant["level"]
-            if grant.get("scope") == "all":
+                cur["scope"] = grant.get("scope", "all")
+            elif new_level == cur_level and grant.get("scope") == "all":
+                # Equal level — the wider scope wins.
                 cur["scope"] = "all"
             cur["can_download"] = bool(cur.get("can_download")) or bool(grant.get("can_download"))
     return merged
