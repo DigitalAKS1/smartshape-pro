@@ -9,7 +9,8 @@ import asyncio
 
 from database import db
 from auth_utils import get_current_user, hash_password
-from rbac import get_team, require_admin, require_teams, require_superadmin, require_module
+from rbac import (get_team, require_admin, require_teams, require_superadmin, require_module,
+                  VALID_ROLES, PRIMARY_ROLE_ORDER, default_permissions_for_roles)
 from audit_backup import list_backups, restore_bundle
 
 # Lazy import to avoid circular dependency — push_routes imports from database only
@@ -28,6 +29,28 @@ async def _push_admins(title, body, url="/today", tag="admin"):
         pass
 
 router = APIRouter()
+
+
+def normalize_roles(body: dict) -> tuple:
+    """Validate the roles a client sent and derive the primary `role` string.
+
+    Accepts either the new `roles` array or the legacy `role` string. Admin is
+    exclusive — it collapses to ["admin"]. Returns (roles, primary_role).
+    """
+    raw = body.get("roles")
+    if not isinstance(raw, list) or not raw:
+        raw = [body.get("role") or "sales_person"]
+    seen, roles = set(), []
+    for r in raw:
+        if r in VALID_ROLES and r not in seen:
+            seen.add(r)
+            roles.append(r)
+    if not roles:
+        roles = ["sales_person"]
+    if "admin" in roles:
+        roles = ["admin"]
+    primary = next(r for r in PRIMARY_ROLE_ORDER if r in roles)
+    return roles, primary
 
 
 async def touch_last_activity(entity_type: str, entity_id: str):
@@ -133,9 +156,7 @@ async def admin_create_user(request: Request):
     email = body.get("email", "").strip().lower()
     password = body.get("password", "")
     name = body.get("name", "")
-    role = body.get("role", "sales_person")
-    if role not in ("admin", "accounts", "store", "sales_person"):
-        role = "sales_person"
+    roles, role = normalize_roles(body)
     phone = body.get("phone", "")
     designation = body.get("designation", "")
     sales_role = body.get("sales_role", "executive")
@@ -160,9 +181,10 @@ async def admin_create_user(request: Request):
         "password_hash": hash_password(password),
         "name": name,
         "role": role,
+        "roles": roles,
         "phone": phone,
         "designation": designation,
-        "sales_role": sales_role if role == "sales_person" else None,
+        "sales_role": sales_role if "sales_person" in roles else None,
         "assigned_modules": assigned_modules,
         "is_active": True,
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -199,9 +221,17 @@ async def admin_update_user(user_id: str, request: Request):
 
     body = await request.json()
     allowed_fields = {}
-    for key in ("name", "role", "phone", "calling_number", "designation", "sales_role", "assigned_modules", "is_active", "module_permissions"):
+    for key in ("name", "role", "roles", "phone", "calling_number", "designation", "sales_role", "assigned_modules", "is_active", "module_permissions"):
         if key in body:
             allowed_fields[key] = body[key]
+
+    # Keep `role` and `roles` consistent whenever either one is being changed.
+    if "roles" in allowed_fields or "role" in allowed_fields:
+        roles, primary = normalize_roles(allowed_fields)
+        allowed_fields["roles"] = roles
+        allowed_fields["role"] = primary
+        if "sales_person" not in roles:
+            allowed_fields["sales_role"] = None
 
     # Sync assigned_modules from module_permissions if provided
     if "module_permissions" in allowed_fields and "assigned_modules" not in allowed_fields:
@@ -232,6 +262,20 @@ async def admin_update_user(user_id: str, request: Request):
         await db.salespersons.update_one({"email": result["email"]}, {"$set": sp_update})
 
     return result
+
+
+@router.get("/admin/role-presets")
+async def admin_role_presets(request: Request, roles: str = ""):
+    """Merged default module_permissions for a comma-separated list of roles.
+
+    Used by User Management to pre-fill the permission matrix when an admin
+    ticks a role. Admin-only: it exposes the shape of the permission system.
+    """
+    current_user = await get_current_user(request)
+    require_admin(current_user)
+    wanted = [r.strip() for r in (roles or "").split(",") if r.strip()]
+    valid = [r for r in wanted if r in VALID_ROLES]
+    return {"module_permissions": default_permissions_for_roles(valid)}
 
 
 @router.delete("/admin/users/{user_id}")
