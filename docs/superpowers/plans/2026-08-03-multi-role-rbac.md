@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- **Branch:** build on `main`, in the worktree `F:/ss-work`. NEVER on `feat/module-rbac` — it is a stale fork that must not be merged.
+- **Branch:** work on `feat/multi-role-rbac` in the worktree `F:/ss-work` (branched from `main`). Task 9 fast-forwards `main` to it once the final review is clean. NEVER on `feat/module-rbac` — it is a stale fork that must not be merged.
 - **`role` is never removed from a user document.** It is recomputed on save as `"admin"` if `admin` is in `roles`, else `roles[0]`.
 - **Scope values are exactly `"own"` and `"all"`.** No `"team"` scope — there is no reporting hierarchy in the system.
 - **Additive only:** a user document with no `roles` key and no `scope` keys must resolve to today's behaviour, bit-identically.
@@ -727,12 +727,14 @@ git commit -m "feat(rbac): gate CRM on the leads module grant instead of the rol
 ### Task 4: Admin API accepts a `roles` array
 
 **Files:**
-- Modify: `backend/routes/admin_routes.py:136-171` (create), `backend/routes/admin_routes.py:200-209` (update)
+- Modify: `backend/routes/admin_routes.py:136-171` (create), `backend/routes/admin_routes.py:200-209` (update), plus a new `GET /admin/role-presets` endpoint
 - Test: `backend/tests/test_admin_roles.py` (create)
 
 **Interfaces:**
 - Consumes: `rbac.VALID_ROLES`, `rbac.PRIMARY_ROLE_ORDER`, `rbac.default_permissions_for_roles` from Task 1.
-- Produces: `normalize_roles(body: dict) -> tuple[list[str], str]` in `backend/routes/admin_routes.py`, returning `(roles, primary_role)`.
+- Produces:
+  - `normalize_roles(body: dict) -> tuple[list[str], str]` in `backend/routes/admin_routes.py`, returning `(roles, primary_role)`.
+  - `GET /admin/role-presets?roles=sales_person,store` -> `{"module_permissions": {...}}`. Task 8's "Apply role presets" button calls this so the preset table lives in exactly one place.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -878,7 +880,43 @@ Then immediately after that loop, before the `assigned_modules` sync block at li
             allowed_fields["sales_role"] = None
 ```
 
-- [ ] **Step 7: Verify the module still imports and all backend tests pass**
+- [ ] **Step 7: Add the role-presets endpoint**
+
+The frontend's "Apply role presets" button (Task 8) needs the merged preset table. Serving it from
+here keeps `ROLE_DEFAULT_PERMISSIONS` as the single source of truth instead of copying it into JS.
+
+Add to `backend/routes/admin_routes.py`, next to the other `/admin/users` routes:
+
+```python
+@router.get("/admin/role-presets")
+async def admin_role_presets(request: Request, roles: str = ""):
+    """Merged default module_permissions for a comma-separated list of roles.
+
+    Used by User Management to pre-fill the permission matrix when an admin
+    ticks a role. Admin-only: it exposes the shape of the permission system.
+    """
+    current_user = await get_current_user(request)
+    require_admin(current_user)
+    wanted = [r.strip() for r in (roles or "").split(",") if r.strip()]
+    valid = [r for r in wanted if r in VALID_ROLES]
+    return {"module_permissions": default_permissions_for_roles(valid)}
+```
+
+- [ ] **Step 8: Verify the endpoint resolves and the module imports**
+
+```bash
+cd backend && python -c "
+import routes.admin_routes as a
+paths = [r.path for r in a.router.routes]
+assert '/admin/role-presets' in paths, paths
+print('route registered OK')
+"
+```
+
+Expected: `route registered OK`. If `require_admin` is not already imported at line 12, add it —
+Step 3's import line includes it.
+
+- [ ] **Step 9: Verify the module still imports and all backend tests pass**
 
 ```bash
 cd backend && python -c "import routes.admin_routes; print('imports OK')" && python -m pytest tests/test_rbac_module.py tests/test_admin_roles.py -v
@@ -886,12 +924,12 @@ cd backend && python -c "import routes.admin_routes; print('imports OK')" && pyt
 
 Expected: `imports OK` and all tests PASS.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
 git add backend/routes/admin_routes.py
 git add -f backend/tests/test_admin_roles.py
-git commit -m "feat(rbac): admin user API accepts a roles array and derives the primary role"
+git commit -m "feat(rbac): admin user API accepts a roles array and serves merged role presets"
 ```
 
 ---
@@ -1142,7 +1180,7 @@ git commit -m "feat(rbac): frontend hooks for multiple roles and per-module scop
 - Modify: `frontend/src/components/admin/UserFormDialog.js` (whole file)
 
 **Interfaces:**
-- Consumes: `form.roles` (array) and `form.module_permissions[mod].scope` from Task 8's form state; `handlePermissionsChange`, `handleRolesChange`, `applyRolePresets` props from Task 8.
+- Consumes: `form.roles` (array) and `form.module_permissions[mod].scope` from Task 8's form state; `handlePermissionsChange`, `handleRolesChange`, `applyRolePresets` props from Task 8. `applyRolePresets` is async — the button just calls it, it does not await.
 - Produces: the edited dialog. Task 8 supplies the new props.
 
 **Note:** Task 8 adds `handleRolesChange` and `applyRolePresets` to the hook. Implement this task and Task 8 together, or expect a runtime error on the missing props until Task 8 lands.
@@ -1323,12 +1361,13 @@ git commit -m "feat(rbac): role checkboxes and per-module data-scope control in 
 ### Task 8: User management form state and role chips
 
 **Files:**
+- Modify: `frontend/src/lib/api.js:947-952` (add the `rolePresets` binding)
 - Modify: `frontend/src/hooks/useUserManagement.js`
 - Modify: `frontend/src/pages/admin/UserManagement.js`
 
 **Interfaces:**
-- Consumes: nothing from earlier frontend tasks beyond the props Task 7 expects.
-- Produces: `handleRolesChange(role: string)` and `applyRolePresets()` on the hook's return object; `form.roles: string[]` in form state.
+- Consumes: `GET /admin/role-presets?roles=a,b` from Task 4.
+- Produces: `handleRolesChange(role: string)` and `applyRolePresets(): Promise<void>` on the hook's return object; `form.roles: string[]` in form state; `rolePresets.get(roles: string[])` in `lib/api.js`.
 
 - [ ] **Step 1: Add `roles` to the form state**
 
@@ -1358,55 +1397,30 @@ Change `openEdit` (line 53-60) to hydrate `roles` from the user, falling back to
     });
 ```
 
-- [ ] **Step 2: Add the preset tables and the two new handlers**
+- [ ] **Step 2: Add the API binding for role presets**
+
+The preset table lives only in `backend/rbac.py`. The button fetches it rather than duplicating it.
+
+In `frontend/src/lib/api.js`, add after the `adminUsers` export (line 947-952):
+
+```javascript
+// Merged default module_permissions for a set of roles (admin only)
+export const rolePresets = {
+  get: (roles) => API.get('/admin/role-presets', { params: { roles: roles.join(',') } }),
+};
+```
+
+- [ ] **Step 3: Add the two new handlers**
+
+In `frontend/src/hooks/useUserManagement.js`, extend the import at line 2:
+
+```javascript
+import { adminUsers, modules as modulesApi, designations as desgApi, rolePresets } from '../lib/api';
+```
 
 Add above `useUserManagement` in the same file:
 
 ```javascript
-// Mirrors ROLE_DEFAULT_PERMISSIONS in backend/rbac.py. Kept in sync by hand —
-// the backend is the real gate; this only pre-fills the matrix in the UI.
-const RW  = { level: 'read_write',        can_download: true, scope: 'all' };
-const RWD = { level: 'read_write_delete', can_download: true, scope: 'all' };
-const R   = { level: 'read',              can_download: true, scope: 'all' };
-const RW_OWN = { level: 'read_write', can_download: true, scope: 'own' };
-const R_OWN  = { level: 'read',       can_download: true, scope: 'own' };
-
-const ROLE_PRESETS = {
-  accounts: {
-    dashboard: R, quotations: RWD, orders: RW, procurement: RW,
-    invoices: RWD, accounts: RW, payroll: RW, analytics: R,
-    field_sales: R, hr: R, leave_management: RW, settings: R,
-  },
-  store: {
-    dashboard: R, quotations: R, orders: RW, procurement: RW,
-    inventory: RWD, stock_management: RW, purchase_alerts: RW,
-    package_master: RW, physical_count: RW, store: RW,
-    leave_management: RW, analytics: R,
-  },
-  sales_person: {
-    dashboard: R_OWN, quotations: RW_OWN, leads: RW_OWN,
-    field_sales: RW_OWN, sales_portal: RW_OWN,
-    leave_management: RW_OWN, analytics: R_OWN,
-  },
-};
-
-const LEVEL_RANK = { none: 0, read: 1, read_write: 2, read_write_delete: 3 };
-
-function mergePresets(roles) {
-  if (roles.includes('admin')) return {};
-  const merged = {};
-  roles.forEach(role => {
-    Object.entries(ROLE_PRESETS[role] || {}).forEach(([mod, grant]) => {
-      const cur = merged[mod];
-      if (!cur) { merged[mod] = { ...grant }; return; }
-      if (LEVEL_RANK[grant.level] > LEVEL_RANK[cur.level]) cur.level = grant.level;
-      if (grant.scope === 'all') cur.scope = 'all';
-      cur.can_download = cur.can_download || grant.can_download;
-    });
-  });
-  return merged;
-}
-
 const PRIMARY_ROLE_ORDER = ['admin', 'accounts', 'store', 'sales_person'];
 ```
 
@@ -1429,20 +1443,29 @@ Then add the handlers inside the hook, after `handlePermissionsChange` (line 83)
     });
   };
 
-  // Re-merge the presets of every ticked role into the matrix, overwriting it.
-  const applyRolePresets = () => {
-    setForm(prev => {
-      const merged = mergePresets(prev.roles || []);
-      return {
+  // Pull the merged presets for every ticked role from the backend and overwrite the matrix.
+  const applyRolePresets = async () => {
+    const roles = form.roles || [];
+    if (roles.includes('admin')) {
+      setForm(prev => ({ ...prev, module_permissions: {}, assigned_modules: [] }));
+      return;
+    }
+    try {
+      const res = await rolePresets.get(roles);
+      const merged = res.data?.module_permissions || {};
+      setForm(prev => ({
         ...prev,
         module_permissions: merged,
         assigned_modules: Object.entries(merged).filter(([, p]) => p.level !== 'none').map(([m]) => m),
-      };
-    });
+      }));
+      toast.success('Role presets applied');
+    } catch {
+      toast.error('Could not load role presets');
+    }
   };
 ```
 
-- [ ] **Step 3: Send `roles` on save**
+- [ ] **Step 4: Send `roles` on save**
 
 In `handleSave`, change the update payload (line 88-94):
 
@@ -1458,7 +1481,7 @@ In `handleSave`, change the update payload (line 88-94):
 
 The create path already spreads the whole form (`adminUsers.create({ ...form })`), so `roles` goes along automatically.
 
-- [ ] **Step 4: Make the role filter multi-role aware and export the handlers**
+- [ ] **Step 5: Make the role filter multi-role aware and export the handlers**
 
 Change `filteredUsers` (line 134-136):
 
@@ -1480,7 +1503,7 @@ Add to the returned object (line 146-149):
     handleSave, handleDelete,
 ```
 
-- [ ] **Step 5: Pass the new props through and show role chips**
+- [ ] **Step 6: Pass the new props through and show role chips**
 
 In `frontend/src/pages/admin/UserManagement.js`, extend the destructure at line 28 to:
 
@@ -1536,7 +1559,7 @@ Finally, add the two new props to the `<UserFormDialog ... />` element alongside
             applyRolePresets={applyRolePresets}
 ```
 
-- [ ] **Step 6: Verify the app compiles**
+- [ ] **Step 7: Verify the app compiles**
 
 ```bash
 cd frontend && DISABLE_ESLINT_PLUGIN=true NODE_OPTIONS=--max-old-space-size=4096 REACT_APP_BACKEND_URL=https://app.smartshape.in npx react-scripts build
@@ -1544,11 +1567,11 @@ cd frontend && DISABLE_ESLINT_PLUGIN=true NODE_OPTIONS=--max-old-space-size=4096
 
 Expected: `Compiled successfully`.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add frontend/src/hooks/useUserManagement.js frontend/src/pages/admin/UserManagement.js
-git commit -m "feat(rbac): multi-role form state, preset merge and role chips in user management"
+git add frontend/src/lib/api.js frontend/src/hooks/useUserManagement.js frontend/src/pages/admin/UserManagement.js
+git commit -m "feat(rbac): multi-role form state, preset fetch and role chips in user management"
 ```
 
 ---
@@ -1664,5 +1687,5 @@ Log in to production as `info@smartshape.in`, open User Management, and confirm 
 
 - **Do not touch the other ~100 `get_team()` call sites.** They keep working via the highest-privilege rule. Widening them is out of scope.
 - **`scope` only means something for modules that have owned records** — leads, contacts, schools, quotations, orders. For `dashboard` or `settings` it is stored but unused. That is fine; do not add special-casing.
-- **The frontend `ROLE_PRESETS` table duplicates `backend/rbac.py`'s `ROLE_DEFAULT_PERMISSIONS`.** This duplication is deliberate — the button needs to pre-fill the matrix without a round trip, and the backend remains the real gate. If you change one, change the other.
+- **The preset table exists only in `backend/rbac.py`.** The "Apply role presets" button fetches it from `GET /admin/role-presets` (Task 4). Do not re-introduce a copy in JS.
 - **If a test file will not stage,** that is the `backend/tests/` gitignore on `main`. Use `git add -f`.
