@@ -114,8 +114,9 @@ for order routes.
 ### 5a-bis. Owner escape hatch — 1 site
 
 `customer_routes.py:252` is not a filter but a bypass: the owning sales person may edit a catalogue
-selection without holding the `quotations` grant. The `team == "sales"` half of the condition is redundant
-once scope is per-module, so it reduces to the ownership test alone:
+selection without holding the `quotations` grant. The `team == "sales"` half is NOT redundant — dropping it
+widens the bypass to any owner regardless of team, which lets a legacy store user edit a quotation still
+carrying their email. The correct successor is "own-scoped AND owns":
 
 ```python
 # before
@@ -123,7 +124,8 @@ if not (team == "sales" and owns):
     require_module(user, "quotations", "read_write")
 
 # after
-if not owns:
+owner_bypass = owns and not sees_all(user, "quotations")
+if not owner_bypass:
     require_module(user, "quotations", "read_write")
 ```
 

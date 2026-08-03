@@ -326,6 +326,12 @@ ROLE_DEFAULT_PERMISSIONS = {
     },
 }
 
+# CORRECTION (applied during execution): the three preset dicts above were
+# transcribed from the stale feat/module-rbac fork and omit the `delegation` and
+# `forms` grants that exist on main for all three roles. Keep those grants —
+# `delegation` is the universal task system every member needs. accounts/store
+# get them at `_RW`; sales_person at `_RW_OWN`.
+
 
 def default_permissions_for_roles(roles: list) -> dict:
     """Merge the presets of every role held: max level, widest scope, OR'd download.
@@ -535,6 +541,10 @@ git commit -m "feat(rbac): scope quotations/orders visibility by module grant, n
 
 Existing helpers in this file that the replacements reuse: `_owned_school_ids(email)` and `_sales_lead_scope(email)`.
 
+**CORRECTION (applied during execution):** an earlier revision of this task inlined
+`assigned_to == email or created_by == email` in place of `_owns()`. That breaks lockstep with
+`_owner_clause` and lets a previous owner keep access after a record is reassigned. Use `_owns()`.
+
 **`main`-only helpers you must NOT remove:** this file also defines `_owns(doc, email)` and
 `_owner_clause(email)`. The `else:` bodies you are keeping call them. Do not rewrite those bodies —
 only the branch conditions above them change.
@@ -561,7 +571,7 @@ from rbac import get_team, require_superadmin, require_module, has_module, has_t
     if sees_all(user, "leads"):
         return True
     email = user["email"]
-    if school.get("assigned_to") == email or school.get("created_by") == email:
+    if _owns(school, email):
         return True
     sid = school.get("school_id")
     if sid:
@@ -605,7 +615,7 @@ from rbac import get_team, require_superadmin, require_module, has_module, has_t
     if sees_all(user, "leads"):
         return True
     email = user["email"]
-    if contact.get("created_by") == email or contact.get("assigned_to") == email:
+    if _owns(contact, email):
         return True
     sid = contact.get("school_id")
     if sid and sid in (await _owned_school_ids(email)):
