@@ -300,19 +300,83 @@ async def admin_role_presets(request: Request, roles: str = ""):
     return {"module_permissions": default_permissions_for_roles(valid)}
 
 
-@router.delete("/admin/users/{user_id}")
-async def admin_delete_user(user_id: str, request: Request):
+# Collections whose LIVE ownership moves when a user is removed, as
+# (collection, owner_field). Deliberately excludes quotations, orders and
+# invoices: `sales_person_email`/`created_by` there are sales attribution, and
+# rewriting them would re-credit past deals in revenue and commission reports.
+# `created_by` is never transferred anywhere — it records who made a record.
+TRANSFER_SPECS = [
+    ("leads", "assigned_to"),
+    ("schools", "assigned_to"),
+    ("contacts", "assigned_to"),
+    ("tasks", "assigned_to"),
+    ("followups", "assigned_to"),
+    ("visit_plans", "assigned_to"),
+    ("visits", "assigned_to"),
+    ("field_visits", "assigned_to"),
+    ("del_task_instances", "assigned_to"),
+]
+
+
+@router.get("/admin/users/{user_id}/data-summary")
+async def admin_user_data_summary(user_id: str, request: Request):
+    """How much live work this user owns, per collection. Drives the delete dialog."""
     current_user = await get_current_user(request)
-    if current_user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
+    require_admin(current_user)
+    target = await db.users.find_one({"user_id": user_id}, {"_id": 0, "email": 1})
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    email = target["email"]
+    counts = {}
+    for coll, field in TRANSFER_SPECS:
+        n = await db[coll].count_documents({field: email})
+        if n:
+            counts[coll] = n
+    return {"counts": counts, "total": sum(counts.values())}
+
+
+@router.delete("/admin/users/{user_id}")
+async def admin_delete_user(user_id: str, request: Request, transfer_to: str = ""):
+    """Deactivate a user and hand their live CRM work to another active user.
+
+    The account is kept (is_active=False) so audit logs, edit history and
+    `created_by` stamps still resolve to a real name. Quotations and orders keep
+    their original owner — see TRANSFER_SPECS.
+    """
+    current_user = await get_current_user(request)
+    require_admin(current_user)
     if current_user.get("user_id") == user_id:
-        raise HTTPException(status_code=400, detail="Cannot delete your own account")
+        raise HTTPException(status_code=400, detail="Cannot remove your own account")
+
     user_to_delete = await db.users.find_one({"user_id": user_id})
     if not user_to_delete:
         raise HTTPException(status_code=404, detail="User not found")
-    await db.users.delete_one({"user_id": user_id})
-    await db.salespersons.update_one({"email": user_to_delete["email"]}, {"$set": {"is_active": False}})
-    return {"message": "User deleted"}
+    email = user_to_delete["email"]
+
+    transferred = {}
+    transfer_to = (transfer_to or "").strip().lower()
+    if transfer_to:
+        if transfer_to == email.lower():
+            raise HTTPException(status_code=400, detail="Cannot transfer a user's work to themselves")
+        recipient = await db.users.find_one(
+            {"email": transfer_to}, {"_id": 0, "email": 1, "name": 1, "is_active": 1}
+        )
+        if not recipient:
+            raise HTTPException(status_code=400, detail="Transfer recipient not found")
+        if recipient.get("is_active") is False:
+            raise HTTPException(status_code=400, detail="Cannot transfer work to a deactivated user")
+        for coll, field in TRANSFER_SPECS:
+            res = await db[coll].update_many({field: email}, {"$set": {field: transfer_to}})
+            if res.modified_count:
+                transferred[coll] = res.modified_count
+
+    await db.users.update_one({"user_id": user_id}, {"$set": {"is_active": False}})
+    await db.salespersons.update_one({"email": email}, {"$set": {"is_active": False}})
+
+    await log_activity(current_user.get("email"), "deactivate_user", "user", user_id,
+                        f"deactivated {email}; transferred={transferred}")
+
+    return {"message": "User deactivated", "transferred": transferred, "deactivated": True}
 
 
 # ==================== ANALYTICS ====================

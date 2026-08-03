@@ -8,6 +8,7 @@ import { UserPlus, Edit2, Trash2, Download } from 'lucide-react';
 import { SALES_ROLES } from '../../lib/salesPermissions';
 import { useUserManagement } from '../../hooks/useUserManagement';
 import { UserFormDialog } from '../../components/admin/UserFormDialog';
+import { DeleteUserDialog } from '../../components/admin/DeleteUserDialog';
 
 const ROLE_META = {
   admin:        { label: 'Admin',    cls: 'bg-[#e94560]/20 text-[#e94560] border-[#e94560]/30' },
@@ -30,6 +31,7 @@ export default function UserManagement() {
     applyRolePresets,
     handleSave, handleDelete,
     handleToggleActive,
+    deleteTarget, setDeleteTarget, openDelete,
   } = useUserManagement();
 
   const card      = 'bg-[var(--bg-card)] border-[var(--border-color)]';
@@ -172,7 +174,7 @@ export default function UserManagement() {
                     <td className="py-3 px-4 text-right">
                       <Button size="sm" variant="ghost" onClick={() => openEdit(u)} className={`${textSec} h-8 px-2`}><Edit2 className="h-3.5 w-3.5" /></Button>
                       {u.role !== 'admin' && (
-                        <Button size="sm" variant="ghost" onClick={() => handleDelete(u.user_id)} className="text-red-400 h-8 px-2"><Trash2 className="h-3.5 w-3.5" /></Button>
+                        <Button size="sm" variant="ghost" onClick={() => openDelete(u)} className="text-red-400 h-8 px-2"><Trash2 className="h-3.5 w-3.5" /></Button>
                       )}
                     </td>
                   </tr>
@@ -197,6 +199,14 @@ export default function UserManagement() {
           handleRolesChange={handleRolesChange}
           applyRolePresets={applyRolePresets}
           handleSave={handleSave}
+        />
+
+        <DeleteUserDialog
+          open={!!deleteTarget}
+          onOpenChange={(v) => !v && setDeleteTarget(null)}
+          user={deleteTarget}
+          users={users}
+          onConfirm={handleDelete}
         />
       </div>
     </AdminLayout>

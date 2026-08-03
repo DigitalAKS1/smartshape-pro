@@ -948,7 +948,8 @@ export const adminUsers = {
   getAll: () => API.get('/admin/users'),
   create: (data) => API.post('/admin/users', data),
   update: (userId, data) => API.put(`/admin/users/${userId}`, data),
-  delete: (userId) => API.delete(`/admin/users/${userId}`),
+  delete: (userId, transferTo) => API.delete(`/admin/users/${userId}`, { params: transferTo ? { transfer_to: transferTo } : {} }),
+  dataSummary: (userId) => API.get(`/admin/users/${userId}/data-summary`),
 };
 
 // Merged default module_permissions for a set of roles (admin only)

@@ -14,6 +14,7 @@ export function useUserManagement() {
   const [editUser, setEditUser] = useState(null);
   const [showPassword, setShowPassword] = useState(false);
   const [permTab, setPermTab] = useState('matrix');
+  const [deleteTarget, setDeleteTarget] = useState(null);
 
   const emptyForm = {
     email: '', password: '', name: '', role: 'sales_person', roles: ['sales_person'],
@@ -150,16 +151,19 @@ export function useUserManagement() {
     }
   };
 
-  const handleDelete = async (userId) => {
-    if (!window.confirm('Are you sure you want to delete this user?')) return;
+  const handleDelete = async (userId, transferTo) => {
     try {
-      await adminUsers.delete(userId);
-      toast.success('User deleted');
+      const res = await adminUsers.delete(userId, transferTo);
+      const moved = Object.values(res.data?.transferred || {}).reduce((a, b) => a + b, 0);
+      toast.success(moved ? `User deactivated — ${moved} records transferred` : 'User deactivated');
+      setDeleteTarget(null);
       fetchData();
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Failed to delete user');
+      toast.error(err.response?.data?.detail || 'Failed to remove user');
     }
   };
+
+  const openDelete = (u) => setDeleteTarget(u);
 
   const handleToggleActive = async (u) => {
     try {
@@ -191,5 +195,6 @@ export function useUserManagement() {
     applyRolePresets,
     handleSave, handleDelete,
     handleToggleActive,
+    deleteTarget, setDeleteTarget, openDelete,
   };
 }
