@@ -6,7 +6,7 @@ from email.mime.multipart import MIMEMultipart
 
 from database import db
 from auth_utils import get_current_user, hash_password, verify_password
-from rbac import get_team, require_module
+from rbac import get_team, require_module, sees_all
 
 router = APIRouter()
 
@@ -246,9 +246,13 @@ async def update_customer_selection(token: str, request: Request):
     if not quot:
         raise HTTPException(status_code=404, detail="Quotation not found")
 
-    # The owning sales person may always edit; everyone else needs module access.
+    # The owning sales person may always edit their own quotation; everyone else
+    # needs module access. Own-scoped is the per-module successor to the old
+    # `team == "sales"` test — a user who sees all quotations still goes through
+    # require_module, exactly as before.
     owns = (quot.get("sales_person_email", "").lower() == user.get("email", "").lower())
-    if not owns:
+    owner_bypass = owns and not sees_all(user, "quotations")
+    if not owner_bypass:
         require_module(user, "quotations", "read_write")
 
     selection = await db.catalogue_selections.find_one(
