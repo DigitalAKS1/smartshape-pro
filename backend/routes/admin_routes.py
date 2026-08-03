@@ -301,21 +301,39 @@ async def admin_role_presets(request: Request, roles: str = ""):
 
 
 # Collections whose LIVE ownership moves when a user is removed, as
-# (collection, owner_field). Deliberately excludes quotations, orders and
-# invoices: `sales_person_email`/`created_by` there are sales attribution, and
-# rewriting them would re-credit past deals in revenue and commission reports.
-# `created_by` is never transferred anywhere — it records who made a record.
+# (collection, owner_field, extra_filter). Deliberately excludes quotations,
+# orders and invoices: `sales_person_email`/`created_by` there are sales
+# attribution, and rewriting them would re-credit past deals in revenue and
+# commission reports. `created_by` is never transferred anywhere.
+#
+# `field_visits` moves only while the visit is still OPEN (no outcome recorded).
+# A completed visit is a record of who actually made it — history, like a
+# quotation — so it keeps the original owner.
+#
+# `del_task_instances` is NOT in this list: those documents key ownership on
+# `emp_id`/`emp_name` (an FK into `del_employees`), not on an email field at
+# all, so a `(collection, field, extra_filter)` tuple can't express it. It is
+# handled separately by `_delegation_transfer_query` / the block below.
 TRANSFER_SPECS = [
-    ("leads", "assigned_to"),
-    ("schools", "assigned_to"),
-    ("contacts", "assigned_to"),
-    ("tasks", "assigned_to"),
-    ("followups", "assigned_to"),
-    ("visit_plans", "assigned_to"),
-    ("visits", "assigned_to"),
-    ("field_visits", "assigned_to"),
-    ("del_task_instances", "assigned_to"),
+    ("leads", "assigned_to", {}),
+    ("schools", "assigned_to", {}),
+    ("contacts", "assigned_to", {}),
+    ("tasks", "assigned_to", {}),
+    ("followups", "assigned_to", {}),
+    ("visit_plans", "assigned_to", {}),
+    ("field_visits", "sales_person_email", {"outcome": None}),
 ]
+
+# del_task_instances "done" states — mirrors the guard in report_instance()
+# (routes/delegation_routes.py: `if inst.get("status") in ("completed",
+# "verified"): raise HTTPException(400, "Task is already done")`). Anything
+# not in this set (in practice just "pending") is still outstanding work.
+_DELEGATION_DONE_STATUSES = ("completed", "verified")
+
+
+async def _delegation_employee(email: str):
+    """del_task_instances key on emp_id, not email. Resolve both ends via del_employees."""
+    return await db.del_employees.find_one({"email": email}, {"_id": 0, "emp_id": 1, "name": 1})
 
 
 @router.get("/admin/users/{user_id}/data-summary")
@@ -328,10 +346,19 @@ async def admin_user_data_summary(user_id: str, request: Request):
         raise HTTPException(status_code=404, detail="User not found")
     email = target["email"]
     counts = {}
-    for coll, field in TRANSFER_SPECS:
-        n = await db[coll].count_documents({field: email})
+    for coll, field, extra_filter in TRANSFER_SPECS:
+        n = await db[coll].count_documents({field: email, **extra_filter})
         if n:
             counts[coll] = n
+
+    emp = await _delegation_employee(email)
+    if emp:
+        n = await db.del_task_instances.count_documents(
+            {"emp_id": emp["emp_id"], "status": {"$nin": list(_DELEGATION_DONE_STATUSES)}}
+        )
+        if n:
+            counts["del_task_instances"] = n
+
     return {"counts": counts, "total": sum(counts.values())}
 
 
@@ -365,10 +392,25 @@ async def admin_delete_user(user_id: str, request: Request, transfer_to: str = "
             raise HTTPException(status_code=400, detail="Transfer recipient not found")
         if recipient.get("is_active") is False:
             raise HTTPException(status_code=400, detail="Cannot transfer work to a deactivated user")
-        for coll, field in TRANSFER_SPECS:
-            res = await db[coll].update_many({field: email}, {"$set": {field: transfer_to}})
+        for coll, field, extra_filter in TRANSFER_SPECS:
+            res = await db[coll].update_many(
+                {field: email, **extra_filter}, {"$set": {field: transfer_to}}
+            )
             if res.modified_count:
                 transferred[coll] = res.modified_count
+
+        # del_task_instances: keyed on emp_id/emp_name, not email — resolve both
+        # sides via del_employees. If either side has no employee row, skip
+        # silently and report 0; never invent a del_employees record.
+        from_emp = await _delegation_employee(email)
+        to_emp = await _delegation_employee(transfer_to)
+        if from_emp and to_emp:
+            res = await db.del_task_instances.update_many(
+                {"emp_id": from_emp["emp_id"], "status": {"$nin": list(_DELEGATION_DONE_STATUSES)}},
+                {"$set": {"emp_id": to_emp["emp_id"], "emp_name": to_emp["name"]}},
+            )
+            if res.modified_count:
+                transferred["del_task_instances"] = res.modified_count
 
     await db.users.update_one({"user_id": user_id}, {"$set": {"is_active": False}})
     await db.salespersons.update_one({"email": email}, {"$set": {"is_active": False}})

@@ -26,29 +26,42 @@ ADMIN = {"user_id": "user_admin", "email": "admin@smartshape.in", "role": "admin
 
 # ==================== TRANSFER_SPECS contract (pure Python) ====================
 
-def test_transfer_specs_cover_live_crm_ownership():
-    collections = {c for c, _ in TRANSFER_SPECS}
-    for expected in ("leads", "schools", "contacts", "tasks", "followups",
-                     "visit_plans", "visits", "field_visits", "del_task_instances"):
-        assert expected in collections, f"{expected} missing from TRANSFER_SPECS"
-
-
 def test_transfer_never_touches_sales_attribution():
-    """Quotations and orders carry commission/revenue attribution and must not move."""
-    collections = {c for c, _ in TRANSFER_SPECS}
-    assert "quotations" not in collections
-    assert "orders" not in collections
-    assert "invoices" not in collections
+    collections = {c for c, _, _ in TRANSFER_SPECS}
+    for banned in ("quotations", "orders", "invoices"):
+        assert banned not in collections
 
 
-def test_transfer_only_moves_assigned_to():
-    """created_by is history, not ownership — it must never be rewritten."""
-    fields = {f for _, f in TRANSFER_SPECS}
-    assert fields == {"assigned_to"}, f"unexpected owner fields: {fields}"
+def test_transfer_never_rewrites_created_by():
+    fields = {f for _, f, _ in TRANSFER_SPECS}
+    assert "created_by" not in fields
+
+
+def test_every_spec_collection_is_really_written_by_the_app():
+    """Guards against a spec entry that can never match — the `visits` mistake."""
+    collections = {c for c, _, _ in TRANSFER_SPECS}
+    assert "visits" not in collections
+
+
+def test_field_visits_only_transfers_open_visits():
+    spec = [s for s in TRANSFER_SPECS if s[0] == "field_visits"]
+    assert spec and spec[0][1] == "sales_person_email"
+    assert spec[0][2] == {"outcome": None}
 
 
 def test_specs_have_no_duplicates():
-    assert len(TRANSFER_SPECS) == len(set(TRANSFER_SPECS))
+    collections = [c for c, _, _ in TRANSFER_SPECS]
+    assert len(collections) == len(set(collections))
+
+
+def test_transfer_specs_cover_live_crm_ownership():
+    """del_task_instances is intentionally NOT a TRANSFER_SPECS tuple — it keys
+    on emp_id, not an email field — so it's handled separately in the route.
+    This just confirms the tuple-based collections are still all present."""
+    collections = {c for c, _, _ in TRANSFER_SPECS}
+    for expected in ("leads", "schools", "contacts", "tasks", "followups",
+                     "visit_plans", "field_visits"):
+        assert expected in collections, f"{expected} missing from TRANSFER_SPECS"
 
 
 # ==================== Endpoint tests (isolated test DB) ====================
@@ -66,7 +79,7 @@ async def ctx():
         yield d, client
     ar.db = orig_db
     for coll in ("users", "salespersons", "leads", "schools", "contacts", "tasks",
-                 "followups", "visit_plans", "visits", "field_visits",
+                 "followups", "visit_plans", "field_visits", "del_employees",
                  "del_task_instances", "quotations", "orders", "activity_logs"):
         await d[coll].delete_many({})
     motor_client.close()
@@ -100,6 +113,23 @@ async def leaving_and_recipient(ctx):
     await d.followups.insert_one({"followup_id": "fu_1", "assigned_to": "leaving@smartshape.in"})
     await d.visit_plans.insert_one({"plan_id": "plan_1", "assigned_to": "leaving@smartshape.in"})
 
+    # field_visits: one still open (no outcome — live work), one completed
+    # (has an outcome — history, must stay with the original rep)
+    await d.field_visits.insert_one({"visit_id": "visit_open", "sales_person_email": "leaving@smartshape.in",
+                                      "outcome": None})
+    await d.field_visits.insert_one({"visit_id": "visit_done", "sales_person_email": "leaving@smartshape.in",
+                                      "outcome": "interested"})
+
+    # del_task_instances key on emp_id, not email — via del_employees
+    await d.del_employees.insert_one({"emp_id": "emp_leaving", "name": "Leaving Rep",
+                                       "email": "leaving@smartshape.in"})
+    await d.del_employees.insert_one({"emp_id": "emp_recipient", "name": "Recipient Rep",
+                                       "email": "recipient@smartshape.in"})
+    await d.del_task_instances.insert_one({"instance_id": "inst_pending", "emp_id": "emp_leaving",
+                                            "emp_name": "Leaving Rep", "status": "pending"})
+    await d.del_task_instances.insert_one({"instance_id": "inst_done", "emp_id": "emp_leaving",
+                                            "emp_name": "Leaving Rep", "status": "completed"})
+
     # Sales-attribution records that must NOT move
     await d.quotations.insert_one({"quotation_id": "quot_1", "created_by": "leaving@smartshape.in"})
     await d.orders.insert_one({"order_id": "order_1", "sales_person_email": "leaving@smartshape.in"})
@@ -116,9 +146,9 @@ async def test_data_summary_counts_only_live_crm_collections(ctx, monkeypatch, l
     body = r.json()
     assert body["counts"] == {
         "leads": 1, "schools": 1, "contacts": 1, "tasks": 1,
-        "followups": 1, "visit_plans": 1,
+        "followups": 1, "visit_plans": 1, "field_visits": 1, "del_task_instances": 1,
     }
-    assert body["total"] == 6
+    assert body["total"] == 8
     assert "quotations" not in body["counts"]
     assert "orders" not in body["counts"]
 
@@ -165,7 +195,7 @@ async def test_delete_with_transfer_moves_live_crm_ownership_only(ctx, monkeypat
     assert body["deactivated"] is True
     assert body["transferred"] == {
         "leads": 1, "schools": 1, "contacts": 1, "tasks": 1,
-        "followups": 1, "visit_plans": 1,
+        "followups": 1, "visit_plans": 1, "field_visits": 1, "del_task_instances": 1,
     }
 
     lead = await d.leads.find_one({"lead_id": "lead_1"}, {"_id": 0})
@@ -182,8 +212,58 @@ async def test_delete_with_transfer_moves_live_crm_ownership_only(ctx, monkeypat
     order = await d.orders.find_one({"order_id": "order_1"}, {"_id": 0})
     assert order["sales_person_email"] == "leaving@smartshape.in"
 
+    # Delegation: emp_id + emp_name move together, only for the pending instance
+    inst_pending = await d.del_task_instances.find_one({"instance_id": "inst_pending"}, {"_id": 0})
+    assert inst_pending["emp_id"] == "emp_recipient"
+    assert inst_pending["emp_name"] == "Recipient Rep"
+    inst_done = await d.del_task_instances.find_one({"instance_id": "inst_done"}, {"_id": 0})
+    assert inst_done["emp_id"] == "emp_leaving"
+    assert inst_done["emp_name"] == "Leaving Rep"
+
     user_doc = await d.users.find_one({"user_id": "user_leaving"}, {"_id": 0})
     assert user_doc["is_active"] is False
+
+
+@pytest.mark.asyncio
+async def test_field_visits_open_transfers_completed_stays(ctx, monkeypatch, leaving_and_recipient):
+    """End-to-end: seed one completed (outcome set) and one open (outcome None)
+    field visit, transfer, assert ONLY the open one moved."""
+    d, client = leaving_and_recipient
+    monkeypatch.setattr(ar, "get_current_user", _as(ADMIN))
+    r = await client.delete("/api/admin/users/user_leaving",
+                             params={"transfer_to": "recipient@smartshape.in"})
+    assert r.status_code == 200, r.text
+    assert r.json()["transferred"]["field_visits"] == 1
+
+    open_visit = await d.field_visits.find_one({"visit_id": "visit_open"}, {"_id": 0})
+    assert open_visit["sales_person_email"] == "recipient@smartshape.in"
+
+    done_visit = await d.field_visits.find_one({"visit_id": "visit_done"}, {"_id": 0})
+    assert done_visit["sales_person_email"] == "leaving@smartshape.in", \
+        "a completed visit is history and must keep its original owner"
+
+
+@pytest.mark.asyncio
+async def test_delegation_transfer_skipped_silently_when_no_employee_row(ctx, monkeypatch):
+    """If the departing user (or the recipient) has no del_employees row,
+    delegation transfer must be skipped silently — never error, never invent
+    a del_employees record."""
+    d, client = ctx
+    await d.users.insert_one({
+        "user_id": "user_leaving2", "email": "leaving2@smartshape.in", "name": "Leaving Two",
+        "role": "sales_person", "roles": ["sales_person"], "is_active": True,
+    })
+    await d.users.insert_one({
+        "user_id": "user_recipient2", "email": "recipient2@smartshape.in", "name": "Recipient Two",
+        "role": "sales_person", "roles": ["sales_person"], "is_active": True,
+    })
+    # Neither has a del_employees row.
+    monkeypatch.setattr(ar, "get_current_user", _as(ADMIN))
+    r = await client.delete("/api/admin/users/user_leaving2",
+                             params={"transfer_to": "recipient2@smartshape.in"})
+    assert r.status_code == 200, r.text
+    assert "del_task_instances" not in r.json()["transferred"]
+    assert await d.del_employees.count_documents({}) == 0, "must never invent a del_employees record"
 
 
 @pytest.mark.asyncio
