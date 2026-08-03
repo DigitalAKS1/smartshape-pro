@@ -16,6 +16,18 @@ const LEVELS = [
   { value: 'read_write_delete', label: 'Full Access', short: 'RWD', cls: 'text-green-400' },
 ];
 
+const SCOPES = [
+  { value: 'own', label: 'Own records' },
+  { value: 'all', label: 'All records' },
+];
+
+const ROLE_OPTIONS = [
+  { value: 'admin',        label: 'Admin',    hint: 'Full access to everything' },
+  { value: 'accounts',     label: 'Accounts', hint: 'All quotations & financials' },
+  { value: 'store',        label: 'Store',    hint: 'All orders & inventory' },
+  { value: 'sales_person', label: 'Sales',    hint: 'Leads, CRM & own quotations' },
+];
+
 function PermMatrix({ modules, permissions, onChange, disabled }) {
   const inputCls = 'bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]';
 
@@ -23,12 +35,18 @@ function PermMatrix({ modules, permissions, onChange, disabled }) {
     const cur = permissions[modName] || { level: 'none', can_download: false };
     const updated = { ...permissions, [modName]: { ...cur, level } };
     if (level === 'none') updated[modName].can_download = false;
+    else if (!updated[modName].scope) updated[modName].scope = 'all';
     onChange(updated);
   };
 
   const toggleDownload = (modName) => {
     const cur = permissions[modName] || { level: 'read_write', can_download: false };
     onChange({ ...permissions, [modName]: { ...cur, can_download: !cur.can_download } });
+  };
+
+  const setScope = (modName, scope) => {
+    const cur = permissions[modName] || { level: 'read', can_download: false };
+    onChange({ ...permissions, [modName]: { ...cur, scope } });
   };
 
   if (disabled === 'admin') {
@@ -39,28 +57,12 @@ function PermMatrix({ modules, permissions, onChange, disabled }) {
       </div>
     );
   }
-  if (disabled === 'accounts') {
-    return (
-      <div className="flex items-center gap-2 p-3 rounded-md bg-yellow-500/10 border border-yellow-500/30">
-        <Shield className="h-4 w-4 text-yellow-400" />
-        <p className="text-sm text-yellow-400">Accounts team sees ALL quotations, orders, payments and payroll. No CRM access.</p>
-      </div>
-    );
-  }
-  if (disabled === 'store') {
-    return (
-      <div className="flex items-center gap-2 p-3 rounded-md bg-blue-500/10 border border-blue-500/30">
-        <Shield className="h-4 w-4 text-blue-400" />
-        <p className="text-sm text-blue-400">Store team sees ALL orders, dispatches and manages all inventory. No CRM access.</p>
-      </div>
-    );
-  }
-
   return (
     <div className="rounded-md border border-[var(--border-color)] overflow-hidden">
-      <div className="grid grid-cols-[1fr_auto_auto] gap-0 text-[10px] font-semibold uppercase tracking-wide text-[var(--text-muted)] bg-[var(--bg-primary)] px-3 py-2 border-b border-[var(--border-color)]">
+      <div className="grid grid-cols-[1fr_auto_auto_auto] gap-0 text-[10px] font-semibold uppercase tracking-wide text-[var(--text-muted)] bg-[var(--bg-primary)] px-3 py-2 border-b border-[var(--border-color)]">
         <span>Module</span>
         <span className="w-36 text-center">Permission Level</span>
+        <span className="w-32 text-center">Data Scope</span>
         <span className="w-20 text-center">Download</span>
       </div>
       <div className="divide-y divide-[var(--border-color)]">
@@ -68,9 +70,10 @@ function PermMatrix({ modules, permissions, onChange, disabled }) {
           const perm = permissions[mod.name] || { level: 'none', can_download: false };
           const level = perm.level || 'none';
           const canDl = perm.can_download || false;
+          const scope = perm.scope || 'all';
           const levelObj = LEVELS.find(l => l.value === level) || LEVELS[0];
           return (
-            <div key={mod.module_id} className={`grid grid-cols-[1fr_auto_auto] items-center gap-0 px-3 py-2.5 hover:bg-[var(--bg-hover)] transition-colors ${level !== 'none' ? '' : 'opacity-60'}`}>
+            <div key={mod.module_id} className={`grid grid-cols-[1fr_auto_auto_auto] items-center gap-0 px-3 py-2.5 hover:bg-[var(--bg-hover)] transition-colors ${level !== 'none' ? '' : 'opacity-60'}`}>
               <div>
                 <p className="text-sm font-medium text-[var(--text-primary)]">{mod.display_name}</p>
                 <p className="text-[10px] text-[var(--text-muted)]">{mod.category}</p>
@@ -80,6 +83,16 @@ function PermMatrix({ modules, permissions, onChange, disabled }) {
                   className={`w-full h-8 px-2 rounded text-xs font-medium ${inputCls} ${levelObj.cls}`}>
                   {LEVELS.map(l => (
                     <option key={l.value} value={l.value} className="text-[var(--text-primary)]">{l.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="w-32 px-1">
+                <select value={scope} onChange={e => setScope(mod.name, e.target.value)}
+                  disabled={level === 'none'}
+                  data-testid={`scope-${mod.name}`}
+                  className={`w-full h-8 px-2 rounded text-xs font-medium ${inputCls} ${scope === 'own' ? 'text-orange-400' : 'text-emerald-400'} disabled:opacity-40`}>
+                  {SCOPES.map(s => (
+                    <option key={s.value} value={s.value} className="text-[var(--text-primary)]">{s.label}</option>
                   ))}
                 </select>
               </div>
@@ -102,6 +115,8 @@ export function UserFormDialog({
   allModules, allDesignations,
   handleDesignationChange,
   handlePermissionsChange,
+  handleRolesChange,
+  applyRolePresets,
   handleSave,
 }) {
   const textPri  = 'text-[var(--text-primary)]';
@@ -150,21 +165,29 @@ export function UserFormDialog({
                 </SelectContent>
               </Select>
             </div>
-            <div><Label className={`${textSec} text-xs uppercase tracking-wide mb-1.5 block`}>Role Level<FieldTooltip text="Controls what data this user can access." /></Label>
-              <Select value={form.role} onValueChange={v => setForm({...form, role: v})}>
-                <SelectTrigger className={inputCls}><SelectValue /></SelectTrigger>
-                <SelectContent className="bg-[var(--bg-card)] border-[var(--border-color)]">
-                  <SelectItem value="admin" className={`${textPri} hover:bg-[var(--bg-hover)]`}>Admin — full access</SelectItem>
-                  <SelectItem value="accounts" className={`${textPri} hover:bg-[var(--bg-hover)]`}>Accounts — all quotations & financials</SelectItem>
-                  <SelectItem value="store" className={`${textPri} hover:bg-[var(--bg-hover)]`}>Store — all orders & inventory</SelectItem>
-                  <SelectItem value="sales_person" className={`${textPri} hover:bg-[var(--bg-hover)]`}>Sales — own data only</SelectItem>
-                </SelectContent>
-              </Select>
+            <div><Label className={`${textSec} text-xs uppercase tracking-wide mb-1.5 block`}>Roles<FieldTooltip text="Tick every job this person does. Roles are presets — the permission matrix below is what actually applies." /></Label>
+              <div className="grid grid-cols-2 gap-1.5">
+                {ROLE_OPTIONS.map(r => {
+                  const checked = (form.roles || []).includes(r.value);
+                  const isAdminRole = r.value === 'admin';
+                  const adminOn = (form.roles || []).includes('admin');
+                  return (
+                    <button key={r.value} type="button"
+                      onClick={() => handleRolesChange(r.value)}
+                      disabled={adminOn && !isAdminRole}
+                      data-testid={`role-${r.value}`}
+                      className={`px-2.5 py-2 rounded-lg border text-left transition-all disabled:opacity-40 ${checked ? 'border-[#e94560] bg-[#e94560]/10' : 'border-[var(--border-color)] hover:bg-[var(--bg-hover)]'}`}>
+                      <p className={`text-xs font-semibold ${checked ? 'text-[#e94560]' : textPri}`}>{r.label}</p>
+                      <p className={`text-[10px] ${textMuted} leading-snug`}>{r.hint}</p>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           </div>
 
           {/* Sales Portal Role */}
-          {form.role === 'sales_person' && (
+          {(form.roles || []).includes('sales_person') && (
             <div>
               <Label className={`${textSec} text-xs uppercase tracking-wide mb-1.5 block`}>Sales Portal Role</Label>
               <div className="grid grid-cols-3 gap-2">
@@ -183,11 +206,13 @@ export function UserFormDialog({
           <div>
             <div className="flex items-center justify-between mb-2">
               <Label className={`${textSec} text-xs uppercase tracking-wide`}>Module Permissions<FieldTooltip text="Controls which sections of the app this user can open." /></Label>
-              {form.role !== 'admin' && (
+              {!(form.roles || []).includes('admin') && (
                 <div className="flex gap-1">
+                  <button onClick={applyRolePresets} className="text-xs text-[#e94560] hover:underline">Apply role presets</button>
+                  <span className={textMuted}>•</span>
                   <button onClick={() => {
                     const all = {};
-                    allModules.filter(m => m.is_active).forEach(m => { all[m.name] = { level: 'read_write', can_download: false }; });
+                    allModules.filter(m => m.is_active).forEach(m => { all[m.name] = { level: 'read_write', can_download: false, scope: 'all' }; });
                     handlePermissionsChange(all);
                   }} className="text-xs text-[#e94560] hover:underline">All R+W</button>
                   <span className={textMuted}>•</span>
@@ -199,7 +224,7 @@ export function UserFormDialog({
               modules={allModules}
               permissions={form.module_permissions}
               onChange={handlePermissionsChange}
-              disabled={['admin', 'accounts', 'store'].includes(form.role) ? form.role : null}
+              disabled={(form.roles || []).includes('admin') ? 'admin' : null}
             />
           </div>
         </div>
