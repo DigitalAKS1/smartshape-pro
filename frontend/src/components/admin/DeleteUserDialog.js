@@ -14,6 +14,7 @@ const LABELS = {
 
 export function DeleteUserDialog({ open, onOpenChange, user, users, onConfirm }) {
   const [summary, setSummary] = useState(null);
+  const [loadError, setLoadError] = useState(false);
   const [transferTo, setTransferTo] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -24,10 +25,11 @@ export function DeleteUserDialog({ open, onOpenChange, user, users, onConfirm })
   useEffect(() => {
     if (!open || !user) return;
     setSummary(null);
+    setLoadError(false);
     setTransferTo('');
     adminUsers.dataSummary(user.user_id)
       .then(res => setSummary(res.data))
-      .catch(() => setSummary({ counts: {}, total: 0 }));
+      .catch(() => setLoadError(true));
   }, [open, user]);
 
   if (!user) return null;
@@ -62,11 +64,17 @@ export function DeleteUserDialog({ open, onOpenChange, user, users, onConfirm })
 
           <div className="rounded-md border border-[var(--border-color)] p-3">
             <p className={`text-xs uppercase tracking-wide ${textMuted} mb-2`}>Live work owned</p>
-            {summary === null && <p className={`text-sm ${textMuted}`}>Counting…</p>}
-            {summary && total === 0 && (
+            {loadError && (
+              <p className="text-sm text-[#e94560]">
+                Could not load how much live work this person owns. Removal is blocked until this
+                can be checked — try again in a moment.
+              </p>
+            )}
+            {!loadError && summary === null && <p className={`text-sm ${textMuted}`}>Counting…</p>}
+            {!loadError && summary && total === 0 && (
               <p className={`text-sm ${textMuted}`}>Nothing assigned — nothing to transfer.</p>
             )}
-            {summary && total > 0 && (
+            {!loadError && summary && total > 0 && (
               <div className="flex flex-wrap gap-1.5">
                 {Object.entries(summary.counts).map(([k, v]) => (
                   <span key={k} className="text-xs px-2 py-0.5 rounded-full border border-[var(--border-color)] bg-[var(--bg-hover)]">
@@ -77,7 +85,7 @@ export function DeleteUserDialog({ open, onOpenChange, user, users, onConfirm })
             )}
           </div>
 
-          {summary && total > 0 && (
+          {!loadError && summary && total > 0 && (
             <div>
               <Label className={`${textSec} text-xs uppercase tracking-wide mb-1.5 block`}>Give this work to</Label>
               <Select value={transferTo} onValueChange={setTransferTo}>
@@ -103,7 +111,8 @@ export function DeleteUserDialog({ open, onOpenChange, user, users, onConfirm })
 
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} className={`border-[var(--border-color)] ${textSec}`}>Cancel</Button>
-          <Button onClick={confirm} disabled={busy || summary === null || (total > 0 && !transferTo)}
+          <Button onClick={confirm}
+            disabled={busy || loadError || summary === null || (total > 0 && !transferTo)}
             className="bg-[#e94560] hover:bg-[#f05c75] text-white">
             {busy ? 'Working…' : 'Deactivate & transfer'}
           </Button>

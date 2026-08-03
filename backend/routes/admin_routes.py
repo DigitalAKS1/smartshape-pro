@@ -310,17 +310,25 @@ async def admin_role_presets(request: Request, roles: str = ""):
 # A completed visit is a record of who actually made it — history, like a
 # quotation — so it keeps the original owner.
 #
+# `visit_plans` gets the identical treatment: it reaches a terminal
+# status="completed" on check-out (routes/field_routes.py:454-487
+# visit_check_out — the same field is used as the "already done" guard at
+# routes/field_routes.py:887, `if plan.get("status") == "completed": raise
+# HTTPException(..., "Cannot reschedule a completed visit")`). A completed
+# plan is a record of who actually went — history — so only outstanding
+# plans (status != "completed", i.e. "planned" or "in_progress") transfer.
+#
 # `del_task_instances` is NOT in this list: those documents key ownership on
 # `emp_id`/`emp_name` (an FK into `del_employees`), not on an email field at
 # all, so a `(collection, field, extra_filter)` tuple can't express it. It is
-# handled separately by `_delegation_transfer_query` / the block below.
+# handled separately by `_delegation_employee` / the block below.
 TRANSFER_SPECS = [
     ("leads", "assigned_to", {}),
     ("schools", "assigned_to", {}),
     ("contacts", "assigned_to", {}),
     ("tasks", "assigned_to", {}),
     ("followups", "assigned_to", {}),
-    ("visit_plans", "assigned_to", {}),
+    ("visit_plans", "assigned_to", {"status": {"$ne": "completed"}}),
     ("field_visits", "sales_person_email", {"outcome": None}),
 ]
 
@@ -385,13 +393,24 @@ async def admin_delete_user(user_id: str, request: Request, transfer_to: str = "
     if transfer_to:
         if transfer_to == email.lower():
             raise HTTPException(status_code=400, detail="Cannot transfer a user's work to themselves")
+        # Case-insensitive lookup: some insert paths (e.g. auth_routes.py) don't
+        # lowercase on write like POST /admin/users does, so a stored mixed-case
+        # email must still be selectable as a recipient. Same idiom already used
+        # for exact-match email lookups elsewhere (crm_routes.py:854).
+        import re as _re
         recipient = await db.users.find_one(
-            {"email": transfer_to}, {"_id": 0, "email": 1, "name": 1, "is_active": 1}
+            {"email": {"$regex": f"^{_re.escape(transfer_to)}$", "$options": "i"}},
+            {"_id": 0, "email": 1, "name": 1, "is_active": 1},
         )
         if not recipient:
             raise HTTPException(status_code=400, detail="Transfer recipient not found")
         if recipient.get("is_active") is False:
             raise HTTPException(status_code=400, detail="Cannot transfer work to a deactivated user")
+        # Use the recipient's canonically-stored email casing for every write
+        # below, not the caller-supplied/lowercased form — the rest of the app
+        # (own-record queries, get_current_user) matches assigned_to by exact
+        # string against the email as stored.
+        transfer_to = recipient["email"]
         for coll, field, extra_filter in TRANSFER_SPECS:
             res = await db[coll].update_many(
                 {field: email, **extra_filter}, {"$set": {field: transfer_to}}

@@ -111,7 +111,14 @@ async def leaving_and_recipient(ctx):
     await d.contacts.insert_one({"contact_id": "contact_1", "assigned_to": "leaving@smartshape.in"})
     await d.tasks.insert_one({"task_id": "task_1", "assigned_to": "leaving@smartshape.in"})
     await d.followups.insert_one({"followup_id": "fu_1", "assigned_to": "leaving@smartshape.in"})
-    await d.visit_plans.insert_one({"plan_id": "plan_1", "assigned_to": "leaving@smartshape.in"})
+
+    # visit_plans: one still outstanding (status != "completed" — live work),
+    # one completed (status == "completed" — history, must stay put, same
+    # treatment as a completed field visit)
+    await d.visit_plans.insert_one({"plan_id": "plan_open", "assigned_to": "leaving@smartshape.in",
+                                     "status": "planned"})
+    await d.visit_plans.insert_one({"plan_id": "plan_done", "assigned_to": "leaving@smartshape.in",
+                                     "status": "completed"})
 
     # field_visits: one still open (no outcome — live work), one completed
     # (has an outcome — history, must stay with the original rep)
@@ -182,6 +189,45 @@ async def test_delete_without_transfer_deactivates_and_leaves_records_orphaned(c
 
     lead = await d.leads.find_one({"lead_id": "lead_1"}, {"_id": 0})
     assert lead["assigned_to"] == "leaving@smartshape.in"
+
+
+@pytest.mark.asyncio
+async def test_visit_plans_open_transfers_completed_stays(ctx, monkeypatch, leaving_and_recipient):
+    """End-to-end, mirroring test_field_visits_open_transfers_completed_stays:
+    seed one completed (status="completed") and one outstanding visit plan,
+    transfer, assert ONLY the outstanding one moved."""
+    d, client = leaving_and_recipient
+    monkeypatch.setattr(ar, "get_current_user", _as(ADMIN))
+    r = await client.delete("/api/admin/users/user_leaving",
+                             params={"transfer_to": "recipient@smartshape.in"})
+    assert r.status_code == 200, r.text
+    assert r.json()["transferred"]["visit_plans"] == 1
+
+    open_plan = await d.visit_plans.find_one({"plan_id": "plan_open"}, {"_id": 0})
+    assert open_plan["assigned_to"] == "recipient@smartshape.in"
+
+    done_plan = await d.visit_plans.find_one({"plan_id": "plan_done"}, {"_id": 0})
+    assert done_plan["assigned_to"] == "leaving@smartshape.in", \
+        "a completed visit plan is history and must keep its original owner"
+
+
+@pytest.mark.asyncio
+async def test_transfer_recipient_lookup_is_case_insensitive(ctx, monkeypatch, leaving_and_recipient):
+    """A recipient stored with a mixed-case email (some insert paths don't
+    lowercase on write) must still be selectable, and every write must use
+    the canonically-stored casing, not the caller-supplied one."""
+    d, client = leaving_and_recipient
+    await d.users.update_one({"user_id": "user_recipient"},
+                              {"$set": {"email": "Recipient@SmartShape.in"}})
+    monkeypatch.setattr(ar, "get_current_user", _as(ADMIN))
+    r = await client.delete("/api/admin/users/user_leaving",
+                             params={"transfer_to": "recipient@smartshape.in"})
+    assert r.status_code == 200, r.text
+    assert r.json()["transferred"]["leads"] == 1
+
+    lead = await d.leads.find_one({"lead_id": "lead_1"}, {"_id": 0})
+    assert lead["assigned_to"] == "Recipient@SmartShape.in", \
+        "must use the recipient's canonically-stored email casing, not the lowercased input"
 
 
 @pytest.mark.asyncio
