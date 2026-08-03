@@ -1576,13 +1576,402 @@ git commit -m "feat(rbac): multi-role form state, preset fetch and role chips in
 
 ---
 
-### Task 9: End-to-end verification and deploy
+### Task 9: Transfer a user's live work when deactivating them
+
+**Files:**
+- Modify: `backend/routes/admin_routes.py:237-249` (`admin_delete_user`), plus a new data-summary endpoint
+- Modify: `frontend/src/lib/api.js` (the `adminUsers` export)
+- Modify: `frontend/src/hooks/useUserManagement.js` (`handleDelete`)
+- Create: `frontend/src/components/admin/DeleteUserDialog.js`
+- Modify: `frontend/src/pages/admin/UserManagement.js` (render the dialog)
+- Test: `backend/tests/test_user_transfer.py` (create)
+
+**Interfaces:**
+- Consumes: `require_admin` from `rbac` (already imported at `admin_routes.py:12`).
+- Produces:
+  - `TRANSFER_SPECS: list[tuple[str, str]]` in `backend/routes/admin_routes.py` — `(collection, owner_field)` pairs that move on transfer.
+  - `GET /admin/users/{user_id}/data-summary` returning `{"counts": {"<collection>": <int>}, "total": <int>}`
+  - `DELETE /admin/users/{user_id}?transfer_to=<email>` returning `{"message": str, "transferred": {"<collection>": <int>}, "deactivated": true}`
+  - `adminUsers.delete(userId, transferTo)` and `adminUsers.dataSummary(userId)` in `lib/api.js`
+  - `<DeleteUserDialog />` component
+
+**Why this task exists:** `admin_delete_user` currently deletes the user document and deactivates their
+salespersons row, leaving every lead, school, contact, task and follow-up pointing at an email with no
+account. That work becomes invisible — nobody owns it and nobody is told. This task makes removal a
+transfer.
+
+**Three decisions already made by the product owner — implement exactly these, do not widen:**
+
+1. **Only live CRM ownership transfers.** The `assigned_to` field moves on leads, schools, contacts,
+   tasks, follow-ups, visit plans, visits, field visits and delegation task instances.
+   **Quotations and orders do NOT move** — `sales_person_email` and `created_by` there are sales
+   attribution, and rewriting them would re-credit past deals and corrupt commission and revenue reports.
+2. **`created_by` is never rewritten anywhere.** It records who made a record — that is history, not
+   ownership. Only `assigned_to` moves.
+3. **The account is deactivated, not deleted.** Set `is_active: False` and keep the user document so
+   activity logs, edit history and `created_by` stamps still resolve to a real name. The user cannot log in.
+
+- [ ] **Step 1: Write the failing test**
+
+Create `backend/tests/test_user_transfer.py`:
+
+```python
+"""Pure-Python tests for the user data-transfer spec (no DB / no network)."""
+from routes.admin_routes import TRANSFER_SPECS
+
+
+def test_transfer_specs_cover_live_crm_ownership():
+    collections = {c for c, _ in TRANSFER_SPECS}
+    for expected in ("leads", "schools", "contacts", "tasks", "followups",
+                     "visit_plans", "visits", "field_visits", "del_task_instances"):
+        assert expected in collections, f"{expected} missing from TRANSFER_SPECS"
+
+
+def test_transfer_never_touches_sales_attribution():
+    """Quotations and orders carry commission/revenue attribution and must not move."""
+    collections = {c for c, _ in TRANSFER_SPECS}
+    assert "quotations" not in collections
+    assert "orders" not in collections
+    assert "invoices" not in collections
+
+
+def test_transfer_only_moves_assigned_to():
+    """created_by is history, not ownership — it must never be rewritten."""
+    fields = {f for _, f in TRANSFER_SPECS}
+    assert fields == {"assigned_to"}, f"unexpected owner fields: {fields}"
+
+
+def test_specs_have_no_duplicates():
+    assert len(TRANSFER_SPECS) == len(set(TRANSFER_SPECS))
+```
+
+- [ ] **Step 2: Run the test to verify it fails**
+
+```bash
+cd backend && python -m pytest tests/test_user_transfer.py -v
+```
+
+Expected: FAIL with `ImportError: cannot import name 'TRANSFER_SPECS'`.
+
+- [ ] **Step 3: Add the transfer spec and the data-summary endpoint**
+
+Add to `backend/routes/admin_routes.py`, immediately above `admin_delete_user`:
+
+```python
+# Collections whose LIVE ownership moves when a user is removed, as
+# (collection, owner_field). Deliberately excludes quotations, orders and
+# invoices: `sales_person_email`/`created_by` there are sales attribution, and
+# rewriting them would re-credit past deals in revenue and commission reports.
+# `created_by` is never transferred anywhere — it records who made a record.
+TRANSFER_SPECS = [
+    ("leads", "assigned_to"),
+    ("schools", "assigned_to"),
+    ("contacts", "assigned_to"),
+    ("tasks", "assigned_to"),
+    ("followups", "assigned_to"),
+    ("visit_plans", "assigned_to"),
+    ("visits", "assigned_to"),
+    ("field_visits", "assigned_to"),
+    ("del_task_instances", "assigned_to"),
+]
+
+
+@router.get("/admin/users/{user_id}/data-summary")
+async def admin_user_data_summary(user_id: str, request: Request):
+    """How much live work this user owns, per collection. Drives the delete dialog."""
+    current_user = await get_current_user(request)
+    require_admin(current_user)
+    target = await db.users.find_one({"user_id": user_id}, {"_id": 0, "email": 1})
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    email = target["email"]
+    counts = {}
+    for coll, field in TRANSFER_SPECS:
+        n = await db[coll].count_documents({field: email})
+        if n:
+            counts[coll] = n
+    return {"counts": counts, "total": sum(counts.values())}
+```
+
+- [ ] **Step 4: Rewrite `admin_delete_user` as deactivate-and-transfer**
+
+Replace the whole of `admin_delete_user` (lines 237-249) with:
+
+```python
+@router.delete("/admin/users/{user_id}")
+async def admin_delete_user(user_id: str, request: Request, transfer_to: str = ""):
+    """Deactivate a user and hand their live CRM work to another active user.
+
+    The account is kept (is_active=False) so audit logs, edit history and
+    `created_by` stamps still resolve to a real name. Quotations and orders keep
+    their original owner — see TRANSFER_SPECS.
+    """
+    current_user = await get_current_user(request)
+    require_admin(current_user)
+    if current_user.get("user_id") == user_id:
+        raise HTTPException(status_code=400, detail="Cannot remove your own account")
+
+    user_to_delete = await db.users.find_one({"user_id": user_id})
+    if not user_to_delete:
+        raise HTTPException(status_code=404, detail="User not found")
+    email = user_to_delete["email"]
+
+    transferred = {}
+    transfer_to = (transfer_to or "").strip().lower()
+    if transfer_to:
+        if transfer_to == email.lower():
+            raise HTTPException(status_code=400, detail="Cannot transfer a user's work to themselves")
+        recipient = await db.users.find_one(
+            {"email": transfer_to}, {"_id": 0, "email": 1, "name": 1, "is_active": 1}
+        )
+        if not recipient:
+            raise HTTPException(status_code=400, detail="Transfer recipient not found")
+        if recipient.get("is_active") is False:
+            raise HTTPException(status_code=400, detail="Cannot transfer work to a deactivated user")
+        for coll, field in TRANSFER_SPECS:
+            res = await db[coll].update_many({field: email}, {"$set": {field: transfer_to}})
+            if res.modified_count:
+                transferred[coll] = res.modified_count
+
+    await db.users.update_one({"user_id": user_id}, {"$set": {"is_active": False}})
+    await db.salespersons.update_one({"email": email}, {"$set": {"is_active": False}})
+
+    return {"message": "User deactivated", "transferred": transferred, "deactivated": True}
+```
+
+If this file already imports a `log_activity` helper, add an audit line before the return recording the
+actor, the deactivated email, and the `transferred` dict. If it does not, do NOT invent an import — the
+`transferred` counts in the response are the record.
+
+- [ ] **Step 5: Run the tests and confirm the route registers**
+
+```bash
+cd backend && python -m pytest tests/test_user_transfer.py -v && python -c "
+import routes.admin_routes as a
+paths = [r.path for r in a.router.routes]
+assert '/admin/users/{user_id}/data-summary' in paths, paths
+print('route registered OK')
+"
+```
+
+Expected: 4 tests PASS and `route registered OK`.
+
+- [ ] **Step 6: Add the API bindings**
+
+In `frontend/src/lib/api.js`, replace the whole `adminUsers` export (currently lines 947-952) with:
+
+```javascript
+export const adminUsers = {
+  getAll: () => API.get('/admin/users'),
+  create: (data) => API.post('/admin/users', data),
+  update: (userId, data) => API.put(`/admin/users/${userId}`, data),
+  delete: (userId, transferTo) => API.delete(`/admin/users/${userId}`, { params: transferTo ? { transfer_to: transferTo } : {} }),
+  dataSummary: (userId) => API.get(`/admin/users/${userId}/data-summary`),
+};
+```
+
+- [ ] **Step 7: Create the transfer dialog**
+
+Create `frontend/src/components/admin/DeleteUserDialog.js`:
+
+```javascript
+import React, { useEffect, useState } from 'react';
+import { Button } from '../ui/button';
+import { Label } from '../ui/label';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../ui/dialog';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
+import { AlertTriangle } from 'lucide-react';
+import { adminUsers } from '../../lib/api';
+
+const LABELS = {
+  leads: 'Leads', schools: 'Schools', contacts: 'Contacts', tasks: 'Tasks',
+  followups: 'Follow-ups', visit_plans: 'Visit plans', visits: 'Visits',
+  field_visits: 'Field visits', del_task_instances: 'Delegated tasks',
+};
+
+export function DeleteUserDialog({ open, onOpenChange, user, users, onConfirm }) {
+  const [summary, setSummary] = useState(null);
+  const [transferTo, setTransferTo] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const textPri = 'text-[var(--text-primary)]';
+  const textSec = 'text-[var(--text-secondary)]';
+  const textMuted = 'text-[var(--text-muted)]';
+
+  useEffect(() => {
+    if (!open || !user) return;
+    setSummary(null);
+    setTransferTo('');
+    adminUsers.dataSummary(user.user_id)
+      .then(res => setSummary(res.data))
+      .catch(() => setSummary({ counts: {}, total: 0 }));
+  }, [open, user]);
+
+  if (!user) return null;
+
+  const candidates = (users || []).filter(u => u.user_id !== user.user_id && u.is_active !== false);
+  const total = summary?.total ?? null;
+
+  const confirm = async () => {
+    setBusy(true);
+    try {
+      await onConfirm(user.user_id, transferTo);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className={`bg-[var(--bg-card)] border-[var(--border-color)] ${textPri} w-[calc(100vw-1rem)] sm:max-w-lg`}>
+        <DialogHeader>
+          <DialogTitle className={`${textPri} text-lg flex items-center gap-2`}>
+            <AlertTriangle className="h-5 w-5 text-[#e94560]" />
+            Remove {user.name}?
+          </DialogTitle>
+        </DialogHeader>
+
+        <div className="space-y-4 py-2">
+          <p className={`text-sm ${textSec}`}>
+            The account is deactivated, not erased. Past quotations, orders and history keep this
+            person's name — only live work needs a new owner.
+          </p>
+
+          <div className="rounded-md border border-[var(--border-color)] p-3">
+            <p className={`text-xs uppercase tracking-wide ${textMuted} mb-2`}>Live work owned</p>
+            {summary === null && <p className={`text-sm ${textMuted}`}>Counting…</p>}
+            {summary && total === 0 && (
+              <p className={`text-sm ${textMuted}`}>Nothing assigned — nothing to transfer.</p>
+            )}
+            {summary && total > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {Object.entries(summary.counts).map(([k, v]) => (
+                  <span key={k} className="text-xs px-2 py-0.5 rounded-full border border-[var(--border-color)] bg-[var(--bg-hover)]">
+                    {v} {LABELS[k] || k}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {summary && total > 0 && (
+            <div>
+              <Label className={`${textSec} text-xs uppercase tracking-wide mb-1.5 block`}>Give this work to</Label>
+              <Select value={transferTo} onValueChange={setTransferTo}>
+                <SelectTrigger className="bg-[var(--bg-primary)] border-[var(--border-color)]">
+                  <SelectValue placeholder="Select a user…" />
+                </SelectTrigger>
+                <SelectContent className="bg-[var(--bg-card)] border-[var(--border-color)]">
+                  {candidates.map(u => (
+                    <SelectItem key={u.user_id} value={u.email} className={`${textPri} hover:bg-[var(--bg-hover)]`}>
+                      {u.name} — {u.email}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {!transferTo && (
+                <p className="text-[11px] text-[#e94560] mt-1.5">
+                  Pick someone, or this work will be left with no owner.
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} className={`border-[var(--border-color)] ${textSec}`}>Cancel</Button>
+          <Button onClick={confirm} disabled={busy || summary === null || (total > 0 && !transferTo)}
+            className="bg-[#e94560] hover:bg-[#f05c75] text-white">
+            {busy ? 'Working…' : 'Deactivate & transfer'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+```
+
+The confirm button stays disabled until a recipient is chosen whenever there is work to move. That is what
+stops an admin in a hurry from orphaning records.
+
+- [ ] **Step 8: Replace the `window.confirm` delete flow**
+
+In `frontend/src/hooks/useUserManagement.js`, replace `handleDelete` (currently lines 113-122) with:
+
+```javascript
+  const handleDelete = async (userId, transferTo) => {
+    try {
+      const res = await adminUsers.delete(userId, transferTo);
+      const moved = Object.values(res.data?.transferred || {}).reduce((a, b) => a + b, 0);
+      toast.success(moved ? `User deactivated — ${moved} records transferred` : 'User deactivated');
+      setDeleteTarget(null);
+      fetchData();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to remove user');
+    }
+  };
+```
+
+Add this state next to the other `useState` declarations near the top of the hook (around line 13):
+
+```javascript
+  const [deleteTarget, setDeleteTarget] = useState(null);
+```
+
+Add `openDelete` beside the other handlers:
+
+```javascript
+  const openDelete = (u) => setDeleteTarget(u);
+```
+
+Add `deleteTarget`, `setDeleteTarget` and `openDelete` to the hook's returned object next to `handleDelete`.
+
+- [ ] **Step 9: Render the dialog**
+
+In `frontend/src/pages/admin/UserManagement.js`:
+
+1. Import the dialog: `import { DeleteUserDialog } from '../../components/admin/DeleteUserDialog';`
+2. Destructure `deleteTarget`, `setDeleteTarget` and `openDelete` from `useUserManagement()`.
+3. Change the row's delete button handler from `handleDelete(u.user_id)` to `openDelete(u)`.
+4. Render alongside `<UserFormDialog ... />`:
+
+```javascript
+        <DeleteUserDialog
+          open={!!deleteTarget}
+          onOpenChange={(v) => !v && setDeleteTarget(null)}
+          user={deleteTarget}
+          users={users}
+          onConfirm={handleDelete}
+        />
+```
+
+Read the surrounding JSX before editing and match its conventions. Do not restructure the row.
+
+- [ ] **Step 10: Verify the app compiles**
+
+```bash
+cd frontend && DISABLE_ESLINT_PLUGIN=true NODE_OPTIONS=--max-old-space-size=4096 REACT_APP_BACKEND_URL=https://app.smartshape.in npx react-scripts build
+```
+
+Expected: `Compiled successfully`.
+
+- [ ] **Step 11: Commit**
+
+```bash
+git add backend/routes/admin_routes.py frontend/src/lib/api.js frontend/src/hooks/useUserManagement.js frontend/src/pages/admin/UserManagement.js frontend/src/components/admin/DeleteUserDialog.js
+git add -f backend/tests/test_user_transfer.py
+git commit -m "feat(admin): transfer a user's live CRM work when deactivating them"
+```
+
+---
+
+### Task 10: End-to-end verification and deploy
 
 **Files:**
 - Modify: `frontend/build/**` (rebuilt bundle — committed, this repo serves the committed build)
 
 **Interfaces:**
-- Consumes: everything from Tasks 1-8.
+- Consumes: everything from Tasks 1-9.
 - Produces: a deployed release.
 
 - [ ] **Step 1: Run the whole backend test suite**
@@ -1629,6 +2018,20 @@ print('sales+store resolves correctly: OK')
 
 Expected: `sales+store resolves correctly: OK`.
 
+- [ ] **Step 3-bis: Confirm the transfer spec excludes sales attribution**
+
+```bash
+cd backend && python -c "
+from routes.admin_routes import TRANSFER_SPECS
+colls = {c for c, _ in TRANSFER_SPECS}
+assert 'quotations' not in colls and 'orders' not in colls, colls
+assert {f for _, f in TRANSFER_SPECS} == {'assigned_to'}
+print('transfer spec safe: OK')
+"
+```
+
+Expected: `transfer spec safe: OK`.
+
 - [ ] **Step 4: Manual click-through against a local backend**
 
 Start the backend and frontend, log in as `info@smartshape.in`, then verify:
@@ -1638,6 +2041,7 @@ Start the backend and frontend, log in as `info@smartshape.in`, then verify:
 3. Save, reload the list, confirm two role chips show on that user.
 4. Log in as that user: CRM opens and shows only their own leads; Orders shows every order.
 5. Log in as an untouched sales user: everything behaves exactly as before.
+6. Admin -> User Management -> click delete on a user who owns leads. The dialog lists their live work by type, the confirm button is disabled until a recipient is chosen, and after confirming the user shows as inactive and the recipient owns the records. Confirm the removed user's past quotations still carry their name.
 
 Record the result of each of the five checks. Do not proceed to deploy on a failure.
 
