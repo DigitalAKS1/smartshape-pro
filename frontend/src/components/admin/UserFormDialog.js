@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
 import { Shield, Eye, EyeOff } from 'lucide-react';
 import { SALES_ROLES } from '../../lib/salesPermissions';
+import { defaultScopeForRoles } from '../../lib/moduleScope';
 
 const LEVELS = [
   { value: 'none', label: 'No Access', short: '—', cls: 'text-[var(--text-muted)]' },
@@ -28,14 +29,19 @@ const ROLE_OPTIONS = [
   { value: 'sales_person', label: 'Sales',    hint: 'Leads, CRM & own quotations' },
 ];
 
-function PermMatrix({ modules, permissions, onChange, disabled }) {
+function PermMatrix({ modules, permissions, onChange, disabled, roles }) {
   const inputCls = 'bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]';
+
+  // What a grant with no explicit `scope` actually resolves to on the server —
+  // see lib/moduleScope.js. Hard-coding 'all' here both LIED about a pre-backfill
+  // sales rep's access and silently widened it the moment any level was edited.
+  const defaultScope = defaultScopeForRoles(roles);
 
   const setLevel = (modName, level) => {
     const cur = permissions[modName] || { level: 'none', can_download: false };
     const updated = { ...permissions, [modName]: { ...cur, level } };
     if (level === 'none') updated[modName].can_download = false;
-    else if (!updated[modName].scope) updated[modName].scope = 'all';
+    else if (!updated[modName].scope) updated[modName].scope = defaultScope;
     onChange(updated);
   };
 
@@ -70,7 +76,7 @@ function PermMatrix({ modules, permissions, onChange, disabled }) {
           const perm = permissions[mod.name] || { level: 'none', can_download: false };
           const level = perm.level || 'none';
           const canDl = perm.can_download || false;
-          const scope = perm.scope || 'all';
+          const scope = perm.scope || defaultScope;
           const levelObj = LEVELS.find(l => l.value === level) || LEVELS[0];
           return (
             <div key={mod.module_id} className={`grid grid-cols-[1fr_auto_auto_auto] items-center gap-0 px-3 py-2.5 hover:bg-[var(--bg-hover)] transition-colors ${level !== 'none' ? '' : 'opacity-60'}`}>
@@ -224,6 +230,7 @@ export function UserFormDialog({
               modules={allModules}
               permissions={form.module_permissions}
               onChange={handlePermissionsChange}
+              roles={form.roles}
               disabled={(form.roles || []).includes('admin') ? 'admin' : null}
             />
           </div>

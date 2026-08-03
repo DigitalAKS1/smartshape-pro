@@ -144,7 +144,15 @@ export default function UserManagement() {
                       </div>
                     </td>
                     <td className="py-3 px-4 hidden sm:table-cell">
-                      <div className="flex flex-wrap items-center gap-1">
+                      {/* translate="no": the role chips are a variable-length
+                          sibling list produced by .map(). Google Translate
+                          rewrites text nodes in place and React's reconciler
+                          then calls insertBefore against a child that no longer
+                          exists — the crash this repo guards with translate="no"
+                          elsewhere (MasterFields.js, ImportCenter.js,
+                          DynamicEntityForm.js). Role and designation labels are
+                          product vocabulary and should not be translated anyway. */}
+                      <div className="flex flex-wrap items-center gap-1" translate="no">
                         {u.designation && (
                           <span className={`text-xs px-2 py-0.5 rounded-full font-medium border border-[var(--border-color)] bg-[var(--bg-hover)] ${textSec}`}>
                             {allDesignations.find(d => d.code === u.designation)?.name || u.designation}

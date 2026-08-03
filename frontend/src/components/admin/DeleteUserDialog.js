@@ -37,6 +37,16 @@ export function DeleteUserDialog({ open, onOpenChange, user, users, onConfirm })
   const candidates = (users || []).filter(u => u.user_id !== user.user_id && u.is_active !== false);
   const total = summary?.total ?? null;
 
+  // How much of the live work is CRM (leads / schools / contacts) — the backend
+  // decides which collections those are, next to the gate that filters them.
+  const crmCount = summary?.crm_total ?? 0;
+  const recipient = candidates.find(u => u.email === transferTo);
+  // `can_receive_crm` is computed server-side from the same rule as the CRM read
+  // gate. Older payloads won't carry it — treat missing as "fine" so a stale
+  // frontend never invents a scary warning.
+  const recipientBlindToCrm =
+    !!recipient && recipient.can_receive_crm === false && crmCount > 0;
+
   const confirm = async () => {
     setBusy(true);
     try {
@@ -104,6 +114,19 @@ export function DeleteUserDialog({ open, onOpenChange, user, users, onConfirm })
                 <p className="text-[11px] text-[#e94560] mt-1.5">
                   Pick someone, or this work will be left with no owner.
                 </p>
+              )}
+              {/* Warn, never block: an admin may deliberately park records with
+                  someone they are about to grant CRM access to. */}
+              {recipientBlindToCrm && (
+                <div className="mt-2 rounded-md border border-yellow-500/40 bg-yellow-500/10 p-2.5 flex gap-2">
+                  <AlertTriangle className="h-4 w-4 text-yellow-500 flex-shrink-0 mt-0.5" />
+                  <p className="text-[11px] text-yellow-500 leading-snug">
+                    {recipient.name} does not have CRM access, so they will not be able to see
+                    the {crmCount} leads, schools and contacts you are giving them. The records
+                    will still move. Give {recipient.name} the Leads module in User Management
+                    and they will show up.
+                  </p>
+                </div>
               )}
             </div>
           )}
