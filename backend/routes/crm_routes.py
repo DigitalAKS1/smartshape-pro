@@ -10,7 +10,7 @@ import requests as http_requests
 
 from database import db
 from auth_utils import get_current_user
-from rbac import get_team, require_superadmin, require_module
+from rbac import get_team, require_superadmin, require_module, has_module, has_team, sees_all
 from audit_backup import snapshot_and_delete, preview_counts
 from cascade_delete import build_school_plan, build_contact_plan
 import crm_contact_calls as cc
@@ -887,13 +887,14 @@ async def _user_can_access_school(user: dict, school: dict) -> bool:
     sales sees owned/created schools + schools holding their leads."""
     if not school:
         return False
-    team = get_team(user)
-    if team == "admin":
+    if has_team(user, "admin"):
         return True
-    if team in ("accounts", "store"):
+    if not has_module(user, "leads"):
         return False
+    if sees_all(user, "leads"):
+        return True
     email = user["email"]
-    if _owns(school, email):
+    if school.get("assigned_to") == email or school.get("created_by") == email:
         return True
     sid = school.get("school_id")
     if sid:
@@ -909,11 +910,12 @@ async def _user_can_mutate_lead(user: dict, lead: dict) -> bool:
     """admin all; accounts/store none; sales if assigned or under an owned school."""
     if not lead:
         return False
-    team = get_team(user)
-    if team == "admin":
+    if has_team(user, "admin"):
         return True
-    if team in ("accounts", "store"):
+    if not has_module(user, "leads", "read_write"):
         return False
+    if sees_all(user, "leads"):
+        return True
     email = user["email"]
     if lead.get("assigned_to") == email:
         return True
@@ -927,13 +929,14 @@ async def _user_can_mutate_contact(user: dict, contact: dict) -> bool:
     """admin all; accounts/store none; sales if creator/assignee or under an owned school."""
     if not contact:
         return False
-    team = get_team(user)
-    if team == "admin":
+    if has_team(user, "admin"):
         return True
-    if team in ("accounts", "store"):
+    if not has_module(user, "leads", "read_write"):
         return False
+    if sees_all(user, "leads"):
+        return True
     email = user["email"]
-    if _owns(contact, email):
+    if contact.get("created_by") == email or contact.get("assigned_to") == email:
         return True
     sid = contact.get("school_id")
     if sid and sid in (await _owned_school_ids(email)):
@@ -983,13 +986,12 @@ async def _assign_school_cascade(school_id: str, assigned_to: str, assigned_name
 @router.get("/schools")
 async def get_schools(request: Request):
     user = await get_current_user(request)
-    team = get_team(user)
-    if team == "admin":
-        query = {}
-    elif team in ("accounts", "store"):
-        # These teams don't work with the CRM; return empty
+    if not has_module(user, "leads"):
+        # No CRM grant — nothing to show
         return []
-    else:  # sales — owned schools + created + schools holding their leads
+    if sees_all(user, "leads"):
+        query = {}
+    else:  # own-scoped — owned schools + created + schools holding their leads
         own_leads = await db.leads.find({"assigned_to": user["email"]}, {"_id": 0, "school_id": 1}).to_list(10000)
         linked_school_ids = [l.get("school_id") for l in own_leads if l.get("school_id")]
         query = {"$or": [
@@ -1452,12 +1454,11 @@ async def set_school_password(school_id: str, request: Request):
 @router.get("/contacts")
 async def get_contacts(request: Request):
     user = await get_current_user(request)
-    team = get_team(user)
-    if team == "admin":
-        query = {}
-    elif team in ("accounts", "store"):
+    if not has_module(user, "leads"):
         return []
-    else:  # sales — own + assigned + everything under owned schools
+    if sees_all(user, "leads"):
+        query = {}
+    else:  # own-scoped — own + assigned + everything under owned schools
         owned = await _owned_school_ids(user["email"])
         query = {"$or": [
             *_owner_clause(user["email"])["$or"],
@@ -2102,12 +2103,11 @@ async def backfill_contact_owners(request: Request):
 @router.get("/leads")
 async def get_leads(request: Request):
     user = await get_current_user(request)
-    team = get_team(user)
-    if team == "admin":
-        query = {}
-    elif team in ("accounts", "store"):
+    if not has_module(user, "leads"):
         return []
-    else:  # sales — assigned + everything under owned schools
+    if sees_all(user, "leads"):
+        query = {}
+    else:  # own-scoped — assigned + everything under owned schools
         owned = await _owned_school_ids(user["email"])
         query = {"$or": [
             {"assigned_to": user["email"]},
@@ -2156,16 +2156,15 @@ async def search_leads(request: Request, q: str = "", limit: int = 8):
     """Typeahead lead search, scoped like GET /leads. Placed before /leads/{lead_id}
     routes so it isn't shadowed."""
     user = await get_current_user(request)
-    team = get_team(user)
     q = (q or "").strip()
     if len(q) < 2:
         return {"leads": []}
 
-    if team == "admin":
-        scope = {}
-    elif team in ("accounts", "store"):
+    if not has_module(user, "leads"):
         return {"leads": []}
-    else:  # sales — assigned + everything under owned schools
+    if sees_all(user, "leads"):
+        scope = {}
+    else:  # own-scoped — assigned + everything under owned schools
         owned = await _owned_school_ids(user["email"])
         scope = {"$or": [
             {"assigned_to": user["email"]},
@@ -2575,10 +2574,9 @@ async def referral_leaderboard(request: Request):
 async def leads_forecast(request: Request):
     """Weighted pipeline forecast over OPEN stages, RBAC-scoped, per-stage + per-rep."""
     user = await get_current_user(request)
-    team = get_team(user)
-    if team in ("accounts", "store"):
+    if not has_module(user, "leads"):
         return {"total_value": 0, "total_weighted": 0, "by_stage": {}, "by_rep": {}}
-    query = {} if team == "admin" else {"$or": await _sales_lead_scope(user["email"])}
+    query = {} if sees_all(user, "leads") else {"$or": await _sales_lead_scope(user["email"])}
     query["stage"] = {"$in": OPEN_STAGES}
     leads = await db.leads.find(query, {"_id": 0}).to_list(10000)
     settings = await get_crm_settings()
@@ -2617,11 +2615,10 @@ async def leads_funnel(request: Request,
                        rep: Optional[str] = None, source: Optional[str] = None):
     """Stage-to-stage conversion %, avg days/stage, win/loss + lost-reason breakdown."""
     user = await get_current_user(request)
-    team = get_team(user)
-    if team in ("accounts", "store"):
+    if not has_module(user, "leads"):
         return {"stages": [], "won": {"count": 0, "value": 0}, "lost": {"count": 0}, "lost_reasons": {}}
-    query = {} if team == "admin" else {"$or": await _sales_lead_scope(user["email"])}
-    if rep and team == "admin":
+    query = {} if sees_all(user, "leads") else {"$or": await _sales_lead_scope(user["email"])}
+    if rep and sees_all(user, "leads"):
         query["assigned_to"] = rep
     if source:
         query["source"] = source
@@ -2671,11 +2668,10 @@ async def leads_funnel(request: Request,
 async def leads_needs_attention(request: Request):
     """Open leads flagged overdue / stuck / no-next-action, RBAC-scoped, sorted by value."""
     user = await get_current_user(request)
-    team = get_team(user)
-    if team in ("accounts", "store"):
+    if not has_module(user, "leads"):
         return []
     query = {"stage": {"$in": OPEN_STAGES}}
-    if team != "admin":
+    if not sees_all(user, "leads"):
         query["$or"] = await _sales_lead_scope(user["email"])
     leads = await db.leads.find(query, {"_id": 0}).to_list(20000)
     lead_ids = [l["lead_id"] for l in leads]
