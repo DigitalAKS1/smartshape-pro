@@ -894,7 +894,7 @@ async def _user_can_access_school(user: dict, school: dict) -> bool:
     if sees_all(user, "leads"):
         return True
     email = user["email"]
-    if school.get("assigned_to") == email or school.get("created_by") == email:
+    if _owns(school, email):
         return True
     sid = school.get("school_id")
     if sid:
@@ -936,7 +936,7 @@ async def _user_can_mutate_contact(user: dict, contact: dict) -> bool:
     if sees_all(user, "leads"):
         return True
     email = user["email"]
-    if contact.get("created_by") == email or contact.get("assigned_to") == email:
+    if _owns(contact, email):
         return True
     sid = contact.get("school_id")
     if sid and sid in (await _owned_school_ids(email)):
