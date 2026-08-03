@@ -22,7 +22,7 @@ IST = timezone(timedelta(hours=5, minutes=30))
 
 from database import db
 from auth_utils import get_current_user
-from rbac import get_team, require_admin
+from rbac import get_team, get_teams, has_team, require_admin
 
 router = APIRouter(prefix="/fms", tags=["fms"])
 
@@ -86,10 +86,16 @@ _STAGE_TEAM_ALLOWED = {
 }
 
 def _require_stage_team(user: dict, stage: dict):
-    team = get_team(user)
+    # Membership test, not a privilege floor: a Sales+Store user is genuinely in
+    # both teams and may act on either team's stages. get_team() collapses to the
+    # HIGHEST team only, which would 403 that user on their own sales/field stages.
+    teams = get_teams(user)
     allowed = _STAGE_TEAM_ALLOWED.get(stage.get("team", ""), {"admin"})
-    if team not in allowed:
-        raise HTTPException(403, f"Your role ({team}) cannot act on a {stage.get('team')} stage")
+    if not (teams & allowed):
+        raise HTTPException(
+            403,
+            f"Your role ({'/'.join(sorted(teams))}) cannot act on a {stage.get('team')} stage",
+        )
 
 # ── TAT Engine: office-hour-aware next plan time ──────────────────────────────
 
@@ -855,7 +861,10 @@ async def get_checklist(flow_id: str, request: Request):
 @router.post("/checklist")
 async def submit_checklist(request: Request):
     user = await get_current_user(request)
-    if get_team(user) not in ("store", "admin"):
+    # Membership test, not a privilege floor — see _require_stage_team. A
+    # Store+Accounts user resolves to get_team()=="accounts" and would be
+    # wrongly locked out of the checklist they are actually responsible for.
+    if not (has_team(user, "store") or has_team(user, "admin")):
         raise HTTPException(403, "Only store/admin can submit the pre-dispatch checklist")
     body = await request.json()
     flow_id = body["flow_id"]

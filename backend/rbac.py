@@ -159,6 +159,21 @@ def sees_all(user: dict, module: str) -> bool:
     return module_scope(user, module) == "all"
 
 
+def can_read_crm(user: dict) -> bool:
+    """May this user see CRM records (schools / contacts / leads) at all?
+
+    True on an explicit `leads` grant (the multi-role path), OR on legacy
+    sales-team membership. Sales users have always had CRM access without needing
+    a module grant, and not every user document carries `module_permissions` —
+    preserving that is what keeps this additive.
+
+    Single source of truth: routes/crm_routes.py `_crm_read` delegates here, and
+    the admin remove-user flow uses it to warn before handing a departing rep's
+    CRM work to someone who would not be able to see it.
+    """
+    return has_team(user, "sales") or has_module(user, "leads")
+
+
 # Per-role default capability grants. These REPRODUCE today's role-based access
 # so flipping route gates to module-based changes nothing for existing users
 # until an admin edits a grant. Admin is omitted (bypasses all checks).

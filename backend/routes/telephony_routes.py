@@ -14,7 +14,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from database import db
 from auth_utils import get_current_user
-from rbac import get_team
+from rbac import get_team, has_team
 from services import telephony_service
 
 router = APIRouter()
@@ -41,7 +41,10 @@ async def _resolve_target(kind: str, ref_id: str) -> dict:
 @router.post("/telephony/call")
 async def place_telephony_call(request: Request):
     user = await get_current_user(request)
-    if get_team(user) not in ("sales", "admin"):
+    # Membership test, not a privilege floor: a Sales+Store user is genuinely
+    # sales and must keep calling access. get_team() returns only the HIGHEST
+    # team ("store" here), so it cannot answer "is this person in sales?".
+    if not (has_team(user, "sales") or has_team(user, "admin")):
         raise HTTPException(403, "No calling access")
     if not await telephony_service.is_enabled():
         raise HTTPException(409, "Calling is not enabled. Ask admin to configure it in Settings → Calling.")
@@ -95,7 +98,10 @@ async def get_telephony_call(event_id: str, request: Request):
 async def list_telephony_calls(request: Request, limit: int = 100):
     """Recent calls — a rep sees their own; admin sees everyone's (call log)."""
     user = await get_current_user(request)
-    if get_team(user) not in ("sales", "admin"):
+    # Membership test, not a privilege floor: a Sales+Store user is genuinely
+    # sales and must keep calling access. get_team() returns only the HIGHEST
+    # team ("store" here), so it cannot answer "is this person in sales?".
+    if not (has_team(user, "sales") or has_team(user, "admin")):
         raise HTTPException(403, "No calling access")
     q = {} if get_team(user) == "admin" else {"rep_email": user["email"]}
     return await db.telephony_calls.find(q, {"_id": 0, "raw_events": 0}) \
@@ -108,7 +114,10 @@ async def forward_telephony_call(event_id: str, request: Request):
     with the context. Does not change ownership (a hand-off, not a reassign).
     Bonvoice has no live-transfer API, so this is a CRM-level forward."""
     user = await get_current_user(request)
-    if get_team(user) not in ("sales", "admin"):
+    # Membership test, not a privilege floor: a Sales+Store user is genuinely
+    # sales and must keep calling access. get_team() returns only the HIGHEST
+    # team ("store" here), so it cannot answer "is this person in sales?".
+    if not (has_team(user, "sales") or has_team(user, "admin")):
         raise HTTPException(403, "No calling access")
     row = await db.telephony_calls.find_one({"event_id": event_id}, {"_id": 0})
     if not row:

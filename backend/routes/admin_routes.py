@@ -10,7 +10,8 @@ import asyncio
 from database import db
 from auth_utils import get_current_user, hash_password
 from rbac import (get_team, require_admin, require_teams, require_superadmin, require_module,
-                  VALID_ROLES, PRIMARY_ROLE_ORDER, default_permissions_for_roles)
+                  VALID_ROLES, PRIMARY_ROLE_ORDER, default_permissions_for_roles,
+                  can_read_crm)
 from audit_backup import list_backups, restore_bundle
 
 # Lazy import to avoid circular dependency — push_routes imports from database only
@@ -143,6 +144,13 @@ async def admin_get_users(request: Request):
     if user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
     users = await db.users.find({}, {"_id": 0, "password_hash": 0}).to_list(1000)
+    # `can_receive_crm` is derived, never stored: whether this person would be
+    # able to SEE CRM records (schools/contacts/leads) handed to them. Same rule
+    # as crm_routes._crm_read, via the single source of truth in rbac. The remove-
+    # user dialog uses it to warn before parking a departing rep's pipeline with
+    # someone whose CRM lists would render it as an empty page.
+    for u in users:
+        u["can_receive_crm"] = can_read_crm(u)
     return users
 
 
@@ -324,17 +332,38 @@ async def admin_role_presets(request: Request, roles: str = ""):
 #
 # `del_task_instances` is NOT in this list: those documents key ownership on
 # `emp_id`/`emp_name` (an FK into `del_employees`), not on an email field at
-# all, so a `(collection, field, extra_filter)` tuple can't express it. It is
-# handled separately by `_delegation_employee` / the block below.
+# all, so a `(collection, owner_field, name_field, extra_filter)` tuple can't
+# express it. It is handled separately by `_delegation_employee` / the block below.
+#
+# Each entry is (collection, owner_field, name_field | None, extra_filter).
+# `name_field` is the DISPLAY name that travels with the owner key. Every other
+# write path in this codebase sets the pair together — _assign_school_cascade and
+# _apply_owner (crm_routes.py), create_task/create_visit_plan (server.py),
+# visit_check_in (field_routes.py) — and delegation already moves emp_id +
+# emp_name together below. Moving only the key leaves the DEPARTED person's name
+# on the recipient's records, and /leads/forecast buckets by_rep on
+# `assigned_name` (crm_routes.py:2613), so transferred pipeline would report
+# under the wrong rep forever. Worse, the unassigned-school reconciler
+# (crm_routes.py:1199-1213) copies `assigned_name` back off child leads, which
+# would spread the mismatched pair. Verified per collection against the insert
+# sites: leads/schools/contacts/tasks/visit_plans use `assigned_name`,
+# field_visits uses `sales_person_name`, and `followups` has NO name field on any
+# of its four insert paths (crm_routes.py:3209, crm_routes.py:3295,
+# field_routes.py:122, server.py:2303) — hence None, not a guess.
 TRANSFER_SPECS = [
-    ("leads", "assigned_to", {}),
-    ("schools", "assigned_to", {}),
-    ("contacts", "assigned_to", {}),
-    ("tasks", "assigned_to", {}),
-    ("followups", "assigned_to", {}),
-    ("visit_plans", "assigned_to", {"status": {"$nin": ["completed", "cancelled"]}}),
-    ("field_visits", "sales_person_email", {"outcome": None}),
+    ("leads", "assigned_to", "assigned_name", {}),
+    ("schools", "assigned_to", "assigned_name", {}),
+    ("contacts", "assigned_to", "assigned_name", {}),
+    ("tasks", "assigned_to", "assigned_name", {}),
+    ("followups", "assigned_to", None, {}),
+    ("visit_plans", "assigned_to", "assigned_name", {"status": {"$nin": ["completed", "cancelled"]}}),
+    ("field_visits", "sales_person_email", "sales_person_name", {"outcome": None}),
 ]
+
+# The transferable collections whose LIST endpoints are gated by
+# crm_routes._crm_read. A recipient without CRM access receives these into a
+# black hole — the lists return [] — so the remove-user dialog warns first.
+CRM_TRANSFER_COLLECTIONS = ("leads", "schools", "contacts")
 
 # del_task_instances "done" states — mirrors the guard in report_instance()
 # (routes/delegation_routes.py: `if inst.get("status") in ("completed",
@@ -358,7 +387,7 @@ async def admin_user_data_summary(user_id: str, request: Request):
         raise HTTPException(status_code=404, detail="User not found")
     email = target["email"]
     counts = {}
-    for coll, field, extra_filter in TRANSFER_SPECS:
+    for coll, field, _name_field, extra_filter in TRANSFER_SPECS:
         n = await db[coll].count_documents({field: email, **extra_filter})
         if n:
             counts[coll] = n
@@ -371,7 +400,11 @@ async def admin_user_data_summary(user_id: str, request: Request):
         if n:
             counts["del_task_instances"] = n
 
-    return {"counts": counts, "total": sum(counts.values())}
+    # How much of this is CRM work — the dialog pairs it with the candidate's
+    # `can_receive_crm` flag to warn before handing records to someone who
+    # cannot see them.
+    crm_total = sum(counts.get(c, 0) for c in CRM_TRANSFER_COLLECTIONS)
+    return {"counts": counts, "total": sum(counts.values()), "crm_total": crm_total}
 
 
 @router.delete("/admin/users/{user_id}")
@@ -415,9 +448,17 @@ async def admin_delete_user(user_id: str, request: Request, transfer_to: str = "
         # (own-record queries, get_current_user) matches assigned_to by exact
         # string against the email as stored.
         transfer_to = recipient["email"]
-        for coll, field, extra_filter in TRANSFER_SPECS:
+        # The display name moves with the owner key. Fall back to the email when
+        # the recipient has no name, never to blank — a blank `assigned_name`
+        # against a real `assigned_to` is exactly the corrupt pair that
+        # _apply_owner exists to prevent.
+        transfer_to_name = (recipient.get("name") or "").strip() or transfer_to
+        for coll, field, name_field, extra_filter in TRANSFER_SPECS:
+            set_doc = {field: transfer_to}
+            if name_field:
+                set_doc[name_field] = transfer_to_name
             res = await db[coll].update_many(
-                {field: email, **extra_filter}, {"$set": {field: transfer_to}}
+                {field: email, **extra_filter}, {"$set": set_doc}
             )
             if res.modified_count:
                 transferred[coll] = res.modified_count

@@ -11,7 +11,7 @@ import uuid, re
 
 from database import db
 from auth_utils import get_current_user
-from rbac import get_team, require_module
+from rbac import has_team, require_module
 
 router = APIRouter(prefix="/crm-zoom")
 
@@ -100,7 +100,7 @@ async def zoom_crm_import(request: Request):
     if not rows:
         raise HTTPException(400, "No rows to import")
 
-    is_sales = get_team(user) == "sales"
+    is_sales = has_team(user, "sales")
     default_owner = user["email"] if is_sales else ""
     default_owner_name = user["name"] if is_sales else ""
 

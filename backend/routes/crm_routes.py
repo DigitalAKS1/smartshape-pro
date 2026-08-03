@@ -10,7 +10,8 @@ import requests as http_requests
 
 from database import db
 from auth_utils import get_current_user
-from rbac import get_team, require_superadmin, require_module, has_module, has_team, sees_all
+from rbac import (get_team, require_superadmin, require_module, has_module, has_team,
+                  sees_all, can_read_crm)
 from audit_backup import snapshot_and_delete, preview_counts
 from cascade_delete import build_school_plan, build_contact_plan
 import crm_contact_calls as cc
@@ -800,12 +801,12 @@ def _owns(doc: dict, email: str) -> bool:
 def _crm_read(user: dict) -> bool:
     """May this user see CRM records at all?
 
-    True on an explicit `leads` grant (the new multi-role path), OR on legacy
-    sales-team membership. Sales users have always had CRM access without needing
-    a module grant, and not every user document carries `module_permissions` —
-    preserving that is what keeps this change additive.
+    Delegates to rbac.can_read_crm so the admin "remove user" dialog can warn
+    about a recipient who cannot see CRM work without duplicating the rule.
+    True on an explicit `leads` grant (the multi-role path), OR on legacy
+    sales-team membership.
     """
-    return has_team(user, "sales") or has_module(user, "leads")
+    return can_read_crm(user)
 
 
 def _crm_write(user: dict) -> bool:
@@ -899,8 +900,10 @@ async def _apply_owner(body: dict, *, default_email: str, default_name: str):
 
 
 async def _user_can_access_school(user: dict, school: dict) -> bool:
-    """Mirror GET /schools sales scope: admin sees all; accounts/store none;
-    sales sees owned/created schools + schools holding their leads."""
+    """Mirror GET /schools scope: admin sees all. Everyone else needs CRM access
+    (`_crm_read` — a `leads` grant or sales-team membership); a `leads` grant
+    scoped "all" sees every school, an "own"-scoped one sees owned/created
+    schools + schools holding their leads. No CRM access at all -> nothing."""
     if not school:
         return False
     if has_team(user, "admin"):
@@ -923,7 +926,10 @@ async def _user_can_access_school(user: dict, school: dict) -> bool:
 
 
 async def _user_can_mutate_lead(user: dict, lead: dict) -> bool:
-    """admin all; accounts/store none; sales if assigned or under an owned school."""
+    """admin all; otherwise needs CRM write access (`_crm_write` — a `leads`
+    read_write grant or sales-team membership). A "all"-scoped `leads` grant may
+    mutate any lead; an "own"-scoped one only if assigned or under an owned
+    school. No `leads` grant and not sales -> nothing."""
     if not lead:
         return False
     if has_team(user, "admin"):
@@ -942,7 +948,10 @@ async def _user_can_mutate_lead(user: dict, lead: dict) -> bool:
 
 
 async def _user_can_mutate_contact(user: dict, contact: dict) -> bool:
-    """admin all; accounts/store none; sales if creator/assignee or under an owned school."""
+    """admin all; otherwise needs CRM write access (`_crm_write` — a `leads`
+    read_write grant or sales-team membership). A "all"-scoped `leads` grant may
+    mutate any contact; an "own"-scoped one only if creator/assignee or under an
+    owned school. No `leads` grant and not sales -> nothing."""
     if not contact:
         return False
     if has_team(user, "admin"):
@@ -1025,7 +1034,7 @@ async def create_school(request: Request):
     body = await request.json()
     school_id = f"sch_{uuid.uuid4().hex[:12]}"
     # Owner: explicit, else the creating sales rep owns what they add.
-    owner = body.get("assigned_to") or (user["email"] if get_team(user) == "sales" else "")
+    owner = body.get("assigned_to") or (user["email"] if has_team(user, "sales") else "")
     owner_name = body.get("assigned_name") or (user["name"] if owner == user["email"] else "")
     school_doc = {
         "school_id": school_id,
@@ -1494,7 +1503,7 @@ async def create_contact(request: Request):
     contact_id = f"con_{uuid.uuid4().hex[:12]}"
     now_iso = datetime.now(timezone.utc).isoformat()
     # Owner default: explicit (name/email resolved), else the creating sales rep.
-    _sales_self = user["email"] if get_team(user) == "sales" else ""
+    _sales_self = user["email"] if has_team(user, "sales") else ""
     _sales_self_name = user["name"] if _sales_self else ""
     _default_owner, _default_owner_name = await _apply_owner(
         body, default_email=_sales_self, default_name=_sales_self_name)
@@ -1864,7 +1873,7 @@ async def convert_contact_to_lead(contact_id: str, request: Request):
     now_iso = datetime.now(timezone.utc).isoformat()
 
     # Owner default for the convert flow: explicit (resolved) > contact owner > creating sales rep.
-    _cv_default = (contact.get("assigned_to") or "").strip() or (user["email"] if get_team(user) == "sales" else "")
+    _cv_default = (contact.get("assigned_to") or "").strip() or (user["email"] if has_team(user, "sales") else "")
     _cv_default_name = (contact.get("assigned_name") or "").strip() or (user["name"] if _cv_default == user["email"] else "")
     _cv_owner, _cv_owner_name = await _apply_owner(
         body, default_email=_cv_default, default_name=_cv_default_name)
@@ -2351,7 +2360,7 @@ async def create_lead(request: Request):
     user = await get_current_user(request)
     body = await request.json()
     # Owner for an inline new school: explicit (name/email resolved), else the creating sales rep.
-    _sales_self = user["email"] if get_team(user) == "sales" else ""
+    _sales_self = user["email"] if has_team(user, "sales") else ""
     _sales_self_name = user["name"] if _sales_self else ""
     _ns_owner, _ns_owner_name = await _apply_owner(
         body, default_email=_sales_self, default_name=_sales_self_name)
