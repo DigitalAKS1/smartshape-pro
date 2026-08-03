@@ -18,26 +18,61 @@ from fastapi import HTTPException
 SUPERADMIN_EMAIL = (os.getenv("SUPERADMIN_EMAIL") or "info@smartshape.in").strip().lower()
 
 
+VALID_ROLES = ("admin", "accounts", "store", "sales_person")
+
+# role -> logical team
+_ROLE_TEAM = {
+    "admin": "admin",
+    "accounts": "accounts",
+    "store": "store",
+    "sales_person": "sales",
+}
+
+# Highest privilege last. get_team() returns the highest team a user holds so the
+# ~100 legacy call sites behave as "widest role wins" without being edited.
+_TEAM_RANK = {"sales": 0, "store": 1, "accounts": 2, "admin": 3}
+
+# Order used to pick the derived primary `role` when several are held.
+PRIMARY_ROLE_ORDER = ["admin", "accounts", "store", "sales_person"]
+
+
+def get_roles(user: dict) -> list[str]:
+    """Every role the user holds. Falls back to the legacy single `role` string."""
+    roles = user.get("roles")
+    if isinstance(roles, list):
+        valid = [r for r in roles if r in _ROLE_TEAM]
+        if valid:
+            return valid
+    return [user.get("role") or "sales_person"]
+
+
+def get_teams(user: dict) -> set:
+    """All logical teams the user belongs to."""
+    return {_ROLE_TEAM.get(r, "sales") for r in get_roles(user)}
+
+
+def has_team(user: dict, team: str) -> bool:
+    return team in get_teams(user)
+
+
 def get_team(user: dict) -> str:
-    """Return the logical team for a user: 'admin' | 'accounts' | 'store' | 'sales'"""
-    role = user.get("role", "sales_person")
-    if role == "admin":
-        return "admin"
-    if role == "accounts":
-        return "accounts"
-    if role == "store":
-        return "store"
-    return "sales"
+    """The user's highest-privilege team: 'admin' | 'accounts' | 'store' | 'sales'.
+
+    Signature unchanged. For a single-role user this returns exactly what it always
+    did; for a multi-role user it returns the widest, which is what the legacy
+    call sites want.
+    """
+    return max(get_teams(user), key=lambda t: _TEAM_RANK[t])
 
 
 def require_admin(user: dict):
-    if get_team(user) != "admin":
+    if not has_team(user, "admin"):
         raise HTTPException(status_code=403, detail="Admin access required")
 
 
 def require_teams(user: dict, *teams: str):
-    """Raise 403 if the user's team is not in the allowed set."""
-    if get_team(user) not in teams:
+    """Raise 403 unless the user holds at least one of the allowed teams."""
+    if not (get_teams(user) & set(teams)):
         raise HTTPException(status_code=403, detail="Access denied for your role")
 
 
@@ -95,12 +130,43 @@ def require_module(user: dict, module: str, level: str = "read") -> None:
         )
 
 
+def has_module(user: dict, module: str, level: str = "read") -> bool:
+    """Non-raising sibling of require_module. Admin always True."""
+    if has_team(user, "admin"):
+        return True
+    perms = (user.get("module_permissions") or {}).get(module) or {}
+    return LEVELS.get(perms.get("level", "none"), 0) >= LEVELS.get(level, 99)
+
+
+def module_scope(user: dict, module: str) -> str:
+    """'own' (only records the user owns) or 'all' (org-wide) for this module.
+
+    Reads the grant's explicit `scope`. When absent — every pre-existing user —
+    it falls back to the legacy role rule: a sales-only user sees own records,
+    everyone else sees all. That keeps untouched users behaving identically.
+    """
+    if has_team(user, "admin"):
+        return "all"
+    grant = (user.get("module_permissions") or {}).get(module) or {}
+    scope = grant.get("scope")
+    if scope in ("own", "all"):
+        return scope
+    return "own" if get_teams(user) == {"sales"} else "all"
+
+
+def sees_all(user: dict, module: str) -> bool:
+    """True when the user may see every record in this module, not just their own."""
+    return module_scope(user, module) == "all"
+
+
 # Per-role default capability grants. These REPRODUCE today's role-based access
 # so flipping route gates to module-based changes nothing for existing users
 # until an admin edits a grant. Admin is omitted (bypasses all checks).
-_RW = {"level": "read_write", "can_download": True}
-_RWD = {"level": "read_write_delete", "can_download": True}
-_R = {"level": "read", "can_download": True}
+_RW = {"level": "read_write", "can_download": True, "scope": "all"}
+_RWD = {"level": "read_write_delete", "can_download": True, "scope": "all"}
+_R = {"level": "read", "can_download": True, "scope": "all"}
+_RW_OWN = {"level": "read_write", "can_download": True, "scope": "own"}
+_R_OWN = {"level": "read", "can_download": True, "scope": "own"}
 
 ROLE_DEFAULT_PERMISSIONS = {
     # delegation = the universal task system; every member needs it to receive
@@ -119,16 +185,36 @@ ROLE_DEFAULT_PERMISSIONS = {
         "forms": _RW,
     },
     "sales_person": {
-        "dashboard": _R, "quotations": _RW, "leads": _RW, "field_sales": _RW,
-        "sales_portal": _RW, "leave_management": _RW, "analytics": _R,
-        "delegation": _RW, "forms": _RW,
+        "dashboard": _R_OWN, "quotations": _RW_OWN, "leads": _RW_OWN,
+        "field_sales": _RW_OWN, "sales_portal": _RW_OWN,
+        "leave_management": _RW_OWN, "analytics": _R_OWN,
+        "delegation": _RW_OWN, "forms": _RW_OWN,
     },
 }
 
 
-def default_permissions_for_role(role: str) -> dict:
-    """Complete module_permissions for a role. Admin returns {} (bypasses checks)."""
-    if role == "admin":
+def default_permissions_for_roles(roles: list) -> dict:
+    """Merge the presets of every role held: max level, widest scope, OR'd download.
+
+    Admin returns {} — it bypasses all module checks.
+    """
+    if "admin" in roles:
         return {}
-    # deep-copy so callers can't mutate the shared template
-    return {k: dict(v) for k, v in ROLE_DEFAULT_PERMISSIONS.get(role, {}).items()}
+    merged: dict = {}
+    for role in roles:
+        for mod, grant in ROLE_DEFAULT_PERMISSIONS.get(role, {}).items():
+            cur = merged.get(mod)
+            if cur is None:
+                merged[mod] = dict(grant)  # copy so the template is never mutated
+                continue
+            if LEVELS[grant["level"]] > LEVELS[cur["level"]]:
+                cur["level"] = grant["level"]
+            if grant.get("scope") == "all":
+                cur["scope"] = "all"
+            cur["can_download"] = bool(cur.get("can_download")) or bool(grant.get("can_download"))
+    return merged
+
+
+def default_permissions_for_role(role: str) -> dict:
+    """Complete module_permissions for a single role. Admin returns {}."""
+    return default_permissions_for_roles([role])

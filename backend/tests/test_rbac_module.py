@@ -64,3 +64,145 @@ def test_sales_default_has_no_procurement():
 
 def test_admin_default_is_empty():
     assert rbac.default_permissions_for_role("admin") == {}
+
+
+# ---------------- multi-role + per-module scope ----------------
+
+def _muser(roles=None, role=None, perms=None):
+    u = {"email": "x@y.com"}
+    if role is not None:
+        u["role"] = role
+    if roles is not None:
+        u["roles"] = roles
+    if perms is not None:
+        u["module_permissions"] = perms
+    return u
+
+
+def test_get_roles_falls_back_to_single_role():
+    assert rbac.get_roles(_muser(role="store")) == ["store"]
+
+
+def test_get_roles_reads_roles_array():
+    assert rbac.get_roles(_muser(role="sales_person", roles=["sales_person", "store"])) == [
+        "sales_person", "store"
+    ]
+
+
+def test_get_roles_drops_unknown_entries_in_array():
+    assert rbac.get_roles(_muser(role="store", roles=["store", "wizard"])) == ["store"]
+
+
+def test_get_roles_falls_back_when_array_has_nothing_valid():
+    assert rbac.get_roles(_muser(role="store", roles=["wizard"])) == ["store"]
+
+
+def test_get_team_unchanged_for_single_role():
+    assert rbac.get_team(_muser(role="admin")) == "admin"
+    assert rbac.get_team(_muser(role="accounts")) == "accounts"
+    assert rbac.get_team(_muser(role="store")) == "store"
+    assert rbac.get_team(_muser(role="sales_person")) == "sales"
+    assert rbac.get_team(_muser(role="wizard")) == "sales"
+    assert rbac.get_team({"email": "x@y.com"}) == "sales"
+
+
+def test_get_team_returns_highest_privilege_of_the_set():
+    assert rbac.get_team(_muser(role="sales_person", roles=["sales_person", "store"])) == "store"
+    assert rbac.get_team(_muser(role="store", roles=["store", "accounts"])) == "accounts"
+    assert rbac.get_team(_muser(role="admin", roles=["admin", "sales_person"])) == "admin"
+
+
+def test_get_teams_and_has_team():
+    u = _muser(role="sales_person", roles=["sales_person", "store"])
+    assert rbac.get_teams(u) == {"sales", "store"}
+    assert rbac.has_team(u, "sales") is True
+    assert rbac.has_team(u, "accounts") is False
+
+
+def test_require_teams_passes_on_any_overlap():
+    u = _muser(role="store", roles=["store", "sales_person"])
+    rbac.require_teams(u, "sales")            # no raise — holds sales
+    rbac.require_teams(u, "accounts", "store")  # no raise — holds store
+    with pytest.raises(HTTPException) as e:
+        rbac.require_teams(u, "accounts")
+    assert e.value.status_code == 403
+
+
+def test_require_admin_unchanged():
+    rbac.require_admin(_muser(role="admin"))
+    with pytest.raises(HTTPException):
+        rbac.require_admin(_muser(role="store"))
+
+
+def test_module_scope_uses_explicit_grant():
+    u = _muser(role="store", perms={"leads": {"level": "read_write", "scope": "own"}})
+    assert rbac.module_scope(u, "leads") == "own"
+    assert rbac.sees_all(u, "leads") is False
+
+
+def test_module_scope_admin_is_always_all():
+    assert rbac.module_scope(_muser(role="admin"), "leads") == "all"
+
+
+def test_module_scope_legacy_fallback_matches_today():
+    # No scope key anywhere — must reproduce the old role-based rule exactly.
+    sales = _muser(role="sales_person", perms={"quotations": {"level": "read_write"}})
+    store = _muser(role="store", perms={"orders": {"level": "read_write"}})
+    accounts = _muser(role="accounts", perms={"orders": {"level": "read_write"}})
+    assert rbac.module_scope(sales, "quotations") == "own"
+    assert rbac.module_scope(store, "orders") == "all"
+    assert rbac.module_scope(accounts, "orders") == "all"
+
+
+def test_module_scope_fallback_for_ungranted_module():
+    assert rbac.module_scope(_muser(role="sales_person", perms={}), "orders") == "own"
+    assert rbac.module_scope(_muser(role="store", perms={}), "orders") == "all"
+
+
+def test_bad_scope_value_falls_back():
+    u = _muser(role="sales_person", perms={"leads": {"level": "read", "scope": "galaxy"}})
+    assert rbac.module_scope(u, "leads") == "own"
+
+
+def test_has_module_is_non_raising():
+    u = _muser(role="store", perms={"leads": {"level": "read"}})
+    assert rbac.has_module(u, "leads") is True
+    assert rbac.has_module(u, "leads", "read_write") is False
+    assert rbac.has_module(u, "payroll") is False
+    assert rbac.has_module(_muser(role="admin"), "payroll", "read_write_delete") is True
+
+
+def test_merged_presets_take_max_level_and_widest_scope():
+    merged = rbac.default_permissions_for_roles(["sales_person", "store"])
+    # store contributes org-wide orders at read_write
+    assert merged["orders"]["level"] == "read_write"
+    assert merged["orders"]["scope"] == "all"
+    # sales contributes own-scoped leads
+    assert merged["leads"]["scope"] == "own"
+    # quotations exist in both: sales read_write/own vs store read/all -> max level, widest scope
+    assert merged["quotations"]["level"] == "read_write"
+    assert merged["quotations"]["scope"] == "all"
+
+
+def test_merged_presets_with_admin_is_empty():
+    assert rbac.default_permissions_for_roles(["admin", "store"]) == {}
+
+
+def test_default_permissions_for_role_wrapper_still_works():
+    assert rbac.default_permissions_for_role("store") == rbac.default_permissions_for_roles(["store"])
+
+
+def test_preset_merge_does_not_mutate_the_template():
+    before = rbac.ROLE_DEFAULT_PERMISSIONS["store"]["orders"]["level"]
+    rbac.default_permissions_for_roles(["sales_person", "store"])
+    assert rbac.ROLE_DEFAULT_PERMISSIONS["store"]["orders"]["level"] == before
+
+
+def test_sales_person_presets_are_own_scoped():
+    perms = rbac.default_permissions_for_roles(["sales_person"])
+    assert all(g["scope"] == "own" for g in perms.values())
+
+
+def test_store_presets_are_all_scoped():
+    perms = rbac.default_permissions_for_roles(["store"])
+    assert all(g["scope"] == "all" for g in perms.values())
