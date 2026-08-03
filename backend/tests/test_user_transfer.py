@@ -112,13 +112,16 @@ async def leaving_and_recipient(ctx):
     await d.tasks.insert_one({"task_id": "task_1", "assigned_to": "leaving@smartshape.in"})
     await d.followups.insert_one({"followup_id": "fu_1", "assigned_to": "leaving@smartshape.in"})
 
-    # visit_plans: one still outstanding (status != "completed" — live work),
-    # one completed (status == "completed" — history, must stay put, same
-    # treatment as a completed field visit)
+    # visit_plans: one still outstanding (status "planned" — live work), one
+    # completed and one cancelled (both terminal — history/not-live-work,
+    # must stay put; mirrors the terminal-status set already used to read
+    # this collection at admin_routes.py:714 and server.py:3111)
     await d.visit_plans.insert_one({"plan_id": "plan_open", "assigned_to": "leaving@smartshape.in",
                                      "status": "planned"})
     await d.visit_plans.insert_one({"plan_id": "plan_done", "assigned_to": "leaving@smartshape.in",
                                      "status": "completed"})
+    await d.visit_plans.insert_one({"plan_id": "plan_cancelled", "assigned_to": "leaving@smartshape.in",
+                                     "status": "cancelled"})
 
     # field_visits: one still open (no outcome — live work), one completed
     # (has an outcome — history, must stay with the original rep)
@@ -192,10 +195,15 @@ async def test_delete_without_transfer_deactivates_and_leaves_records_orphaned(c
 
 
 @pytest.mark.asyncio
-async def test_visit_plans_open_transfers_completed_stays(ctx, monkeypatch, leaving_and_recipient):
+async def test_visit_plans_open_transfers_completed_and_cancelled_stay(ctx, monkeypatch, leaving_and_recipient):
     """End-to-end, mirroring test_field_visits_open_transfers_completed_stays:
-    seed one completed (status="completed") and one outstanding visit plan,
-    transfer, assert ONLY the outstanding one moved."""
+    seed one planned, one completed and one cancelled visit plan, transfer,
+    assert ONLY the planned one moved. `cancelled` must be excluded too — it
+    is not live work, and this is the terminal-status set the codebase
+    already uses to read this collection (admin_routes.py:714,
+    server.py:3111). This assertion would FAIL under a bare
+    `{"status": {"$ne": "completed"}}` filter, since that would incorrectly
+    move plan_cancelled along with plan_open."""
     d, client = leaving_and_recipient
     monkeypatch.setattr(ar, "get_current_user", _as(ADMIN))
     r = await client.delete("/api/admin/users/user_leaving",
@@ -205,6 +213,10 @@ async def test_visit_plans_open_transfers_completed_stays(ctx, monkeypatch, leav
 
     open_plan = await d.visit_plans.find_one({"plan_id": "plan_open"}, {"_id": 0})
     assert open_plan["assigned_to"] == "recipient@smartshape.in"
+
+    cancelled_plan = await d.visit_plans.find_one({"plan_id": "plan_cancelled"}, {"_id": 0})
+    assert cancelled_plan["assigned_to"] == "leaving@smartshape.in", \
+        "a cancelled visit plan is not live work and must not be transferred"
 
     done_plan = await d.visit_plans.find_one({"plan_id": "plan_done"}, {"_id": 0})
     assert done_plan["assigned_to"] == "leaving@smartshape.in", \

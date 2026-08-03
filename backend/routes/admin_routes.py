@@ -316,7 +316,11 @@ async def admin_role_presets(request: Request, roles: str = ""):
 # routes/field_routes.py:887, `if plan.get("status") == "completed": raise
 # HTTPException(..., "Cannot reschedule a completed visit")`). A completed
 # plan is a record of who actually went — history — so only outstanding
-# plans (status != "completed", i.e. "planned" or "in_progress") transfer.
+# plans transfer. "cancelled" is excluded too — a cancelled plan is not live
+# work either, and this mirrors the terminal-status set the codebase already
+# uses when reading this exact collection (admin_routes.py:714 and
+# server.py:3111 both skip `status in ("completed", "cancelled")`). Do NOT
+# simplify this back to a bare `$ne: "completed"`.
 #
 # `del_task_instances` is NOT in this list: those documents key ownership on
 # `emp_id`/`emp_name` (an FK into `del_employees`), not on an email field at
@@ -328,7 +332,7 @@ TRANSFER_SPECS = [
     ("contacts", "assigned_to", {}),
     ("tasks", "assigned_to", {}),
     ("followups", "assigned_to", {}),
-    ("visit_plans", "assigned_to", {"status": {"$ne": "completed"}}),
+    ("visit_plans", "assigned_to", {"status": {"$nin": ["completed", "cancelled"]}}),
     ("field_visits", "sales_person_email", {"outcome": None}),
 ]
 
