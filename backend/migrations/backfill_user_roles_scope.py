@@ -79,10 +79,11 @@ def compute_update(u: dict) -> dict:
 async def main(apply: bool):
     from database import db  # deferred: keep compute_update() importable with no DB env configured
 
-    users = await db.users.find({}, {"_id": 0, "user_id": 1, "email": 1, "role": 1,
-                                     "roles": 1, "module_permissions": 1}).to_list(10000)
-    changed = 0
-    for u in users:
+    total = changed = 0
+    cursor = db.users.find({}, {"user_id": 1, "email": 1, "role": 1,
+                                 "roles": 1, "module_permissions": 1})
+    async for u in cursor:
+        total += 1
         update = compute_update(u)
         if not update:
             continue
@@ -91,7 +92,7 @@ async def main(apply: bool):
         if apply:
             await db.users.update_one({"user_id": u["user_id"]}, {"$set": update})
 
-    print(f"\n{changed} of {len(users)} users {'updated' if apply else 'would be updated'}.")
+    print(f"\n{changed} of {total} users {'updated' if apply else 'would be updated'}.")
 
 
 if __name__ == "__main__":

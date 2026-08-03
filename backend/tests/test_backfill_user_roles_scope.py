@@ -88,6 +88,13 @@ def test_explicit_scope_is_never_overwritten():
     assert "module_permissions" not in update  # untouched -- already explicit
 
 
+def test_garbage_scope_string_is_replaced_like_a_missing_one():
+    u = {"user_id": "u1", "email": "a@b.c", "role": "sales_person",
+         "module_permissions": {"leads": {"level": "read_write", "scope": "galaxy"}}}
+    update = compute_update(u)
+    assert update["module_permissions"]["leads"]["scope"] == "own"
+
+
 def test_no_op_when_already_fully_self_describing():
     u = {
         "user_id": "9", "role": "sales_person", "roles": ["sales_person"],
