@@ -375,7 +375,7 @@ git commit -m "feat(rbac): multi-role users and per-module data scope helpers"
 ### Task 2: Own-record filters in quotations, orders and the customer portal
 
 **Files:**
-- Modify: `backend/routes/quotation_routes.py:370,579,656,682`
+- Modify: `backend/routes/quotation_routes.py:366,538,615,641`
 - Modify: `backend/routes/order_routes.py:109,948,1112`
 - Modify: `backend/routes/customer_routes.py:252`
 
@@ -399,7 +399,7 @@ from rbac import get_team, require_teams, require_module, sees_all
 
 - [ ] **Step 2: Replace the four quotation scope checks**
 
-At `quotation_routes.py:370`, inside `get_quotations`:
+At `quotation_routes.py:366`, inside `get_quotations`:
 
 ```python
     elif not sees_all(user, "quotations"):
@@ -407,7 +407,7 @@ At `quotation_routes.py:370`, inside `get_quotations`:
         query["sales_person_email"] = user["email"]
 ```
 
-At `quotation_routes.py:577-580`:
+At `quotation_routes.py:536-541`:
 
 ```python
     require_module(user, "quotations", "read_write")
@@ -417,7 +417,7 @@ At `quotation_routes.py:577-580`:
 
 Delete the now-unused `_team = get_team(user)` line directly above it.
 
-At `quotation_routes.py:654-657`:
+At `quotation_routes.py:613-618`:
 
 ```python
     require_module(user, "quotations", "read_write")
@@ -427,7 +427,7 @@ At `quotation_routes.py:654-657`:
 
 Delete the now-unused `_team = get_team(user)` line directly above it.
 
-At `quotation_routes.py:677-682`, inside `_get_quotation_for_po`:
+At `quotation_routes.py:634-643`, inside `_get_quotation_for_po`:
 
 ```python
 async def _get_quotation_for_po(quotation_id: str, user: dict):
@@ -527,7 +527,7 @@ git commit -m "feat(rbac): scope quotations/orders visibility by module grant, n
 ### Task 3: CRM access gated on the `leads` module
 
 **Files:**
-- Modify: `backend/routes/crm_routes.py:787,809,827,940,1055,1686,2322,2376,2608,2650,2704`
+- Modify: `backend/routes/crm_routes.py:893,915,933,989,1458,2108,2166,2579,2621,2675` (10 sites — `main` has no `directory_claim`)
 
 **Interfaces:**
 - Consumes: `rbac.has_module(user, module, level)` and `rbac.sees_all(user, module)` from Task 1.
@@ -535,17 +535,21 @@ git commit -m "feat(rbac): scope quotations/orders visibility by module grant, n
 
 Existing helpers in this file that the replacements reuse: `_owned_school_ids(email)` and `_sales_lead_scope(email)`.
 
+**`main`-only helpers you must NOT remove:** this file also defines `_owns(doc, email)` and
+`_owner_clause(email)`. The `else:` bodies you are keeping call them. Do not rewrite those bodies —
+only the branch conditions above them change.
+
 - [ ] **Step 1: Update the import**
 
-`backend/routes/crm_routes.py:18` becomes:
+`backend/routes/crm_routes.py:13` becomes:
 
 ```python
 from rbac import get_team, require_superadmin, require_module, has_module, has_team, sees_all
 ```
 
-- [ ] **Step 2: Rewrite the three mutation guards (lines 782-840)**
+- [ ] **Step 2: Rewrite the three mutation guards (lines 888-946)**
 
-`_user_can_view_school`:
+`_user_can_access_school` (note: `main` names it `_access`, not `_view`):
 
 ```python
     if not school:
@@ -608,20 +612,11 @@ from rbac import get_team, require_superadmin, require_module, has_module, has_t
         return True
 ```
 
-Leave the remainder of `_user_can_mutate_contact` (below line 834) untouched. Delete each now-unused `team = get_team(user)` line in these three helpers.
+Leave the remainder of `_user_can_mutate_contact` (below line 940) untouched. Delete each now-unused `team = get_team(user)` line in these three helpers.
 
-- [ ] **Step 3: Rewrite `directory_claim` (line 938-941)**
+- [ ] **Step 3: Rewrite the four list endpoints**
 
-```python
-    if not has_module(user, "leads", "read_write"):
-        raise HTTPException(status_code=403, detail="No CRM access")
-```
-
-Delete the `team = get_team(user)` line above it if `team` is unused further down the function.
-
-- [ ] **Step 4: Rewrite the four list endpoints**
-
-`get_schools` at line 1052-1057:
+`get_schools` at line 985-991:
 
 ```python
     if not has_module(user, "leads"):
@@ -634,7 +629,7 @@ Delete the `team = get_team(user)` line above it if `team` is unused further dow
 
 Keep the existing `else:` body (the `own_leads` lookup and `$or` query) exactly as it is; only the branch conditions above it change.
 
-`get_contacts` at line 1683-1688:
+`get_contacts` at line 1454-1460:
 
 ```python
     if not has_module(user, "leads"):
@@ -646,7 +641,7 @@ Keep the existing `else:` body (the `own_leads` lookup and `$or` query) exactly 
 
 Keep the existing `else:` body unchanged.
 
-`get_leads` at line 2319-2324:
+`get_leads` at line 2104-2110:
 
 ```python
     if not has_module(user, "leads"):
@@ -658,7 +653,7 @@ Keep the existing `else:` body unchanged.
 
 Keep the existing `else:` body unchanged.
 
-The lead-search endpoint at line 2374-2377:
+The lead-search endpoint at line 2162-2168:
 
 ```python
     if not has_module(user, "leads"):
@@ -672,9 +667,9 @@ Keep the existing `else:` body unchanged.
 
 In each of the four, delete the `team = get_team(user)` line if `team` is not referenced elsewhere in the same function.
 
-- [ ] **Step 5: Rewrite the three analytics endpoints**
+- [ ] **Step 4: Rewrite the three analytics endpoints**
 
-`leads_forecast` at line 2607-2610:
+`leads_forecast` at line 2578-2581:
 
 ```python
     if not has_module(user, "leads"):
@@ -682,7 +677,7 @@ In each of the four, delete the `team = get_team(user)` line if `team` is not re
     query = {} if sees_all(user, "leads") else {"$or": await _sales_lead_scope(user["email"])}
 ```
 
-`leads_funnel` at line 2649-2653:
+`leads_funnel` at line 2620-2624:
 
 ```python
     if not has_module(user, "leads"):
@@ -692,7 +687,7 @@ In each of the four, delete the `team = get_team(user)` line if `team` is not re
         query["assigned_to"] = rep
 ```
 
-`leads_needs_attention` at line 2703-2708:
+`leads_needs_attention` at line 2674-2679:
 
 ```python
     if not has_module(user, "leads"):
@@ -704,7 +699,7 @@ In each of the four, delete the `team = get_team(user)` line if `team` is not re
 
 Delete each now-unused `team = get_team(user)` line.
 
-- [ ] **Step 6: Verify the module imports and has no orphaned names**
+- [ ] **Step 5: Verify the module imports and has no orphaned names**
 
 ```bash
 cd backend && python -c "import routes.crm_routes; print('imports OK')" && python -m pyflakes routes/crm_routes.py
@@ -712,7 +707,7 @@ cd backend && python -c "import routes.crm_routes; print('imports OK')" && pytho
 
 Expected: `imports OK`, and no `undefined name 'team'` from pyflakes.
 
-- [ ] **Step 7: Confirm no `team in ("accounts", "store")` blocks remain**
+- [ ] **Step 6: Confirm no `team in ("accounts", "store")` blocks remain**
 
 ```bash
 cd backend && grep -rn 'team in ("accounts", "store")' routes/
@@ -720,7 +715,7 @@ cd backend && grep -rn 'team in ("accounts", "store")' routes/
 
 Expected: no output.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add backend/routes/crm_routes.py
@@ -732,7 +727,7 @@ git commit -m "feat(rbac): gate CRM on the leads module grant instead of the rol
 ### Task 4: Admin API accepts a `roles` array
 
 **Files:**
-- Modify: `backend/routes/admin_routes.py:137-172` (create), `backend/routes/admin_routes.py:201-210` (update)
+- Modify: `backend/routes/admin_routes.py:136-171` (create), `backend/routes/admin_routes.py:200-209` (update)
 - Test: `backend/tests/test_admin_roles.py` (create)
 
 **Interfaces:**
@@ -834,21 +829,21 @@ Expected: PASS, 7 tests.
 
 - [ ] **Step 5: Wire `normalize_roles` into user creation**
 
-In `admin_create_user`, replace lines 137-139:
+In `admin_create_user`, replace lines 136-138:
 
 ```python
     roles, role = normalize_roles(body)
 ```
 
-Replace line 166 (`"sales_role": sales_role if role == "sales_person" else None,`) with:
+Replace line 165 (`"sales_role": sales_role if role == "sales_person" else None,`) with:
 
 ```python
         "sales_role": sales_role if "sales_person" in roles else None,
 ```
 
-Add `"roles": roles,` to `user_doc` immediately after the `"role": role,` line (line 163).
+Add `"roles": roles,` to `user_doc` immediately after the `"role": role,` line (line 162).
 
-Replace lines 171-172 so a user created without an explicit matrix gets the merged presets:
+Replace lines 170-171 so a user created without an explicit matrix gets the merged presets:
 
 ```python
     if isinstance(module_permissions, dict):
@@ -865,13 +860,13 @@ Replace lines 171-172 so a user created without an explicit matrix gets the merg
 
 - [ ] **Step 6: Wire `normalize_roles` into user update**
 
-In `admin_update_user`, add `"roles"` to the allowed-fields tuple at line 203:
+In `admin_update_user`, add `"roles"` to the allowed-fields tuple at line 202:
 
 ```python
     for key in ("name", "role", "roles", "phone", "calling_number", "designation", "sales_role", "assigned_modules", "is_active", "module_permissions"):
 ```
 
-Then immediately after that loop, before the `assigned_modules` sync block at line 207, add:
+Then immediately after that loop, before the `assigned_modules` sync block at line 206, add:
 
 ```python
     # Keep `role` and `roles` consistent whenever either one is being changed.
