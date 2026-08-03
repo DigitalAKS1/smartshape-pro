@@ -225,13 +225,35 @@ async def admin_update_user(user_id: str, request: Request):
         if key in body:
             allowed_fields[key] = body[key]
 
-    # Keep `role` and `roles` consistent whenever either one is being changed.
-    if "roles" in allowed_fields or "role" in allowed_fields:
+    # Keep `role` and `roles` consistent. A caller that sends `roles` is
+    # authoritative. A caller that sends only the legacy `role` string (today's
+    # console does this on EVERY edit, including name-only changes) must not
+    # silently collapse a multi-role user — only treat it as a real role change
+    # when it disagrees with what is already stored.
+    if "roles" in allowed_fields:
         roles, primary = normalize_roles(allowed_fields)
         allowed_fields["roles"] = roles
         allowed_fields["role"] = primary
-        if "sales_person" not in roles:
-            allowed_fields["sales_role"] = None
+    elif "role" in allowed_fields:
+        stored = await db.users.find_one({"user_id": user_id}, {"_id": 0, "roles": 1})
+        stored_roles = (stored or {}).get("roles")
+        if isinstance(stored_roles, list) and stored_roles:
+            _, stored_primary = normalize_roles({"roles": stored_roles})
+            if stored_primary == allowed_fields["role"]:
+                # Routine edit — the legacy field agrees with what is stored. Leave roles alone.
+                allowed_fields["role"] = stored_primary
+            else:
+                # Genuine role change through a legacy client — reset to the single role.
+                roles, primary = normalize_roles(allowed_fields)
+                allowed_fields["roles"] = roles
+                allowed_fields["role"] = primary
+        else:
+            roles, primary = normalize_roles(allowed_fields)
+            allowed_fields["roles"] = roles
+            allowed_fields["role"] = primary
+
+    if "roles" in allowed_fields and "sales_person" not in allowed_fields.get("roles", []):
+        allowed_fields["sales_role"] = None
 
     # Sync assigned_modules from module_permissions if provided
     if "module_permissions" in allowed_fields and "assigned_modules" not in allowed_fields:
