@@ -26,6 +26,8 @@ export default function UserManagement() {
     openCreate, openEdit,
     handleDesignationChange,
     handlePermissionsChange,
+    handleRolesChange,
+    applyRolePresets,
     handleSave, handleDelete,
     handleToggleActive,
   } = useUserManagement();
@@ -35,8 +37,10 @@ export default function UserManagement() {
   const textSec   = 'text-[var(--text-secondary)]';
   const textMuted = 'text-[var(--text-muted)]';
 
+  const rolesOf = (u) => (Array.isArray(u.roles) && u.roles.length ? u.roles : [u.role || 'sales_person']);
+
   const getLevelBadge = (u) => {
-    if (u.role === 'admin') return (
+    if (rolesOf(u).includes('admin')) return (
       <span className="text-[10px] px-2 py-0.5 rounded-full bg-[#e94560]/20 text-[#e94560] border border-[#e94560]/30 font-medium">Admin</span>
     );
     const perms = u.module_permissions || {};
@@ -98,10 +102,10 @@ export default function UserManagement() {
         <div className="flex items-center gap-2 flex-wrap">
           {[
             { id: 'all',          label: `All (${users.length})` },
-            { id: 'admin',        label: `Admin (${users.filter(u => u.role === 'admin').length})` },
-            { id: 'accounts',     label: `Accounts (${users.filter(u => u.role === 'accounts').length})` },
-            { id: 'store',        label: `Store (${users.filter(u => u.role === 'store').length})` },
-            { id: 'sales_person', label: `Sales (${users.filter(u => u.role === 'sales_person').length})` },
+            { id: 'admin',        label: `Admin (${users.filter(u => rolesOf(u).includes('admin')).length})` },
+            { id: 'accounts',     label: `Accounts (${users.filter(u => rolesOf(u).includes('accounts')).length})` },
+            { id: 'store',        label: `Store (${users.filter(u => rolesOf(u).includes('store')).length})` },
+            { id: 'sales_person', label: `Sales (${users.filter(u => rolesOf(u).includes('sales_person')).length})` },
           ].map(f => (
             <button key={f.id} onClick={() => setRoleFilter(f.id)}
               className={`text-xs px-3 py-1.5 rounded-full font-medium border transition-all ${
@@ -144,10 +148,12 @@ export default function UserManagement() {
                             {allDesignations.find(d => d.code === u.designation)?.name || u.designation}
                           </span>
                         )}
-                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium border ${(ROLE_META[u.role] || ROLE_META.sales_person).cls}`}>
-                          {(ROLE_META[u.role] || ROLE_META.sales_person).label}
-                        </span>
-                        {u.role === 'sales_person' && u.sales_role && (
+                        {rolesOf(u).map(r => (
+                          <span key={r} className={`text-xs px-2 py-0.5 rounded-full font-medium border ${(ROLE_META[r] || ROLE_META.sales_person).cls}`}>
+                            {(ROLE_META[r] || ROLE_META.sales_person).label}
+                          </span>
+                        ))}
+                        {rolesOf(u).includes('sales_person') && u.sales_role && (
                           <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold border ${SALES_ROLES[u.sales_role]?.cls || 'bg-gray-500/20 text-gray-400 border-gray-500/30'}`}>
                             {SALES_ROLES[u.sales_role]?.label || u.sales_role}
                           </span>
@@ -188,6 +194,8 @@ export default function UserManagement() {
           allDesignations={allDesignations}
           handleDesignationChange={handleDesignationChange}
           handlePermissionsChange={handlePermissionsChange}
+          handleRolesChange={handleRolesChange}
+          applyRolePresets={applyRolePresets}
           handleSave={handleSave}
         />
       </div>

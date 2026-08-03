@@ -951,6 +951,11 @@ export const adminUsers = {
   delete: (userId) => API.delete(`/admin/users/${userId}`),
 };
 
+// Merged default module_permissions for a set of roles (admin only)
+export const rolePresets = {
+  get: (roles) => API.get('/admin/role-presets', { params: { roles: roles.join(',') } }),
+};
+
 // Flow Management System
 export const fms = {
   dashboard:       (p)    => API.get('/fms/dashboard', { params: p }),

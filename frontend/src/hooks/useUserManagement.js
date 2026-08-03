@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
-import { adminUsers, modules as modulesApi, designations as desgApi } from '../lib/api';
+import { adminUsers, modules as modulesApi, designations as desgApi, rolePresets } from '../lib/api';
 import { toast } from 'sonner';
+
+const PRIMARY_ROLE_ORDER = ['admin', 'accounts', 'store', 'sales_person'];
 
 export function useUserManagement() {
   const [users, setUsers] = useState([]);
@@ -14,7 +16,7 @@ export function useUserManagement() {
   const [permTab, setPermTab] = useState('matrix');
 
   const emptyForm = {
-    email: '', password: '', name: '', role: 'sales_person',
+    email: '', password: '', name: '', role: 'sales_person', roles: ['sales_person'],
     sales_role: 'executive',
     designation: '', phone: '', calling_number: '',
     assigned_modules: [],
@@ -52,6 +54,7 @@ export function useUserManagement() {
     setEditUser(u);
     setForm({
       email: u.email, password: '', name: u.name, role: u.role,
+      roles: (Array.isArray(u.roles) && u.roles.length) ? u.roles : [u.role || 'sales_person'],
       sales_role: u.sales_role || 'executive',
       designation: u.designation || '', phone: u.phone || '',
       calling_number: u.calling_number || '',
@@ -82,15 +85,52 @@ export function useUserManagement() {
     setForm(prev => ({ ...prev, module_permissions: newPerms, assigned_modules: assigned }));
   };
 
+  // Toggle one role on/off. Admin is exclusive.
+  const handleRolesChange = (role) => {
+    setForm(prev => {
+      const cur = prev.roles || [];
+      let next;
+      if (role === 'admin') {
+        next = cur.includes('admin') ? [] : ['admin'];
+      } else {
+        next = cur.includes(role) ? cur.filter(r => r !== role) : [...cur.filter(r => r !== 'admin'), role];
+      }
+      if (!next.length) next = ['sales_person'];
+      const primary = PRIMARY_ROLE_ORDER.find(r => next.includes(r));
+      return { ...prev, roles: next, role: primary };
+    });
+  };
+
+  // Pull the merged presets for every ticked role from the backend and overwrite the matrix.
+  const applyRolePresets = async () => {
+    const roles = form.roles || [];
+    if (roles.includes('admin')) {
+      setForm(prev => ({ ...prev, module_permissions: {}, assigned_modules: [] }));
+      return;
+    }
+    try {
+      const res = await rolePresets.get(roles);
+      const merged = res.data?.module_permissions || {};
+      setForm(prev => ({
+        ...prev,
+        module_permissions: merged,
+        assigned_modules: Object.entries(merged).filter(([, p]) => p.level !== 'none').map(([m]) => m),
+      }));
+      toast.success('Role presets applied');
+    } catch {
+      toast.error('Could not load role presets');
+    }
+  };
+
   const handleSave = async () => {
     try {
       if (editUser) {
         const payload = {
-          name: form.name, role: form.role, designation: form.designation,
+          name: form.name, role: form.role, roles: form.roles, designation: form.designation,
           phone: form.phone, calling_number: form.calling_number,
           assigned_modules: form.assigned_modules,
           module_permissions: form.module_permissions,
-          ...(form.role === 'sales_person' ? { sales_role: form.sales_role } : {}),
+          ...((form.roles || []).includes('sales_person') ? { sales_role: form.sales_role } : {}),
         };
         if (form.password) payload.password = form.password;
         await adminUsers.update(editUser.user_id, payload);
@@ -131,9 +171,11 @@ export function useUserManagement() {
     }
   };
 
+  const rolesOfUser = (u) => (Array.isArray(u.roles) && u.roles.length ? u.roles : [u.role]);
+
   const filteredUsers = roleFilter === 'all'
     ? users
-    : users.filter(u => u.role === roleFilter);
+    : users.filter(u => rolesOfUser(u).includes(roleFilter));
 
   return {
     users, filteredUsers, allModules, allDesignations,
@@ -145,6 +187,8 @@ export function useUserManagement() {
     openCreate, openEdit,
     handleDesignationChange,
     handlePermissionsChange,
+    handleRolesChange,
+    applyRolePresets,
     handleSave, handleDelete,
     handleToggleActive,
   };
