@@ -195,11 +195,23 @@ def test_merge_does_not_cross_multiply_level_and_scope():
 
 
 def test_merge_widens_scope_only_on_equal_levels():
+    """`dashboard` is the genuine tie: sales grants read/own, store grants
+    read/all — SAME level, different scope — so the wider scope must win.
+
+    This is the only module in the sales+store overlap where the tie-widening
+    branch of default_permissions_for_roles actually decides anything. Deleting
+    that branch makes this assert fail (dashboard would keep whichever scope the
+    first role in the list supplied). `orders` and `leads` are single-contributor
+    modules and discriminate nothing — they are asserted here only as the
+    control case."""
     merged = rbac.default_permissions_for_roles(["sales_person", "store"])
-    # orders: only store grants it (read_write/all) -> unchanged
+    # dashboard: sales read/own + store read/all, equal level -> widest wins
+    assert merged["dashboard"]["level"] == "read"
+    assert merged["dashboard"]["scope"] == "all", \
+        "equal levels from two roles must widen the scope to 'all'"
+    # control: single-contributor modules keep their own grant untouched
     assert merged["orders"]["level"] == "read_write"
     assert merged["orders"]["scope"] == "all"
-    # leads: only sales grants it (read_write/own) -> unchanged
     assert merged["leads"]["scope"] == "own"
 
 

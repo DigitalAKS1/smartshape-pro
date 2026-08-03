@@ -27,30 +27,30 @@ ADMIN = {"user_id": "user_admin", "email": "admin@smartshape.in", "role": "admin
 # ==================== TRANSFER_SPECS contract (pure Python) ====================
 
 def test_transfer_never_touches_sales_attribution():
-    collections = {c for c, _, _ in TRANSFER_SPECS}
+    collections = {c for c, _, _, _ in TRANSFER_SPECS}
     for banned in ("quotations", "orders", "invoices"):
         assert banned not in collections
 
 
 def test_transfer_never_rewrites_created_by():
-    fields = {f for _, f, _ in TRANSFER_SPECS}
+    fields = {f for _, f, _, _ in TRANSFER_SPECS}
     assert "created_by" not in fields
 
 
 def test_every_spec_collection_is_really_written_by_the_app():
     """Guards against a spec entry that can never match — the `visits` mistake."""
-    collections = {c for c, _, _ in TRANSFER_SPECS}
+    collections = {c for c, _, _, _ in TRANSFER_SPECS}
     assert "visits" not in collections
 
 
 def test_field_visits_only_transfers_open_visits():
     spec = [s for s in TRANSFER_SPECS if s[0] == "field_visits"]
     assert spec and spec[0][1] == "sales_person_email"
-    assert spec[0][2] == {"outcome": None}
+    assert spec[0][3] == {"outcome": None}
 
 
 def test_specs_have_no_duplicates():
-    collections = [c for c, _, _ in TRANSFER_SPECS]
+    collections = [c for c, _, _, _ in TRANSFER_SPECS]
     assert len(collections) == len(set(collections))
 
 
@@ -58,10 +58,37 @@ def test_transfer_specs_cover_live_crm_ownership():
     """del_task_instances is intentionally NOT a TRANSFER_SPECS tuple — it keys
     on emp_id, not an email field — so it's handled separately in the route.
     This just confirms the tuple-based collections are still all present."""
-    collections = {c for c, _, _ in TRANSFER_SPECS}
+    collections = {c for c, _, _, _ in TRANSFER_SPECS}
     for expected in ("leads", "schools", "contacts", "tasks", "followups",
                      "visit_plans", "field_visits"):
         assert expected in collections, f"{expected} missing from TRANSFER_SPECS"
+
+
+def test_every_spec_carries_the_display_name_field_the_app_actually_writes():
+    """The owner key and its display name must move together. Verified against
+    the insert sites, not guessed: leads/schools/contacts/tasks/visit_plans write
+    `assigned_name`, field_visits writes `sales_person_name`, and followups has
+    no name field on ANY of its four insert paths (crm_routes.py:3209 and :3295,
+    field_routes.py:122, server.py:2303) — so None there is deliberate."""
+    expected = {
+        "leads": "assigned_name",
+        "schools": "assigned_name",
+        "contacts": "assigned_name",
+        "tasks": "assigned_name",
+        "followups": None,
+        "visit_plans": "assigned_name",
+        "field_visits": "sales_person_name",
+    }
+    actual = {c: n for c, _, n, _ in TRANSFER_SPECS}
+    assert actual == expected
+
+
+def test_crm_transfer_collections_are_a_subset_of_the_specs():
+    collections = {c for c, _, _, _ in TRANSFER_SPECS}
+    assert set(ar.CRM_TRANSFER_COLLECTIONS) <= collections
+    # These are exactly the transferable collections whose list endpoints are
+    # gated by crm_routes._crm_read.
+    assert set(ar.CRM_TRANSFER_COLLECTIONS) == {"leads", "schools", "contacts"}
 
 
 # ==================== Endpoint tests (isolated test DB) ====================
@@ -104,12 +131,17 @@ async def leaving_and_recipient(ctx):
     })
     await d.salespersons.insert_one({"email": "leaving@smartshape.in", "is_active": True})
 
-    # Live CRM records owned by the leaving user
+    # Live CRM records owned by the leaving user. They carry the departing
+    # person's DISPLAY name too — that is what must move with the owner key.
     await d.leads.insert_one({"lead_id": "lead_1", "assigned_to": "leaving@smartshape.in",
+                               "assigned_name": "Leaving Rep",
                                "created_by": "leaving@smartshape.in"})
-    await d.schools.insert_one({"school_id": "school_1", "assigned_to": "leaving@smartshape.in"})
-    await d.contacts.insert_one({"contact_id": "contact_1", "assigned_to": "leaving@smartshape.in"})
-    await d.tasks.insert_one({"task_id": "task_1", "assigned_to": "leaving@smartshape.in"})
+    await d.schools.insert_one({"school_id": "school_1", "assigned_to": "leaving@smartshape.in",
+                                 "assigned_name": "Leaving Rep"})
+    await d.contacts.insert_one({"contact_id": "contact_1", "assigned_to": "leaving@smartshape.in",
+                                  "assigned_name": "Leaving Rep"})
+    await d.tasks.insert_one({"task_id": "task_1", "assigned_to": "leaving@smartshape.in",
+                               "assigned_name": "Leaving Rep"})
     await d.followups.insert_one({"followup_id": "fu_1", "assigned_to": "leaving@smartshape.in"})
 
     # visit_plans: one still outstanding (status "planned" — live work), one
@@ -117,7 +149,7 @@ async def leaving_and_recipient(ctx):
     # must stay put; mirrors the terminal-status set already used to read
     # this collection at admin_routes.py:714 and server.py:3111)
     await d.visit_plans.insert_one({"plan_id": "plan_open", "assigned_to": "leaving@smartshape.in",
-                                     "status": "planned"})
+                                     "assigned_name": "Leaving Rep", "status": "planned"})
     await d.visit_plans.insert_one({"plan_id": "plan_done", "assigned_to": "leaving@smartshape.in",
                                      "status": "completed"})
     await d.visit_plans.insert_one({"plan_id": "plan_cancelled", "assigned_to": "leaving@smartshape.in",
@@ -126,9 +158,9 @@ async def leaving_and_recipient(ctx):
     # field_visits: one still open (no outcome — live work), one completed
     # (has an outcome — history, must stay with the original rep)
     await d.field_visits.insert_one({"visit_id": "visit_open", "sales_person_email": "leaving@smartshape.in",
-                                      "outcome": None})
+                                      "sales_person_name": "Leaving Rep", "outcome": None})
     await d.field_visits.insert_one({"visit_id": "visit_done", "sales_person_email": "leaving@smartshape.in",
-                                      "outcome": "interested"})
+                                      "sales_person_name": "Leaving Rep", "outcome": "interested"})
 
     # del_task_instances key on emp_id, not email — via del_employees
     await d.del_employees.insert_one({"emp_id": "emp_leaving", "name": "Leaving Rep",
@@ -377,3 +409,152 @@ async def test_delete_unknown_user_404s(ctx, monkeypatch, leaving_and_recipient)
     monkeypatch.setattr(ar, "get_current_user", _as(ADMIN))
     r = await client.delete("/api/admin/users/user_does_not_exist")
     assert r.status_code == 404
+
+
+# ==================== Fix 2: the display name moves with the owner key ====================
+
+@pytest.mark.asyncio
+async def test_transfer_moves_owner_name_alongside_owner_email(ctx, monkeypatch, leaving_and_recipient):
+    """Every other write path in this codebase sets `assigned_to` and
+    `assigned_name` together. Moving only the key leaves the DEPARTED person's
+    name on the recipient's records — /leads/forecast buckets `by_rep` on
+    `assigned_name`, so transferred pipeline would report under the wrong rep.
+    This would FAIL if TRANSFER_SPECS carried no name field."""
+    d, client = leaving_and_recipient
+    monkeypatch.setattr(ar, "get_current_user", _as(ADMIN))
+    r = await client.delete("/api/admin/users/user_leaving",
+                             params={"transfer_to": "recipient@smartshape.in"})
+    assert r.status_code == 200, r.text
+
+    lead = await d.leads.find_one({"lead_id": "lead_1"}, {"_id": 0})
+    assert lead["assigned_to"] == "recipient@smartshape.in"
+    assert lead["assigned_name"] == "Recipient Rep", \
+        "the departed rep's name must not survive on a transferred lead"
+
+    school = await d.schools.find_one({"school_id": "school_1"}, {"_id": 0})
+    assert school["assigned_to"] == "recipient@smartshape.in"
+    assert school["assigned_name"] == "Recipient Rep"
+
+    contact = await d.contacts.find_one({"contact_id": "contact_1"}, {"_id": 0})
+    assert contact["assigned_name"] == "Recipient Rep"
+
+    task = await d.tasks.find_one({"task_id": "task_1"}, {"_id": 0})
+    assert task["assigned_name"] == "Recipient Rep"
+
+    plan = await d.visit_plans.find_one({"plan_id": "plan_open"}, {"_id": 0})
+    assert plan["assigned_name"] == "Recipient Rep"
+
+    # field_visits uses a different name key
+    open_visit = await d.field_visits.find_one({"visit_id": "visit_open"}, {"_id": 0})
+    assert open_visit["sales_person_email"] == "recipient@smartshape.in"
+    assert open_visit["sales_person_name"] == "Recipient Rep"
+
+    # ...and history keeps the ORIGINAL pair, name included
+    done_visit = await d.field_visits.find_one({"visit_id": "visit_done"}, {"_id": 0})
+    assert done_visit["sales_person_email"] == "leaving@smartshape.in"
+    assert done_visit["sales_person_name"] == "Leaving Rep"
+
+
+@pytest.mark.asyncio
+async def test_followups_transfer_without_inventing_a_name_field(ctx, monkeypatch, leaving_and_recipient):
+    """`followups` has no display-name field on any insert path. The transfer
+    must move the owner and NOT create a phantom `assigned_name` key."""
+    d, client = leaving_and_recipient
+    monkeypatch.setattr(ar, "get_current_user", _as(ADMIN))
+    r = await client.delete("/api/admin/users/user_leaving",
+                             params={"transfer_to": "recipient@smartshape.in"})
+    assert r.status_code == 200, r.text
+    fu = await d.followups.find_one({"followup_id": "fu_1"}, {"_id": 0})
+    assert fu["assigned_to"] == "recipient@smartshape.in"
+    assert "assigned_name" not in fu
+
+
+@pytest.mark.asyncio
+async def test_transfer_name_falls_back_to_email_never_blank(ctx, monkeypatch, leaving_and_recipient):
+    """A blank `assigned_name` against a real `assigned_to` is the corrupt pair
+    _apply_owner exists to prevent — never write one."""
+    d, client = leaving_and_recipient
+    await d.users.update_one({"user_id": "user_recipient"}, {"$set": {"name": ""}})
+    monkeypatch.setattr(ar, "get_current_user", _as(ADMIN))
+    r = await client.delete("/api/admin/users/user_leaving",
+                             params={"transfer_to": "recipient@smartshape.in"})
+    assert r.status_code == 200, r.text
+    lead = await d.leads.find_one({"lead_id": "lead_1"}, {"_id": 0})
+    assert lead["assigned_name"] == "recipient@smartshape.in"
+
+
+# ============ Fix 4: warn before handing CRM work to someone who can't see it ============
+
+@pytest.mark.asyncio
+async def test_data_summary_reports_how_much_of_the_work_is_crm(ctx, monkeypatch, leaving_and_recipient):
+    d, client = leaving_and_recipient
+    monkeypatch.setattr(ar, "get_current_user", _as(ADMIN))
+    r = await client.get("/api/admin/users/user_leaving/data-summary")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    # leads + schools + contacts = 3 of the 8 live records
+    assert body["crm_total"] == 3
+    assert body["total"] == 8
+
+
+@pytest.mark.asyncio
+async def test_admin_users_flags_who_can_actually_receive_crm_work(ctx, monkeypatch):
+    """The recipient dropdown offers every active user. A store manager with no
+    `leads` grant receives a departing rep's pipeline into a black hole — CRM
+    lists return []. The list endpoint must expose that, per candidate."""
+    d, client = ctx
+    await d.users.insert_many([
+        # sales team — CRM access has always been implicit, no grant needed
+        {"user_id": "u_sales", "email": "sales@x.in", "name": "Sales", "role": "sales_person",
+         "roles": ["sales_person"], "is_active": True},
+        # store only, no leads grant — CANNOT see CRM records
+        {"user_id": "u_store", "email": "store@x.in", "name": "Store", "role": "store",
+         "roles": ["store"], "is_active": True,
+         "module_permissions": {"orders": {"level": "read_write", "scope": "all"}}},
+        # store PLUS an explicit leads grant — CAN see CRM records
+        {"user_id": "u_store_crm", "email": "storecrm@x.in", "name": "Store CRM", "role": "store",
+         "roles": ["store"], "is_active": True,
+         "module_permissions": {"leads": {"level": "read", "scope": "all"}}},
+        # a leads grant explicitly set to "none" is not a grant
+        {"user_id": "u_none", "email": "none@x.in", "name": "None", "role": "accounts",
+         "roles": ["accounts"], "is_active": True,
+         "module_permissions": {"leads": {"level": "none"}}},
+        # admin bypasses every module check
+        {"user_id": "u_admin", "email": "adm@x.in", "name": "Adm", "role": "admin",
+         "roles": ["admin"], "is_active": True},
+        # legacy doc: no `roles` key, no module_permissions at all
+        {"user_id": "u_legacy", "email": "legacy@x.in", "name": "Legacy", "role": "sales_person",
+         "is_active": True},
+    ])
+    monkeypatch.setattr(ar, "get_current_user", _as(ADMIN))
+    r = await client.get("/api/admin/users")
+    assert r.status_code == 200, r.text
+    flags = {u["email"]: u["can_receive_crm"] for u in r.json()}
+    assert flags["sales@x.in"] is True
+    assert flags["store@x.in"] is False
+    assert flags["storecrm@x.in"] is True
+    assert flags["none@x.in"] is False
+    assert flags["adm@x.in"] is True
+    assert flags["legacy@x.in"] is True
+
+
+@pytest.mark.asyncio
+async def test_can_receive_crm_matches_the_crm_read_gate_exactly(ctx, monkeypatch):
+    """The dialog's warning must not drift from the gate that actually decides
+    whether the recipient's CRM lists come back empty."""
+    from routes.crm_routes import _crm_read
+    from rbac import can_read_crm
+    table = [
+        {"role": "sales_person", "roles": ["sales_person"]},
+        {"role": "store", "roles": ["store"]},
+        {"role": "store", "roles": ["store", "sales_person"]},
+        {"role": "accounts", "roles": ["accounts"],
+         "module_permissions": {"leads": {"level": "read", "scope": "own"}}},
+        {"role": "accounts", "roles": ["accounts"],
+         "module_permissions": {"leads": {"level": "none"}}},
+        {"role": "admin", "roles": ["admin"]},
+        {"role": "store"},          # legacy: no roles key
+        {},                          # nothing at all
+    ]
+    for u in table:
+        assert can_read_crm(u) is _crm_read(u), u

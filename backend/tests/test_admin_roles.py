@@ -93,13 +93,30 @@ async def test_role_presets_requires_admin(ctx, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_role_presets_filters_to_valid_roles(ctx, monkeypatch):
+    """The endpoint must not pass an arbitrary client-supplied string through to
+    the permission engine.
+
+    Comparing responses alone proves nothing here: default_permissions_for_roles
+    is total (`ROLE_DEFAULT_PERMISSIONS.get(role, {})`), so an unknown role
+    contributes nothing whether or not the VALID_ROLES filter exists — the old
+    version of this test passed with the filter deleted. So observe the filter
+    directly: spy on what the endpoint actually hands the engine."""
     d, client = ctx
     monkeypatch.setattr(ar, "get_current_user", _as(ADMIN))
-    valid_only = await client.get("/api/admin/role-presets", params={"roles": "store,accounts"})
-    with_junk = await client.get("/api/admin/role-presets", params={"roles": "store,accounts,wizard"})
-    assert valid_only.status_code == 200
-    assert valid_only.json() == with_junk.json()
-    assert valid_only.json()["module_permissions"]
+    seen = []
+    real = ar.default_permissions_for_roles
+
+    def spy(roles):
+        seen.append(list(roles))
+        return real(roles)
+
+    monkeypatch.setattr(ar, "default_permissions_for_roles", spy)
+    r = await client.get("/api/admin/role-presets",
+                          params={"roles": " store , accounts ,wizard,,admin_ish"})
+    assert r.status_code == 200, r.text
+    assert seen == [["store", "accounts"]], \
+        "junk roles must be filtered out before reaching default_permissions_for_roles"
+    assert r.json()["module_permissions"]
 
 
 @pytest.mark.asyncio
