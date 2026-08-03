@@ -797,6 +797,22 @@ def _owns(doc: dict, email: str) -> bool:
     return doc.get("created_by") == email and not (doc.get("assigned_to") or "")
 
 
+def _crm_read(user: dict) -> bool:
+    """May this user see CRM records at all?
+
+    True on an explicit `leads` grant (the new multi-role path), OR on legacy
+    sales-team membership. Sales users have always had CRM access without needing
+    a module grant, and not every user document carries `module_permissions` —
+    preserving that is what keeps this change additive.
+    """
+    return has_team(user, "sales") or has_module(user, "leads")
+
+
+def _crm_write(user: dict) -> bool:
+    """Mutation counterpart of `_crm_read`."""
+    return has_team(user, "sales") or has_module(user, "leads", "read_write")
+
+
 async def _owned_school_ids(email: str) -> list:
     """School ids a sales user owns — assigned to them, or created by them while
     still unassigned (see `_owner_clause`). Excludes deleted."""
@@ -889,7 +905,7 @@ async def _user_can_access_school(user: dict, school: dict) -> bool:
         return False
     if has_team(user, "admin"):
         return True
-    if not has_module(user, "leads"):
+    if not _crm_read(user):
         return False
     if sees_all(user, "leads"):
         return True
@@ -912,7 +928,7 @@ async def _user_can_mutate_lead(user: dict, lead: dict) -> bool:
         return False
     if has_team(user, "admin"):
         return True
-    if not has_module(user, "leads", "read_write"):
+    if not _crm_write(user):
         return False
     if sees_all(user, "leads"):
         return True
@@ -931,7 +947,7 @@ async def _user_can_mutate_contact(user: dict, contact: dict) -> bool:
         return False
     if has_team(user, "admin"):
         return True
-    if not has_module(user, "leads", "read_write"):
+    if not _crm_write(user):
         return False
     if sees_all(user, "leads"):
         return True
@@ -986,7 +1002,7 @@ async def _assign_school_cascade(school_id: str, assigned_to: str, assigned_name
 @router.get("/schools")
 async def get_schools(request: Request):
     user = await get_current_user(request)
-    if not has_module(user, "leads"):
+    if not _crm_read(user):
         # No CRM grant — nothing to show
         return []
     if sees_all(user, "leads"):
@@ -1454,7 +1470,7 @@ async def set_school_password(school_id: str, request: Request):
 @router.get("/contacts")
 async def get_contacts(request: Request):
     user = await get_current_user(request)
-    if not has_module(user, "leads"):
+    if not _crm_read(user):
         return []
     if sees_all(user, "leads"):
         query = {}
@@ -2103,7 +2119,7 @@ async def backfill_contact_owners(request: Request):
 @router.get("/leads")
 async def get_leads(request: Request):
     user = await get_current_user(request)
-    if not has_module(user, "leads"):
+    if not _crm_read(user):
         return []
     if sees_all(user, "leads"):
         query = {}
@@ -2160,7 +2176,7 @@ async def search_leads(request: Request, q: str = "", limit: int = 8):
     if len(q) < 2:
         return {"leads": []}
 
-    if not has_module(user, "leads"):
+    if not _crm_read(user):
         return {"leads": []}
     if sees_all(user, "leads"):
         scope = {}
@@ -2574,7 +2590,7 @@ async def referral_leaderboard(request: Request):
 async def leads_forecast(request: Request):
     """Weighted pipeline forecast over OPEN stages, RBAC-scoped, per-stage + per-rep."""
     user = await get_current_user(request)
-    if not has_module(user, "leads"):
+    if not _crm_read(user):
         return {"total_value": 0, "total_weighted": 0, "by_stage": {}, "by_rep": {}}
     query = {} if sees_all(user, "leads") else {"$or": await _sales_lead_scope(user["email"])}
     query["stage"] = {"$in": OPEN_STAGES}
@@ -2615,7 +2631,7 @@ async def leads_funnel(request: Request,
                        rep: Optional[str] = None, source: Optional[str] = None):
     """Stage-to-stage conversion %, avg days/stage, win/loss + lost-reason breakdown."""
     user = await get_current_user(request)
-    if not has_module(user, "leads"):
+    if not _crm_read(user):
         return {"stages": [], "won": {"count": 0, "value": 0}, "lost": {"count": 0}, "lost_reasons": {}}
     query = {} if sees_all(user, "leads") else {"$or": await _sales_lead_scope(user["email"])}
     if rep and sees_all(user, "leads"):
@@ -2668,7 +2684,7 @@ async def leads_funnel(request: Request,
 async def leads_needs_attention(request: Request):
     """Open leads flagged overdue / stuck / no-next-action, RBAC-scoped, sorted by value."""
     user = await get_current_user(request)
-    if not has_module(user, "leads"):
+    if not _crm_read(user):
         return []
     query = {"stage": {"$in": OPEN_STAGES}}
     if not sees_all(user, "leads"):
