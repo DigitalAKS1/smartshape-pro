@@ -104,6 +104,69 @@ async def generate_quote_number() -> str:
 
 # ==================== AUTO-REGISTER HELPER ====================
 
+async def _resolve_or_create_school(quot: dict, created_by_email: str, now_iso: str):
+    """Resolve a quotation's school to a school_id.
+
+    Preference (the duplicate-school fix): an explicit school_id from the form —
+    the user picked an existing school — wins, so we link by FK and never fork a
+    duplicate on a name that differs by a space or punctuation. Only with no
+    valid picked id do we fall back to a case-insensitive name match, and only
+    then create a new school."""
+    picked = (quot.get("school_id") or "").strip()
+    if picked:
+        hit = await db.schools.find_one({"school_id": picked}, {"_id": 0, "school_id": 1})
+        if hit:
+            await db.schools.update_one({"school_id": picked}, {"$set": {"last_activity_date": now_iso}})
+            return picked
+
+    sname = (quot.get("school_name") or "").strip()
+    if not sname:
+        return None
+
+    existing_school = await db.schools.find_one(
+        {"school_name": {"$regex": f"^{re.escape(sname)}$", "$options": "i"}},
+        {"_id": 0, "school_id": 1},
+    )
+    if existing_school:
+        await db.schools.update_one(
+            {"school_id": existing_school["school_id"]},
+            {"$set": {"last_activity_date": now_iso}},
+        )
+        return existing_school["school_id"]
+
+    school_id = f"sch_{uuid.uuid4().hex[:12]}"
+    await db.schools.insert_one({
+        "school_id": school_id,
+        "school_name": sname,
+        "school_type": "School",
+        "board": "",
+        "group_id": "",
+        "website": "",
+        "email": (quot.get("customer_email") or "").strip(),
+        "phone": (quot.get("customer_phone") or "").strip(),
+        "city": "",
+        "state": "",
+        "pincode": "",
+        "address": (quot.get("address") or "").strip(),
+        "primary_contact_name": (quot.get("principal_name") or "").strip(),
+        "designation": "Principal",
+        "alternate_contact": "",
+        "school_strength": 0,
+        "number_of_branches": 1,
+        "annual_budget_range": "",
+        "existing_vendor": "",
+        "social_profiles": {},
+        "anniversary": "",
+        "source": "quotation",
+        "source_id": quot.get("quotation_id"),
+        "last_activity_date": now_iso,
+        "created_by": created_by_email,
+        "created_at": now_iso,
+    })
+    logging.info(f"Auto-created school '{sname}' from quotation {quot.get('quotation_id')}")
+    return school_id
+
+
 async def _auto_register_from_quotation(quot: dict, created_by_email: str):
     """After a quotation is saved, silently upsert the school, contact, and lead into CRM,
     and store lead_id back on the quotation."""
@@ -115,52 +178,12 @@ async def _auto_register_from_quotation(quot: dict, created_by_email: str):
     addr         = (quot.get("address") or "").strip()
     quotation_id = quot.get("quotation_id", "")
 
-    school_id     = None
     contact_id_used = None  # track for lead linking
 
     # ── 1. School ──────────────────────────────────────────────────────────────
-    if sname:
-        existing_school = await db.schools.find_one(
-            {"school_name": {"$regex": f"^{re.escape(sname)}$", "$options": "i"}},
-            {"_id": 0, "school_id": 1}
-        )
-        if existing_school:
-            school_id = existing_school["school_id"]
-            await db.schools.update_one(
-                {"school_id": school_id},
-                {"$set": {"last_activity_date": now_iso}}
-            )
-        else:
-            school_id = f"sch_{uuid.uuid4().hex[:12]}"
-            await db.schools.insert_one({
-                "school_id": school_id,
-                "school_name": sname,
-                "school_type": "School",
-                "board": "",
-                "group_id": "",
-                "website": "",
-                "email": email,
-                "phone": phone,
-                "city": "",
-                "state": "",
-                "pincode": "",
-                "address": addr,
-                "primary_contact_name": pname,
-                "designation": "Principal",
-                "alternate_contact": "",
-                "school_strength": 0,
-                "number_of_branches": 1,
-                "annual_budget_range": "",
-                "existing_vendor": "",
-                "social_profiles": {},
-                "anniversary": "",
-                "source": "quotation",
-                "source_id": quot.get("quotation_id"),
-                "last_activity_date": now_iso,
-                "created_by": created_by_email,
-                "created_at": now_iso,
-            })
-            logging.info(f"Auto-created school '{sname}' from quotation {quot.get('quotation_id')}")
+    # Prefer an explicit school_id (user picked a real school); only fall back to
+    # name-match / create when none was sent. Closes the duplicate-school leak.
+    school_id = await _resolve_or_create_school(quot, created_by_email, now_iso)
 
     # Stamp the resolved school_id back on the quotation so the 360° school view
     # links by FK (not a fragile school_name string match).
@@ -480,6 +503,9 @@ async def create_quotation(request: Request):
         "package_name": package["display_name"] if package else "",
         "principal_name": body.get("principal_name", ""),
         "school_name": body.get("school_name", ""),
+        # FK when the user picked an existing school — used to link by id instead
+        # of forking a duplicate on a fuzzy name match (see _resolve_or_create_school).
+        "school_id": body.get("school_id", ""),
         "address": body.get("address", ""),
         "customer_email": body.get("customer_email", ""),
         "customer_phone": body.get("customer_phone", ""),

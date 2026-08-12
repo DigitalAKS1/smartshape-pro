@@ -26,7 +26,7 @@ export default function QuotationStep1Contact({
   // school autocomplete inside new contact
   schoolQuery, setSchoolQuery,
   showSchoolDrop, setShowSchoolDrop,
-  filteredSchools, pickSchool,
+  filteredSchools, pickSchool, handleSchoolQueryChange, clearSchoolPick,
   newSchoolData, setNewSchoolData,
   setAddSchoolOpen,
   schoolDropRef,
@@ -197,12 +197,7 @@ export default function QuotationStep1Contact({
                 <Building2 className={`absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 ${tMut} pointer-events-none`} />
                 <Input
                   value={schoolQuery}
-                  onChange={e => {
-                    const v = e.target.value;
-                    setSchoolQuery(v);
-                    setNewContactData(p => ({ ...p, company: v }));
-                    setShowSchoolDrop(true);
-                  }}
+                  onChange={e => handleSchoolQueryChange(e.target.value)}
                   onFocus={() => schoolQuery && setShowSchoolDrop(true)}
                   placeholder="Type school name…"
                   className={`h-11 pl-9 pr-9 ${inputCls}`}
@@ -211,11 +206,7 @@ export default function QuotationStep1Contact({
                 {schoolQuery && (
                   <button
                     type="button"
-                    onClick={() => {
-                      setSchoolQuery('');
-                      setNewContactData(p => ({ ...p, company: '' }));
-                      setShowSchoolDrop(false);
-                    }}
+                    onClick={clearSchoolPick}
                     className={`absolute right-3 top-1/2 -translate-y-1/2 ${tMut}`}
                   >
                     <X className="h-3.5 w-3.5" />

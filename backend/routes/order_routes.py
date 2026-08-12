@@ -13,6 +13,7 @@ from auth_utils import get_current_user
 from rbac import get_team, require_teams, require_superadmin, require_module, sees_all
 from audit_backup import snapshot_and_delete
 from tally_export import gather_so, build_json, build_voucher_xml, build_envelope
+from services.payment_ledger import recompute_and_sync
 
 router = APIRouter()
 
@@ -380,6 +381,15 @@ async def create_order_for_quotation(quotation_id: str, *, created_by: str,
         "updated_at": now_iso,
     }
     await db.orders.insert_one(order_doc)
+
+    # Journal any at-creation advance into the payments ledger and set the
+    # collected-amount caches, so total_paid / payment_received are complete and
+    # equal from the very first read (see services/payment_ledger).
+    synced = await recompute_and_sync(db, order_id)
+    if synced:
+        order_doc["total_paid"] = synced["total_paid"]
+        order_doc["payment_received"] = synced["total_paid"]
+        order_doc["payment_status"] = synced["payment_status"]
 
     for item in sel_items:
         await db.order_items.insert_one({
@@ -812,14 +822,11 @@ async def record_payment(order_id: str, request: Request):
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.payments.insert_one(payment_doc)
-    all_payments = await db.payments.find({"order_id": order_id}, {"_id": 0}).to_list(None)
-    total_paid = sum(p["amount"] for p in all_payments)
-    grand_total = float(order.get("grand_total", 0) or 0)
-    payment_status = "paid" if grand_total > 0 and total_paid >= grand_total else "partial" if total_paid > 0 else "unpaid"
-    await db.orders.update_one({"order_id": order_id}, {
-        "$set": {"total_paid": total_paid, "payment_status": payment_status}
-    })
-    return {**payment_doc, "total_paid": total_paid, "payment_status": payment_status}
+    # Recompute from the ledger (incl. the journaled creation advance) and mirror
+    # onto BOTH total_paid and payment_received — the fix for balances that read
+    # payment_received going stale after a post-creation payment.
+    synced = await recompute_and_sync(db, order_id)
+    return {**payment_doc, "total_paid": synced["total_paid"], "payment_status": synced["payment_status"]}
 
 
 @router.get("/orders/{order_id}/payments")

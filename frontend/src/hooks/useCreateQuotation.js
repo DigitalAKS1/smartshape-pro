@@ -44,7 +44,7 @@ export default function useCreateQuotation() {
 
   // ── Main form ────────────────────────────────────────────────────────────
   const [formData, setFormData] = useState({
-    package_id: '', principal_name: '', school_name: '', address: '',
+    package_id: '', principal_name: '', school_name: '', school_id: '', address: '',
     city: '', state: '', pincode: '', lead_id: '',
     customer_email: '', customer_phone: '', customer_gst: '',
     sales_person_id: '', discount1_pct: 0, discount2_pct: 0,
@@ -111,6 +111,7 @@ export default function useCreateQuotation() {
         setFormData(prev => ({
           ...prev,
           school_name: sch.school_name || prev.school_name,
+          school_id: sch.school_id || prev.school_id,
           city: sch.city || prev.city, state: sch.state || prev.state, pincode: sch.pincode || prev.pincode,
           address: sch.address || prev.address,
           customer_phone: sch.phone || prev.customer_phone,
@@ -167,6 +168,9 @@ export default function useCreateQuotation() {
     if (!sch) return;
     setFormData(prev => ({
       ...prev,
+      // Concrete school picked → link by FK (identity), so the backend never
+      // forks a duplicate on a fuzzy name match.
+      school_id:      sch.school_id       || prev.school_id,
       school_name:    prev.school_name    || sch.school_name          || '',
       principal_name: prev.principal_name || sch.primary_contact_name || '',
       address:        prev.address        || sch.address             || '',
@@ -187,6 +191,9 @@ export default function useCreateQuotation() {
     const sch = findSchoolForContact(contact);
     setFormData(prev => ({
       ...prev,
+      // Link to the contact's resolved school by id; clear a stale id if the
+      // contact has no linked school (backend then falls back to name).
+      school_id:      (sch && sch.school_id) || '',
       principal_name: contact.name || (sch && sch.primary_contact_name) || prev.principal_name,
       school_name:    contact.company || (sch && sch.school_name) || prev.school_name,
       customer_phone: contact.phone || (sch && sch.phone) || prev.customer_phone,
@@ -248,6 +255,21 @@ export default function useCreateQuotation() {
     // Also pull the school's address/email/phone/gst into the quote form so the
     // Contact step isn't left blank when a school is picked here.
     applySchoolToForm(school);
+  };
+
+  // Manual edit of the school text invalidates a previously-picked school_id, so
+  // a quote can never be linked to the wrong school. Backend falls back to name.
+  const handleSchoolQueryChange = (v) => {
+    setSchoolQuery(v);
+    setNewContactData(prev => ({ ...prev, company: v }));
+    setShowSchoolDrop(true);
+    setFormData(prev => (prev.school_id ? { ...prev, school_id: '' } : prev));
+  };
+  const clearSchoolPick = () => {
+    setSchoolQuery('');
+    setNewContactData(prev => ({ ...prev, company: '' }));
+    setShowSchoolDrop(false);
+    setFormData(prev => (prev.school_id ? { ...prev, school_id: '' } : prev));
   };
 
   const handleCreateSchool = async () => {
@@ -398,7 +420,7 @@ export default function useCreateQuotation() {
     savingSchool,
     newSchoolData, setNewSchoolData,
     schoolDropRef,
-    filteredSchools, pickSchool, handleCreateSchool,
+    filteredSchools, pickSchool, handleCreateSchool, handleSchoolQueryChange, clearSchoolPick,
     // Step 2
     selectedPackage, handlePackageSelect,
     // Step 3

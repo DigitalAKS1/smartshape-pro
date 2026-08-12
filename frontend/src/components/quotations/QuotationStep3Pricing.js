@@ -67,7 +67,7 @@ export default function QuotationStep3Pricing({
             <Label className={`text-xs ${tMut} mb-1`}>School / Organization *</Label>
             <Input
               value={formData.school_name}
-              onChange={e => setFormData(p => ({ ...p, school_name: e.target.value }))}
+              onChange={e => setFormData(p => ({ ...p, school_name: e.target.value, school_id: '' }))}
               className={`h-11 ${inputCls}`}
               data-testid="school-name-input"
               placeholder="School or company name"

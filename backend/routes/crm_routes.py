@@ -3117,11 +3117,12 @@ async def lock_lead(lead_id: str, request: Request):
 
 
 @router.delete("/leads/{lead_id}")
-async def delete_lead(lead_id: str, request: Request):
+async def delete_lead(lead_id: str, request: Request, reason: str = ""):
     user = await get_current_user(request)
     lead = await db.leads.find_one(
         {"lead_id": lead_id},
-        {"_id": 0, "converted_from_contact": 1, "order_id": 1, "assigned_to": 1, "school_id": 1},
+        {"_id": 0, "converted_from_contact": 1, "order_id": 1, "assigned_to": 1,
+         "school_id": 1, "company_name": 1, "contact_name": 1},
     )
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
@@ -3134,15 +3135,24 @@ async def delete_lead(lead_id: str, request: Request):
         if order:
             raise HTTPException(status_code=409, detail="Cannot delete lead: an order exists. Cancel or delete the order first.")
 
-    # Cascade: hard-delete all child CRM records
-    await asyncio.gather(
-        db.followups.delete_many({"lead_id": lead_id}),
-        db.call_notes.delete_many({"lead_id": lead_id}),
-        db.tasks.delete_many({"lead_id": lead_id}),
-        db.physical_dispatches.delete_many({"lead_id": lead_id}),
-        db.drip_enrollments.delete_many({"lead_id": lead_id}),
-        db.whatsapp_logs.update_many({"lead_id": lead_id}, {"$unset": {"lead_id": ""}}),
-    )
+    # Snapshot the lead + all child CRM records into audit_backups, THEN hard-delete
+    # — so a deleted lead's call history / follow-ups are recoverable, the same
+    # safety the order & school cascades already have.
+    plan = [
+        ("leads", {"lead_id": lead_id}),
+        ("followups", {"lead_id": lead_id}),
+        ("call_notes", {"lead_id": lead_id}),
+        ("tasks", {"lead_id": lead_id}),
+        ("physical_dispatches", {"lead_id": lead_id}),
+        ("drip_enrollments", {"lead_id": lead_id}),
+    ]
+    label = lead.get("company_name") or lead.get("contact_name") or lead_id
+    await snapshot_and_delete(plan, root_type="lead", root_id=lead_id,
+                              root_label=label, deleted_by=user["email"], reason=reason)
+
+    # whatsapp_logs are kept (they belong to the school/contact) — just detach the
+    # now-gone lead so they aren't orphaned to a dead id.
+    await db.whatsapp_logs.update_many({"lead_id": lead_id}, {"$unset": {"lead_id": ""}})
 
     # Restore converted contact back to active if this lead was the conversion target
     if lead.get("converted_from_contact"):
@@ -3152,7 +3162,6 @@ async def delete_lead(lead_id: str, request: Request):
                       "last_activity_date": datetime.now(timezone.utc).isoformat()}}
         )
 
-    await db.leads.delete_one({"lead_id": lead_id})
     return {"message": "Lead and all related records deleted"}
 
 
