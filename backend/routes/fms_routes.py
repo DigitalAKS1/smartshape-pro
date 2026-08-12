@@ -283,7 +283,23 @@ PURCHASE_STAGES = [
     {"key": "purchase_payment",  "label": "Purchase Payment",      "team": "accounts",   "tat_hours": 24,  "needs_approval": True},
 ]
 
-STAGE_MAP = {"order": ORDER_STAGES, "purchase": PURCHASE_STAGES}
+# Post-Order Implementation & Customer Success (Delivery → Training →
+# Implementation → Engagement). Auto-created when an order is marked delivered.
+# customer_notify=True stages ping the school (training-date ask, invite,
+# readiness checklist, evidence request, weekly engagement). tat_hours are
+# office-hours (10-6 IST): ~8h = same day, ~16h = 2 days, ~40h = 5 days.
+POSTORDER_STAGES = [
+    {"key": "delivery_confirmed", "label": "Delivery Confirmed",      "team": "sales", "tat_hours": 2,  "needs_approval": False},
+    {"key": "training_date",      "label": "Training Date Capture",   "team": "sales", "tat_hours": 16, "needs_approval": False, "customer_notify": True},
+    {"key": "invite_reg",         "label": "Invite + Registration",   "team": "sales", "tat_hours": 8,  "needs_approval": False, "customer_notify": True},
+    {"key": "pre_training",       "label": "Pre-Training Readiness",  "team": "sales", "tat_hours": 8,  "needs_approval": False, "customer_notify": True},
+    {"key": "training",           "label": "Training",                "team": "sales", "tat_hours": 8,  "needs_approval": False},
+    {"key": "evidence",           "label": "Evidence Collection",     "team": "sales", "tat_hours": 40, "needs_approval": False, "customer_notify": True},
+    {"key": "dossier",            "label": "Implementation Dossier",  "team": "sales", "tat_hours": 40, "needs_approval": False},
+    {"key": "engagement",         "label": "Customer Engagement",     "team": "sales", "tat_hours": 40, "needs_approval": False, "customer_notify": True},
+]
+
+STAGE_MAP = {"order": ORDER_STAGES, "purchase": PURCHASE_STAGES, "postorder": POSTORDER_STAGES}
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # SETTINGS
@@ -1042,7 +1058,56 @@ _ALL_SYSTEM = [
     *_SYSTEM_TEMPLATES,
     {"key": "followup",     "name": "Sales Follow-up Flow",  "color": "#10b981", "stages": FOLLOWUP_STAGES},
     {"key": "onboarding",   "name": "Customer Onboarding",   "color": "#f59e0b", "stages": ONBOARDING_STAGES},
+    {"key": "postorder",    "name": "Post-Order Implementation", "color": "#0ea5e9", "stages": POSTORDER_STAGES},
 ]
+
+
+async def create_postorder_flow_for_order(order: dict, created_by: str = "system"):
+    """Auto-create the Post-Order Implementation flow for a delivered order.
+
+    Idempotent: returns None if a post-order flow already exists for this order.
+    Import-safe (no HTTP request) so order_routes can call it on delivery. Links
+    the flow to the order (reference_id + order_id), school and lead, and pulls
+    the school's phone/email so the customer-notify stages can reach them."""
+    order_id = order.get("order_id")
+    if not order_id:
+        return None
+    if await db.fms_flows.find_one({"reference_id": order_id, "flow_type": "postorder"}):
+        return None  # already has a post-order flow
+
+    # Ensure the system template exists, then use its id (falls back to STAGE_MAP).
+    tmpl = await db.fms_templates.find_one({"key": "postorder"}, {"_id": 0, "template_id": 1})
+    if not tmpl:
+        await _ensure_system_templates()
+        tmpl = await db.fms_templates.find_one({"key": "postorder"}, {"_id": 0, "template_id": 1})
+
+    # Contact for customer notifications: prefer the school record.
+    phone, email = order.get("customer_phone", ""), order.get("customer_email", "")
+    school_id = order.get("school_id") or ""
+    if school_id and not (phone and email):
+        sch = await db.schools.find_one({"school_id": school_id}, {"_id": 0, "phone": 1, "email": 1})
+        if sch:
+            phone = phone or sch.get("phone", "")
+            email = email or sch.get("email", "")
+
+    body = FlowCreate(
+        flow_type="postorder",
+        template_id=(tmpl or {}).get("template_id"),
+        title=f"Post-Order: {order.get('school_name', '') or order_id} ({order.get('order_number', order_id)})",
+        reference_id=order_id,
+        customer_name=order.get("school_name", ""),
+        customer_phone=phone,
+        customer_email=email,
+        amount=float(order.get("grand_total", 0) or 0),
+        school_id=school_id,
+        lead_id=order.get("lead_id") or "",
+    )
+    flow = await _create_flow_core(body, created_by)
+    # Stamp an explicit order_id FK (FlowCreate has no such field) so the CRM 360
+    # and future reports can join flows to orders cleanly.
+    await db.fms_flows.update_one({"flow_id": flow["flow_id"]}, {"$set": {"order_id": order_id}})
+    flow["order_id"] = order_id
+    return flow
 
 async def _ensure_system_templates():
     for t in _ALL_SYSTEM:

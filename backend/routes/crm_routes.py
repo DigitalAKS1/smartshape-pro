@@ -1404,6 +1404,20 @@ async def get_school_profile(school_id: str, request: Request):
         inv_or.append({"quotation_id": {"$in": quote_ids}})
     invoices = await db.invoices.find({"$or": inv_or}, {"_id": 0, "raw": 0}).sort("invoice_date", -1).to_list(None)
 
+    # Post-Order Implementation flows (FMS) for this school — so the 360 surfaces
+    # training/implementation/engagement status instead of being blind to it.
+    flows_raw = await db.fms_flows.find(
+        {"$or": [{"school_id": school_id}, {"lead_id": {"$in": lead_ids}}]},
+        {"_id": 0, "flow_id": 1, "title": 1, "flow_type": 1, "status": 1,
+         "current_stage_key": 1, "order_id": 1, "reference_id": 1, "created_at": 1},
+    ).sort("created_at", -1).to_list(None)
+    fms_flows = []
+    for _f in flows_raw:
+        cur = await db.fms_stages.find_one(
+            {"flow_id": _f["flow_id"], "key": _f.get("current_stage_key")},
+            {"_id": 0, "label": 1, "status": 1, "tat_status": 1, "plan_done": 1, "assigned_to": 1})
+        fms_flows.append({**_f, "current_stage": cur})
+
     active_stages = {"new", "contacted", "demo", "quoted", "negotiation"}
     active_leads_count = sum(1 for l in leads if l.get("stage") in active_stages)
 
@@ -1439,6 +1453,7 @@ async def get_school_profile(school_id: str, request: Request):
         "dispatches": dispatches,
         "communications": communications,
         "invoices": invoices,
+        "fms_flows": fms_flows,
         "metrics": {
             "total_leads": len(leads),
             "active_leads": active_leads_count,

@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import uuid
 import io
 import json
+import logging
 
 from database import db
 from auth_utils import get_current_user
@@ -484,6 +485,14 @@ async def update_order_status(order_id: str, request: Request):
         await db.order_items.update_many(
             {"order_id": order_id, "status": {"$nin": ["removed", "cancelled", "released"]}},
             {"$set": {"status": "delivered"}})
+        # Kick off the Post-Order Implementation & Customer Success flow
+        # (Delivery → Training → Implementation → Engagement). Idempotent and
+        # best-effort: a flow hiccup must never block the delivery status update.
+        try:
+            from routes.fms_routes import create_postorder_flow_for_order
+            await create_postorder_flow_for_order(order, created_by=user.get("email", "system"))
+        except Exception as e:
+            logging.warning(f"post-order flow not auto-created for {order_id}: {e}")
     elif new_status == "cancelled":
         items = await db.order_items.find({"order_id": order_id}, {"_id": 0}).to_list(1000)
         for item in items:
