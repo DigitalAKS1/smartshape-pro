@@ -1,5 +1,5 @@
 import React from 'react';
-import { Bell, Wifi, WifiOff, Download, Share2, X } from 'lucide-react';
+import { Bell, Wifi, WifiOff, Download, Share2, X, Menu } from 'lucide-react';
 
 const isIOS = typeof navigator !== 'undefined' && /iPad|iPhone|iPod/.test(navigator.userAgent);
 
@@ -32,6 +32,7 @@ export default function AppShellHeader({
   showInstall,
   showIosInstall,
   shareCopied,
+  onMenuClick,
   onBellClick,
   onEnablePush,
   onShare,
@@ -42,6 +43,17 @@ export default function AppShellHeader({
     <>
       <header className="sticky top-0 z-30 bg-[var(--bg-card)] border-b border-[var(--border-color)] px-3 py-2 flex items-center justify-between" data-testid="mobile-header">
         <div className="flex items-center gap-2">
+          {onMenuClick && (
+            <button
+              onClick={onMenuClick}
+              className="w-8 h-8 -ml-1 flex items-center justify-center rounded-xl hover:bg-[var(--bg-hover)] text-[var(--text-secondary)] flex-shrink-0"
+              title="Menu"
+              aria-label="Open menu"
+              data-testid="mobile-menu-button"
+            >
+              <Menu className="h-5 w-5" />
+            </button>
+          )}
           <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#e94560] to-[#f05c75] flex items-center justify-center font-bold text-white text-xs">SS</div>
           <div>
             <p className="text-sm font-semibold truncate leading-tight">Divine Computer Pvt Ltd</p>

@@ -106,6 +106,32 @@ export const BOTTOM_NAV_ITEMS = [
 
 export const MORE_ITEM = { path: '__more__', icon: MoreHorizontal, label: 'More' };
 
+/**
+ * buildSidebarGroups — the user's full navigation menu, gated by their grants.
+ * Admins see everything; others see only modules in `assigned_modules`; adminOnly
+ * items are hidden from non-admins; empty groups are dropped. Shared by
+ * AdminLayout (desktop sidebar + mobile drawer) and AppShell (mobile drawer) so
+ * the menu can never drift between them.
+ */
+export function buildSidebarGroups(user) {
+  const isAdmin = user?.role === 'admin';
+  const userModules = user?.assigned_modules || [];
+  const groups = [];
+  SIDEBAR_SECTIONS.forEach((section) => {
+    const items = [];
+    section.modules.forEach((mod) => {
+      if (isAdmin || userModules.includes(mod)) {
+        const entry = MODULE_ROUTE_MAP[mod];
+        const allow = (item) => !(item.adminOnly && !isAdmin);
+        if (Array.isArray(entry)) entry.forEach((item) => { if (allow(item)) items.push(item); });
+        else if (entry && allow(entry)) items.push(entry);
+      }
+    });
+    if (items.length > 0) groups.push({ label: section.label, items });
+  });
+  return groups;
+}
+
 export function getPageTitle(pathname) {
   if (pathname === '/today') return "Today's Actions";
   const allRoutes = Object.values(MODULE_ROUTE_MAP).flat();

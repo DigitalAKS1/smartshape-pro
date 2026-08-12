@@ -7,7 +7,7 @@ import KeyboardShortcuts from '../KeyboardShortcuts';
 import AdminSidebar from './AdminSidebar';
 import AdminTopbar from './AdminTopbar';
 import TaskReminderPopup from '../notifications/TaskReminderPopup';
-import { MODULE_ROUTE_MAP, SIDEBAR_SECTIONS, BOTTOM_NAV_ITEMS, MORE_ITEM } from './AdminNavItems';
+import { BOTTOM_NAV_ITEMS, MORE_ITEM, buildSidebarGroups } from './AdminNavItems';
 
 export default function AdminLayout({ children }) {
   const { user, logout } = useAuth();
@@ -25,19 +25,7 @@ export default function AdminLayout({ children }) {
   // Admins see everything via the `isAdmin ||` checks below.
   const userModules = user?.assigned_modules || [];
 
-  const sidebarGroups = [];
-  SIDEBAR_SECTIONS.forEach((section) => {
-    const items = [];
-    section.modules.forEach((mod) => {
-      if (isAdmin || userModules.includes(mod)) {
-        const entry = MODULE_ROUTE_MAP[mod];
-        const allow = (item) => !(item.adminOnly && !isAdmin);
-        if (Array.isArray(entry)) entry.forEach((item) => { if (allow(item)) items.push(item); });
-        else if (entry && allow(entry)) items.push(entry);
-      }
-    });
-    if (items.length > 0) sidebarGroups.push({ label: section.label, items });
-  });
+  const sidebarGroups = buildSidebarGroups(user);
 
   const handleLogout = async () => { await logout(); navigate('/login'); };
   const initials = (user?.name || 'U').split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();

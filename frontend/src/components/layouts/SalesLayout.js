@@ -2,7 +2,7 @@ import React from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { useTheme } from '../../contexts/ThemeContext';
-import { Home, Users, MapPin, FileText, Calendar, LogOut, ArrowLeft, Sun, Moon, User } from 'lucide-react';
+import { Home, Users, MapPin, FileText, Calendar, LogOut, ArrowLeft, Sun, Moon, LayoutGrid } from 'lucide-react';
 import { Button } from '../ui/button';
 import { getSalesPermissions, SALES_ROLES } from '../../lib/salesPermissions';
 
@@ -77,10 +77,10 @@ export default function SalesLayout({ children, title, showBack }) {
             </button>
             <Link
               to={isAdmin ? '/dashboard' : '/today'}
-              className="w-8 h-8 flex items-center justify-center rounded-xl hover:bg-[var(--bg-hover)] text-[var(--text-muted)] hover:text-[#e94560] transition-colors"
-              title="Back to dashboard"
+              className="h-8 px-2.5 flex items-center gap-1 rounded-xl bg-[var(--bg-hover)] border border-[var(--border-color)] text-[var(--text-secondary)] hover:text-[#e94560] transition-colors text-[11px] font-semibold flex-shrink-0"
+              title="Go to dashboard"
               data-testid="sales-back-to-dashboard">
-              <User className="h-4 w-4" />
+              <LayoutGrid className="h-3.5 w-3.5" /> {isAdmin ? 'Admin' : 'Home'}
             </Link>
             <button onClick={handleLogout}
               className="w-8 h-8 flex items-center justify-center rounded-xl hover:bg-red-50 text-[var(--text-muted)] hover:text-red-500 transition-colors"

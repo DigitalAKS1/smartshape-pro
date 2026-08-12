@@ -6,6 +6,8 @@ import SalesLayout from './SalesLayout';
 import AppShellHeader from './AppShellHeader';
 import AppShellNav from './AppShellNav';
 import AppShellNotifDrawer from './AppShellNotifDrawer';
+import AdminSidebar from './AdminSidebar';
+import { buildSidebarGroups } from './AdminNavItems';
 import { useAuth } from '../../contexts/AuthContext';
 import { notificationsApi, pushApi } from '../../lib/api';
 
@@ -24,7 +26,7 @@ const isStandalone = typeof window !== 'undefined' && !!window.navigator.standal
  * - Mobile: custom top-header + bottom-nav + notification drawer.
  */
 export default function AppShell({ children }) {
-  const { user } = useAuth();
+  const { user, logout } = useAuth();
   const nav = useNavigate();
 
   const [isMobile, setIsMobile] = useState(false);
@@ -35,6 +37,7 @@ export default function AppShell({ children }) {
   const [shareCopied, setShareCopied] = useState(false);
 
   const [notifOpen, setNotifOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [notifs, setNotifs] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
 
@@ -166,6 +169,9 @@ export default function AppShell({ children }) {
   }
 
   const isSalesUser = user?.role === 'sales';
+  const sidebarGroups = buildSidebarGroups(user);
+  const initials = (user?.name || 'U').split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
+  const handleMenuLogout = async () => { await logout(); nav('/login'); };
 
   return (
     <div className="min-h-screen bg-[var(--bg-primary)] text-[var(--text-primary)]">
@@ -179,12 +185,31 @@ export default function AppShell({ children }) {
         showInstall={showInstall}
         showIosInstall={showIosInstall}
         shareCopied={shareCopied}
+        onMenuClick={() => setMenuOpen(true)}
         onBellClick={() => setNotifOpen(true)}
         onEnablePush={enablePush}
         onShare={handleShare}
         onInstall={promptInstall}
         onDismissIos={() => { localStorage.setItem('ios-install-dismissed', '1'); setShowIosInstall(false); }}
       />
+
+      {/* Full navigation drawer — gives the mobile shell the complete menu
+          (Sales Portal + every module the user can access), which the AppShell
+          pages otherwise had no way to reach. */}
+      {menuOpen && (
+        <div className="fixed inset-0 z-50 flex" onClick={() => setMenuOpen(false)} data-testid="appshell-menu-drawer">
+          <div className="absolute inset-0 bg-black/30 backdrop-blur-[2px]" />
+          <aside className="relative w-[272px] max-w-[85vw] bg-[var(--bg-sidebar)] h-full shadow-2xl" onClick={e => e.stopPropagation()}>
+            <AdminSidebar
+              sidebarGroups={sidebarGroups}
+              user={user}
+              initials={initials}
+              onClose={() => setMenuOpen(false)}
+              onLogout={handleMenuLogout}
+            />
+          </aside>
+        </div>
+      )}
 
       <main className="pb-20">{children}</main>
 
