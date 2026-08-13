@@ -2,7 +2,8 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { toast } from 'sonner';
 import AdminLayout from '../../components/layouts/AdminLayout';
 import { mailAreas, mailRuns } from '../../lib/api';
-import { MapPin, Mail, Plus, RefreshCw, Trash2, X } from 'lucide-react';
+import { MapPin, Mail, Plus, RefreshCw, Trash2, X, Printer } from 'lucide-react';
+import MailAddressSheet from '../../components/mail/MailAddressSheet';
 
 const PIECES = ['brochure', 'sample', 'newsletter', 'other'];
 const STATUS_COLOR = { planned: '#9A6A15', posted: '#1E5AA8', closed: '#2E7D5B' };
@@ -15,6 +16,7 @@ export default function OfflineMail() {
   const [areaForm, setAreaForm] = useState({ name: '', kind: 'pincode', pincode: '', city: '' });
   const [runForm, setRunForm] = useState(null); // null | {area_id, piece_type, courier, tracking_no, send_date, count}
   const [busy, setBusy] = useState(false);
+  const [sheetRun, setSheetRun] = useState(null); // {run_id, name} for the address/print sheet
 
   const load = useCallback(async () => {
     try {
@@ -157,6 +159,7 @@ export default function OfflineMail() {
                     <tr className="text-[10px] uppercase tracking-wide text-[var(--text-muted)] text-left">
                       <th className="py-2 pr-3">Run</th><th className="py-2 pr-3">Area</th><th className="py-2 pr-3">Piece</th>
                       <th className="py-2 pr-3">Sent</th><th className="py-2 pr-3">Courier</th><th className="py-2 pr-3">Status</th>
+                      <th className="py-2 pr-3 text-right">Addresses & Stickers</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -176,9 +179,16 @@ export default function OfflineMail() {
                             <option value="closed">closed</option>
                           </select>
                         </td>
+                        <td className="py-2.5 pr-3 text-right">
+                          <button onClick={() => setSheetRun({ run_id: r.run_id, name: r.name })}
+                            className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border border-[var(--border-color)] text-[11px] font-semibold text-[var(--text-secondary)] hover:text-[#e94560] hover:border-[#e94560]"
+                            data-testid={`addresses-${r.run_id}`}>
+                            <Printer className="h-3.5 w-3.5" /> Addresses / Print
+                          </button>
+                        </td>
                       </tr>
                     ))}
-                    {runs.length === 0 && <tr><td colSpan="6" className="py-6 text-center text-[var(--text-muted)]">No mail runs yet. Open an area above and click "New run".</td></tr>}
+                    {runs.length === 0 && <tr><td colSpan="7" className="py-6 text-center text-[var(--text-muted)]">No mail runs yet. Open an area above and click "New run".</td></tr>}
                   </tbody>
                 </table>
               </div>
@@ -213,6 +223,10 @@ export default function OfflineMail() {
             </div>
           </div>
         </div>
+      )}
+
+      {sheetRun && (
+        <MailAddressSheet runId={sheetRun.run_id} runName={sheetRun.name} onClose={() => setSheetRun(null)} />
       )}
     </AdminLayout>
   );

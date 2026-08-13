@@ -347,6 +347,8 @@ export const mailRuns = {
   get: (id) => API.get(`/mail-runs/${id}`),
   create: (data) => API.post('/mail-runs', data),
   updateStatus: (id, status) => API.put(`/mail-runs/${id}/status`, { status }),
+  addresses: (id) => API.get(`/mail-runs/${id}/addresses`),
+  stickers: (id) => API.get(`/mail-runs/${id}/stickers.pdf`, { responseType: 'blob' }),
 };
 
 export const activityTypes = {

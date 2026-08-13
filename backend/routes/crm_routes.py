@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form
+from fastapi.responses import StreamingResponse, HTMLResponse
 from typing import Optional
 from datetime import datetime, timezone, timedelta
 import uuid
@@ -644,6 +645,40 @@ async def get_mail_run(run_id: str, request: Request):
     return run
 
 
+def _addr_missing(s):
+    """Too incomplete to courier: needs a pincode AND a street + city."""
+    return not (str(s.get("pincode") or "").strip()
+                and str(s.get("address") or "").strip()
+                and str(s.get("city") or "").strip())
+
+
+@router.get("/mail-runs/{run_id}/addresses")
+async def get_mail_run_addresses(run_id: str, request: Request):
+    """Editable address sheet for a run — fill blanks before printing stickers."""
+    await get_current_user(request)
+    run = await db.mail_runs.find_one({"run_id": run_id}, {"_id": 0})
+    if not run:
+        raise HTTPException(status_code=404, detail="Mail run not found")
+    touches = await db.mail_touches.find({"run_id": run_id}, {"_id": 0}).to_list(None)
+    ids = [t["school_id"] for t in touches]
+    schools = await db.schools.find({"school_id": {"$in": ids}}, {"_id": 0}).to_list(None)
+    by_id = {s["school_id"]: s for s in schools}
+    rows = []
+    for sid in ids:
+        s = by_id.get(sid, {"school_id": sid, "school_name": "(deleted school)"})
+        rows.append({
+            "school_id": sid,
+            "school_name": s.get("school_name", ""),
+            "primary_contact_name": s.get("primary_contact_name", ""),
+            "address": s.get("address", ""), "city": s.get("city", ""),
+            "state": s.get("state", ""), "pincode": s.get("pincode", ""),
+            "phone": s.get("phone", ""),
+            "missing": _addr_missing(s),
+        })
+    return {"run_id": run_id, "rows": rows, "total": len(rows),
+            "missing_count": sum(1 for r in rows if r["missing"])}
+
+
 # A4 — the follow-up cadence a posted mailer triggers (offset days, type, title).
 # Research: mail + tight early follow-ups converts; a single call wastes the postage.
 DEFAULT_MAIL_CADENCE = [
@@ -701,6 +736,128 @@ async def update_mail_run_status(run_id: str, request: Request):
             await _create_mail_cadence(run, _set["posted_at"], user)
     await db.mail_runs.update_one({"run_id": run_id}, {"$set": _set})
     return await db.mail_runs.find_one({"run_id": run_id}, {"_id": 0})
+
+
+# ── Address stickers (Godex-500, 100x150mm, Indian postal style) ─────────────
+def _wrap_text(text, maxlen):
+    words = str(text or "").replace("\n", " ").split()
+    lines, cur = [], ""
+    for w in words:
+        if len(cur) + len(w) + 1 <= maxlen:
+            cur = (cur + " " + w).strip()
+        else:
+            if cur:
+                lines.append(cur)
+            cur = w
+    if cur:
+        lines.append(cur)
+    return lines
+
+
+def _build_stickers_pdf(touches, schools_by_id, company, base_url):
+    """One 100x150mm label per school: Indian postal 'To / From' + a scannable QR."""
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.units import mm
+    from reportlab.graphics.barcode import qr
+    from reportlab.graphics.shapes import Drawing
+    from reportlab.graphics import renderPDF
+
+    buf = io.BytesIO()
+    W, H = 100 * mm, 150 * mm
+    c = canvas.Canvas(buf, pagesize=(W, H))
+    m = 7 * mm
+
+    cname = company.get("company_name", "") or "SmartShape"
+    cstate = company.get("state", "")
+    ccity_pin = " - ".join([x for x in [company.get("city", ""), company.get("pincode", "")] if x])
+    from_lines = [cname] + _wrap_text(company.get("address", ""), 54)[:2]
+    if ccity_pin:
+        from_lines.append(ccity_pin + ("," if cstate else "."))
+    if cstate:
+        from_lines.append(cstate + ".")
+
+    if not touches:
+        c.showPage()
+
+    for t in touches:
+        sch = schools_by_id.get(t.get("school_id"), {})
+        # FROM (compact, top)
+        y = H - 11 * mm
+        c.setFont("Helvetica-Bold", 8); c.drawString(m, y, "From:")
+        c.setFont("Helvetica", 8)
+        for ln in from_lines:
+            c.drawString(m + 12 * mm, y, ln[:52]); y -= 4 * mm
+        c.setFont("Helvetica-Oblique", 7)
+        c.drawString(m, y - 1.5 * mm, "SMARTS-SHAPES · Learning through Craft")
+
+        c.setLineWidth(0.6); c.line(m, H - 40 * mm, W - m, H - 40 * mm)
+
+        # TO (Indian postal style, large)
+        ty = H - 50 * mm
+        c.setFont("Helvetica-Bold", 11); c.drawString(m, ty, "To,"); ty -= 6.5 * mm
+        c.setFont("Helvetica", 11); c.drawString(m, ty, "The Principal,"); ty -= 6.5 * mm
+        c.setFont("Helvetica-Bold", 14)
+        for ln in _wrap_text(sch.get("school_name", ""), 28)[:2]:
+            c.drawString(m, ty, ln + ","); ty -= 6.5 * mm
+        c.setFont("Helvetica", 11)
+        for ln in _wrap_text(sch.get("address", ""), 36)[:3]:
+            c.drawString(m, ty, ln + ","); ty -= 5.5 * mm
+        city_pin = " - ".join([x for x in [sch.get("city", ""), sch.get("pincode", "")] if x])
+        if city_pin:
+            c.setFont("Helvetica-Bold", 12); c.drawString(m, ty, city_pin + ","); ty -= 6 * mm
+        if sch.get("state"):
+            c.setFont("Helvetica", 11); c.drawString(m, ty, sch.get("state") + ".")
+
+        # QR (scan to respond) bottom-right
+        size = 26 * mm
+        url = f"{base_url}/api/r/{t.get('qr_token', '')}"
+        qrw = qr.QrCodeWidget(url)
+        b = qrw.getBounds(); bw = (b[2] - b[0]) or 1; bh = (b[3] - b[1]) or 1
+        d = Drawing(size, size, transform=[size / bw, 0, 0, size / bh, 0, 0])
+        d.add(qrw)
+        renderPDF.draw(d, c, W - size - m, 8 * mm)
+        c.setFont("Helvetica", 7); c.drawString(m, 11 * mm, "Scan to connect →")
+        c.showPage()
+
+    c.save()
+    return buf.getvalue()
+
+
+@router.get("/mail-runs/{run_id}/stickers.pdf")
+async def mail_run_stickers(run_id: str, request: Request):
+    await get_current_user(request)
+    run = await db.mail_runs.find_one({"run_id": run_id}, {"_id": 0})
+    if not run:
+        raise HTTPException(status_code=404, detail="Mail run not found")
+    touches = await db.mail_touches.find({"run_id": run_id}, {"_id": 0}).to_list(None)
+    ids = [t["school_id"] for t in touches]
+    schools = await db.schools.find({"school_id": {"$in": ids}}, {"_id": 0}).to_list(None)
+    schools_by_id = {s["school_id"]: s for s in schools}
+    company = await db.settings.find_one({"type": "company"}, {"_id": 0}) or {}
+    base = (_os.environ.get("FRONTEND_URL") or "https://app.smartshape.in").rstrip("/")
+    pdf = _build_stickers_pdf(touches, schools_by_id, company, base)
+    return StreamingResponse(io.BytesIO(pdf), media_type="application/pdf",
+                             headers={"Content-Disposition": f'attachment; filename="stickers-{run_id}.pdf"'})
+
+
+# Public QR landing — a scan logs the school's response on its mail touch.
+@router.get("/r/{qr_token}")
+async def mail_qr_respond(qr_token: str):
+    t = await db.mail_touches.find_one({"qr_token": qr_token}, {"_id": 0})
+    if t and not t.get("responded"):
+        await db.mail_touches.update_one({"qr_token": qr_token}, {"$set": {
+            "responded": True, "responded_at": datetime.now(timezone.utc).isoformat(), "response_channel": "qr"}})
+        if t.get("run_id"):
+            await db.mail_runs.update_one({"run_id": t["run_id"]}, {"$inc": {"counts.responded": 1}})
+    name = (t or {}).get("school_name", "")
+    html = (
+        "<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<title>SmartShape</title></head><body style='font-family:system-ui;text-align:center;padding:44px;"
+        "background:#f4f5f2;color:#1a211e'><h2 style='color:#c4402e'>Thank you!</h2>"
+        f"<p>We’ve noted your interest{(' — ' + name) if name else ''}.<br>"
+        "Our team will call you shortly about <b>SMARTS-SHAPES</b>.</p></body></html>"
+    )
+    return HTMLResponse(html)
 
 
 # ── Activity Types (editable master, powers the Bulk Activity Planner) ────────

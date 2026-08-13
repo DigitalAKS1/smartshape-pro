@@ -8,7 +8,7 @@ import { toast } from 'sonner';
 import {
   Plus, MessageSquare, Calendar, Target, Building2, UserPlus,
   Upload, Search, ChevronRight, AlertTriangle, Clock, MoreHorizontal,
-  Edit2, Trash2, Lock, UserCog, FileText, Linkedin, Instagram, Eye,
+  Edit2, Trash2, Lock, UserCog, FileText, Linkedin, Instagram, Eye, Printer,
 } from 'lucide-react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../../components/ui/dropdown-menu';
 import WhatsAppSendDialog from '../../components/WhatsAppSendDialog';
@@ -18,7 +18,7 @@ import { STAGES, SCHOOL_TYPES } from '../../lib/crmConstants';
 import LeadMobileCard from '../../components/crm/LeadMobileCard';
 import { FieldTooltip } from '../../components/ui/Tooltip';
 import EmptyState, { EMPTY_STATES } from '../../components/ui/EmptyState';
-import { leads as leadsApiObj, quotations as quotationsApi2, adminApi, schools as schoolsApiObj } from '../../lib/api';
+import { leads as leadsApiObj, quotations as quotationsApi2, adminApi, schools as schoolsApiObj, mailRuns as mailRunsApi } from '../../lib/api';
 
 import useLeadsCRM from '../../hooks/useLeadsCRM';
 import LeadDetailPanel from '../../components/crm/LeadDetailPanel';
@@ -143,6 +143,24 @@ export default function LeadsCRM() {
       setSelectedSchoolIds(new Set());
       crm.fetchData();
     } catch (err) { toast.error(err?.response?.data?.detail || 'Bulk assign failed'); }
+  };
+
+  // Turn the current filtered school selection into a physical mail run (brochure
+  // by default), then jump to Offline Mail to review addresses + print stickers.
+  const [mailRunBusy, setMailRunBusy] = React.useState(false);
+  const createMailRunFromSelection = async () => {
+    if (selectedSchoolIds.size === 0) return;
+    const ids = Array.from(selectedSchoolIds);
+    const name = window.prompt(`Name this mail run (${ids.length} schools):`, `Brochure drop — ${new Date().toLocaleDateString()}`);
+    if (name === null) return;
+    setMailRunBusy(true);
+    try {
+      await mailRunsApi.create({ name: name || 'Brochure drop', piece_type: 'brochure', school_ids: ids });
+      toast.success(`Mail run created for ${ids.length} schools — opening Offline Mail to print stickers`);
+      setSelectedSchoolIds(new Set());
+      navigate('/offline-mail');
+    } catch (err) { toast.error(err?.response?.data?.detail || 'Could not create mail run'); }
+    finally { setMailRunBusy(false); }
   };
 
   if (crm.loading) return (
@@ -771,6 +789,9 @@ export default function LeadsCRM() {
                     className="w-48"
                   />
                   <Button size="sm" onClick={() => setPlanActivityOpen(true)} className="bg-[#e94560] hover:bg-[#f05c75] text-white h-8" data-testid="plan-activity-btn">Plan Activity</Button>
+                  <Button size="sm" variant="outline" onClick={createMailRunFromSelection} disabled={mailRunBusy} className={`border-[var(--border-color)] ${textSec} h-8`} data-testid="mail-run-btn">
+                    <Printer className="mr-1 h-3 w-3" /> {mailRunBusy ? 'Creating…' : 'Mail Run'}
+                  </Button>
                   <Button size="sm" variant="outline" onClick={() => setSelectedSchoolIds(new Set())} className={`border-[var(--border-color)] ${textSec} h-8`}>Clear</Button>
                   {/* Superadmin-only (O20): guarded bulk delete of the current selection,
                       same dry-run-preview -> confirm -> delete flow as Data Cleanup. */}
