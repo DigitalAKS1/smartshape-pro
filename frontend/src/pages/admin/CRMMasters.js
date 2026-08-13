@@ -14,6 +14,7 @@ import MasterEntityTable from '../../components/crm/MasterEntityTable';
 const TABS = [
   { id: 'groups',       label: 'Group Master',        icon: Building2, desc: 'Trusts / parent organisations that own multiple schools' },
   { id: 'sources',      label: 'Source Master',        icon: Tag,       desc: 'Where leads / contacts come from (Call, Exhibition, Ads, ...)' },
+  { id: 'deal_types',   label: 'Deal Types',           icon: Briefcase, desc: 'Deal categories for quotations & leads — New Machine, Reorder Dies, New Dies, Sample. Powers the deal-type filter.' },
   { id: 'roles',        label: 'Contact Roles',        icon: UserCheck, desc: 'Role / designation taxonomy for school contacts (Principal, Trustee, Director, ...)' },
   { id: 'designations', label: 'Designation Master',   icon: Briefcase, desc: 'Job designations for school contacts — CEO, Principal, Vice Principal, Coordinator, ...' },
   { id: 'tags',         label: 'Tag Master',           icon: Tag,       desc: 'Color-coded tags to segment leads and run targeted WhatsApp / email campaigns' },
@@ -216,6 +217,29 @@ export default function CRMMasters() {
                 </div>
               ))}
               {m.sourcesList.length === 0 && <MasterEmpty icon={Tag} title="No sources yet" sub="Add where your leads come from — Call, Exhibition, Website, Referral — to track and filter by channel." />}
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'deal_types' && (
+          <div className={`${card} border rounded-md p-5`}>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className={`text-lg font-medium ${textPri} flex items-center gap-2`}>Deal Types <CountPill n={m.dealTypesList.length} /></h2>
+              <Button onClick={m.openNewDt} size="sm" className="bg-[#e94560] hover:bg-[#f05c75] text-white" data-testid="add-deal-type-btn">
+                <Plus className="mr-1 h-3 w-3" /> Add Deal Type
+              </Button>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+              {m.dealTypesList.map(d => (
+                <div key={d.deal_type_id} className={chipCls} data-testid={`deal-type-row-${d.deal_type_id}`}>
+                  <span className={`${textPri} text-sm`}>{d.name}</span>
+                  <div className="flex">
+                    <Button size="sm" variant="ghost" onClick={() => m.openEditDt(d)} className={`${textSec} h-7 px-1.5`} data-testid={`edit-deal-type-${d.deal_type_id}`}><Edit2 className="h-3 w-3" /></Button>
+                    <Button size="sm" variant="ghost" onClick={() => m.deleteDt(d)} className="text-red-400 h-7 px-1.5" data-testid={`delete-deal-type-${d.deal_type_id}`}><Trash2 className="h-3 w-3" /></Button>
+                  </div>
+                </div>
+              ))}
+              {m.dealTypesList.length === 0 && <MasterEmpty icon={Briefcase} title="No deal types yet" sub="Add the kinds of deals you sell — New Machine, Reorder Dies, New Dies, Sample — to segment quotations and filter leads." />}
             </div>
           </div>
         )}
@@ -510,6 +534,21 @@ export default function CRMMasters() {
             <DialogFooter>
               <Button variant="outline" onClick={() => m.setSrcOpen(false)} className="border-[var(--border-color)] text-[var(--text-secondary)]">Cancel</Button>
               <Button onClick={m.saveSrc} className="bg-[#e94560] hover:bg-[#f05c75] text-white" data-testid="save-source-btn">{m.editSrc ? 'Update' : 'Create'}</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* DEAL TYPE DIALOG */}
+        <Dialog open={m.dtOpen} onOpenChange={m.setDtOpen}>
+          <DialogContent className={`${dlgCls} max-w-sm`}>
+            <DialogHeader><DialogTitle className={textPri}>{m.editDt ? 'Edit Deal Type' : 'Add Deal Type'}</DialogTitle></DialogHeader>
+            <div className="py-2">
+              <Label className={`${textSec} text-xs`}>Deal Type Name *</Label>
+              <Input value={m.dtForm.name} onChange={e => m.setDtForm({ name: e.target.value })} className={inputCls} placeholder="e.g. Reorder - Dies" data-testid="deal-type-name-input" />
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => m.setDtOpen(false)} className="border-[var(--border-color)] text-[var(--text-secondary)]">Cancel</Button>
+              <Button onClick={m.saveDt} className="bg-[#e94560] hover:bg-[#f05c75] text-white" data-testid="save-deal-type-btn">{m.editDt ? 'Update' : 'Create'}</Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>

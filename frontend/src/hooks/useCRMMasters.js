@@ -8,6 +8,7 @@ import {
   whatsappTemplates,
   broadcastApi,
   designations as designationsApi,
+  dealTypes as dealTypesApi,
 } from '../lib/api';
 
 export function useCRMMasters() {
@@ -28,6 +29,12 @@ export function useCRMMasters() {
   const [srcOpen, setSrcOpen] = useState(false);
   const [editSrc, setEditSrc] = useState(null);
   const [srcForm, setSrcForm] = useState({ name: '' });
+
+  // deal types
+  const [dealTypesList, setDealTypesList] = useState([]);
+  const [dtOpen, setDtOpen] = useState(false);
+  const [editDt, setEditDt] = useState(null);
+  const [dtForm, setDtForm] = useState({ name: '' });
 
   // roles
   const [roleOpen, setRoleOpen] = useState(false);
@@ -51,13 +58,14 @@ export function useCRMMasters() {
 
   const fetchAll = async () => {
     try {
-      const [g, s, r, t, tmpl, des] = await Promise.all([
+      const [g, s, r, t, tmpl, des, dt] = await Promise.all([
         groupsApi.getAll(),
         sourcesApi.getAll(),
         contactRolesApi.getAll(),
         tagsApi.getAll(),
         whatsappTemplates.getAll().catch(() => ({ data: [] })),
         designationsApi.getAll().catch(() => ({ data: [] })),
+        dealTypesApi.getAll().catch(() => ({ data: [] })),
       ]);
       setGroupsList(g.data || []);
       setSourcesList(s.data || []);
@@ -65,6 +73,7 @@ export function useCRMMasters() {
       setTagsList(t.data || []);
       setTemplatesList(tmpl.data || []);
       setDesignationsList(des.data || []);
+      setDealTypesList(dt.data || []);
     } catch { toast.error('Failed to load masters'); }
     finally { setLoading(false); }
   };
@@ -112,6 +121,24 @@ export function useCRMMasters() {
   const deleteSrc = async (s) => {
     if (!window.confirm(`Delete source "${s.name}"?`)) return;
     try { await sourcesApi.delete(s.source_id); toast.success('Deleted'); fetchAll(); }
+    catch { toast.error('Delete failed'); }
+  };
+
+  // ── Deal Types ──────────────────────────────────────────────────────────────
+  const openNewDt = () => { setEditDt(null); setDtForm({ name: '' }); setDtOpen(true); };
+  const openEditDt = (d) => { setEditDt(d); setDtForm({ name: d.name || '' }); setDtOpen(true); };
+  const saveDt = async () => {
+    if (!dtForm.name) { toast.error('Deal type name required'); return; }
+    try {
+      if (editDt) await dealTypesApi.update(editDt.deal_type_id, dtForm);
+      else await dealTypesApi.create(dtForm);
+      toast.success(editDt ? 'Deal type updated' : 'Deal type created');
+      setDtOpen(false); fetchAll();
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Failed'); }
+  };
+  const deleteDt = async (d) => {
+    if (!window.confirm(`Delete deal type "${d.name}"?`)) return;
+    try { await dealTypesApi.delete(d.deal_type_id); toast.success('Deleted'); fetchAll(); }
     catch { toast.error('Delete failed'); }
   };
 
@@ -187,13 +214,16 @@ export function useCRMMasters() {
   return {
     loading,
     // data
-    groupsList, sourcesList, rolesList, tagsList, templatesList, designationsList,
+    groupsList, sourcesList, rolesList, tagsList, templatesList, designationsList, dealTypesList,
     // group dialog
     groupOpen, setGroupOpen, editGroup, groupForm, setGroupForm,
     openNewGroup, openEditGroup, saveGroup, deleteGroup,
     // source dialog
     srcOpen, setSrcOpen, editSrc, srcForm, setSrcForm,
     openNewSrc, openEditSrc, saveSrc, deleteSrc,
+    // deal-type dialog
+    dtOpen, setDtOpen, editDt, dtForm, setDtForm,
+    openNewDt, openEditDt, saveDt, deleteDt,
     // role dialog
     roleOpen, setRoleOpen, editRole, roleForm, setRoleForm,
     openNewRole, openEditRole, saveRole, deleteRole,

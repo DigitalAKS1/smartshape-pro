@@ -484,11 +484,179 @@ async def create_deal_type(request: Request):
     return await db.deal_types.find_one({"deal_type_id": deal_type_id}, {"_id": 0})
 
 
+@router.put("/deal-types/{deal_type_id}")
+async def update_deal_type(deal_type_id: str, request: Request):
+    await get_current_user(request)
+    body = await request.json()
+    upd = {}
+    if "name" in body:
+        upd["name"] = body["name"]
+    if "is_active" in body:
+        upd["is_active"] = bool(body["is_active"])
+    if upd:
+        await db.deal_types.update_one({"deal_type_id": deal_type_id}, {"$set": upd})
+    return await db.deal_types.find_one({"deal_type_id": deal_type_id}, {"_id": 0})
+
+
 @router.delete("/deal-types/{deal_type_id}")
 async def delete_deal_type(deal_type_id: str, request: Request):
     await get_current_user(request)
     await db.deal_types.delete_one({"deal_type_id": deal_type_id})
     return {"message": "Deal type deleted"}
+
+
+# ── Mail Areas (Territory & Offline-Mail engine, sub-project A1) ──────────────
+# An area is a city/pincode zone; schools belong to it by matching pincode
+# (fallback city). auto-assign caches the count; the school list is queried on
+# demand so the existing CRM/deal-type filter can narrow "who to mail".
+def _area_school_query(area):
+    if area.get("kind") == "city" and area.get("city"):
+        return {"city": area["city"]}
+    if area.get("pincode"):
+        return {"pincode": area["pincode"]}
+    return {"area_id_never_matches": True}  # misconfigured area matches nothing
+
+
+@router.get("/mail-areas")
+async def get_mail_areas(request: Request):
+    await get_current_user(request)
+    return await db.mail_areas.find({}, {"_id": 0}).sort("name", 1).to_list(500)
+
+
+@router.post("/mail-areas")
+async def create_mail_area(request: Request):
+    await get_current_user(request)
+    body = await request.json()
+    area_id = f"area_{uuid.uuid4().hex[:8]}"
+    await db.mail_areas.insert_one({
+        "area_id": area_id,
+        "name": body.get("name", ""),
+        "kind": body.get("kind", "pincode"),
+        "pincode": (body.get("pincode", "") or "").strip(),
+        "city": (body.get("city", "") or "").strip(),
+        "assigned_to": body.get("assigned_to", ""),
+        "school_count": 0,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    return await db.mail_areas.find_one({"area_id": area_id}, {"_id": 0})
+
+
+@router.delete("/mail-areas/{area_id}")
+async def delete_mail_area(area_id: str, request: Request):
+    await get_current_user(request)
+    await db.mail_areas.delete_one({"area_id": area_id})
+    return {"message": "Area deleted"}
+
+
+@router.post("/mail-areas/{area_id}/auto-assign")
+async def auto_assign_mail_area(area_id: str, request: Request):
+    await get_current_user(request)
+    area = await db.mail_areas.find_one({"area_id": area_id}, {"_id": 0})
+    if not area:
+        raise HTTPException(status_code=404, detail="Area not found")
+    count = await db.schools.count_documents(_area_school_query(area))
+    await db.mail_areas.update_one({"area_id": area_id}, {"$set": {"school_count": count}})
+    return {"area_id": area_id, "school_count": count}
+
+
+@router.get("/mail-areas/{area_id}/schools")
+async def get_mail_area_schools(area_id: str, request: Request):
+    await get_current_user(request)
+    area = await db.mail_areas.find_one({"area_id": area_id}, {"_id": 0})
+    if not area:
+        raise HTTPException(status_code=404, detail="Area not found")
+    return await db.schools.find(_area_school_query(area), {"_id": 0}).sort("school_name", 1).to_list(5000)
+
+
+# ── Mail Runs (Territory & Offline-Mail engine, sub-project A2) ───────────────
+async def _upsert_direct_mail_lead(school_id, deal_type, owner, now_iso):
+    """Tag a mailed school as a Direct-Mail lead — reuse its open lead if present,
+    else create one — so mailed schools become filterable pipeline."""
+    sch = await db.schools.find_one({"school_id": school_id}, {"_id": 0})
+    if not sch:
+        return None
+    existing = await db.leads.find_one(
+        {"school_id": school_id, "stage": {"$nin": ["won", "lost"]}, "is_deleted": {"$ne": True}},
+        {"_id": 0, "lead_id": 1})
+    if existing:
+        _set = {"last_activity_date": now_iso, "source": "Direct Mail"}
+        if deal_type:
+            _set["deal_type"] = deal_type
+        await db.leads.update_one({"lead_id": existing["lead_id"]}, {"$set": _set})
+        return existing["lead_id"]
+    lead_id = f"lead_{uuid.uuid4().hex[:12]}"
+    await db.leads.insert_one({
+        "lead_id": lead_id, "school_id": school_id,
+        "company_name": sch.get("school_name", ""), "school_city": sch.get("city", ""),
+        "contact_name": sch.get("primary_contact_name", ""),
+        "contact_phone": sch.get("phone", ""), "contact_email": sch.get("email", ""),
+        "source": "Direct Mail", "deal_type": deal_type or "", "lead_type": "cold",
+        "stage": "new", "assigned_to": owner, "assigned_name": "",
+        "last_activity_date": now_iso, "created_by": owner,
+        "created_at": now_iso, "updated_at": now_iso,
+    })
+    return lead_id
+
+
+@router.post("/mail-runs")
+async def create_mail_run(request: Request):
+    user = await get_current_user(request)
+    body = await request.json()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    school_ids = body.get("school_ids", []) or []
+    run_id = f"run_{uuid.uuid4().hex[:10]}"
+    deal_type = body.get("deal_type_target", "")
+    piece_type = body.get("piece_type", "brochure")
+    await db.mail_runs.insert_one({
+        "run_id": run_id, "name": body.get("name", ""), "area_id": body.get("area_id", ""),
+        "piece_type": piece_type, "deal_type_target": deal_type, "school_ids": school_ids,
+        "send_date": body.get("send_date", ""), "courier": body.get("courier", ""),
+        "tracking_no": body.get("tracking_no", ""), "courier_cost": float(body.get("courier_cost", 0) or 0),
+        "status": "planned", "created_by": user["email"], "created_at": now_iso,
+        "counts": {"sent": len(school_ids), "delivered": 0, "responded": 0, "appointments": 0},
+    })
+    for sid in school_ids:
+        lead_id = await _upsert_direct_mail_lead(sid, deal_type, user["email"], now_iso)
+        await db.mail_touches.insert_one({
+            "touch_id": f"mt_{uuid.uuid4().hex[:10]}", "run_id": run_id, "school_id": sid,
+            "lead_id": lead_id, "piece_type": piece_type, "posted_at": None,
+            "qr_token": uuid.uuid4().hex[:16], "delivery_status": "pending",
+            "responded": False, "responded_at": None, "response_channel": "",
+            "appointment": False, "next_action_date": "", "outcome_note": "",
+            "owner": user["email"], "created_at": now_iso,
+        })
+    return await db.mail_runs.find_one({"run_id": run_id}, {"_id": 0})
+
+
+@router.get("/mail-runs")
+async def get_mail_runs(request: Request):
+    await get_current_user(request)
+    return await db.mail_runs.find({}, {"_id": 0}).sort("created_at", -1).to_list(500)
+
+
+@router.get("/mail-runs/{run_id}")
+async def get_mail_run(run_id: str, request: Request):
+    await get_current_user(request)
+    run = await db.mail_runs.find_one({"run_id": run_id}, {"_id": 0})
+    if not run:
+        raise HTTPException(status_code=404, detail="Mail run not found")
+    run["touches"] = await db.mail_touches.find({"run_id": run_id}, {"_id": 0}).to_list(None)
+    return run
+
+
+@router.put("/mail-runs/{run_id}/status")
+async def update_mail_run_status(run_id: str, request: Request):
+    await get_current_user(request)
+    body = await request.json()
+    status = body.get("status")
+    if status not in ("planned", "posted", "closed"):
+        raise HTTPException(status_code=400, detail="Invalid status")
+    _set = {"status": status}
+    if status == "posted":
+        _set["posted_at"] = datetime.now(timezone.utc).isoformat()
+        await db.mail_touches.update_many({"run_id": run_id}, {"$set": {"posted_at": _set["posted_at"]}})
+    await db.mail_runs.update_one({"run_id": run_id}, {"$set": _set})
+    return await db.mail_runs.find_one({"run_id": run_id}, {"_id": 0})
 
 
 # ==================== PIPELINE SETTINGS ====================

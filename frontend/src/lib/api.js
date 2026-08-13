@@ -330,6 +330,7 @@ export const sources = {
 export const dealTypes = {
   getAll: () => API.get('/deal-types'),
   create: (data) => API.post('/deal-types', data),
+  update: (id, data) => API.put(`/deal-types/${id}`, data),
   delete: (id) => API.delete(`/deal-types/${id}`),
 };
 
