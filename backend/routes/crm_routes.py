@@ -982,6 +982,19 @@ async def mail_qr_respond(qr_token: str):
     return HTMLResponse(html)
 
 
+async def _wa_notify(phone, message):
+    """Send an internal WhatsApp alert to a rep. Reuses the school_routes sender
+    (posts to messageautosender.com); safe no-op if WhatsApp isn't configured or
+    the phone is blank. Never raises into the caller."""
+    if not (phone or "").strip():
+        return
+    try:
+        from routes.school_routes import _wa_send  # lazy → avoids import cycle
+        await _wa_send(phone, message)
+    except Exception:
+        pass
+
+
 @router.post("/r/{qr_token}/interest")
 async def mail_qr_interest(qr_token: str, request: Request):
     """Public capture: record what the school wants + raise a HIGH-priority callback
@@ -1024,15 +1037,26 @@ async def mail_qr_interest(qr_token: str, request: Request):
         "assigned_to": owner, "assigned_name": owner_name, "status": "pending",
         "created_by": "qr", "source": "qr_interest", "created_at": now_iso, "done_at": None})
 
-    # ping the owner instantly (bell) so a hot lead doesn't wait in a list
+    # ping the owner instantly (bell + WhatsApp) so a hot lead doesn't wait in a list
+    school_name = sch.get("school_name", t.get("school_name", "")) or "A school"
     if owner:
         await db.crm_notifications.insert_one({
             "notif_id": f"crmn_{uuid.uuid4().hex[:10]}",
             "email": owner, "type": "qr_interest",
             "title": "📩 Hot lead from a mailer",
-            "body": f"{sch.get('school_name', 'A school')} scanned your mailer — {detail}",
+            "body": f"{school_name} scanned your mailer — {detail}",
             "ref_type": "school", "ref_id": t.get("school_id", ""),
             "from_name": name or "Direct-mail QR", "is_read": False, "created_at": now_iso})
+        # reps live on their phones — also WhatsApp them the hot lead
+        urep = await db.users.find_one({"email": owner},
+                                       {"_id": 0, "phone": 1, "calling_number": 1}) or {}
+        rep_phone = (urep.get("phone") or urep.get("calling_number") or "").strip()
+        wa_msg = (f"📩 New mailer lead — {school_name}\n"
+                  f"Interested in: {interest or 'not specified'}\n"
+                  + (f"Contact: {name} {phone}\n" if (name or phone) else "")
+                  + (f"Best time: {ptime}\n" if ptime else "")
+                  + "Call them back — a task is waiting in SmartShape CRM.")
+        await _wa_notify(rep_phone, wa_msg)
 
     # keep the school phone fresh if it was blank and the scanner gave one
     if phone and not sch.get("phone") and t.get("school_id"):
