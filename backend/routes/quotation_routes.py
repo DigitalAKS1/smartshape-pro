@@ -283,9 +283,12 @@ async def _auto_register_from_quotation(quot: dict, created_by_email: str):
 
     if existing_lead:
         lead_id = existing_lead["lead_id"]
+        _lead_set = {"last_activity_date": now_iso}
+        if quot.get("deal_type"):
+            _lead_set["deal_type"] = quot["deal_type"]  # tag the lead with the quote's deal type
         await db.leads.update_one(
             {"lead_id": lead_id},
-            {"$set": {"last_activity_date": now_iso}, "$addToSet": {"quotation_ids": quotation_id}}
+            {"$set": _lead_set, "$addToSet": {"quotation_ids": quotation_id}}
         )
         logging.info(f"Linked quotation {quotation_id} → existing lead {lead_id}")
     else:
@@ -305,6 +308,7 @@ async def _auto_register_from_quotation(quot: dict, created_by_email: str):
             "source": "quotation",
             "source_id": quotation_id,
             "lead_type": "warm",
+            "deal_type": quot.get("deal_type", ""),
             "interested_product": quot.get("package_name", ""),
             "stage": "negotiation",
             "priority": "high",
@@ -506,6 +510,7 @@ async def create_quotation(request: Request):
         # FK when the user picked an existing school — used to link by id instead
         # of forking a duplicate on a fuzzy name match (see _resolve_or_create_school).
         "school_id": body.get("school_id", ""),
+        "deal_type": body.get("deal_type", ""),
         "address": body.get("address", ""),
         "customer_email": body.get("customer_email", ""),
         "customer_phone": body.get("customer_phone", ""),

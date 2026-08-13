@@ -17,6 +17,7 @@ const CURRENCY_SYMBOLS = ['₹', '$', '€', '£', 'AED', '¥'];
 export default function QuotationStep3Pricing({
   formData, setFormData,
   salesPersonsList,
+  dealTypesList = [],
   selectedPackage,
   company,
   // product lines
@@ -72,6 +73,20 @@ export default function QuotationStep3Pricing({
               data-testid="school-name-input"
               placeholder="School or company name"
             />
+          </div>
+          <div>
+            <Label className={`text-xs ${tMut} mb-1`}>Deal Type</Label>
+            <select
+              value={formData.deal_type || ''}
+              onChange={e => setFormData(p => ({ ...p, deal_type: e.target.value }))}
+              className={`h-11 w-full rounded-md px-3 text-sm border ${inputCls}`}
+              data-testid="deal-type-select"
+            >
+              <option value="">— Select deal type —</option>
+              {dealTypesList.map(d => (
+                <option key={d.deal_type_id || d.name} value={d.name}>{d.name}</option>
+              ))}
+            </select>
           </div>
           <div className="sm:col-span-2">
             <Label className={`text-xs ${tMut} mb-1`}>Street Address</Label>

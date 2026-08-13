@@ -90,6 +90,7 @@ export default function CreateQuotation() {
             formData={hook.formData}
             setFormData={hook.setFormData}
             salesPersonsList={hook.salesPersonsList}
+            dealTypesList={hook.dealTypesList}
             selectedPackage={hook.selectedPackage}
             company={hook.company}
             showAddProduct={hook.showAddProduct}

@@ -327,6 +327,12 @@ export const sources = {
   delete: (id) => API.delete(`/sources/${id}`),
 };
 
+export const dealTypes = {
+  getAll: () => API.get('/deal-types'),
+  create: (data) => API.post('/deal-types', data),
+  delete: (id) => API.delete(`/deal-types/${id}`),
+};
+
 // Contact Roles
 export const contactRoles = {
   getAll: () => API.get('/contact-roles'),

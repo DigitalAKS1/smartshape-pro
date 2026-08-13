@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
-import { packages, salesPersons, quotations, companySettings, contacts as contactsApi, schools as schoolsApi, schoolPortalSettings } from '../lib/api';
+import { packages, salesPersons, quotations, companySettings, contacts as contactsApi, schools as schoolsApi, schoolPortalSettings, dealTypes } from '../lib/api';
 
 export default function useCreateQuotation() {
   const navigate = useNavigate();
@@ -15,6 +15,7 @@ export default function useCreateQuotation() {
   const [salesPersonsList, setSalesPersonsList] = useState([]);
   const [contactsList, setContactsList]     = useState([]);
   const [schoolsList, setSchoolsList]       = useState([]);
+  const [dealTypesList, setDealTypesList]   = useState([]);
   const [company, setCompany]               = useState({});
 
   // ── Step 1 — Contact ─────────────────────────────────────────────────────
@@ -44,7 +45,7 @@ export default function useCreateQuotation() {
 
   // ── Main form ────────────────────────────────────────────────────────────
   const [formData, setFormData] = useState({
-    package_id: '', principal_name: '', school_name: '', school_id: '', address: '',
+    package_id: '', principal_name: '', school_name: '', school_id: '', deal_type: '', address: '',
     city: '', state: '', pincode: '', lead_id: '',
     customer_email: '', customer_phone: '', customer_gst: '',
     sales_person_id: '', discount1_pct: 0, discount2_pct: 0,
@@ -61,14 +62,15 @@ export default function useCreateQuotation() {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [pkgsRes, spRes, compRes, ctRes, schRes] = await Promise.all([
+        const [pkgsRes, spRes, compRes, ctRes, schRes, dtRes] = await Promise.all([
           packages.getAll(), salesPersons.getAll(), companySettings.get(),
-          contactsApi.getAll(), schoolsApi.getAll(),
+          contactsApi.getAll(), schoolsApi.getAll(), dealTypes.getAll(),
         ]);
         setPackagesList(pkgsRes.data || []);
         setSalesPersonsList(spRes.data || []);
         setContactsList(ctRes.data || []);
         setSchoolsList(schRes.data || []);
+        setDealTypesList(dtRes.data || []);
         const comp = compRes.data || {};
         setCompany(comp);
         setFormData(prev => ({
@@ -404,7 +406,7 @@ export default function useCreateQuotation() {
     // Step
     step, setStep,
     // Remote data
-    packagesList, salesPersonsList, company,
+    packagesList, salesPersonsList, company, dealTypesList,
     // Step 1
     contactQuery, setContactQuery,
     selectedContact, setSelectedContact,

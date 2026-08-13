@@ -29,7 +29,7 @@ function deriveOwners(salespersons, rows) {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-export function deriveFilterOptions({ contacts = [], leads = [], schools = [], sources = [], roles = [], tags = [], salespersons = [] } = {}) {
+export function deriveFilterOptions({ contacts = [], leads = [], schools = [], sources = [], roles = [], tags = [], salespersons = [], dealTypes = [] } = {}) {
   return {
     sources: uniqSorted([...(sources || []).map(s => s.name || s), ...contacts.map(c => c.source), ...leads.map(l => l.source)]),
     roles: uniqSorted([...(roles || []).map(r => r.name || r), ...contacts.map(c => c.designation)]),
@@ -37,6 +37,9 @@ export function deriveFilterOptions({ contacts = [], leads = [], schools = [], s
     cities: uniqSorted(schools.map(s => s.city)),
     tags: (tags || []).map(t => ({ id: t.tag_id, name: t.name, color: t.color })),
     owners: deriveOwners(salespersons, [...schools, ...contacts, ...leads]),
+    // Deal types: the master picklist plus any value actually seen on a lead, so
+    // nothing is un-filterable.
+    deal_types: uniqSorted([...(dealTypes || []).map(d => d.name || d), ...leads.map(l => l.deal_type)]),
     stages: STAGES,
   };
 }
@@ -62,14 +65,14 @@ export function hasActiveFilters(f) {
   if (!f) return false;
   return nonEmpty(f.sources) || nonEmpty(f.lead_stages) || nonEmpty(f.roles) ||
     nonEmpty(f.school_types) || nonEmpty(f.cities) || nonEmpty(f.tags) ||
-    nonEmpty(f.owners) || nonEmpty(f.has) || f.min_strength != null || f.max_strength != null ||
+    nonEmpty(f.owners) || nonEmpty(f.has) || nonEmpty(f.deal_types) || f.min_strength != null || f.max_strength != null ||
     hasDateRange(f, 'import_date') || hasDateRange(f, 'assigned_date');
 }
 
 export function countActive(f) {
   if (!f) return 0;
   let n = 0;
-  ['sources', 'lead_stages', 'roles', 'school_types', 'cities', 'tags', 'owners', 'has'].forEach(k => { if (nonEmpty(f[k])) n++; });
+  ['sources', 'lead_stages', 'roles', 'school_types', 'cities', 'tags', 'owners', 'has', 'deal_types'].forEach(k => { if (nonEmpty(f[k])) n++; });
   if (f.min_strength != null || f.max_strength != null) n++;
   if (hasDateRange(f, 'import_date')) n++;
   if (hasDateRange(f, 'assigned_date')) n++;
@@ -154,6 +157,17 @@ export function matchesCrmFilter(row, filter, ctx) {
     }
   }
 
+  // Deal type lives on leads. For a school row, match if ANY lead under it has a
+  // wanted deal type ("schools we sent a Sample / Reorder / New-Machine deal").
+  if (nonEmpty(f.deal_types)) {
+    if (kind === 'lead') {
+      if (!f.deal_types.includes((row.deal_type || '').trim())) return false;
+    } else {
+      const sl = leadsBySchoolId[row.school_id] || [];
+      if (!sl.some(l => f.deal_types.includes((l.deal_type || '').trim()))) return false;
+    }
+  }
+
   const needsSchool = nonEmpty(f.school_types) || nonEmpty(f.cities) || f.min_strength != null || f.max_strength != null;
   if (needsSchool) {
     const school = schoolsById[row.school_id];
@@ -172,6 +186,7 @@ export function matchesCrmFilter(row, filter, ctx) {
 export const FACET_LABELS = {
   owners: 'Owner', cities: 'City', sources: 'Source',
   school_types: 'Type', roles: 'Role', lead_stages: 'Stage', tags: 'Tag',
+  deal_types: 'Deal Type',
 };
 
 // Turn a free-text term into ranked "add this filter" suggestions. Pure: pass
@@ -195,6 +210,7 @@ export function suggestFacets(term, options = {}, { countFor, applied } = {}) {
   (options.stages || []).forEach(s => add('lead_stages', s.id, s.label));
   (options.tags || []).forEach(tg => add('tags', tg.id, tg.name));
   (options.owners || []).forEach(o => add('owners', o.id, o.name));
+  (options.deal_types || []).forEach(d => add('deal_types', d, d));
 
   let out = cand;
   if (countFor) {

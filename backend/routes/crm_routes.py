@@ -448,6 +448,49 @@ async def delete_source(source_id: str, request: Request):
     return {"message": "Source deleted"}
 
 
+# ── Deal Types ───────────────────────────────────────────────────────────────
+# Segments quotations + leads by what kind of deal it is. Powers the "which deal
+# type was sent" filter (leads / quotations / schools) and the resale engine.
+DEFAULT_DEAL_TYPES = ["New Machine Package", "Reorder - Dies", "New Dies / Add-on", "Sample / Trial / Demo"]
+
+
+@router.get("/deal-types")
+async def get_deal_types(request: Request):
+    await get_current_user(request)
+    rows = await db.deal_types.find({}, {"_id": 0}).sort("name", 1).to_list(100)
+    if not rows:
+        for name in DEFAULT_DEAL_TYPES:
+            await db.deal_types.insert_one({
+                "deal_type_id": f"dt_{uuid.uuid4().hex[:8]}",
+                "name": name,
+                "is_active": True,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            })
+        rows = await db.deal_types.find({}, {"_id": 0}).sort("name", 1).to_list(100)
+    return rows
+
+
+@router.post("/deal-types")
+async def create_deal_type(request: Request):
+    await get_current_user(request)
+    body = await request.json()
+    deal_type_id = f"dt_{uuid.uuid4().hex[:8]}"
+    await db.deal_types.insert_one({
+        "deal_type_id": deal_type_id,
+        "name": body.get("name", ""),
+        "is_active": True,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    return await db.deal_types.find_one({"deal_type_id": deal_type_id}, {"_id": 0})
+
+
+@router.delete("/deal-types/{deal_type_id}")
+async def delete_deal_type(deal_type_id: str, request: Request):
+    await get_current_user(request)
+    await db.deal_types.delete_one({"deal_type_id": deal_type_id})
+    return {"message": "Deal type deleted"}
+
+
 # ==================== PIPELINE SETTINGS ====================
 
 @router.get("/pipeline-settings")
@@ -1286,7 +1329,8 @@ async def get_school_profile(school_id: str, request: Request):
     quotations = await db.quotations.find(
         {"$or": [{"school_id": school_id}, {"school_name": school_name}]},
         {"_id": 0, "quotation_id": 1, "quotation_number": 1, "status": 1, "quotation_status": 1,
-         "grand_total": 1, "currency_symbol": 1, "created_at": 1, "created_by_name": 1, "items": 1}
+         "grand_total": 1, "currency_symbol": 1, "created_at": 1, "created_by_name": 1, "items": 1,
+         "deal_type": 1}
     ).sort("created_at", -1).to_list(None)
 
     # Fetch from visit_plans (admin-scheduled, have school_id)
@@ -1418,6 +1462,14 @@ async def get_school_profile(school_id: str, request: Request):
             {"_id": 0, "label": 1, "status": 1, "tat_status": 1, "plan_done": 1, "assigned_to": 1})
         fms_flows.append({**_f, "current_stage": cur})
 
+    # Deal types this school has been sent/associated with (distinct across its
+    # leads + quotations) — powers the 360 chips and school-level deal-type filter.
+    deal_types_present = sorted(
+        {(l.get("deal_type") or "").strip() for l in leads}
+        | {(q.get("deal_type") or "").strip() for q in quotations}
+    )
+    deal_types_present = [d for d in deal_types_present if d]
+
     active_stages = {"new", "contacted", "demo", "quoted", "negotiation"}
     active_leads_count = sum(1 for l in leads if l.get("stage") in active_stages)
 
@@ -1454,6 +1506,7 @@ async def get_school_profile(school_id: str, request: Request):
         "communications": communications,
         "invoices": invoices,
         "fms_flows": fms_flows,
+        "deal_types": deal_types_present,
         "metrics": {
             "total_leads": len(leads),
             "active_leads": active_leads_count,
@@ -1944,6 +1997,7 @@ async def convert_contact_to_lead(contact_id: str, request: Request):
         "source": contact.get("source", ""),
         "source_id": contact.get("source_id", ""),
         "lead_type": body.get("lead_type", "warm"),
+        "deal_type": body.get("deal_type", ""),
         "interested_product": body.get("interested_product", ""),
         "stage": "new",
         "priority": body.get("priority", "medium"),

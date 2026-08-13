@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import {
   SlidersHorizontal, X, ChevronDown, ChevronRight, ChevronLeft,
-  Search, User, MapPin, Building2, Radio, GitBranch, Tag as TagIcon, CalendarRange,
+  Search, User, MapPin, Building2, Radio, GitBranch, Tag as TagIcon, CalendarRange, Briefcase,
 } from 'lucide-react';
 import { UNASSIGNED, FACET_LABELS, countActive } from '../../lib/crmFilter';
 
@@ -268,6 +268,8 @@ export default function FilterRail({ options = {}, value, onChange, resultCount,
           opts={(options.sources || []).map((s) => ({ id: s, label: s }))} values={filt.sources || []} onToggle={toggle} countFor={countFor} />
         <FacetSection facetKey="lead_stages" label="Stage" Icon={GitBranch}
           opts={(options.stages || []).map((s) => ({ id: s.id, label: s.label }))} values={filt.lead_stages || []} onToggle={toggle} countFor={countFor} />
+        <FacetSection facetKey="deal_types" label="Deal Type" Icon={Briefcase}
+          opts={(options.deal_types || []).map((d) => ({ id: d, label: d }))} values={filt.deal_types || []} onToggle={toggle} countFor={countFor} />
         <FacetSection facetKey="tags" label="Tag" Icon={TagIcon}
           opts={(options.tags || []).map((t) => ({ id: t.id, label: t.name, color: t.color }))} values={filt.tags || []} onToggle={toggle} countFor={countFor} />
         <DatesSection filt={filt} onSetRange={setRange} />
