@@ -852,12 +852,16 @@ def _build_stickers_pdf(touches, schools_by_id, company, base_url):
         ty = H - 50 * mm
         c.setFont("Helvetica-Bold", 11); c.drawString(m, ty, "To,"); ty -= 6.5 * mm
         c.setFont("Helvetica", 11); c.drawString(m, ty, "The Principal,"); ty -= 6.5 * mm
+        # Wrapped fields carry a trailing comma only on their LAST visual line, so
+        # a name/address that wraps doesn't sprout a comma mid-phrase.
         c.setFont("Helvetica-Bold", 14)
-        for ln in _wrap_text(sch.get("school_name", ""), 28)[:2]:
-            c.drawString(m, ty, ln + ","); ty -= 6.5 * mm
+        name_lines = _wrap_text(sch.get("school_name", ""), 28)[:2]
+        for i, ln in enumerate(name_lines):
+            c.drawString(m, ty, ln + ("," if i == len(name_lines) - 1 else "")); ty -= 6.5 * mm
         c.setFont("Helvetica", 11)
-        for ln in _wrap_text(sch.get("address", ""), 36)[:3]:
-            c.drawString(m, ty, ln + ","); ty -= 5.5 * mm
+        addr_lines = _wrap_text(sch.get("address", ""), 36)[:3]
+        for i, ln in enumerate(addr_lines):
+            c.drawString(m, ty, ln + ("," if i == len(addr_lines) - 1 else "")); ty -= 5.5 * mm
         city_pin = " - ".join([x for x in [sch.get("city", ""), sch.get("pincode", "")] if x])
         if city_pin:
             c.setFont("Helvetica-Bold", 12); c.drawString(m, ty, city_pin + ","); ty -= 6 * mm
