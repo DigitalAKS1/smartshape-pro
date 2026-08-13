@@ -982,7 +982,10 @@ async def mail_qr_respond(qr_token: str):
 async def mail_qr_interest(qr_token: str, request: Request):
     """Public capture: record what the school wants + raise a HIGH-priority callback
     task for the account owner (fallback: the run's creator)."""
-    body = await request.json()
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}  # bare/malformed POST from a scanner must never 500 a public page
     t = await db.mail_touches.find_one({"qr_token": qr_token}, {"_id": 0})
     if not t:
         return {"ok": True}  # unknown/expired token — never error a public scan
@@ -1016,6 +1019,16 @@ async def mail_qr_interest(qr_token: str, request: Request):
         "notes": detail, "due_date": now_iso[:10], "priority": "high",
         "assigned_to": owner, "assigned_name": owner_name, "status": "pending",
         "created_by": "qr", "source": "qr_interest", "created_at": now_iso, "done_at": None})
+
+    # ping the owner instantly (bell) so a hot lead doesn't wait in a list
+    if owner:
+        await db.crm_notifications.insert_one({
+            "notif_id": f"crmn_{uuid.uuid4().hex[:10]}",
+            "email": owner, "type": "qr_interest",
+            "title": "📩 Hot lead from a mailer",
+            "body": f"{sch.get('school_name', 'A school')} scanned your mailer — {detail}",
+            "ref_type": "school", "ref_id": t.get("school_id", ""),
+            "from_name": name or "Direct-mail QR", "is_read": False, "created_at": now_iso})
 
     # keep the school phone fresh if it was blank and the scanner gave one
     if phone and not sch.get("phone") and t.get("school_id"):
