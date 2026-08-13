@@ -2,8 +2,10 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { toast } from 'sonner';
 import AdminLayout from '../../components/layouts/AdminLayout';
 import { mailAreas, mailRuns } from '../../lib/api';
-import { MapPin, Mail, Plus, RefreshCw, Trash2, X, Printer } from 'lucide-react';
+import { MapPin, Mail, Plus, RefreshCw, Trash2, X, Printer, TrendingUp, QrCode, CalendarCheck, FileText, IndianRupee } from 'lucide-react';
 import MailAddressSheet from '../../components/mail/MailAddressSheet';
+
+const inr = (n) => '₹' + Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 });
 
 const PIECES = ['brochure', 'sample', 'newsletter', 'other'];
 const STATUS_COLOR = { planned: '#9A6A15', posted: '#1E5AA8', closed: '#2E7D5B' };
@@ -11,6 +13,7 @@ const STATUS_COLOR = { planned: '#9A6A15', posted: '#1E5AA8', closed: '#2E7D5B' 
 export default function OfflineMail() {
   const [areas, setAreas] = useState([]);
   const [runs, setRuns] = useState([]);
+  const [analytics, setAnalytics] = useState({ runs: [], totals: {} });
   const [loading, setLoading] = useState(true);
   const [showArea, setShowArea] = useState(false);
   const [areaForm, setAreaForm] = useState({ name: '', kind: 'pincode', pincode: '', city: '' });
@@ -20,9 +23,10 @@ export default function OfflineMail() {
 
   const load = useCallback(async () => {
     try {
-      const [a, r] = await Promise.all([mailAreas.getAll(), mailRuns.getAll()]);
+      const [a, r, an] = await Promise.all([mailAreas.getAll(), mailRuns.getAll(), mailRuns.analytics()]);
       setAreas(a.data || []);
       setRuns(r.data || []);
+      setAnalytics(an.data || { runs: [], totals: {} });
     } catch { toast.error('Failed to load offline mail'); }
     finally { setLoading(false); }
   }, []);
@@ -92,6 +96,7 @@ export default function OfflineMail() {
   };
 
   const areaName = (id) => areas.find(a => a.area_id === id)?.name || '—';
+  const perfById = Object.fromEntries((analytics.runs || []).map(x => [x.run_id, x]));
 
   const card = 'bg-[var(--bg-card)] border border-[var(--border-color)] rounded-xl';
   const btnP = 'inline-flex items-center gap-1.5 h-9 px-3.5 rounded-lg bg-[#e94560] hover:bg-[#f05c75] text-white text-sm font-semibold';
@@ -111,6 +116,33 @@ export default function OfflineMail() {
           <div className="py-16 text-center text-[var(--text-muted)]">Loading…</div>
         ) : (
           <div className="grid gap-6">
+            {/* CAMPAIGN PERFORMANCE — the ROI of every rupee of postage */}
+            {(analytics.totals?.sent || 0) > 0 && (() => {
+              const t = analytics.totals;
+              const kpis = [
+                { icon: Mail, label: 'Posted', val: t.sent, sub: `${runs.length} run${runs.length !== 1 ? 's' : ''}` },
+                { icon: QrCode, label: 'Responded', val: t.responded, sub: `${Math.round((t.response_rate || 0) * 100)}% response`, hot: true },
+                { icon: CalendarCheck, label: 'Appointments', val: t.appointments, sub: t.cost_per_appointment != null ? `${inr(t.cost_per_appointment)}/appt` : '—' },
+                { icon: FileText, label: 'Quoted', val: t.quoted, sub: inr(t.pipeline_value) + ' pipeline' },
+                { icon: IndianRupee, label: 'Postage spent', val: inr(t.courier_cost), sub: t.cost_per_response != null ? `${inr(t.cost_per_response)}/response` : 'no responses yet', isMoney: true },
+              ];
+              return (
+                <div className={`${card} p-5`}>
+                  <h2 className="text-lg font-medium text-[var(--text-primary)] flex items-center gap-2 mb-4"><TrendingUp className="h-4 w-4 text-[#e94560]" /> Campaign Performance</h2>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+                    {kpis.map((k, i) => (
+                      <div key={i} className={`rounded-xl p-3.5 border ${k.hot ? 'border-[#e94560]/40 bg-[#e94560]/5' : 'border-[var(--border-color)] bg-[var(--bg-primary)]'}`}>
+                        <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-[var(--text-muted)]"><k.icon className="h-3.5 w-3.5" /> {k.label}</div>
+                        <div className={`mt-1 font-bold text-[var(--text-primary)] ${k.isMoney ? 'text-xl' : 'text-2xl'}`}>{k.val}</div>
+                        <div className="text-[11px] text-[var(--text-secondary)] mt-0.5">{k.sub}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-[11px] text-[var(--text-muted)] mt-3">Funnel: Posted → QR scan / call-back → appointment → quotation. A quotation counts for a run when the school was quoted on/after the send date.</p>
+                </div>
+              );
+            })()}
+
             {/* AREAS */}
             <div className={`${card} p-5`}>
               <div className="flex items-center justify-between mb-4">
@@ -158,7 +190,11 @@ export default function OfflineMail() {
                   <thead>
                     <tr className="text-[10px] uppercase tracking-wide text-[var(--text-muted)] text-left">
                       <th className="py-2 pr-3">Run</th><th className="py-2 pr-3">Area</th><th className="py-2 pr-3">Piece</th>
-                      <th className="py-2 pr-3">Sent</th><th className="py-2 pr-3">Courier</th><th className="py-2 pr-3">Status</th>
+                      <th className="py-2 pr-3">Sent</th>
+                      <th className="py-2 pr-3" title="Scanned QR or called back">Resp.</th>
+                      <th className="py-2 pr-3" title="Appointments booked">Appt.</th>
+                      <th className="py-2 pr-3" title="Schools quoted on/after send date">Quoted</th>
+                      <th className="py-2 pr-3">Courier</th><th className="py-2 pr-3">Status</th>
                       <th className="py-2 pr-3 text-right">Addresses & Stickers</th>
                     </tr>
                   </thead>
@@ -169,6 +205,9 @@ export default function OfflineMail() {
                         <td className="py-2.5 pr-3 text-[var(--text-secondary)]">{areaName(r.area_id)}</td>
                         <td className="py-2.5 pr-3 text-[var(--text-secondary)] capitalize">{r.piece_type}</td>
                         <td className="py-2.5 pr-3 font-mono">{r.counts?.sent ?? 0}</td>
+                        <td className="py-2.5 pr-3 font-mono font-semibold text-[#e94560]">{perfById[r.run_id]?.responded ?? 0}</td>
+                        <td className="py-2.5 pr-3 font-mono">{perfById[r.run_id]?.appointments ?? 0}</td>
+                        <td className="py-2.5 pr-3 font-mono">{perfById[r.run_id]?.quoted ?? 0}</td>
                         <td className="py-2.5 pr-3 text-[var(--text-secondary)]">{r.courier || '—'}{r.tracking_no ? ` · ${r.tracking_no}` : ''}</td>
                         <td className="py-2.5 pr-3">
                           <select value={r.status} onChange={e => setStatus(r, e.target.value)}
@@ -188,7 +227,7 @@ export default function OfflineMail() {
                         </td>
                       </tr>
                     ))}
-                    {runs.length === 0 && <tr><td colSpan="7" className="py-6 text-center text-[var(--text-muted)]">No mail runs yet. Open an area above and click "New run".</td></tr>}
+                    {runs.length === 0 && <tr><td colSpan="10" className="py-6 text-center text-[var(--text-muted)]">No mail runs yet. Open an area above and click "New run".</td></tr>}
                   </tbody>
                 </table>
               </div>

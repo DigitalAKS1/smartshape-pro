@@ -349,6 +349,7 @@ export const mailRuns = {
   updateStatus: (id, status) => API.put(`/mail-runs/${id}/status`, { status }),
   addresses: (id) => API.get(`/mail-runs/${id}/addresses`),
   stickers: (id) => API.get(`/mail-runs/${id}/stickers.pdf`, { responseType: 'blob' }),
+  analytics: () => API.get('/mail-runs/analytics'),
 };
 
 export const activityTypes = {

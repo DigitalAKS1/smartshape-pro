@@ -635,6 +635,55 @@ async def get_mail_runs(request: Request):
     return await db.mail_runs.find({}, {"_id": 0}).sort("created_at", -1).to_list(500)
 
 
+# NOTE: this static path MUST stay above /mail-runs/{run_id} or FastAPI matches
+# "analytics" as a run_id and this endpoint is never reached.
+@router.get("/mail-runs/analytics")
+async def get_mail_analytics(request: Request):
+    """Offline-mail ROI: per-run funnel + cost efficiency + roll-up.
+
+    A quotation is attributed to a run when it's for one of the run's schools and
+    was created on/after the run's send date (falls back to the run's created_at).
+    Same school in two runs counts under both — a v1 attribution simplification.
+    """
+    await get_current_user(request)
+    runs = await db.mail_runs.find({}, {"_id": 0}).sort("created_at", -1).to_list(2000)
+    out = []
+    tot = {"sent": 0, "responded": 0, "appointments": 0, "quoted": 0,
+           "pipeline_value": 0.0, "courier_cost": 0.0}
+    for run in runs:
+        rid = run["run_id"]
+        sids = run.get("school_ids", []) or []
+        since = run.get("send_date") or (run.get("created_at") or "")[:10]
+        touches = await db.mail_touches.find({"run_id": rid}, {"_id": 0}).to_list(None)
+        responded = sum(1 for t in touches if t.get("responded"))
+        appts = sum(1 for t in touches if t.get("appointment"))
+        quoted, pipeline = 0, 0.0
+        if sids:
+            q = {"school_id": {"$in": sids}}
+            if since:
+                q["created_at"] = {"$gte": since}
+            quotes = await db.quotations.find(q, {"_id": 0, "school_id": 1, "grand_total": 1}).to_list(None)
+            quoted = len({x.get("school_id") for x in quotes})
+            pipeline = float(sum(x.get("grand_total", 0) or 0 for x in quotes))
+        sent = run.get("counts", {}).get("sent", len(sids)) or len(sids)
+        cost = float(run.get("courier_cost", 0) or 0)
+        out.append({
+            "run_id": rid, "name": run.get("name", ""), "piece_type": run.get("piece_type", ""),
+            "status": run.get("status", ""), "send_date": run.get("send_date", ""),
+            "sent": sent, "responded": responded, "appointments": appts,
+            "quoted": quoted, "pipeline_value": pipeline, "courier_cost": cost,
+            "response_rate": (responded / sent) if sent else 0.0,
+            "cost_per_response": round(cost / responded, 2) if responded else None,
+            "cost_per_appointment": round(cost / appts, 2) if appts else None,
+        })
+        tot["sent"] += sent; tot["responded"] += responded; tot["appointments"] += appts
+        tot["quoted"] += quoted; tot["pipeline_value"] += pipeline; tot["courier_cost"] += cost
+    tot["response_rate"] = (tot["responded"] / tot["sent"]) if tot["sent"] else 0.0
+    tot["cost_per_response"] = round(tot["courier_cost"] / tot["responded"], 2) if tot["responded"] else None
+    tot["cost_per_appointment"] = round(tot["courier_cost"] / tot["appointments"], 2) if tot["appointments"] else None
+    return {"runs": out, "totals": tot}
+
+
 @router.get("/mail-runs/{run_id}")
 async def get_mail_run(run_id: str, request: Request):
     await get_current_user(request)
