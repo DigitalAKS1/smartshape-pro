@@ -256,10 +256,13 @@ async def startup():
 
     # Seed admin
     admin_email = os.environ.get("ADMIN_EMAIL", "admin@smartshape.com").lower()
-    # No weak default. The admin password comes from the ADMIN_PASSWORD env var: if set, it
-    # is applied (declarative). If NOT set, we never reset an existing admin's password and we
-    # seed a brand-new admin with a strong RANDOM password (logged once) — so the master
-    # login is never the guessable 'admin123'.
+    # ADMIN_PASSWORD is a BOOTSTRAP secret, not a declarative override. We use it only to
+    # create a brand-new admin or repair one that has no password yet. We NEVER overwrite an
+    # existing admin password — so a password the owner changes in-app persists across every
+    # deploy/restart (previously the seed reverted it each boot, which repeatedly locked the
+    # owner out). If ADMIN_PASSWORD is unset, a brand-new admin gets a strong RANDOM password
+    # (logged once). Lost-password recovery = reset the DB hash directly (see runbook), which
+    # then also sticks because the seed won't touch an existing hash.
     env_admin_password = os.environ.get("ADMIN_PASSWORD")
 
     existing_admin = await db.users.find_one({"email": admin_email})
@@ -285,12 +288,11 @@ async def startup():
             )
     else:
         update_admin = {"role": "admin"}
+        # Repair ONLY when there is no password to begin with. An existing hash is left
+        # untouched on purpose, so in-app password changes survive restarts and deploys.
         if not existing_admin.get("password_hash"):
             import secrets
             update_admin["password_hash"] = hash_password(env_admin_password or secrets.token_urlsafe(16))
-        elif env_admin_password and not verify_password(env_admin_password, existing_admin.get("password_hash", "")):
-            # ADMIN_PASSWORD explicitly provided → apply it so the owner can set a strong one.
-            update_admin["password_hash"] = hash_password(env_admin_password)
         await db.users.update_one({"email": admin_email}, {"$set": update_admin})
         logging.info("Admin ensured")
 
