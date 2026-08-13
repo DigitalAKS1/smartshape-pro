@@ -24,6 +24,7 @@ import useLeadsCRM from '../../hooks/useLeadsCRM';
 import LeadDetailPanel from '../../components/crm/LeadDetailPanel';
 import LeadFormDialog from '../../components/crm/LeadFormDialog';
 import ForecastBar from '../../components/crm/ForecastBar';
+import PlanActivityDialog from '../../components/crm/PlanActivityDialog';
 import SchoolFormDialog from '../../components/crm/SchoolFormDialog';
 import ContactFormDialog from '../../components/crm/ContactFormDialog';
 import ContactsTab from '../../components/crm/ContactsTab';
@@ -124,6 +125,7 @@ export default function LeadsCRM() {
 
   // Bulk school assignment (admin): select many schools, assign all to one Sales Exec.
   const [selectedSchoolIds, setSelectedSchoolIds] = React.useState(new Set());
+  const [planActivityOpen, setPlanActivityOpen] = React.useState(false);
   const [unassignedOnly, setUnassignedOnly] = React.useState(false);
   const toggleSchoolSelect = (id) => setSelectedSchoolIds(prev => {
     const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n;
@@ -768,6 +770,7 @@ export default function LeadsCRM() {
                     placeholder="Assign owner to…"
                     className="w-48"
                   />
+                  <Button size="sm" onClick={() => setPlanActivityOpen(true)} className="bg-[#e94560] hover:bg-[#f05c75] text-white h-8" data-testid="plan-activity-btn">Plan Activity</Button>
                   <Button size="sm" variant="outline" onClick={() => setSelectedSchoolIds(new Set())} className={`border-[var(--border-color)] ${textSec} h-8`}>Clear</Button>
                   {/* Superadmin-only (O20): guarded bulk delete of the current selection,
                       same dry-run-preview -> confirm -> delete flow as Data Cleanup. */}
@@ -1078,6 +1081,14 @@ export default function LeadsCRM() {
           mode="selected"
           schoolIds={Array.from(selectedSchoolIds)}
           onDeleted={() => { setSelectedSchoolIds(new Set()); crm.fetchData(); }}
+        />
+
+        <PlanActivityDialog
+          open={planActivityOpen}
+          onClose={() => setPlanActivityOpen(false)}
+          schoolIds={Array.from(selectedSchoolIds)}
+          spList={crm.spList}
+          onDone={() => { setSelectedSchoolIds(new Set()); crm.fetchData(); }}
         />
 
         <ContactDetailPanel

@@ -659,6 +659,132 @@ async def update_mail_run_status(run_id: str, request: Request):
     return await db.mail_runs.find_one({"run_id": run_id}, {"_id": 0})
 
 
+# ── Activity Types (editable master, powers the Bulk Activity Planner) ────────
+DEFAULT_ACTIVITY_TYPES = ["Newsletter", "Call", "Visit", "WhatsApp", "Sample", "Meeting"]
+
+
+@router.get("/activity-types")
+async def get_activity_types(request: Request):
+    await get_current_user(request)
+    rows = await db.activity_types.find({}, {"_id": 0}).sort("name", 1).to_list(100)
+    if not rows:
+        for name in DEFAULT_ACTIVITY_TYPES:
+            await db.activity_types.insert_one({
+                "activity_type_id": f"at_{uuid.uuid4().hex[:8]}", "name": name,
+                "is_active": True, "created_at": datetime.now(timezone.utc).isoformat()})
+        rows = await db.activity_types.find({}, {"_id": 0}).sort("name", 1).to_list(100)
+    return rows
+
+
+@router.post("/activity-types")
+async def create_activity_type(request: Request):
+    await get_current_user(request)
+    body = await request.json()
+    at_id = f"at_{uuid.uuid4().hex[:8]}"
+    await db.activity_types.insert_one({
+        "activity_type_id": at_id, "name": body.get("name", ""),
+        "is_active": True, "created_at": datetime.now(timezone.utc).isoformat()})
+    return await db.activity_types.find_one({"activity_type_id": at_id}, {"_id": 0})
+
+
+@router.put("/activity-types/{at_id}")
+async def update_activity_type(at_id: str, request: Request):
+    await get_current_user(request)
+    body = await request.json()
+    if "name" in body:
+        await db.activity_types.update_one({"activity_type_id": at_id}, {"$set": {"name": body["name"]}})
+    return await db.activity_types.find_one({"activity_type_id": at_id}, {"_id": 0})
+
+
+@router.delete("/activity-types/{at_id}")
+async def delete_activity_type(at_id: str, request: Request):
+    await get_current_user(request)
+    await db.activity_types.delete_one({"activity_type_id": at_id})
+    return {"message": "Activity type deleted"}
+
+
+# ── Bulk Activity Planner ────────────────────────────────────────────────────
+@router.post("/activities/bulk")
+async def create_activities_bulk(request: Request):
+    """Plan one activity per selected school. Default assigns each to that school's
+    own account manager (school.assigned_to); 'person' mode assigns all to one."""
+    user = await get_current_user(request)
+    body = await request.json()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    school_ids = body.get("school_ids", []) or []
+    assign_mode = body.get("assign_mode", "owner")
+    override_to = body.get("assigned_to", "")
+    override_name = body.get("assigned_name", "")
+    batch_id = f"batch_{uuid.uuid4().hex[:10]}"
+    created, unassigned_fallback = 0, 0
+    for sid in school_ids:
+        sch = await db.schools.find_one({"school_id": sid}, {"_id": 0, "school_name": 1, "assigned_to": 1, "assigned_name": 1})
+        if not sch:
+            continue
+        if assign_mode == "person" and override_to:
+            ato, aname = override_to, override_name
+        else:
+            ato, aname = sch.get("assigned_to", ""), sch.get("assigned_name", "")
+            if not ato:
+                ato, aname = user["email"], user.get("name", "")  # fallback to planner
+                unassigned_fallback += 1
+        await db.crm_activities.insert_one({
+            "activity_id": f"act_{uuid.uuid4().hex[:10]}", "batch_id": batch_id,
+            "school_id": sid, "school_name": sch.get("school_name", ""),
+            "activity_type": body.get("activity_type", ""), "title": body.get("title", ""),
+            "notes": body.get("notes", ""), "due_date": body.get("due_date", ""),
+            "assigned_to": ato, "assigned_name": aname, "status": "pending",
+            "created_by": user["email"], "created_at": now_iso, "done_at": None})
+        created += 1
+    return {"batch_id": batch_id, "created": created, "unassigned_fallback": unassigned_fallback}
+
+
+@router.get("/activities")
+async def get_activities(request: Request):
+    await get_current_user(request)
+    qp = request.query_params
+    q = {}
+    if qp.get("status"):
+        q["status"] = qp.get("status")
+    if qp.get("assigned_to"):
+        q["assigned_to"] = qp.get("assigned_to")
+    if qp.get("activity_type"):
+        q["activity_type"] = qp.get("activity_type")
+    if qp.get("school_id"):
+        q["school_id"] = qp.get("school_id")
+    acts = await db.crm_activities.find(q, {"_id": 0}).sort("created_at", -1).to_list(3000)
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    for a in acts:
+        a["overdue"] = a.get("status") == "pending" and bool(a.get("due_date")) and a["due_date"] < today
+    return acts
+
+
+@router.put("/activities/{activity_id}")
+async def update_activity(activity_id: str, request: Request):
+    await get_current_user(request)
+    body = await request.json()
+    upd = {}
+    if "status" in body:
+        upd["status"] = body["status"]
+        upd["done_at"] = datetime.now(timezone.utc).isoformat() if body["status"] == "done" else None
+    for k in ("title", "notes", "due_date", "activity_type"):
+        if k in body:
+            upd[k] = body[k]
+    if "assigned_to" in body:
+        upd["assigned_to"] = body["assigned_to"]
+        upd["assigned_name"] = body.get("assigned_name", "")
+    if upd:
+        await db.crm_activities.update_one({"activity_id": activity_id}, {"$set": upd})
+    return await db.crm_activities.find_one({"activity_id": activity_id}, {"_id": 0})
+
+
+@router.delete("/activities/{activity_id}")
+async def delete_activity(activity_id: str, request: Request):
+    await get_current_user(request)
+    await db.crm_activities.delete_one({"activity_id": activity_id})
+    return {"message": "Activity deleted"}
+
+
 # ==================== PIPELINE SETTINGS ====================
 
 @router.get("/pipeline-settings")
@@ -1638,6 +1764,9 @@ async def get_school_profile(school_id: str, request: Request):
     )
     deal_types_present = [d for d in deal_types_present if d]
 
+    # Planned activities (Bulk Activity Planner) for this school — pending first.
+    activities = await db.crm_activities.find({"school_id": school_id}, {"_id": 0}).sort("created_at", -1).to_list(200)
+
     active_stages = {"new", "contacted", "demo", "quoted", "negotiation"}
     active_leads_count = sum(1 for l in leads if l.get("stage") in active_stages)
 
@@ -1675,6 +1804,7 @@ async def get_school_profile(school_id: str, request: Request):
         "invoices": invoices,
         "fms_flows": fms_flows,
         "deal_types": deal_types_present,
+        "activities": activities,
         "metrics": {
             "total_leads": len(leads),
             "active_leads": active_leads_count,

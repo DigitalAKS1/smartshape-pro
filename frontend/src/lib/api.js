@@ -349,6 +349,20 @@ export const mailRuns = {
   updateStatus: (id, status) => API.put(`/mail-runs/${id}/status`, { status }),
 };
 
+export const activityTypes = {
+  getAll: () => API.get('/activity-types'),
+  create: (data) => API.post('/activity-types', data),
+  update: (id, data) => API.put(`/activity-types/${id}`, data),
+  delete: (id) => API.delete(`/activity-types/${id}`),
+};
+
+export const activities = {
+  list: (params = {}) => API.get('/activities', { params }),
+  bulk: (data) => API.post('/activities/bulk', data),
+  update: (id, data) => API.put(`/activities/${id}`, data),
+  delete: (id) => API.delete(`/activities/${id}`),
+};
+
 // Contact Roles
 export const contactRoles = {
   getAll: () => API.get('/contact-roles'),

@@ -32,6 +32,7 @@ const UserManagement = lazy(() => import('./pages/admin/UserManagement'));
 const ModuleMaster = lazy(() => import('./pages/admin/ModuleMaster'));
 const CRMMasters = lazy(() => import('./pages/admin/CRMMasters'));
 const OfflineMail = lazy(() => import('./pages/admin/OfflineMail'));
+const ActivityMonitor = lazy(() => import('./pages/admin/ActivityMonitor'));
 const ProcurementMasters = lazy(() => import('./pages/admin/ProcurementMasters'));
 const Procurement = lazy(() => import('./pages/admin/Procurement'));
 const ReturnableChallans = lazy(() => import('./pages/admin/ReturnableChallans'));
@@ -214,6 +215,7 @@ function AppRouter() {
       <Route path="/module-master" element={<ProtectedRoute><ModuleMaster /></ProtectedRoute>} />
       <Route path="/crm-masters" element={<ProtectedRoute><CRMMasters /></ProtectedRoute>} />
       <Route path="/offline-mail" element={<ProtectedRoute><OfflineMail /></ProtectedRoute>} />
+      <Route path="/activity-monitor" element={<ProtectedRoute><ActivityMonitor /></ProtectedRoute>} />
       <Route path="/procurement" element={<ProtectedRoute><Procurement /></ProtectedRoute>} />
       <Route path="/procurement-masters" element={<ProtectedRoute><ProcurementMasters /></ProtectedRoute>} />
       <Route path="/returnable-challans" element={<ProtectedRoute><ReturnableChallans /></ProtectedRoute>} />

@@ -23,6 +23,7 @@ import SchoolLeadQuickCreate from '../../components/school/SchoolLeadQuickCreate
 import ConvertContactDialog from '../../components/school/ConvertContactDialog';
 import EnrollDripDialog from '../../components/school/EnrollDripDialog';
 import SchoolPostOrderCard from '../../components/school/SchoolPostOrderCard';
+import SchoolActivitiesCard from '../../components/school/SchoolActivitiesCard';
 import ContactDetailPanel from '../../components/crm/ContactDetailPanel';
 import {
   SchoolSalesSection, SchoolMarketingSection,
@@ -338,6 +339,8 @@ export default function SchoolProfile() {
 
               {/* Post-Order Implementation flow status (FMS) — full-width row */}
               <SchoolPostOrderCard flows={sp.profile?.fms_flows} />
+              {/* Planned Activities (Bulk Activity Planner) — full-width row */}
+              <SchoolActivitiesCard activities={sp.profile?.activities} onChanged={sp.reload} />
             </div>
           )}
 
