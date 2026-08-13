@@ -334,6 +334,21 @@ export const dealTypes = {
   delete: (id) => API.delete(`/deal-types/${id}`),
 };
 
+export const mailAreas = {
+  getAll: () => API.get('/mail-areas'),
+  create: (data) => API.post('/mail-areas', data),
+  delete: (id) => API.delete(`/mail-areas/${id}`),
+  autoAssign: (id) => API.post(`/mail-areas/${id}/auto-assign`),
+  schools: (id) => API.get(`/mail-areas/${id}/schools`),
+};
+
+export const mailRuns = {
+  getAll: () => API.get('/mail-runs'),
+  get: (id) => API.get(`/mail-runs/${id}`),
+  create: (data) => API.post('/mail-runs', data),
+  updateStatus: (id, status) => API.put(`/mail-runs/${id}/status`, { status }),
+};
+
 // Contact Roles
 export const contactRoles = {
   getAll: () => API.get('/contact-roles'),

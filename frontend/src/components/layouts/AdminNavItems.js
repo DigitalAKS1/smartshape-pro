@@ -45,6 +45,7 @@ export const MODULE_ROUTE_MAP = {
     { path: '/crm-masters', icon: Layers, label: 'CRM Masters' },
     { path: '/dispatch-tracking', icon: Package, label: 'Dispatch Tracking' },
     { path: '/customer-engagement', icon: Heart, label: 'Customer Engagement' },
+    { path: '/offline-mail', icon: MapPin, label: 'Offline Mail' },
     { path: '/marketing', icon: Zap, label: 'Marketing & WhatsApp' },
   ],
   // School & Teacher portal admin — grouped in its own collapsible section.
