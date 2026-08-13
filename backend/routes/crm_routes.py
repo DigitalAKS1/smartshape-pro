@@ -644,9 +644,48 @@ async def get_mail_run(run_id: str, request: Request):
     return run
 
 
+# A4 — the follow-up cadence a posted mailer triggers (offset days, type, title).
+# Research: mail + tight early follow-ups converts; a single call wastes the postage.
+DEFAULT_MAIL_CADENCE = [
+    (2,  "Call",       "Follow-up call — did the mailer reach you?"),
+    (4,  "WhatsApp",   "Send a proof photo/video of a school using it"),
+    (7,  "Newsletter", "Email case study + dies catalogue"),
+    (12, "Call",       "Offer a demo / visit"),
+    (18, "Call",       "Closing nudge — hold a slot?"),
+]
+
+
+async def _create_mail_cadence(run, posted_iso, planner):
+    """One follow-up activity per school per cadence step, assigned to each
+    school's owner (fallback to the planner), due dates staggered from posting."""
+    try:
+        base = datetime.fromisoformat(posted_iso.replace("Z", "+00:00"))
+    except Exception:
+        base = datetime.now(timezone.utc)
+    now_iso = datetime.now(timezone.utc).isoformat()
+    for sid in run.get("school_ids", []):
+        sch = await db.schools.find_one({"school_id": sid}, {"_id": 0, "school_name": 1, "assigned_to": 1, "assigned_name": 1})
+        if not sch:
+            continue
+        if sch.get("assigned_to"):
+            ato, aname = sch["assigned_to"], sch.get("assigned_name", "")
+        else:
+            ato, aname = planner["email"], planner.get("name", "")
+        for offset, atype, title in DEFAULT_MAIL_CADENCE:
+            due = (base + timedelta(days=offset)).strftime("%Y-%m-%d")
+            await db.crm_activities.insert_one({
+                "activity_id": f"act_{uuid.uuid4().hex[:10]}", "batch_id": run["run_id"],
+                "school_id": sid, "school_name": sch.get("school_name", ""),
+                "activity_type": atype, "title": title,
+                "notes": f"Follow-up for mail run: {run.get('name', '')}",
+                "due_date": due, "assigned_to": ato, "assigned_name": aname,
+                "status": "pending", "created_by": planner["email"],
+                "source": "mail_cadence", "created_at": now_iso, "done_at": None})
+
+
 @router.put("/mail-runs/{run_id}/status")
 async def update_mail_run_status(run_id: str, request: Request):
-    await get_current_user(request)
+    user = await get_current_user(request)
     body = await request.json()
     status = body.get("status")
     if status not in ("planned", "posted", "closed"):
@@ -655,6 +694,11 @@ async def update_mail_run_status(run_id: str, request: Request):
     if status == "posted":
         _set["posted_at"] = datetime.now(timezone.utc).isoformat()
         await db.mail_touches.update_many({"run_id": run_id}, {"$set": {"posted_at": _set["posted_at"]}})
+        # Auto-create the follow-up cadence exactly once (idempotent on re-post).
+        run = await db.mail_runs.find_one({"run_id": run_id}, {"_id": 0})
+        already = await db.crm_activities.count_documents({"batch_id": run_id, "source": "mail_cadence"})
+        if run and already == 0:
+            await _create_mail_cadence(run, _set["posted_at"], user)
     await db.mail_runs.update_one({"run_id": run_id}, {"$set": _set})
     return await db.mail_runs.find_one({"run_id": run_id}, {"_id": 0})
 
