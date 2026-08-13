@@ -6,6 +6,7 @@ import uuid
 import csv
 import io
 import re
+import html as _html
 import asyncio
 import requests as http_requests
 
@@ -18,6 +19,12 @@ from cascade_delete import build_school_plan, build_contact_plan
 import crm_contact_calls as cc
 
 router = APIRouter()
+
+
+def _html_escape(s):
+    """Escape for safe interpolation into the public QR page (attrs + text)."""
+    return _html.escape(str(s or ""), quote=True)
+
 
 # ==================== HELPER ====================
 
@@ -889,24 +896,132 @@ async def mail_run_stickers(run_id: str, request: Request):
                              headers={"Content-Disposition": f'attachment; filename="stickers-{run_id}.pdf"'})
 
 
-# Public QR landing — a scan logs the school's response on its mail touch.
-@router.get("/r/{qr_token}")
-async def mail_qr_respond(qr_token: str):
-    t = await db.mail_touches.find_one({"qr_token": qr_token}, {"_id": 0})
+async def _mark_touch_responded(t):
+    """A scan/submit counts as one response on the run (idempotent)."""
     if t and not t.get("responded"):
-        await db.mail_touches.update_one({"qr_token": qr_token}, {"$set": {
+        await db.mail_touches.update_one({"qr_token": t["qr_token"]}, {"$set": {
             "responded": True, "responded_at": datetime.now(timezone.utc).isoformat(), "response_channel": "qr"}})
         if t.get("run_id"):
             await db.mail_runs.update_one({"run_id": t["run_id"]}, {"$inc": {"counts.responded": 1}})
-    name = (t or {}).get("school_name", "")
-    html = (
-        "<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>"
-        "<title>SmartShape</title></head><body style='font-family:system-ui;text-align:center;padding:44px;"
-        "background:#f4f5f2;color:#1a211e'><h2 style='color:#c4402e'>Thank you!</h2>"
-        f"<p>We’ve noted your interest{(' — ' + name) if name else ''}.<br>"
-        "Our team will call you shortly about <b>SMARTS-SHAPES</b>.</p></body></html>"
-    )
+
+
+async def _qr_interest_options():
+    rows = await db.deal_types.find({}, {"_id": 0, "name": 1}).sort("name", 1).to_list(100)
+    opts = [r["name"] for r in rows if r.get("name")] or list(DEFAULT_DEAL_TYPES)
+    return opts + ["Just exploring"]
+
+
+# Public QR landing — renders a branded capture form. A scan itself already counts
+# as a response; submitting tells us what the school wants + when to call.
+@router.get("/r/{qr_token}")
+async def mail_qr_respond(qr_token: str):
+    t = await db.mail_touches.find_one({"qr_token": qr_token}, {"_id": 0})
+    await _mark_touch_responded(t)
+    school_name = (t or {}).get("school_name", "")
+    if not school_name and t and t.get("school_id"):
+        sch = await db.schools.find_one({"school_id": t["school_id"]}, {"_id": 0, "school_name": 1}) or {}
+        school_name = sch.get("school_name", "")
+    opts = await _qr_interest_options()
+    chips = "".join(
+        f"<label class='chip'><input type='radio' name='interest' value=\"{_html_escape(o)}\">{_html_escape(o)}</label>"
+        for o in opts)
+    greeting = f"Hello{(' — ' + _html_escape(school_name)) if school_name else ''}!"
+    html = f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>SMARTS-SHAPES</title>
+<style>
+ :root{{--brand:#e94560;--ink:#1a211e;--bg:#f4f5f2;--card:#fff;--muted:#6b7280;--line:#e5e7eb}}
+ *{{box-sizing:border-box}} body{{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--ink)}}
+ .wrap{{max-width:460px;margin:0 auto;padding:22px 16px 40px}}
+ .brand{{font-weight:800;letter-spacing:.5px;color:var(--brand);font-size:20px}}
+ .tag{{color:var(--muted);font-size:12px;margin-top:2px}}
+ .card{{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px;margin-top:16px;box-shadow:0 1px 3px rgba(0,0,0,.05)}}
+ h1{{font-size:19px;margin:.2em 0 .1em}} p.sub{{color:var(--muted);font-size:13px;margin:.2em 0 1em}}
+ .chips{{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 14px}}
+ .chip{{border:1px solid var(--line);border-radius:999px;padding:8px 12px;font-size:13px;cursor:pointer;user-select:none}}
+ .chip input{{display:none}} .chip:has(input:checked){{background:var(--brand);color:#fff;border-color:var(--brand)}}
+ label.fld{{display:block;font-size:12px;color:var(--muted);margin:10px 0 4px}}
+ input.f,select.f,textarea.f{{width:100%;border:1px solid var(--line);border-radius:10px;padding:11px;font-size:15px;font-family:inherit}}
+ .row{{display:flex;gap:10px}} .row>div{{flex:1}}
+ button{{width:100%;margin-top:16px;background:var(--brand);color:#fff;border:0;border-radius:12px;padding:14px;font-size:16px;font-weight:700;cursor:pointer}}
+ .ok{{text-align:center;padding:26px 8px}} .ok h1{{color:var(--brand)}}
+ .hide{{display:none}}
+</style></head><body><div class="wrap">
+ <div class="brand">SMARTS-SHAPES</div><div class="tag">Learning through Craft</div>
+ <div class="card" id="form">
+  <h1>{greeting}</h1>
+  <p class="sub">Tell us what you’d like — our team will call you back.</p>
+  <div><label class="fld">I’m interested in</label><div class="chips">{chips}</div></div>
+  <div class="row">
+   <div><label class="fld">Your name</label><input class="f" id="name" placeholder="Name"></div>
+   <div><label class="fld">Phone</label><input class="f" id="phone" inputmode="tel" placeholder="Mobile"></div>
+  </div>
+  <label class="fld">Best time to call</label>
+  <select class="f" id="ptime"><option value="">Any time</option><option>Morning</option><option>Afternoon</option><option>Evening</option></select>
+  <label class="fld">Anything else (optional)</label>
+  <textarea class="f" id="note" rows="2" placeholder="e.g. need 20 dies, want a demo"></textarea>
+  <button id="btn">Request a callback</button>
+ </div>
+ <div class="card ok hide" id="done"><h1>Thank you!</h1><p class="sub">We’ve got your details — our team will call you shortly about SMARTS-SHAPES.</p></div>
+<script>
+ var btn=document.getElementById('btn');
+ btn.onclick=function(){{
+  var sel=document.querySelector('input[name=interest]:checked');
+  var body={{interest:sel?sel.value:'',name:document.getElementById('name').value,
+    phone:document.getElementById('phone').value,preferred_time:document.getElementById('ptime').value,
+    note:document.getElementById('note').value}};
+  btn.disabled=true;btn.textContent='Sending…';
+  fetch('/api/r/{qr_token}/interest',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(body)}})
+   .then(function(){{document.getElementById('form').classList.add('hide');document.getElementById('done').classList.remove('hide');}})
+   .catch(function(){{btn.disabled=false;btn.textContent='Request a callback';alert('Please try again.');}});
+ }};
+</script></div></body></html>"""
     return HTMLResponse(html)
+
+
+@router.post("/r/{qr_token}/interest")
+async def mail_qr_interest(qr_token: str, request: Request):
+    """Public capture: record what the school wants + raise a HIGH-priority callback
+    task for the account owner (fallback: the run's creator)."""
+    body = await request.json()
+    t = await db.mail_touches.find_one({"qr_token": qr_token}, {"_id": 0})
+    if not t:
+        return {"ok": True}  # unknown/expired token — never error a public scan
+    now_iso = datetime.now(timezone.utc).isoformat()
+    interest = (body.get("interest") or "").strip()
+    name = (body.get("name") or "").strip()
+    phone = (body.get("phone") or "").strip()
+    ptime = (body.get("preferred_time") or "").strip()
+    note = (body.get("note") or "").strip()
+
+    await _mark_touch_responded(t)
+    await db.mail_touches.update_one({"qr_token": qr_token}, {"$set": {
+        "interested": True, "interest": interest, "preferred_time": ptime,
+        "contact_name": name, "contact_phone": phone, "interest_note": note,
+        "interested_at": now_iso, "response_channel": "qr_form"}})
+
+    sch = await db.schools.find_one({"school_id": t.get("school_id")}, {"_id": 0}) or {}
+    owner = sch.get("assigned_to") or t.get("owner") or ""
+    owner_name = sch.get("assigned_name", "")
+    detail = f"Interested in: {interest or '(not specified)'}."
+    if name or phone:
+        detail += f" Contact: {name} {phone}.".rstrip()
+    if ptime:
+        detail += f" Best time: {ptime}."
+    if note:
+        detail += f" Note: {note}"
+    await db.crm_activities.insert_one({
+        "activity_id": f"act_{uuid.uuid4().hex[:10]}", "batch_id": t.get("run_id", ""),
+        "school_id": t.get("school_id", ""), "school_name": sch.get("school_name", t.get("school_name", "")),
+        "activity_type": "Call", "title": "📩 Direct-mail QR lead — call back",
+        "notes": detail, "due_date": now_iso[:10], "priority": "high",
+        "assigned_to": owner, "assigned_name": owner_name, "status": "pending",
+        "created_by": "qr", "source": "qr_interest", "created_at": now_iso, "done_at": None})
+
+    # keep the school phone fresh if it was blank and the scanner gave one
+    if phone and not sch.get("phone") and t.get("school_id"):
+        await db.schools.update_one({"school_id": t["school_id"]},
+                                    {"$set": {"phone": phone, "last_activity_date": now_iso}})
+    return {"ok": True}
 
 
 # ── Activity Types (editable master, powers the Bulk Activity Planner) ────────
