@@ -86,7 +86,8 @@ export default function RemindersPanel({ onClose, card, textPri, textSec, textMu
   const downloadTemplate = () => {
     const csv = TEMPLATE_COLS.join(',') + '\n' + TEMPLATE_SAMPLE.map(c => /[,;]/.test(c) ? `"${c}"` : c).join(',') + '\n';
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
-    const a = document.createElement('a'); a.href = url; a.download = 'reminders-template.csv'; a.click();
+    const a = document.createElement('a'); a.href = url; a.download = 'reminders-template.csv';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);   // in DOM for Firefox/Safari
     URL.revokeObjectURL(url);
   };
   const confirmImport = async () => {

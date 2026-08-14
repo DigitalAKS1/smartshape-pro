@@ -585,7 +585,8 @@ export default function useLeadsCRM() {
     const row2 = ['Priya Sharma','9123456780','priya@abc.edu','ABC Academy','Purchase Head','Exhibition','','',''];
     const blob = new Blob([[cols, row1, row2].map(r => r.join(',')).join('\n')], { type: 'text/csv' });
     const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: 'contacts_sample.csv' });
-    a.click(); URL.revokeObjectURL(a.href);
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);   // in DOM for Firefox/Safari
+    URL.revokeObjectURL(a.href);
   };
 
   const handleContactExport = () => {

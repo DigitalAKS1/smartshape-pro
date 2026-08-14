@@ -98,7 +98,7 @@ export default function FormBuilder() {
     const a = document.createElement('a');
     a.href = canvas.toDataURL('image/png');
     a.download = `${form.title.replace(/\W+/g, '_')}_QR.png`;
-    a.click();
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);   // in DOM for Firefox/Safari
   };
   const waShare = () => {
     const ev = form.event || {};

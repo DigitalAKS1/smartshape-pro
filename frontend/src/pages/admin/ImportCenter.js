@@ -169,7 +169,8 @@ export default function ImportCenter() {
       const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
-      a.href = url; a.download = 'import_template_with_ids.csv'; a.click();
+      a.href = url; a.download = 'import_template_with_ids.csv';
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);   // in DOM for Firefox/Safari
       URL.revokeObjectURL(url);
     } catch { toast.error('Failed to download template'); }
   };
