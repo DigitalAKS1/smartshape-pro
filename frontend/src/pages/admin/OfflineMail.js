@@ -2,8 +2,10 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { toast } from 'sonner';
 import AdminLayout from '../../components/layouts/AdminLayout';
 import { mailAreas, mailRuns } from '../../lib/api';
-import { MapPin, Mail, Plus, RefreshCw, Trash2, X, Printer, TrendingUp, QrCode, CalendarCheck, FileText, IndianRupee } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { MapPin, Mail, Plus, RefreshCw, Trash2, X, Printer, TrendingUp, QrCode, CalendarCheck, FileText, IndianRupee, ListPlus, Filter } from 'lucide-react';
 import MailAddressSheet from '../../components/mail/MailAddressSheet';
+import ManualMailRunBuilder from '../../components/mail/ManualMailRunBuilder';
 
 const inr = (n) => '₹' + Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 });
 
@@ -20,6 +22,8 @@ export default function OfflineMail() {
   const [runForm, setRunForm] = useState(null); // null | {area_id, piece_type, courier, tracking_no, send_date, count}
   const [busy, setBusy] = useState(false);
   const [sheetRun, setSheetRun] = useState(null); // {run_id, name} for the address/print sheet
+  const [showManual, setShowManual] = useState(false);
+  const navigate = useNavigate();
 
   const load = useCallback(async () => {
     try {
@@ -184,7 +188,14 @@ export default function OfflineMail() {
 
             {/* MAIL RUNS */}
             <div className={`${card} p-5`}>
-              <h2 className="text-lg font-medium text-[var(--text-primary)] flex items-center gap-2 mb-4"><Mail className="h-4 w-4 text-[#e94560]" /> Mail Runs</h2>
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+                <h2 className="text-lg font-medium text-[var(--text-primary)] flex items-center gap-2"><Mail className="h-4 w-4 text-[#e94560]" /> Mail Runs</h2>
+                <div className="flex items-center gap-2">
+                  <button onClick={() => setShowManual(true)} className={btnP} data-testid="manual-run-btn"><ListPlus className="h-3.5 w-3.5" /> Pick schools manually</button>
+                  <button onClick={() => navigate('/leads')} className="inline-flex items-center gap-1.5 h-9 px-3.5 rounded-lg border border-[var(--border-color)] text-[var(--text-secondary)] hover:text-[#e94560] hover:border-[#e94560] text-sm font-semibold" data-testid="filter-crm-btn"><Filter className="h-3.5 w-3.5" /> Filter in CRM</button>
+                </div>
+              </div>
+              <p className="text-xs text-[var(--text-muted)] -mt-2 mb-4">Three ways to build a run: <b>an Area</b> (pincode/city, above) · <b>Pick manually</b> (hand-pick schools) · <b>Filter in CRM</b> (lead-style filter → select → Mail Run).</p>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
@@ -266,6 +277,9 @@ export default function OfflineMail() {
 
       {sheetRun && (
         <MailAddressSheet runId={sheetRun.run_id} runName={sheetRun.name} onClose={() => setSheetRun(null)} />
+      )}
+      {showManual && (
+        <ManualMailRunBuilder onClose={() => setShowManual(false)} onCreated={load} />
       )}
     </AdminLayout>
   );
