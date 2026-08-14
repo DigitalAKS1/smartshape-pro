@@ -1101,6 +1101,10 @@ async def mail_qr_interest(qr_token: str, request: Request):
     ptime = (body.get("preferred_time") or "").strip()
     note = (body.get("note") or "").strip()
 
+    # Idempotency guard: a public endpoint anyone can re-POST. Capture the interest
+    # every time, but raise the task + bell + WhatsApp only on the FIRST submission
+    # for this touch, so a double-tap (or abuse) can't spam the rep with duplicates.
+    first_time = not t.get("interested")
     await _mark_touch_responded(t)
     await db.mail_touches.update_one({"qr_token": qr_token}, {"$set": {
         "interested": True, "interest": interest, "preferred_time": ptime,
@@ -1117,34 +1121,36 @@ async def mail_qr_interest(qr_token: str, request: Request):
         detail += f" Best time: {ptime}."
     if note:
         detail += f" Note: {note}"
-    await db.crm_activities.insert_one({
-        "activity_id": f"act_{uuid.uuid4().hex[:10]}", "batch_id": t.get("run_id", ""),
-        "school_id": t.get("school_id", ""), "school_name": sch.get("school_name", t.get("school_name", "")),
-        "activity_type": "Call", "title": "📩 Direct-mail QR lead — call back",
-        "notes": detail, "due_date": now_iso[:10], "priority": "high",
-        "assigned_to": owner, "assigned_name": owner_name, "status": "pending",
-        "created_by": "qr", "source": "qr_interest", "created_at": now_iso, "done_at": None})
-
-    # ping the owner instantly (bell + WhatsApp) so a hot lead doesn't wait in a list
     school_name = sch.get("school_name", t.get("school_name", "")) or "A school"
-    if owner:
-        await db.crm_notifications.insert_one({
-            "notif_id": f"crmn_{uuid.uuid4().hex[:10]}",
-            "email": owner, "type": "qr_interest",
-            "title": "📩 Hot lead from a mailer",
-            "body": f"{school_name} scanned your mailer — {detail}",
-            "ref_type": "school", "ref_id": t.get("school_id", ""),
-            "from_name": name or "Direct-mail QR", "is_read": False, "created_at": now_iso})
-        # reps live on their phones — also WhatsApp them the hot lead
-        urep = await db.users.find_one({"email": owner},
-                                       {"_id": 0, "phone": 1, "calling_number": 1}) or {}
-        rep_phone = (urep.get("phone") or urep.get("calling_number") or "").strip()
-        wa_msg = (f"📩 New mailer lead — {school_name}\n"
-                  f"Interested in: {interest or 'not specified'}\n"
-                  + (f"Contact: {name} {phone}\n" if (name or phone) else "")
-                  + (f"Best time: {ptime}\n" if ptime else "")
-                  + "Call them back — a task is waiting in SmartShape CRM.")
-        await _wa_notify(rep_phone, wa_msg)
+
+    if first_time:
+        await db.crm_activities.insert_one({
+            "activity_id": f"act_{uuid.uuid4().hex[:10]}", "batch_id": t.get("run_id", ""),
+            "school_id": t.get("school_id", ""), "school_name": sch.get("school_name", t.get("school_name", "")),
+            "activity_type": "Call", "title": "📩 Direct-mail QR lead — call back",
+            "notes": detail, "due_date": now_iso[:10], "priority": "high",
+            "assigned_to": owner, "assigned_name": owner_name, "status": "pending",
+            "created_by": "qr", "source": "qr_interest", "created_at": now_iso, "done_at": None})
+
+        # ping the owner instantly (bell + WhatsApp) so a hot lead doesn't wait in a list
+        if owner:
+            await db.crm_notifications.insert_one({
+                "notif_id": f"crmn_{uuid.uuid4().hex[:10]}",
+                "email": owner, "type": "qr_interest",
+                "title": "📩 Hot lead from a mailer",
+                "body": f"{school_name} scanned your mailer — {detail}",
+                "ref_type": "school", "ref_id": t.get("school_id", ""),
+                "from_name": name or "Direct-mail QR", "is_read": False, "created_at": now_iso})
+            # reps live on their phones — also WhatsApp them the hot lead
+            urep = await db.users.find_one({"email": owner},
+                                           {"_id": 0, "phone": 1, "calling_number": 1}) or {}
+            rep_phone = (urep.get("phone") or urep.get("calling_number") or "").strip()
+            wa_msg = (f"📩 New mailer lead — {school_name}\n"
+                      f"Interested in: {interest or 'not specified'}\n"
+                      + (f"Contact: {name} {phone}\n" if (name or phone) else "")
+                      + (f"Best time: {ptime}\n" if ptime else "")
+                      + "Call them back — a task is waiting in SmartShape CRM.")
+            await _wa_notify(rep_phone, wa_msg)
 
     # keep the school phone fresh if it was blank and the scanner gave one
     if phone and not sch.get("phone") and t.get("school_id"):
