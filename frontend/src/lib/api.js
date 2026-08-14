@@ -579,6 +579,7 @@ export const attendance = {
   checkOut: (lat, lng) => API.post('/sales/attendance/check-out', null, { params: { lat, lng } }),
   getAll: () => API.get('/sales/attendance'),
   getToday: () => API.get('/sales/attendance/today'),
+  summary: (params = {}) => API.get('/sales/attendance/summary', { params }),
 };
 
 // Sales - Visits

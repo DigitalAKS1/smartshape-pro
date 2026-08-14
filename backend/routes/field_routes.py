@@ -282,6 +282,58 @@ async def get_attendance(request: Request):
     return records
 
 
+def _hours_between(a, b):
+    try:
+        return (datetime.fromisoformat(b) - datetime.fromisoformat(a)).total_seconds()
+    except Exception:
+        return 0.0
+
+
+@router.get("/sales/attendance/summary")
+async def attendance_summary(request: Request):
+    """This month at a glance: days present, total hours worked, and (where
+    available) the office/field/WFH split. Robust to both attendance systems —
+    uses the check-in records (db.attendance) when present, else falls back to the
+    web Punch Clock (punch_logs). An admin may pass ?email= for a specific rep."""
+    user = await get_current_user(request)
+    qp = request.query_params
+    month = qp.get("month") or datetime.now(timezone.utc).strftime("%Y-%m")
+    email = (qp.get("email") if user.get("role") == "admin" and qp.get("email") else user["email"])
+    lo, hi = f"{month}-01", f"{month}-31"
+
+    # System A — check-in/out attendance (carries work_type). Preferred when present.
+    records = await db.attendance.find(
+        {"sales_person_email": email, "date": {"$gte": lo, "$lte": hi}}, {"_id": 0}
+    ).sort("date", -1).to_list(400)
+    if records:
+        by_mode, total_seconds = {}, 0.0
+        for r in records:
+            wt = r.get("work_type") or "office"
+            by_mode[wt] = by_mode.get(wt, 0) + 1
+            if r.get("check_in_time") and r.get("check_out_time"):
+                total_seconds += _hours_between(r["check_in_time"], r["check_out_time"])
+        return {"month": month, "email": email, "source": "check_in", "days_present": len(records),
+                "total_hours": round(total_seconds / 3600, 1), "by_mode": by_mode, "records": records}
+
+    # System B — web Punch Clock (in/out events). Fall back: first-in → last-out per day.
+    punches = await db.punch_logs.find(
+        {"user_email": email, "date": {"$gte": lo, "$lte": hi}}, {"_id": 0}
+    ).sort("timestamp", 1).to_list(3000)
+    by_day = {}
+    for p in punches:
+        by_day.setdefault(p.get("date"), []).append(p)
+    days_present, total_seconds = 0, 0.0
+    for _d, ps in by_day.items():
+        ins = [p["timestamp"] for p in ps if p.get("type") == "in"]
+        outs = [p["timestamp"] for p in ps if p.get("type") == "out"]
+        if ins:
+            days_present += 1
+            if outs:
+                total_seconds += _hours_between(min(ins), max(outs))
+    return {"month": month, "email": email, "source": "punch", "days_present": days_present,
+            "total_hours": round(total_seconds / 3600, 1), "by_mode": {}, "records": []}
+
+
 @router.get("/sales/attendance/today")
 async def get_today_attendance(request: Request):
     user = await get_current_user(request)

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { toast } from 'sonner';
-import { LogIn, LogOut, Clock, MapPin, RefreshCw, Home, CheckCircle } from 'lucide-react';
-import { punchApi, wfhApi } from '../lib/api';
+import { LogIn, LogOut, Clock, MapPin, RefreshCw, Home, CheckCircle, CalendarDays } from 'lucide-react';
+import { punchApi, wfhApi, attendance as attendanceApi } from '../lib/api';
 
 const fmt = (iso) => iso ? new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—';
 const fmtDuration = (ms) => {
@@ -56,6 +56,10 @@ export default function PunchClock() {
   }, []);
 
   useEffect(() => { loadPunches(); }, [loadPunches]);
+
+  // This month at a glance (days present + hours). Robust to both attendance systems.
+  const [summary, setSummary] = useState(null);
+  useEffect(() => { attendanceApi.summary().then(r => setSummary(r.data)).catch(() => {}); }, []);
 
   // Check if user already has a WFH location saved
   useEffect(() => {
@@ -146,6 +150,20 @@ export default function PunchClock() {
           </button>
         </div>
       </div>
+
+      {/* This month at a glance */}
+      {summary && (summary.days_present > 0 || summary.total_hours > 0) && (
+        <div className="px-5 py-2.5 flex items-center gap-4 border-b border-[var(--border-color)] bg-[var(--bg-primary)]">
+          <div className="flex items-center gap-1.5 text-[var(--text-muted)]"><CalendarDays className="h-3.5 w-3.5" /><span className="text-[11px] uppercase tracking-wide">This month</span></div>
+          <div className="flex items-center gap-1"><span className="text-sm font-bold text-[var(--text-primary)]">{summary.days_present}</span><span className="text-[11px] text-[var(--text-muted)]">days</span></div>
+          <div className="flex items-center gap-1"><span className="text-sm font-bold text-[var(--text-primary)]">{summary.total_hours}</span><span className="text-[11px] text-[var(--text-muted)]">hrs</span></div>
+          {summary.by_mode && Object.keys(summary.by_mode).length > 0 && (
+            <div className="text-[11px] text-[var(--text-muted)] ml-auto truncate">
+              {Object.entries(summary.by_mode).map(([k, v]) => `${v} ${k}`).join(' · ')}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="p-5">
         {/* Auto-detected current location */}
