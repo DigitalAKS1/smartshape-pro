@@ -56,6 +56,18 @@ export default function MailAddressSheet({ runId, runName, onClose }) {
     else toast.error('Save failed');
   };
 
+  // Programmatic download must attach the anchor to the DOM or several browsers
+  // silently ignore the .click() (Firefox/Safari, and Chrome for blob: URLs).
+  const saveBlob = (blob, filename) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename; a.rel = 'noopener'; a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+  };
+
   const printStickers = async () => {
     if (missingCount > 0 && !window.confirm(`${missingCount} address(es) are still incomplete and may print blank. Print anyway?`)) return;
     setPrinting(true);
@@ -63,10 +75,7 @@ export default function MailAddressSheet({ runId, runName, onClose }) {
       const res = await mailRuns.stickers(runId);
       const url = URL.createObjectURL(res.data);
       const w = window.open(url, '_blank');
-      if (!w) { // popup blocked → force a download instead
-        const a = document.createElement('a');
-        a.href = url; a.download = `stickers-${runId}.pdf`; a.click();
-      }
+      if (!w) saveBlob(res.data, `stickers-${runId}.pdf`);   // popup blocked → download
       setTimeout(() => URL.revokeObjectURL(url), 60000);
     } catch { toast.error('Could not generate stickers'); }
     finally { setPrinting(false); }
@@ -75,10 +84,7 @@ export default function MailAddressSheet({ runId, runName, onClose }) {
   const exportList = async () => {
     try {
       const res = await mailRuns.exportCsv(runId);
-      const url = URL.createObjectURL(res.data);
-      const a = document.createElement('a');
-      a.href = url; a.download = `mail-run-${runName || runId}.csv`; a.click();
-      setTimeout(() => URL.revokeObjectURL(url), 30000);
+      saveBlob(res.data, `mail-run-${runName || runId}.csv`);
     } catch { toast.error('Could not export the list'); }
   };
 

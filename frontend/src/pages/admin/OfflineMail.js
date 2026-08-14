@@ -46,8 +46,12 @@ export default function OfflineMail() {
   };
   const downloadTemplate = () => {
     const csv = 'School Name,Contact Name,Phone,Address,City,State,Pincode\nDelhi Public School,The Principal,9810000000,1 Main Road Sector 45,New Delhi,Delhi,110085\n';
-    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
-    const a = document.createElement('a'); a.href = url; a.download = 'mail-list-template.csv'; a.click();
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+    const a = document.createElement('a');
+    a.href = url; a.download = 'mail-list-template.csv'; a.rel = 'noopener'; a.style.display = 'none';
+    document.body.appendChild(a);      // must be in the DOM for .click() to download in Firefox/Safari
+    a.click();
+    document.body.removeChild(a);
     setTimeout(() => URL.revokeObjectURL(url), 5000);
   };
 
