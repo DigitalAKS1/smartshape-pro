@@ -595,6 +595,31 @@ async def get_visits(request: Request):
     return all_visits
 
 
+@router.put("/sales/visits/{visit_id}")
+async def update_field_visit(visit_id: str, request: Request):
+    """Edit a self-created field visit. A rep may edit their OWN visit only while
+    it is today's visit (add/correct notes, outcome, contact); admins may edit any
+    visit any day. This lets reps append what they forgot without reopening a
+    closed record forever."""
+    user = await get_current_user(request)
+    v = await db.field_visits.find_one({"visit_id": visit_id}, {"_id": 0})
+    if not v:
+        raise HTTPException(status_code=404, detail="Visit not found")
+    is_admin = user.get("role") == "admin"
+    if v.get("sales_person_email") != user["email"] and not is_admin:
+        raise HTTPException(status_code=403, detail="You can only edit your own visits")
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if (v.get("visit_date") or "")[:10] != today and not is_admin:
+        raise HTTPException(status_code=403, detail="A visit can only be edited on the same day. Ask an admin to change an older visit.")
+    body = await request.json()
+    allowed = {k: body[k] for k in
+               ("notes", "outcome", "contact_person", "contact_phone", "purpose", "school_name", "visit_time")
+               if k in body}
+    allowed["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await db.field_visits.update_one({"visit_id": visit_id}, {"$set": allowed})
+    return await db.field_visits.find_one({"visit_id": visit_id}, {"_id": 0})
+
+
 @router.post("/sales/visits/{visit_id}/check-in")
 async def check_in_visit(visit_id: str, lat: float, lng: float, request: Request):
     user = await get_current_user(request)

@@ -1,12 +1,14 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
+import { toast } from 'sonner';
 import SalesLayout from '../../components/layouts/SalesLayout';
 import PunchClock from '../../components/PunchClock';
 import { useSalesHome } from '../../hooks/useSalesHome';
+import { visits as visitsApi } from '../../lib/api';
 import {
   MapPin, FileText, Receipt, Target, Clock, Phone, MessageSquare,
   ChevronRight, AlertCircle, CheckCircle, Navigation, Flame,
-  BarChart2, Calendar, ListChecks,
+  BarChart2, Calendar, ListChecks, Pencil,
 } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import AgendaWeekWidget from '../../components/delegation/AgendaWeekWidget';
@@ -39,7 +41,24 @@ export default function SalesHome() {
     user, today, perms, data,
     loading, punchOpen, setPunchOpen,
     priorityLeads, weekLeadsActive, weekWon,
+    fetchAll,
   } = useSalesHome();
+
+  // Edit a visit within the day — add what you forgot (notes + outcome)
+  const [editId, setEditId] = useState(null);
+  const [ef, setEf] = useState({ notes: '', outcome: '' });
+  const [savingVisit, setSavingVisit] = useState(false);
+  const openEdit = (v) => { setEditId(v.visit_id); setEf({ notes: v.notes || '', outcome: v.outcome || '' }); };
+  const saveVisit = async (v) => {
+    setSavingVisit(true);
+    try {
+      await visitsApi.update(v.visit_id, ef);
+      toast.success('Visit updated');
+      setEditId(null);
+      await fetchAll();
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Could not update visit'); }
+    finally { setSavingVisit(false); }
+  };
 
   if (loading) return (
     <SalesLayout title="Today">
@@ -214,10 +233,42 @@ export default function SalesHome() {
                         'bg-yellow-500/20 text-yellow-400'
                       }`}>{v.status}</span>
                     </div>
-                    <button onClick={() => openNavigate(v.lat, v.lng, v.school_name || v.planned_address)}
-                      className="w-full flex items-center justify-center gap-1.5 py-2 rounded-lg bg-purple-500/10 text-purple-400 text-xs font-semibold">
-                      <Navigation className="h-3.5 w-3.5" /> Navigate
-                    </button>
+                    {v.notes && editId !== v.visit_id && (
+                      <p className={`text-[11px] ${tSec} mb-2 whitespace-pre-wrap`}><b className={tMuted}>Note:</b> {v.notes}{v.outcome ? ` · ${v.outcome}` : ''}</p>
+                    )}
+                    <div className="flex items-center gap-2">
+                      <button onClick={() => openNavigate(v.lat, v.lng, v.school_name || v.planned_address)}
+                        className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg bg-purple-500/10 text-purple-400 text-xs font-semibold">
+                        <Navigation className="h-3.5 w-3.5" /> Navigate
+                      </button>
+                      <button onClick={() => (editId === v.visit_id ? setEditId(null) : openEdit(v))}
+                        className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-[#e94560]/10 text-[#e94560] text-xs font-semibold"
+                        data-testid={`edit-visit-${v.visit_id}`}>
+                        <Pencil className="h-3.5 w-3.5" /> {v.notes ? 'Edit' : 'Add note'}
+                      </button>
+                    </div>
+                    {editId === v.visit_id && (
+                      <div className="mt-2 space-y-2">
+                        <textarea value={ef.notes} onChange={e => setEf(p => ({ ...p, notes: e.target.value }))} rows={2}
+                          placeholder="What happened on this visit? (met principal, wants a demo…)"
+                          className={`w-full rounded-lg px-2.5 py-2 text-sm ${card} ${tPri}`} />
+                        <select value={ef.outcome} onChange={e => setEf(p => ({ ...p, outcome: e.target.value }))}
+                          className={`w-full rounded-lg px-2.5 h-9 text-sm ${card} ${tPri}`}>
+                          <option value="">Outcome…</option>
+                          <option value="interested">Interested</option>
+                          <option value="follow-up">Needs follow-up</option>
+                          <option value="not interested">Not interested</option>
+                          <option value="order">Order / sample given</option>
+                        </select>
+                        <div className="flex gap-2">
+                          <button onClick={() => saveVisit(v)} disabled={savingVisit}
+                            className="flex-1 py-2 rounded-lg bg-[#e94560] text-white text-xs font-semibold disabled:opacity-50">
+                            {savingVisit ? 'Saving…' : 'Save'}
+                          </button>
+                          <button onClick={() => setEditId(null)} className={`px-4 py-2 rounded-lg ${card} ${tSec} text-xs font-semibold`}>Cancel</button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>

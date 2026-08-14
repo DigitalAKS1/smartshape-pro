@@ -92,7 +92,37 @@ export default function CallsLog() {
         <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search phone or rep…"
           className="w-full max-w-sm h-10 px-3 rounded-md text-sm bg-[var(--bg-card)] border border-[var(--border-color)] text-[var(--text-primary)]" />
 
-        <div className="bg-[var(--bg-card)] border border-[var(--border-color)] rounded-xl overflow-hidden">
+        {/* Mobile: each call as a card */}
+        <div className="sm:hidden grid gap-2.5">
+          {!loading && filtered.length === 0 && (
+            <div className="rounded-xl border border-[var(--border-color)] bg-[var(--bg-card)] px-4 py-10 text-center text-[var(--text-muted)]">
+              <Phone className="h-8 w-8 mx-auto mb-2 opacity-40" /> No calls yet.
+            </div>
+          )}
+          {filtered.map((r) => {
+            const oc = outcomeOf(r);
+            const badge = oc ? OUTCOME[oc] : { label: r.status || 'In progress…', cls: 'bg-blue-100 text-blue-700' };
+            return (
+              <div key={r.event_id} className="rounded-xl border border-[var(--border-color)] bg-[var(--bg-card)] p-3" data-testid={`call-card-${r.event_id}`}>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-[var(--text-primary)] truncate">{r.rep_name || r.rep_email || '—'}</p>
+                    <p className="text-xs font-mono text-[var(--text-secondary)]">{r.target_phone || '—'}</p>
+                  </div>
+                  <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium flex-shrink-0 ${badge.cls}`}>{badge.label}</span>
+                </div>
+                <div className="flex items-center justify-between mt-1.5 text-[11px] text-[var(--text-muted)]">
+                  <span>{fmtWhen(r.created_at)} · {fmtDur(r.duration_sec)}</span>
+                  {r.forwarded_to && <span className="inline-flex items-center gap-0.5"><Forward className="h-3 w-3" /> fwd</span>}
+                </div>
+                {r.recording_url && <audio controls preload="none" src={r.recording_url} className="h-8 w-full mt-2" />}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Desktop: full table */}
+        <div className="hidden sm:block bg-[var(--bg-card)] border border-[var(--border-color)] rounded-xl overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
