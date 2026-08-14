@@ -254,7 +254,41 @@ export default function OfflineMail() {
                 </div>
               </div>
               <p className="text-xs text-[var(--text-muted)] -mt-2 mb-4">Four ways to build a run: <b>Upload list</b> (Excel/CSV → adds &amp; syncs schools+contacts, then straight to print · <button onClick={downloadTemplate} className="text-[#e94560] hover:underline inline-flex items-center gap-0.5"><Download className="h-3 w-3" />template</button>) · <b>an Area</b> (pincode/city) · <b>Pick manually</b> · <b>Filter in CRM</b>.</p>
-              <div className="overflow-x-auto">
+              {/* Mobile: each run as a card (the 10-col table is unusable on a phone) */}
+              <div className="sm:hidden grid gap-2.5">
+                {runs.map(r => {
+                  const p = perfById[r.run_id] || {};
+                  return (
+                    <div key={r.run_id} className="rounded-xl border border-[var(--border-color)] bg-[var(--bg-primary)] p-3" data-testid={`run-card-${r.run_id}`}>
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-[var(--text-primary)] truncate">{r.name}</p>
+                          <p className="text-[11px] text-[var(--text-muted)] capitalize">{areaName(r.area_id)} · {r.piece_type}{r.courier ? ` · ${r.courier}` : ''}</p>
+                        </div>
+                        <select value={r.status} onChange={e => setStatus(r, e.target.value)}
+                          className="text-[11px] font-semibold rounded-full px-2 py-1 bg-transparent border flex-shrink-0"
+                          style={{ color: STATUS_COLOR[r.status], borderColor: STATUS_COLOR[r.status] }}>
+                          <option value="planned">planned</option><option value="posted">posted</option><option value="closed">closed</option>
+                        </select>
+                      </div>
+                      <div className="flex items-center gap-3 mt-2 text-[11px] font-mono text-[var(--text-secondary)]">
+                        <span>Sent <b className="text-[var(--text-primary)]">{r.counts?.sent ?? 0}</b></span>
+                        <span className="text-[#e94560]">Resp <b>{p.responded ?? 0}</b></span>
+                        <span>Appt <b className="text-[var(--text-primary)]">{p.appointments ?? 0}</b></span>
+                        <span>Quoted <b className="text-[var(--text-primary)]">{p.quoted ?? 0}</b></span>
+                      </div>
+                      <button onClick={() => setSheetRun({ run_id: r.run_id, name: r.name })}
+                        className="mt-3 w-full inline-flex items-center justify-center gap-1.5 h-9 rounded-lg border border-[var(--border-color)] text-[12px] font-semibold text-[var(--text-secondary)]">
+                        <Printer className="h-3.5 w-3.5" /> Addresses / Print
+                      </button>
+                    </div>
+                  );
+                })}
+                {runs.length === 0 && <p className="py-6 text-center text-sm text-[var(--text-muted)]">No mail runs yet. Build one above.</p>}
+              </div>
+
+              {/* Desktop: full table */}
+              <div className="hidden sm:block overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="text-[10px] uppercase tracking-wide text-[var(--text-muted)] text-left">
