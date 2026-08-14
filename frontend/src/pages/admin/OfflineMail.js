@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { toast } from 'sonner';
 import AdminLayout from '../../components/layouts/AdminLayout';
 import { mailAreas, mailRuns } from '../../lib/api';
 import { useNavigate } from 'react-router-dom';
-import { MapPin, Mail, Plus, RefreshCw, Trash2, X, Printer, TrendingUp, QrCode, CalendarCheck, FileText, IndianRupee, ListPlus, Filter } from 'lucide-react';
+import { MapPin, Mail, Plus, RefreshCw, Trash2, X, Printer, TrendingUp, QrCode, CalendarCheck, FileText, IndianRupee, ListPlus, Filter, Upload, Download } from 'lucide-react';
 import MailAddressSheet from '../../components/mail/MailAddressSheet';
 import ManualMailRunBuilder from '../../components/mail/ManualMailRunBuilder';
 
@@ -23,7 +23,32 @@ export default function OfflineMail() {
   const [busy, setBusy] = useState(false);
   const [sheetRun, setSheetRun] = useState(null); // {run_id, name} for the address/print sheet
   const [showManual, setShowManual] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const fileRef = useRef(null);
   const navigate = useNavigate();
+
+  // Upload a spreadsheet → engine adds/syncs School+Contact → build a run → open
+  // the address sheet so the user can review and print straight away.
+  const onUpload = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setUploading(true);
+    try {
+      const r = await mailRuns.import(file, { piece_type: 'brochure' });
+      const c = r.data.counts || {};
+      toast.success(`${r.data.schools_added} schools added to this run — ${c.create || 0} new, ${c.update || 0} synced. Review addresses & print.`);
+      await load();
+      if (r.data.run) setSheetRun({ run_id: r.data.run.run_id, name: r.data.run.name });
+    } catch (err) { toast.error(err?.response?.data?.detail || 'Import failed'); }
+    finally { setUploading(false); }
+  };
+  const downloadTemplate = () => {
+    const csv = 'School Name,Contact Name,Phone,Address,City,State,Pincode\nDelhi Public School,The Principal,9810000000,1 Main Road Sector 45,New Delhi,Delhi,110085\n';
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+    const a = document.createElement('a'); a.href = url; a.download = 'mail-list-template.csv'; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  };
 
   const load = useCallback(async () => {
     try {
@@ -190,12 +215,14 @@ export default function OfflineMail() {
             <div className={`${card} p-5`}>
               <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
                 <h2 className="text-lg font-medium text-[var(--text-primary)] flex items-center gap-2"><Mail className="h-4 w-4 text-[#e94560]" /> Mail Runs</h2>
-                <div className="flex items-center gap-2">
-                  <button onClick={() => setShowManual(true)} className={btnP} data-testid="manual-run-btn"><ListPlus className="h-3.5 w-3.5" /> Pick schools manually</button>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button onClick={() => fileRef.current?.click()} disabled={uploading} className={btnP} data-testid="upload-run-btn"><Upload className="h-3.5 w-3.5" /> {uploading ? 'Uploading…' : 'Upload list'}</button>
+                  <button onClick={() => setShowManual(true)} className="inline-flex items-center gap-1.5 h-9 px-3.5 rounded-lg border border-[var(--border-color)] text-[var(--text-secondary)] hover:text-[#e94560] hover:border-[#e94560] text-sm font-semibold" data-testid="manual-run-btn"><ListPlus className="h-3.5 w-3.5" /> Pick manually</button>
                   <button onClick={() => navigate('/leads')} className="inline-flex items-center gap-1.5 h-9 px-3.5 rounded-lg border border-[var(--border-color)] text-[var(--text-secondary)] hover:text-[#e94560] hover:border-[#e94560] text-sm font-semibold" data-testid="filter-crm-btn"><Filter className="h-3.5 w-3.5" /> Filter in CRM</button>
+                  <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls" className="hidden" onChange={onUpload} data-testid="mail-import-input" />
                 </div>
               </div>
-              <p className="text-xs text-[var(--text-muted)] -mt-2 mb-4">Three ways to build a run: <b>an Area</b> (pincode/city, above) · <b>Pick manually</b> (hand-pick schools) · <b>Filter in CRM</b> (lead-style filter → select → Mail Run).</p>
+              <p className="text-xs text-[var(--text-muted)] -mt-2 mb-4">Four ways to build a run: <b>Upload list</b> (Excel/CSV → adds &amp; syncs schools+contacts, then straight to print · <button onClick={downloadTemplate} className="text-[#e94560] hover:underline inline-flex items-center gap-0.5"><Download className="h-3 w-3" />template</button>) · <b>an Area</b> (pincode/city) · <b>Pick manually</b> · <b>Filter in CRM</b>.</p>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>

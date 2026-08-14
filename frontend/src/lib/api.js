@@ -350,6 +350,14 @@ export const mailRuns = {
   addresses: (id) => API.get(`/mail-runs/${id}/addresses`),
   stickers: (id) => API.get(`/mail-runs/${id}/stickers.pdf`, { responseType: 'blob' }),
   analytics: () => API.get('/mail-runs/analytics'),
+  import: (file, { name = '', piece_type = 'brochure', send_date = '' } = {}) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    fd.append('name', name);
+    fd.append('piece_type', piece_type);
+    fd.append('send_date', send_date);
+    return API.post('/mail-runs/import', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+  },
 };
 
 export const activityTypes = {

@@ -606,20 +606,18 @@ async def _upsert_direct_mail_lead(school_id, deal_type, owner, now_iso):
     return lead_id
 
 
-@router.post("/mail-runs")
-async def create_mail_run(request: Request):
-    user = await get_current_user(request)
-    body = await request.json()
+async def _make_mail_run(user, *, name, piece_type="brochure", school_ids=None, deal_type="",
+                         area_id="", send_date="", courier="", tracking_no="", courier_cost=0):
+    """Shared run builder: one mail_runs doc + one mail_touches (with QR) per school
+    + a Direct-Mail lead. Used by the normal create path and the file-import path."""
+    school_ids = school_ids or []
     now_iso = datetime.now(timezone.utc).isoformat()
-    school_ids = body.get("school_ids", []) or []
     run_id = f"run_{uuid.uuid4().hex[:10]}"
-    deal_type = body.get("deal_type_target", "")
-    piece_type = body.get("piece_type", "brochure")
     await db.mail_runs.insert_one({
-        "run_id": run_id, "name": body.get("name", ""), "area_id": body.get("area_id", ""),
+        "run_id": run_id, "name": name, "area_id": area_id,
         "piece_type": piece_type, "deal_type_target": deal_type, "school_ids": school_ids,
-        "send_date": body.get("send_date", ""), "courier": body.get("courier", ""),
-        "tracking_no": body.get("tracking_no", ""), "courier_cost": float(body.get("courier_cost", 0) or 0),
+        "send_date": send_date, "courier": courier, "tracking_no": tracking_no,
+        "courier_cost": float(courier_cost or 0),
         "status": "planned", "created_by": user["email"], "created_at": now_iso,
         "counts": {"sent": len(school_ids), "delivered": 0, "responded": 0, "appointments": 0},
     })
@@ -634,6 +632,61 @@ async def create_mail_run(request: Request):
             "owner": user["email"], "created_at": now_iso,
         })
     return await db.mail_runs.find_one({"run_id": run_id}, {"_id": 0})
+
+
+@router.post("/mail-runs")
+async def create_mail_run(request: Request):
+    user = await get_current_user(request)
+    body = await request.json()
+    return await _make_mail_run(
+        user, name=body.get("name", ""), area_id=body.get("area_id", ""),
+        piece_type=body.get("piece_type", "brochure"), deal_type=body.get("deal_type_target", ""),
+        school_ids=body.get("school_ids", []) or [], send_date=body.get("send_date", ""),
+        courier=body.get("courier", ""), tracking_no=body.get("tracking_no", ""),
+        courier_cost=body.get("courier_cost", 0))
+
+
+@router.post("/mail-runs/import")
+async def import_mail_run(request: Request, file: UploadFile = File(...),
+                          name: str = Form(""), piece_type: str = Form("brochure"),
+                          send_date: str = Form("")):
+    """Upload a spreadsheet → add/sync to the School+Contact database (via the
+    audited master-import engine: matches by id → name+phone → phone → name) →
+    build a mail run from those schools, ready to print. Admin only (writes master data)."""
+    user = await get_current_user(request)
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    import import_engine as ie
+    from routes.dynamic_import_routes import _key_rows
+    content = await file.read()
+    try:
+        headers, rows = ie.parse_table(file.filename or "upload.csv", content)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Could not read the file: {e}")
+    if not rows:
+        raise HTTPException(status_code=400, detail="The file has no data rows.")
+    mapping = await ie.propose_mapping(db, headers)
+    keyed = _key_rows(headers, rows, mapping)
+    counts = {"create": 0, "update": 0, "needs_review": 0, "error": 0}
+    errors, school_ids = [], []
+    for idx, kr in enumerate(keyed):
+        try:
+            res = await ie.commit_row(db, kr, user, False)   # no auto-leads; run makes its own
+            counts[res["action"]] = counts.get(res["action"], 0) + 1
+            sid = res.get("school_id")
+            if sid and res["action"] in ("create", "update") and sid not in school_ids:
+                school_ids.append(sid)
+        except Exception as e:
+            counts["error"] += 1
+            errors.append({"row": idx + 1, "error": str(e)[:120]})
+    if not school_ids:
+        raise HTTPException(status_code=400,
+            detail="No schools could be added — make sure the file has a 'School Name' column.")
+    run = await _make_mail_run(
+        user, piece_type=piece_type, school_ids=school_ids, send_date=send_date,
+        name=name or f"Imported list — {datetime.now(timezone.utc).strftime('%d %b %Y')}")
+    return {"run": run, "schools_added": len(school_ids), "counts": counts,
+            "total_rows": len(keyed), "errors": errors[:20]}
 
 
 @router.get("/mail-runs")

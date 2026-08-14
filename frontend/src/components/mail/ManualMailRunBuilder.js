@@ -22,11 +22,23 @@ export default function ManualMailRunBuilder({ onClose, onCreated }) {
   const load = useCallback(async () => {
     try {
       const r = await schoolsApi.getAll();
-      setAll((r.data || []).map(s => ({ school_id: s.school_id, school_name: s.school_name || '(unnamed)', city: s.city || '' })));
+      setAll((r.data || []).map(s => ({ school_id: s.school_id, school_name: s.school_name || '(unnamed)', city: s.city || '', phone: s.phone || '' })));
     } catch { toast.error('Could not load schools'); }
     finally { setLoading(false); }
   }, []);
   useEffect(() => { load(); }, [load]);
+
+  // Inline phone: edit on the picked row, save back to the school on blur if changed.
+  const editPhone = (sid, phone) => setPicked(p => p.map(x => x.school_id === sid ? { ...x, phone } : x));
+  const savePhone = async (sid, phone) => {
+    const orig = all.find(x => x.school_id === sid)?.phone || '';
+    if ((phone || '').trim() === orig.trim()) return;
+    try {
+      await schoolsApi.update(sid, { phone: (phone || '').trim() });
+      setAll(a => a.map(x => x.school_id === sid ? { ...x, phone: (phone || '').trim() } : x));
+      toast.success('Phone saved to school');
+    } catch { toast.error('Could not save phone'); }
+  };
 
   const pickedIds = useMemo(() => new Set(picked.map(p => p.school_id)), [picked]);
   const matches = useMemo(() => {
@@ -79,7 +91,7 @@ export default function ManualMailRunBuilder({ onClose, onCreated }) {
                 ? <div className="px-3 py-3 text-sm text-[var(--text-muted)]">No matches (or already added).</div>
                 : matches.map(s => (
                   <button key={s.school_id} onClick={() => add(s)} className="w-full flex items-center justify-between px-3 py-2 text-left hover:bg-[var(--bg-card)]" data-testid={`pick-${s.school_id}`}>
-                    <span className="text-sm text-[var(--text-primary)] truncate">{s.school_name}{s.city ? <span className="text-[var(--text-muted)]"> · {s.city}</span> : null}</span>
+                    <span className="text-sm text-[var(--text-primary)] truncate">{s.school_name}{s.city ? <span className="text-[var(--text-muted)]"> · {s.city}</span> : null}{s.phone ? <span className="text-[var(--text-muted)]"> · ☎</span> : null}</span>
                     <Plus className="h-4 w-4 text-[#e94560] flex-shrink-0" />
                   </button>
                 ))}
@@ -98,8 +110,18 @@ export default function ManualMailRunBuilder({ onClose, onCreated }) {
           ) : (
             <div className="grid gap-1.5">
               {picked.map((s, i) => (
-                <div key={s.school_id} className="flex items-center justify-between px-3 py-2 rounded-lg bg-[var(--bg-primary)] border border-[var(--border-color)]" data-testid={`picked-${s.school_id}`}>
-                  <span className="text-sm text-[var(--text-primary)] truncate"><span className="text-[var(--text-muted)] mr-1.5">{i + 1}.</span>{s.school_name}{s.city ? <span className="text-[var(--text-muted)]"> · {s.city}</span> : null}</span>
+                <div key={s.school_id} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-[var(--bg-primary)] border border-[var(--border-color)]" data-testid={`picked-${s.school_id}`}>
+                  <span className="text-sm text-[var(--text-primary)] truncate flex-1 min-w-0"><span className="text-[var(--text-muted)] mr-1.5">{i + 1}.</span>{s.school_name}{s.city ? <span className="text-[var(--text-muted)]"> · {s.city}</span> : null}</span>
+                  <input
+                    value={s.phone || ''}
+                    onChange={e => editPhone(s.school_id, e.target.value)}
+                    onBlur={e => savePhone(s.school_id, e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }}
+                    placeholder="+ phone"
+                    inputMode="tel"
+                    className="h-8 w-32 flex-shrink-0 rounded-md px-2 text-xs bg-[var(--bg-card)] border border-[var(--border-color)] text-[var(--text-primary)]"
+                    data-testid={`phone-${s.school_id}`}
+                  />
                   <button onClick={() => remove(s.school_id)} className="text-[var(--text-muted)] hover:text-red-400 flex-shrink-0"><Trash2 className="h-3.5 w-3.5" /></button>
                 </div>
               ))}
