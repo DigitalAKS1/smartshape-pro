@@ -124,7 +124,30 @@ export default function ActivityMonitor() {
           <select className={inp} value={f.status} onChange={e => setF(p => ({ ...p, status: e.target.value }))}><option value="">All status</option><option value="pending">Pending</option><option value="overdue">Overdue</option><option value="done">Done</option></select>
         </div>
 
-        <div className="rounded-xl border border-[var(--border-color)] bg-[var(--bg-card)] overflow-x-auto">
+        {/* Mobile: each task as a card (the 6-col table is cramped on a phone) */}
+        <div className="sm:hidden grid gap-2.5">
+          {loading ? <div className="py-16 text-center text-[var(--text-muted)]">Loading…</div> : filtered.map(a => (
+            <div key={a.activity_id} className="rounded-xl border border-[var(--border-color)] bg-[var(--bg-card)] p-3" data-testid={`activity-card-${a.activity_id}`}>
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-[var(--text-primary)] truncate">{a.school_name}</p>
+                  <p className="text-[12px] text-[var(--text-secondary)] mt-0.5"><span className="font-semibold text-[#e94560]">{a.activity_type}</span> · {a.title}</p>
+                </div>
+                {a.status === 'done'
+                  ? <span className="text-[11px] font-semibold text-[#2E7D5B] flex-shrink-0">✓ done</span>
+                  : <span className="text-[11px] font-semibold flex-shrink-0" style={{ color: a.overdue ? '#C4402E' : '#9A6A15' }}>{a.overdue ? 'overdue' : 'pending'}</span>}
+              </div>
+              <div className="flex items-center justify-between mt-2">
+                <span className="text-[11px] text-[var(--text-muted)]">{a.assigned_name || a.assigned_to || '—'}{a.due_date ? ` · due ${a.due_date}` : ''}</span>
+                <button onClick={() => markDone(a)} className="text-[12px] font-semibold text-[#e94560]">{a.status === 'done' ? 'reopen' : 'mark done'}</button>
+              </div>
+            </div>
+          ))}
+          {!loading && filtered.length === 0 && <p className="py-8 text-center text-sm text-[var(--text-muted)]">No activities. Plan some from the Schools tab.</p>}
+        </div>
+
+        {/* Desktop: full table */}
+        <div className="hidden sm:block rounded-xl border border-[var(--border-color)] bg-[var(--bg-card)] overflow-x-auto">
           {loading ? <div className="py-16 text-center text-[var(--text-muted)]">Loading…</div> : (
             <table className="w-full text-sm">
               <thead>
