@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { toast } from 'sonner';
 import AdminLayout from '../../components/layouts/AdminLayout';
-import { mailAreas, mailRuns } from '../../lib/api';
+import { mailAreas, mailRuns, activities } from '../../lib/api';
 import { useNavigate } from 'react-router-dom';
 import { MapPin, Mail, Plus, RefreshCw, Trash2, X, Printer, TrendingUp, QrCode, CalendarCheck, FileText, IndianRupee, ListPlus, Filter, Upload, Download } from 'lucide-react';
 import MailAddressSheet from '../../components/mail/MailAddressSheet';
@@ -16,6 +16,7 @@ export default function OfflineMail() {
   const [areas, setAreas] = useState([]);
   const [runs, setRuns] = useState([]);
   const [analytics, setAnalytics] = useState({ runs: [], totals: {} });
+  const [hotLeads, setHotLeads] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showArea, setShowArea] = useState(false);
   const [areaForm, setAreaForm] = useState({ name: '', kind: 'pincode', pincode: '', city: '' });
@@ -52,10 +53,11 @@ export default function OfflineMail() {
 
   const load = useCallback(async () => {
     try {
-      const [a, r, an] = await Promise.all([mailAreas.getAll(), mailRuns.getAll(), mailRuns.analytics()]);
+      const [a, r, an, hl] = await Promise.all([mailAreas.getAll(), mailRuns.getAll(), mailRuns.analytics(), activities.hotLeads()]);
       setAreas(a.data || []);
       setRuns(r.data || []);
       setAnalytics(an.data || { runs: [], totals: {} });
+      setHotLeads(hl.data?.leads || []);
     } catch { toast.error('Failed to load offline mail'); }
     finally { setLoading(false); }
   }, []);
@@ -145,6 +147,31 @@ export default function OfflineMail() {
           <div className="py-16 text-center text-[var(--text-muted)]">Loading…</div>
         ) : (
           <div className="grid gap-6">
+            {/* HOT LEADS — schools that scanned a mailer QR and replied. Call now. */}
+            {hotLeads.length > 0 && (
+              <div className={`${card} p-5 border-l-4`} style={{ borderLeftColor: '#e94560' }}>
+                <div className="flex items-center justify-between mb-1">
+                  <h2 className="text-lg font-medium text-[var(--text-primary)] flex items-center gap-2"><QrCode className="h-4 w-4 text-[#e94560]" /> Hot leads — awaiting call-back</h2>
+                  <span className="text-xs font-bold font-mono px-2 py-0.5 rounded-full bg-[#e94560] text-white">{hotLeads.length}</span>
+                </div>
+                <p className="text-xs text-[var(--text-muted)] mb-3">Schools that scanned a mailer QR and told us what they want. Call them while they're warm.</p>
+                <div className="grid gap-2">
+                  {hotLeads.slice(0, 8).map(l => (
+                    <div key={l.activity_id} className="flex items-start justify-between gap-3 p-3 rounded-lg bg-[var(--bg-primary)] border border-[var(--border-color)]" data-testid={`hot-${l.activity_id}`}>
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-[var(--text-primary)] truncate">{l.school_name || 'A school'} <span className="text-[var(--text-muted)] font-normal">· {l.assigned_name || l.assigned_to || 'unassigned'}</span></p>
+                        {l.notes ? <p className="text-[12px] text-[var(--text-secondary)] mt-0.5 line-clamp-2">{l.notes}</p> : null}
+                      </div>
+                      <span className="text-[11px] font-mono flex-shrink-0 whitespace-nowrap" style={{ color: l.age_days > 2 ? '#C4402E' : '#9A6A15' }}>
+                        {l.age_days === 0 ? 'today' : `${l.age_days}d ago`}
+                      </span>
+                    </div>
+                  ))}
+                  {hotLeads.length > 8 && <p className="text-[11px] text-[var(--text-muted)] text-center">+{hotLeads.length - 8} more — see Activity Monitor</p>}
+                </div>
+              </div>
+            )}
+
             {/* CAMPAIGN PERFORMANCE — the ROI of every rupee of postage */}
             {(analytics.totals?.sent || 0) > 0 && (() => {
               const t = analytics.totals;

@@ -1253,6 +1253,37 @@ async def get_activities(request: Request):
     return acts
 
 
+def _age_days(date_str, today):
+    """Whole days between an ISO date (YYYY-MM-DD or fuller) and today; 0 if unknown."""
+    d = (date_str or "")[:10]
+    if not d:
+        return 0
+    from datetime import date
+    try:
+        y, m, dd = (int(x) for x in d.split("-"))
+        return max(0, (date.fromisoformat(today) - date(y, m, dd)).days)
+    except Exception:
+        return 0
+
+
+@router.get("/activities/hot-leads")
+async def get_hot_leads(request: Request):
+    """The warmest leads: schools that scanned a mailer QR and submitted interest,
+    still awaiting a call-back (pending qr_interest activities). Newest first."""
+    await get_current_user(request)
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    acts = await db.crm_activities.find(
+        {"source": "qr_interest", "status": "pending"}, {"_id": 0}
+    ).sort("created_at", -1).to_list(500)
+    leads = [{
+        "activity_id": a.get("activity_id", ""), "school_id": a.get("school_id", ""),
+        "school_name": a.get("school_name", ""), "notes": a.get("notes", ""),
+        "assigned_to": a.get("assigned_to", ""), "assigned_name": a.get("assigned_name", ""),
+        "created_at": a.get("created_at", ""), "age_days": _age_days(a.get("created_at", ""), today),
+    } for a in acts]
+    return {"leads": leads, "count": len(leads)}
+
+
 @router.get("/activities/scorecard")
 async def get_activity_scorecard(request: Request):
     """Per-rep accountability: assigned / done / pending / overdue / completion% /
