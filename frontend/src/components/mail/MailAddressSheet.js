@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { toast } from 'sonner';
 import { mailRuns, schools as schoolsApi } from '../../lib/api';
-import { X, Printer, Save, AlertTriangle, CheckCircle2, MapPin } from 'lucide-react';
+import { X, Printer, Save, AlertTriangle, CheckCircle2, MapPin, Download } from 'lucide-react';
 
 /**
  * Address-review sheet for a mail run.
@@ -70,6 +70,16 @@ export default function MailAddressSheet({ runId, runName, onClose }) {
       setTimeout(() => URL.revokeObjectURL(url), 60000);
     } catch { toast.error('Could not generate stickers'); }
     finally { setPrinting(false); }
+  };
+
+  const exportList = async () => {
+    try {
+      const res = await mailRuns.exportCsv(runId);
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement('a');
+      a.href = url; a.download = `mail-run-${runName || runId}.csv`; a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 30000);
+    } catch { toast.error('Could not export the list'); }
   };
 
   const cell = 'h-9 w-full rounded-md px-2 text-[13px] bg-[var(--bg-primary)] border border-[var(--border-color)] text-[var(--text-primary)]';
@@ -151,6 +161,7 @@ export default function MailAddressSheet({ runId, runName, onClose }) {
         <div className="flex items-center justify-between gap-3 px-5 py-4 border-t border-[var(--border-color)]">
           <span className="text-xs text-[var(--text-muted)]">{dirtyCount > 0 ? `${dirtyCount} unsaved change${dirtyCount > 1 ? 's' : ''}` : `${rows.length} schools`}</span>
           <div className="flex items-center gap-2">
+            <button className={btnG} onClick={exportList} disabled={loading || rows.length === 0} data-testid="export-list-btn"><Download className="h-4 w-4" /> Export list</button>
             <button className={btnG} onClick={saveAll} disabled={saving || dirtyCount === 0}><Save className="h-4 w-4" /> {saving ? 'Saving…' : 'Save addresses'}</button>
             <button className={btnP} onClick={printStickers} disabled={printing || loading || rows.length === 0}><Printer className="h-4 w-4" /> {printing ? 'Preparing…' : 'Print stickers'}</button>
           </div>

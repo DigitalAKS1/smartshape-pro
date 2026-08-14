@@ -788,6 +788,41 @@ async def get_mail_run_addresses(run_id: str, request: Request):
             "missing_count": sum(1 for r in rows if r["missing"])}
 
 
+def _build_mail_run_csv(run, touches, schools_by_id):
+    """Courier manifest / records: one row per school with postal address + contact
+    + piece + response status. Returns CSV text."""
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["#", "School Name", "Addressed To", "Address", "City", "State", "Pincode",
+                "School Phone", "Contact", "Contact Phone", "Piece", "Responded",
+                "Interest", "Responded At"])
+    for i, t in enumerate(touches, 1):
+        s = schools_by_id.get(t.get("school_id")) or {"school_name": f"(deleted: {t.get('school_id','')})"}
+        w.writerow([
+            i, s.get("school_name", ""), "The Principal",
+            s.get("address", ""), s.get("city", ""), s.get("state", ""), s.get("pincode", ""),
+            s.get("phone", ""), t.get("contact_name", ""), t.get("contact_phone", ""),
+            run.get("piece_type", ""), "Yes" if t.get("responded") else "No",
+            t.get("interest", ""), t.get("responded_at", ""),
+        ])
+    return buf.getvalue()
+
+
+@router.get("/mail-runs/{run_id}/export.csv")
+async def export_mail_run(run_id: str, request: Request):
+    await get_current_user(request)
+    run = await db.mail_runs.find_one({"run_id": run_id}, {"_id": 0})
+    if not run:
+        raise HTTPException(status_code=404, detail="Mail run not found")
+    touches = await db.mail_touches.find({"run_id": run_id}, {"_id": 0}).to_list(None)
+    ids = [t["school_id"] for t in touches]
+    schools = await db.schools.find({"school_id": {"$in": ids}}, {"_id": 0}).to_list(None)
+    csv_text = _build_mail_run_csv(run, touches, {s["school_id"]: s for s in schools})
+    safe = (run.get("name") or run_id).replace('"', "").replace(",", "")[:40]
+    return StreamingResponse(io.BytesIO(csv_text.encode("utf-8-sig")), media_type="text/csv",
+                             headers={"Content-Disposition": f'attachment; filename="mail-run-{safe}.csv"'})
+
+
 # A4 — the follow-up cadence a posted mailer triggers (offset days, type, title).
 # Research: mail + tight early follow-ups converts; a single call wastes the postage.
 DEFAULT_MAIL_CADENCE = [
