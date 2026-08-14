@@ -361,6 +361,7 @@ export const activityTypes = {
 
 export const activities = {
   list: (params = {}) => API.get('/activities', { params }),
+  scorecard: () => API.get('/activities/scorecard'),
   bulk: (data) => API.post('/activities/bulk', data),
   update: (id, data) => API.put(`/activities/${id}`, data),
   delete: (id) => API.delete(`/activities/${id}`),

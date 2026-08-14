@@ -2,18 +2,22 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { toast } from 'sonner';
 import AdminLayout from '../../components/layouts/AdminLayout';
 import { activities } from '../../lib/api';
-import { ClipboardList, CheckCircle2, Clock, AlertTriangle } from 'lucide-react';
+import { ClipboardList, CheckCircle2, Clock, AlertTriangle, Users } from 'lucide-react';
 
 // Manager view: every planned activity across schools, filter by rep / type /
 // status. "Overdue" = still pending with a due date in the past.
 export default function ActivityMonitor() {
   const [rows, setRows] = useState([]);
+  const [scorecard, setScorecard] = useState({ reps: [], totals: {} });
   const [loading, setLoading] = useState(true);
   const [f, setF] = useState({ rep: '', type: '', status: '' });
 
   const load = useCallback(async () => {
-    try { const r = await activities.list(); setRows(r.data || []); }
-    catch { toast.error('Failed to load activities'); }
+    try {
+      const [r, sc] = await Promise.all([activities.list(), activities.scorecard()]);
+      setRows(r.data || []);
+      setScorecard(sc.data || { reps: [], totals: {} });
+    } catch { toast.error('Failed to load activities'); }
     finally { setLoading(false); }
   }, []);
   useEffect(() => { load(); }, [load]);
@@ -63,6 +67,56 @@ export default function ActivityMonitor() {
           <Stat icon={AlertTriangle} label="Overdue" n={counts.overdue} color="#C4402E" />
           <Stat icon={CheckCircle2} label="Done" n={counts.done} color="#2E7D5B" />
         </div>
+
+        {/* REP SCORECARD — who is keeping up with the tasks the system assigns */}
+        {!loading && scorecard.reps.length > 0 && (
+          <div className="rounded-xl border border-[var(--border-color)] bg-[var(--bg-card)] p-4 mb-4">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-sm font-semibold text-[var(--text-primary)] flex items-center gap-2"><Users className="h-4 w-4 text-[#e94560]" /> Rep Scorecard</h2>
+              <span className="text-[11px] text-[var(--text-muted)]">team completion <b className="text-[var(--text-secondary)]">{Math.round((scorecard.totals.completion_rate || 0) * 100)}%</b></span>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-[10px] uppercase tracking-wide text-[var(--text-muted)] text-left">
+                    <th className="py-1.5 pr-3">Rep</th><th className="py-1.5 pr-3">Done</th><th className="py-1.5 pr-3">Pending</th>
+                    <th className="py-1.5 pr-3">Overdue</th><th className="py-1.5 pr-3 w-[34%]">Completion</th><th className="py-1.5 pr-3">Oldest</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {scorecard.reps.map(r => {
+                    const pct = Math.round((r.completion_rate || 0) * 100);
+                    const col = pct >= 80 ? '#2E7D5B' : pct >= 50 ? '#9A6A15' : '#C4402E';
+                    const name = r.assigned_name || r.assigned_to || '—';
+                    const active = f.rep === name;
+                    return (
+                      <tr key={r.assigned_to || name} onClick={() => setF(p => ({ ...p, rep: active ? '' : name }))}
+                        className={`border-t border-[var(--border-color)] cursor-pointer ${active ? 'bg-[#e94560]/5' : 'hover:bg-[var(--bg-primary)]'}`}
+                        data-testid={`scorecard-${r.assigned_to}`}>
+                        <td className="py-2 pr-3 font-medium text-[var(--text-primary)]">{name}</td>
+                        <td className="py-2 pr-3 font-mono text-[#2E7D5B]">{r.done}</td>
+                        <td className="py-2 pr-3 font-mono text-[var(--text-secondary)]">{r.pending}</td>
+                        <td className="py-2 pr-3 font-mono font-semibold" style={{ color: r.overdue ? '#C4402E' : 'var(--text-muted)' }}>{r.overdue}</td>
+                        <td className="py-2 pr-3">
+                          <div className="flex items-center gap-2">
+                            <div className="flex-1 h-2 rounded-full bg-[var(--bg-primary)] overflow-hidden max-w-[160px]">
+                              <div className="h-full rounded-full" style={{ width: `${pct}%`, background: col }} />
+                            </div>
+                            <span className="font-mono text-xs font-semibold" style={{ color: col }}>{pct}%</span>
+                          </div>
+                        </td>
+                        <td className="py-2 pr-3 font-mono text-xs" style={{ color: r.oldest_overdue_days > 0 ? '#C4402E' : 'var(--text-muted)' }}>
+                          {r.oldest_overdue_days > 0 ? `${r.oldest_overdue_days}d` : '—'}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <p className="text-[11px] text-[var(--text-muted)] mt-2">Click a rep to filter the list below. Sorted worst-first (most overdue on top).</p>
+          </div>
+        )}
 
         <div className="flex flex-wrap gap-2 mb-4">
           <select className={inp} value={f.rep} onChange={e => setF(p => ({ ...p, rep: e.target.value }))}><option value="">All reps</option>{reps.map(r => <option key={r} value={r}>{r}</option>)}</select>

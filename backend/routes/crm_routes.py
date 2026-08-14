@@ -1165,6 +1165,53 @@ async def get_activities(request: Request):
     return acts
 
 
+@router.get("/activities/scorecard")
+async def get_activity_scorecard(request: Request):
+    """Per-rep accountability: assigned / done / pending / overdue / completion% /
+    oldest-overdue age. Sorted worst-first (most overdue on top) so a manager sees
+    who has fallen behind on the tasks the system assigns them."""
+    await get_current_user(request)
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    acts = await db.crm_activities.find({}, {"_id": 0}).to_list(20000)
+    reps = {}
+    for a in acts:
+        key = a.get("assigned_to") or ""
+        r = reps.setdefault(key, {"assigned_to": key, "assigned_name": a.get("assigned_name", ""),
+                                  "total": 0, "done": 0, "pending": 0, "overdue": 0, "oldest_overdue_date": ""})
+        if not r["assigned_name"] and a.get("assigned_name"):
+            r["assigned_name"] = a["assigned_name"]
+        r["total"] += 1
+        done = a.get("status") == "done"
+        due = a.get("due_date") or ""
+        if done:
+            r["done"] += 1
+        else:
+            r["pending"] += 1
+            if due and due < today:
+                r["overdue"] += 1
+                if not r["oldest_overdue_date"] or due < r["oldest_overdue_date"]:
+                    r["oldest_overdue_date"] = due
+    from datetime import date
+    def _age(d):
+        if not d:
+            return 0
+        try:
+            y, m, dd = (int(x) for x in d.split("-"))
+            return max(0, (date.fromisoformat(today) - date(y, m, dd)).days)
+        except Exception:
+            return 0
+    out = []
+    for r in reps.values():
+        r["completion_rate"] = (r["done"] / r["total"]) if r["total"] else 0.0
+        r["oldest_overdue_days"] = _age(r.pop("oldest_overdue_date"))
+        out.append(r)
+    # worst-first: most overdue, then lowest completion, then biggest workload
+    out.sort(key=lambda x: (-x["overdue"], x["completion_rate"], -x["total"]))
+    totals = {k: sum(r[k] for r in out) for k in ("total", "done", "pending", "overdue")}
+    totals["completion_rate"] = (totals["done"] / totals["total"]) if totals["total"] else 0.0
+    return {"reps": out, "totals": totals}
+
+
 @router.put("/activities/{activity_id}")
 async def update_activity(activity_id: str, request: Request):
     await get_current_user(request)
