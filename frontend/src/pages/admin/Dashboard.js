@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import AdminLayout from '../../components/layouts/AdminLayout';
-import { analytics, quotations as quotApi } from '../../lib/api';
+import { analytics, quotations as quotApi, activities } from '../../lib/api';
 import { formatCurrency } from '../../lib/utils';
-import { Package, AlertTriangle, IndianRupee } from 'lucide-react';
+import { Package, AlertTriangle, IndianRupee, QrCode, Clock } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { Button } from '../../components/ui/button';
 import { useTheme } from '../../contexts/ThemeContext';
@@ -18,18 +18,22 @@ export default function Dashboard() {
   const [stats, setStats]                  = useState(null);
   const [recentQuotations, setRecentQuots] = useState([]);
   const [conversion, setConversion]        = useState(null);
+  const [attention, setAttention]          = useState({ hot: 0, overdue: 0 });
   const [loading, setLoading]              = useState(true);
   const [mounted, setMounted]              = useState(false);
 
   useEffect(() => {
     (async () => {
       try {
-        const [sr, qr, convRes] = await Promise.all([
+        const [sr, qr, convRes, hl, sc] = await Promise.all([
           analytics.getDashboard(), quotApi.getAll(), analytics.getConversion(),
+          activities.hotLeads().catch(() => ({ data: { count: 0 } })),
+          activities.scorecard().catch(() => ({ data: { totals: {} } })),
         ]);
         setStats(sr.data);
         setRecentQuots(Array.isArray(qr.data) ? qr.data.slice(0, 5) : []);
         setConversion(convRes.data);
+        setAttention({ hot: hl.data?.count || 0, overdue: sc.data?.totals?.overdue || 0 });
       } catch (e) {
         console.error('Dashboard fetch error:', e);
       } finally {
@@ -99,6 +103,36 @@ export default function Dashboard() {
             </Button>
           </Link>
         </div>
+
+        {/* Needs you now — surfaces the most actionable signals in one place */}
+        {(attention.hot > 0 || attention.overdue > 0) && (
+          <div className={`${rv('delay-50')} grid grid-cols-1 sm:grid-cols-2 gap-3`} data-testid="attention-strip">
+            {attention.hot > 0 && (
+              <Link to="/offline-mail" className={`group flex items-center justify-between gap-3 rounded-xl border p-4 ${tk.card} hover:border-[#e94560] transition-colors`} data-testid="attention-hot">
+                <div className="flex items-center gap-3 min-w-0">
+                  <span className="flex-shrink-0 h-10 w-10 rounded-lg grid place-items-center bg-[#e94560]/10"><QrCode className="h-5 w-5 text-[#e94560]" /></span>
+                  <div className="min-w-0">
+                    <div className={`text-2xl font-bold ${tk.t1} leading-none`}>{attention.hot}</div>
+                    <div className={`text-xs ${tk.tm} mt-1`}>hot leads awaiting call-back</div>
+                  </div>
+                </div>
+                <ArrowRight className="h-4 w-4 text-[#e94560] opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" />
+              </Link>
+            )}
+            {attention.overdue > 0 && (
+              <Link to="/activity-monitor" className={`group flex items-center justify-between gap-3 rounded-xl border p-4 ${tk.card} hover:border-amber-500 transition-colors`} data-testid="attention-overdue">
+                <div className="flex items-center gap-3 min-w-0">
+                  <span className="flex-shrink-0 h-10 w-10 rounded-lg grid place-items-center bg-amber-500/10"><Clock className="h-5 w-5 text-amber-500" /></span>
+                  <div className="min-w-0">
+                    <div className={`text-2xl font-bold ${tk.t1} leading-none`}>{attention.overdue}</div>
+                    <div className={`text-xs ${tk.tm} mt-1`}>overdue tasks across the team</div>
+                  </div>
+                </div>
+                <ArrowRight className="h-4 w-4 text-amber-500 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" />
+              </Link>
+            )}
+          </div>
+        )}
 
         {/* KPI cards */}
         <div className={`${rv('delay-75')} grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4`} data-testid="dashboard-stats-grid">
