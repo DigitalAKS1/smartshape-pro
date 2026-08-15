@@ -41,7 +41,10 @@ export default function AppShellHeader({
 }) {
   return (
     <>
-      <header className="sticky top-0 z-30 bg-[var(--bg-card)] border-b border-[var(--border-color)] px-3 py-2 flex items-center justify-between" data-testid="mobile-header">
+      <header
+        className="sticky top-0 z-30 bg-[var(--bg-card)] border-b border-[var(--border-color)] px-3 pb-2 flex items-center justify-between"
+        style={{ paddingTop: 'calc(env(safe-area-inset-top) + 0.5rem)' }}
+        data-testid="mobile-header">
         <div className="flex items-center gap-2">
           {onMenuClick && (
             <button
