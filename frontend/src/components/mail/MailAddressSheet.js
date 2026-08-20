@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { toast } from 'sonner';
-import { mailRuns, schools as schoolsApi } from '../../lib/api';
-import { X, Printer, Save, AlertTriangle, CheckCircle2, MapPin, Download } from 'lucide-react';
+import { mailRuns, schools as schoolsApi, settingsApi } from '../../lib/api';
+import { X, Printer, Save, AlertTriangle, CheckCircle2, MapPin, Download, SlidersHorizontal } from 'lucide-react';
 
 /**
  * Address-review sheet for a mail run.
@@ -14,6 +14,18 @@ export default function MailAddressSheet({ runId, runName, onClose }) {
   const [dirty, setDirty] = useState({});      // { school_id: true }
   const [saving, setSaving] = useState(false);
   const [printing, setPrinting] = useState(false);
+
+  // Print options
+  const [showPrint, setShowPrint] = useState(false);
+  const [opts, setOpts] = useState({ format: '100x150', orientation: 'portrait', customW: '100', customH: '150' });
+  const [fromEdit, setFromEdit] = useState(false);
+  const [from, setFrom] = useState({ company_name: '', address: '', city: '', state: '', pincode: '' });
+  useEffect(() => {
+    settingsApi.getCompany().then(r => {
+      const c = r.data || {};
+      setFrom({ company_name: c.company_name || '', address: c.address || '', city: c.city || '', state: c.state || '', pincode: c.pincode || '' });
+    }).catch(() => {});
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -68,15 +80,32 @@ export default function MailAddressSheet({ runId, runName, onClose }) {
     setTimeout(() => URL.revokeObjectURL(url), 30000);
   };
 
+  const buildPrintParams = () => {
+    const p = {};
+    if (opts.format === 'a4') {
+      p.layout = 'a4';
+    } else {
+      p.layout = 'label';
+      p.orientation = opts.orientation;
+      p.size = opts.format === 'custom' ? `${opts.customW}x${opts.customH}` : opts.format;
+    }
+    if (fromEdit) {
+      p.from_name = from.company_name; p.from_address = from.address;
+      p.from_city = from.city; p.from_state = from.state; p.from_pincode = from.pincode;
+    }
+    return p;
+  };
+
   const printStickers = async () => {
     if (missingCount > 0 && !window.confirm(`${missingCount} address(es) are still incomplete and may print blank. Print anyway?`)) return;
     setPrinting(true);
     try {
-      const res = await mailRuns.stickers(runId);
+      const res = await mailRuns.stickers(runId, buildPrintParams());
       const url = URL.createObjectURL(res.data);
       const w = window.open(url, '_blank');
       if (!w) saveBlob(res.data, `stickers-${runId}.pdf`);   // popup blocked → download
       setTimeout(() => URL.revokeObjectURL(url), 60000);
+      setShowPrint(false);
     } catch { toast.error('Could not generate stickers'); }
     finally { setPrinting(false); }
   };
@@ -163,12 +192,66 @@ export default function MailAddressSheet({ runId, runName, onClose }) {
           )}
         </div>
 
+        {/* Print options panel */}
+        {showPrint && (
+          <div className="px-5 py-4 border-t border-[var(--border-color)] bg-[var(--bg-primary)] space-y-3 max-h-[45vh] overflow-auto" data-testid="print-options">
+            <div className="text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)] flex items-center gap-1.5"><SlidersHorizontal className="h-3.5 w-3.5" /> Print options</div>
+            <div className="grid sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-[11px] text-[var(--text-muted)] mb-1">Sticker format</label>
+                <select className={cell + ' h-10'} value={opts.format} onChange={e => setOpts(o => ({ ...o, format: e.target.value }))} data-testid="sticker-format">
+                  <option value="100x150">Godex 100×150 mm (roll — default)</option>
+                  <option value="100x100">100×100 mm</option>
+                  <option value="75x50">75×50 mm</option>
+                  <option value="65x38">65×38 mm</option>
+                  <option value="50x25">50×25 mm (small — name + QR only)</option>
+                  <option value="a4">A4 sheet — 4 labels per page (normal printer)</option>
+                  <option value="custom">Custom size…</option>
+                </select>
+              </div>
+              {opts.format !== 'a4' && (
+                <div>
+                  <label className="block text-[11px] text-[var(--text-muted)] mb-1">Orientation</label>
+                  <select className={cell + ' h-10'} value={opts.orientation} onChange={e => setOpts(o => ({ ...o, orientation: e.target.value }))}>
+                    <option value="portrait">Portrait</option>
+                    <option value="landscape">Landscape</option>
+                  </select>
+                </div>
+              )}
+            </div>
+            {opts.format === 'custom' && (
+              <div className="flex items-center gap-2 text-sm text-[var(--text-secondary)]">
+                <input className={cell + ' w-20'} value={opts.customW} inputMode="numeric" onChange={e => setOpts(o => ({ ...o, customW: e.target.value }))} /> ×
+                <input className={cell + ' w-20'} value={opts.customH} inputMode="numeric" onChange={e => setOpts(o => ({ ...o, customH: e.target.value }))} /> mm (width × height)
+              </div>
+            )}
+            <div>
+              <label className="flex items-center gap-2 text-[13px] text-[var(--text-secondary)]">
+                <input type="checkbox" className="accent-[#e94560]" checked={fromEdit} onChange={e => setFromEdit(e.target.checked)} data-testid="from-override-toggle" />
+                Use a different <b>From</b> address for this batch
+              </label>
+              {fromEdit && (
+                <div className="grid gap-1.5 mt-2">
+                  <input className={cell} placeholder="Company / sender name" value={from.company_name} onChange={e => setFrom(f => ({ ...f, company_name: e.target.value }))} />
+                  <input className={cell} placeholder="Address" value={from.address} onChange={e => setFrom(f => ({ ...f, address: e.target.value }))} />
+                  <div className="grid grid-cols-3 gap-1.5">
+                    <input className={cell} placeholder="City" value={from.city} onChange={e => setFrom(f => ({ ...f, city: e.target.value }))} />
+                    <input className={cell} placeholder="State" value={from.state} onChange={e => setFrom(f => ({ ...f, state: e.target.value }))} />
+                    <input className={cell} placeholder="Pincode" value={from.pincode} onChange={e => setFrom(f => ({ ...f, pincode: e.target.value }))} />
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Footer actions */}
-        <div className="flex items-center justify-between gap-3 px-5 py-4 border-t border-[var(--border-color)]">
+        <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-4 border-t border-[var(--border-color)]">
           <span className="text-xs text-[var(--text-muted)]">{dirtyCount > 0 ? `${dirtyCount} unsaved change${dirtyCount > 1 ? 's' : ''}` : `${rows.length} schools`}</span>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <button className={btnG} onClick={exportList} disabled={loading || rows.length === 0} data-testid="export-list-btn"><Download className="h-4 w-4" /> Export list</button>
             <button className={btnG} onClick={saveAll} disabled={saving || dirtyCount === 0}><Save className="h-4 w-4" /> {saving ? 'Saving…' : 'Save addresses'}</button>
+            <button className={btnG} onClick={() => setShowPrint(s => !s)} data-testid="print-opts-toggle"><SlidersHorizontal className="h-4 w-4" /> Options</button>
             <button className={btnP} onClick={printStickers} disabled={printing || loading || rows.length === 0}><Printer className="h-4 w-4" /> {printing ? 'Preparing…' : 'Print stickers'}</button>
           </div>
         </div>

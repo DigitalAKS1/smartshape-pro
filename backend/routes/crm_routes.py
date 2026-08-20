@@ -898,75 +898,207 @@ def _wrap_text(text, maxlen):
     return lines
 
 
-def _build_stickers_pdf(touches, schools_by_id, company, base_url):
-    """One 100x150mm label per school: Indian postal 'To / From' + a scannable QR."""
-    from reportlab.pdfgen import canvas
+# Sticker sizes in mm (width, height), portrait. "a4" is a separate 4-up layout.
+_STICKER_SIZES = {
+    "100x150": (100, 150),   # Godex-500 default
+    "100x100": (100, 100),
+    "75x50":   (75, 50),
+    "65x38":   (65, 38),
+    "50x25":   (50, 25),
+}
+
+
+def _parse_sticker_size(size):
+    s = (size or "100x150").lower().strip()
+    if s in _STICKER_SIZES:
+        return _STICKER_SIZES[s]
+    try:
+        w, h = s.split("x")
+        return (max(20.0, float(w)), max(12.0, float(h)))   # custom WxH mm, sane floor
+    except Exception:
+        return _STICKER_SIZES["100x150"]
+
+
+def _wrap_to_width(c, text, font, size, max_w):
+    """Wrap by MEASURED string width (points) so text fits any label size/orientation."""
+    words = str(text or "").replace("\n", " ").split()
+    lines, cur = [], ""
+    for w in words:
+        trial = (cur + " " + w).strip()
+        if not cur or c.stringWidth(trial, font, size) <= max_w:
+            cur = trial
+        else:
+            lines.append(cur)
+            cur = w
+    if cur:
+        lines.append(cur)
+    return lines
+
+
+def _company_from_lines(company):
+    cname = company.get("company_name", "") or "SmartShape"
+    tail = [z for z in [
+        " - ".join([x for x in [company.get("city", ""), company.get("pincode", "")] if x]),
+        company.get("state", ""),
+    ] if z]
+    body = _wrap_text(company.get("address", ""), 60)[:2]
+    if tail:
+        body.append(", ".join(tail))
+    return cname, body
+
+
+def _render_label(c, x, y, w, h, sch, token, company, base_url):
+    """One address label inside rect (x,y,w,h): TO on top (bold school name),
+    FROM below (bold company name), QR bottom-right. Fonts + wrap scale to width."""
     from reportlab.lib.units import mm
     from reportlab.graphics.barcode import qr
     from reportlab.graphics.shapes import Drawing
     from reportlab.graphics import renderPDF
 
-    buf = io.BytesIO()
-    W, H = 100 * mm, 150 * mm
-    c = canvas.Canvas(buf, pagesize=(W, H))
-    m = 7 * mm
+    m = max(2 * mm, 0.05 * min(w, h))
+    ix, iw = x + m, w - 2 * m
 
-    cname = company.get("company_name", "") or "SmartShape"
-    cstate = company.get("state", "")
-    ccity_pin = " - ".join([x for x in [company.get("city", ""), company.get("pincode", "")] if x])
-    from_lines = [cname] + _wrap_text(company.get("address", ""), 54)[:2]
-    if ccity_pin:
-        from_lines.append(ccity_pin + ("," if cstate else "."))
-    if cstate:
-        from_lines.append(cstate + ".")
-
-    if not touches:
-        c.showPage()
-
-    for t in touches:
-        sch = schools_by_id.get(t.get("school_id"), {})
-        # FROM (compact, top)
-        y = H - 11 * mm
-        c.setFont("Helvetica-Bold", 8); c.drawString(m, y, "From:")
-        c.setFont("Helvetica", 8)
-        for ln in from_lines:
-            c.drawString(m + 12 * mm, y, ln[:52]); y -= 4 * mm
-        c.setFont("Helvetica-Oblique", 7)
-        c.drawString(m, y - 1.5 * mm, "SMARTS-SHAPES · Learning through Craft")
-
-        c.setLineWidth(0.6); c.line(m, H - 40 * mm, W - m, H - 40 * mm)
-
-        # TO (Indian postal style, large)
-        ty = H - 50 * mm
-        c.setFont("Helvetica-Bold", 11); c.drawString(m, ty, "To,"); ty -= 6.5 * mm
-        c.setFont("Helvetica", 11); c.drawString(m, ty, "The Principal,"); ty -= 6.5 * mm
-        # Wrapped fields carry a trailing comma only on their LAST visual line, so
-        # a name/address that wraps doesn't sprout a comma mid-phrase.
-        c.setFont("Helvetica-Bold", 14)
-        name_lines = _wrap_text(sch.get("school_name", ""), 28)[:2]
-        for i, ln in enumerate(name_lines):
-            c.drawString(m, ty, ln + ("," if i == len(name_lines) - 1 else "")); ty -= 6.5 * mm
-        c.setFont("Helvetica", 11)
-        addr_lines = _wrap_text(sch.get("address", ""), 36)[:3]
-        for i, ln in enumerate(addr_lines):
-            c.drawString(m, ty, ln + ("," if i == len(addr_lines) - 1 else "")); ty -= 5.5 * mm
-        city_pin = " - ".join([x for x in [sch.get("city", ""), sch.get("pincode", "")] if x])
-        if city_pin:
-            c.setFont("Helvetica-Bold", 12); c.drawString(m, ty, city_pin + ","); ty -= 6 * mm
+    # Compact layout for small labels (can't fit full address + FROM + big QR).
+    if h < 45 * mm:
+        f_name = max(6, min(9.5, (h / mm) * 0.30))
+        f_body = max(5, f_name * 0.8)
+        qsz = max(9 * mm, min(h - 2 * m, w * 0.30))
+        tw = w - qsz - 3 * m
+        cy = y + h - m - f_name
+        c.setFont("Helvetica-Bold", f_name)
+        for ln in _wrap_to_width(c, sch.get("school_name", ""), "Helvetica-Bold", f_name, tw)[:2]:
+            c.drawString(ix, cy, ln); cy -= f_name * 1.12
+        c.setFont("Helvetica", f_body)
+        cp = " - ".join([z for z in [sch.get("city", ""), sch.get("pincode", "")] if z])
+        if cp:
+            c.drawString(ix, cy, cp); cy -= f_body * 1.2
         if sch.get("state"):
-            c.setFont("Helvetica", 11); c.drawString(m, ty, sch.get("state") + ".")
+            c.drawString(ix, cy, sch.get("state", ""))
+        cname, _ = _company_from_lines(company)
+        c.setFont("Helvetica", max(4.5, f_body * 0.78))
+        c.drawString(ix, y + m, ("From: " + cname)[:44])
+        if token:
+            url = f"{base_url}/api/r/{token}"
+            qrw = qr.QrCodeWidget(url)
+            b = qrw.getBounds(); bw = (b[2] - b[0]) or 1; bh = (b[3] - b[1]) or 1
+            d = Drawing(qsz, qsz, transform=[qsz / bw, 0, 0, qsz / bh, 0, 0]); d.add(qrw)
+            renderPDF.draw(d, c, x + w - qsz - m, y + (h - qsz) / 2)
+        return
 
-        # QR (scan to respond) bottom-right
-        size = 26 * mm
-        url = f"{base_url}/api/r/{t.get('qr_token', '')}"
+    scale = w / (100 * mm)
+    f_lbl  = max(5.5, min(9, 8 * scale))
+    f_body = max(6.5, min(11, 11 * scale))
+    f_name = max(8, min(15, 14 * scale))
+    f_pin  = max(7, min(13, 12 * scale))
+    LH = 1.22
+
+    bottom_h = max(18 * mm, h * 0.30)
+    qsz = max(12 * mm, min(bottom_h - 2 * m, w * 0.30, 30 * mm))
+
+    # ── TO (top) ──
+    cy = y + h - m - f_lbl
+    c.setFont("Helvetica", f_lbl); c.drawString(ix, cy, "To,")
+    cy -= f_body * LH
+    c.setFont("Helvetica", f_body); c.drawString(ix, cy, "The Principal,")
+    cy -= f_name * LH
+    c.setFont("Helvetica-Bold", f_name)
+    nl = _wrap_to_width(c, sch.get("school_name", ""), "Helvetica-Bold", f_name, iw)[:2]
+    for i, ln in enumerate(nl):
+        c.drawString(ix, cy, ln + ("," if i == len(nl) - 1 else "")); cy -= f_name * 1.12
+    c.setFont("Helvetica", f_body)
+    al = _wrap_to_width(c, sch.get("address", ""), "Helvetica", f_body, iw)[:3]
+    for i, ln in enumerate(al):
+        c.drawString(ix, cy, ln + ("," if i == len(al) - 1 else "")); cy -= f_body * LH
+    cp = " - ".join([z for z in [sch.get("city", ""), sch.get("pincode", "")] if z])
+    if cp:
+        c.setFont("Helvetica-Bold", f_pin); c.drawString(ix, cy, cp + ("," if sch.get("state") else ".")); cy -= f_pin * LH
+    if sch.get("state"):
+        c.setFont("Helvetica", f_body); c.drawString(ix, cy, sch.get("state") + ".")
+
+    # ── divider ──
+    dv = y + bottom_h
+    c.setLineWidth(0.5); c.setStrokeGray(0.45); c.line(ix, dv, x + w - m, dv); c.setStrokeGray(0)
+
+    # ── FROM (bottom-left, company name BOLD) ──
+    cname, from_body = _company_from_lines(company)
+    from_w = w - qsz - 3 * m
+    fy = dv - m - f_lbl
+    c.setFont("Helvetica", f_lbl); c.drawString(ix, fy, "From:")
+    fy -= f_body * LH
+    c.setFont("Helvetica-Bold", f_body)
+    for ln in _wrap_to_width(c, cname, "Helvetica-Bold", f_body, from_w)[:2]:
+        c.drawString(ix, fy, ln); fy -= f_body * LH
+    c.setFont("Helvetica", f_lbl)
+    for ln in from_body:
+        if fy < y + m:
+            break
+        for wl in _wrap_to_width(c, ln, "Helvetica", f_lbl, from_w)[:1]:
+            c.drawString(ix, fy, wl); fy -= f_lbl * LH
+
+    # ── QR (bottom-right) ──
+    if token:
+        url = f"{base_url}/api/r/{token}"
         qrw = qr.QrCodeWidget(url)
         b = qrw.getBounds(); bw = (b[2] - b[0]) or 1; bh = (b[3] - b[1]) or 1
-        d = Drawing(size, size, transform=[size / bw, 0, 0, size / bh, 0, 0])
-        d.add(qrw)
-        renderPDF.draw(d, c, W - size - m, 8 * mm)
-        c.setFont("Helvetica", 7); c.drawString(m, 11 * mm, "Scan to connect →")
-        c.showPage()
+        d = Drawing(qsz, qsz, transform=[qsz / bw, 0, 0, qsz / bh, 0, 0]); d.add(qrw)
+        renderPDF.draw(d, c, x + w - qsz - m, y + m)
+        c.setFont("Helvetica", max(5, f_lbl * 0.75))
+        c.drawCentredString(x + w - qsz / 2 - m, y + m - f_lbl * 0.72, "Scan to connect")
 
+
+def _build_stickers_pdf(touches, schools_by_id, company, base_url, *,
+                        orientation="portrait", size="100x150", layout="label", from_override=None):
+    """Address labels — Godex thermal (one per page) or A4 4-up for a normal
+    printer. TO on top, FROM below (company bold), QR, auto-wrapped to the size.
+      orientation: portrait | landscape (thermal only)
+      size:        preset ("100x150", "50x25"…) or custom "WxH" mm
+      layout:      label (one per page) | a4 (2x2 = 4 labels per A4 sheet)
+      from_override: optional {company_name,address,city,state,pincode} for this batch
+    """
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.units import mm
+    from reportlab.lib.pagesizes import A4
+
+    if from_override:
+        company = {**company, **{k: v for k, v in from_override.items() if v}}
+
+    buf = io.BytesIO()
+
+    if layout == "a4":
+        PW, PH = A4
+        c = canvas.Canvas(buf, pagesize=(PW, PH))
+        gx = gy = 8 * mm
+        cols, rows = 2, 2
+        cw, ch = (PW - 2 * gx) / cols, (PH - 2 * gy) / rows
+        per_page = cols * rows
+        if not touches:
+            c.showPage()
+        for idx, t in enumerate(touches):
+            if idx and idx % per_page == 0:
+                c.showPage()
+            slot = idx % per_page
+            col, row = slot % cols, slot // cols
+            cx = gx + col * cw
+            cyy = PH - gy - (row + 1) * ch
+            c.setDash(2, 2); c.setLineWidth(0.4); c.setStrokeGray(0.7)
+            c.rect(cx, cyy, cw, ch); c.setDash(); c.setStrokeGray(0)
+            _render_label(c, cx, cyy, cw, ch, schools_by_id.get(t.get("school_id"), {}),
+                          t.get("qr_token", ""), company, base_url)
+        c.save()
+        return buf.getvalue()
+
+    # thermal: one label per page
+    w_mm, h_mm = _parse_sticker_size(size)
+    if orientation == "landscape":
+        w_mm, h_mm = h_mm, w_mm
+    W, H = w_mm * mm, h_mm * mm
+    c = canvas.Canvas(buf, pagesize=(W, H))
+    if not touches:
+        c.showPage()
+    for t in touches:
+        _render_label(c, 0, 0, W, H, schools_by_id.get(t.get("school_id"), {}),
+                      t.get("qr_token", ""), company, base_url)
+        c.showPage()
     c.save()
     return buf.getvalue()
 
@@ -983,7 +1115,20 @@ async def mail_run_stickers(run_id: str, request: Request):
     schools_by_id = {s["school_id"]: s for s in schools}
     company = await db.settings.find_one({"type": "company"}, {"_id": 0}) or {}
     base = (_os.environ.get("FRONTEND_URL") or "https://app.smartshape.in").rstrip("/")
-    pdf = _build_stickers_pdf(touches, schools_by_id, company, base)
+    qp = request.query_params
+    orientation = "landscape" if qp.get("orientation") == "landscape" else "portrait"
+    layout = "a4" if qp.get("layout") == "a4" else "label"
+    size = qp.get("size") or "100x150"
+    # Optional per-batch FROM override (else falls back to Settings → Company)
+    from_override = None
+    if qp.get("from_name") or qp.get("from_address"):
+        from_override = {
+            "company_name": qp.get("from_name", ""), "address": qp.get("from_address", ""),
+            "city": qp.get("from_city", ""), "state": qp.get("from_state", ""),
+            "pincode": qp.get("from_pincode", ""),
+        }
+    pdf = _build_stickers_pdf(touches, schools_by_id, company, base, orientation=orientation,
+                              size=size, layout=layout, from_override=from_override)
     return StreamingResponse(io.BytesIO(pdf), media_type="application/pdf",
                              headers={"Content-Disposition": f'attachment; filename="stickers-{run_id}.pdf"'})
 

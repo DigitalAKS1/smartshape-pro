@@ -348,7 +348,7 @@ export const mailRuns = {
   create: (data) => API.post('/mail-runs', data),
   updateStatus: (id, status) => API.put(`/mail-runs/${id}/status`, { status }),
   addresses: (id) => API.get(`/mail-runs/${id}/addresses`),
-  stickers: (id) => API.get(`/mail-runs/${id}/stickers.pdf`, { responseType: 'blob' }),
+  stickers: (id, params = {}) => API.get(`/mail-runs/${id}/stickers.pdf`, { params, responseType: 'blob' }),
   exportCsv: (id) => API.get(`/mail-runs/${id}/export.csv`, { responseType: 'blob' }),
   analytics: () => API.get('/mail-runs/analytics'),
   import: (file, { name = '', piece_type = 'brochure', send_date = '' } = {}) => {
