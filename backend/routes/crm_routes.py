@@ -761,6 +761,12 @@ def _addr_missing(s):
                 and str(s.get("city") or "").strip())
 
 
+def _complete_touches(touches, schools_by_id):
+    """Only the touches whose school has a courier-complete address — so a print
+    run doesn't waste labels (or mail blanks) on incomplete records."""
+    return [t for t in touches if not _addr_missing(schools_by_id.get(t.get("school_id"), {}))]
+
+
 @router.get("/mail-runs/{run_id}/addresses")
 async def get_mail_run_addresses(run_id: str, request: Request):
     """Editable address sheet for a run — fill blanks before printing stickers."""
@@ -1116,6 +1122,8 @@ async def mail_run_stickers(run_id: str, request: Request):
     company = await db.settings.find_one({"type": "company"}, {"_id": 0}) or {}
     base = (_os.environ.get("FRONTEND_URL") or "https://app.smartshape.in").rstrip("/")
     qp = request.query_params
+    if qp.get("skip_incomplete") in ("1", "true", "yes"):
+        touches = _complete_touches(touches, schools_by_id)
     orientation = "landscape" if qp.get("orientation") == "landscape" else "portrait"
     layout = "a4" if qp.get("layout") == "a4" else "label"
     size = qp.get("size") or "100x150"

@@ -17,7 +17,7 @@ export default function MailAddressSheet({ runId, runName, onClose }) {
 
   // Print options
   const [showPrint, setShowPrint] = useState(false);
-  const [opts, setOpts] = useState({ format: '100x150', orientation: 'portrait', customW: '100', customH: '150' });
+  const [opts, setOpts] = useState({ format: '100x150', orientation: 'portrait', customW: '100', customH: '150', skipIncomplete: true });
   const [fromEdit, setFromEdit] = useState(false);
   const [from, setFrom] = useState({ company_name: '', address: '', city: '', state: '', pincode: '' });
   useEffect(() => {
@@ -89,6 +89,7 @@ export default function MailAddressSheet({ runId, runName, onClose }) {
       p.orientation = opts.orientation;
       p.size = opts.format === 'custom' ? `${opts.customW}x${opts.customH}` : opts.format;
     }
+    if (opts.skipIncomplete) p.skip_incomplete = '1';
     if (fromEdit) {
       p.from_name = from.company_name; p.from_address = from.address;
       p.from_city = from.city; p.from_state = from.state; p.from_pincode = from.pincode;
@@ -225,6 +226,10 @@ export default function MailAddressSheet({ runId, runName, onClose }) {
                 <input className={cell + ' w-20'} value={opts.customH} inputMode="numeric" onChange={e => setOpts(o => ({ ...o, customH: e.target.value }))} /> mm (width × height)
               </div>
             )}
+            <label className="flex items-center gap-2 text-[13px] text-[var(--text-secondary)]">
+              <input type="checkbox" className="accent-[#e94560]" checked={opts.skipIncomplete} onChange={e => setOpts(o => ({ ...o, skipIncomplete: e.target.checked }))} data-testid="skip-incomplete-toggle" />
+              Skip incomplete addresses{missingCount > 0 ? ` — ${missingCount} will be skipped` : ''}
+            </label>
             <div>
               <label className="flex items-center gap-2 text-[13px] text-[var(--text-secondary)]">
                 <input type="checkbox" className="accent-[#e94560]" checked={fromEdit} onChange={e => setFromEdit(e.target.checked)} data-testid="from-override-toggle" />
