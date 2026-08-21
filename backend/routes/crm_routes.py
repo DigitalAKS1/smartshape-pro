@@ -953,7 +953,24 @@ def _company_from_lines(company):
     return cname, body
 
 
-def _render_label(c, x, y, w, h, sch, token, company, base_url):
+def _load_company_logo(company, base_url):
+    """Fetch the company logo as a reportlab ImageReader, or None. logo_url may be
+    an absolute http(s) URL or a server path (/uploads/...) served by the frontend."""
+    raw = (company.get("logo_url") or "").strip()
+    if not raw:
+        return None
+    url = raw if raw.startswith("http") else (base_url.rstrip("/") + "/" + raw.lstrip("/"))
+    try:
+        from reportlab.lib.utils import ImageReader
+        r = http_requests.get(url, timeout=6)
+        if r.status_code == 200 and r.content:
+            return ImageReader(io.BytesIO(r.content))
+    except Exception:
+        pass
+    return None
+
+
+def _render_label(c, x, y, w, h, sch, token, company, base_url, logo=None):
     """One address label inside rect (x,y,w,h): TO on top (bold school name),
     FROM below (bold company name), QR bottom-right. Fonts + wrap scale to width."""
     from reportlab.lib.units import mm
@@ -1025,15 +1042,30 @@ def _render_label(c, x, y, w, h, sch, token, company, base_url):
     dv = y + bottom_h
     c.setLineWidth(0.5); c.setStrokeGray(0.45); c.line(ix, dv, x + w - m, dv); c.setStrokeGray(0)
 
-    # ── FROM (bottom-left, company name BOLD) ──
+    # ── FROM (bottom-left): logo above, then company name (smaller but BOLD) ──
     cname, from_body = _company_from_lines(company)
     from_w = w - qsz - 3 * m
-    fy = dv - m - f_lbl
+    f_from = f_body * 0.86            # company name: smaller than the To fields, still bold
+    fy = dv - m
+
+    # Logo sits just under the divider, above "From:"
+    if logo is not None:
+        try:
+            iw_img, ih_img = logo.getSize()
+            logo_h = min(9 * mm, h * 0.09)
+            logo_w = min(from_w, logo_h * (iw_img / ih_img) if ih_img else logo_h)
+            fy -= logo_h
+            c.drawImage(logo, ix, fy, width=logo_w, height=logo_h, mask='auto', preserveAspectRatio=True)
+            fy -= 1.2 * mm
+        except Exception:
+            pass
+
+    fy -= f_lbl
     c.setFont("Helvetica", f_lbl); c.drawString(ix, fy, "From:")
-    fy -= f_body * LH
-    c.setFont("Helvetica-Bold", f_body)
-    for ln in _wrap_to_width(c, cname, "Helvetica-Bold", f_body, from_w)[:2]:
-        c.drawString(ix, fy, ln); fy -= f_body * LH
+    fy -= f_from * LH
+    c.setFont("Helvetica-Bold", f_from)
+    for ln in _wrap_to_width(c, cname, "Helvetica-Bold", f_from, from_w)[:2]:
+        c.drawString(ix, fy, ln); fy -= f_from * LH
     c.setFont("Helvetica", f_lbl)
     for ln in from_body:
         if fy < y + m:
@@ -1068,6 +1100,7 @@ def _build_stickers_pdf(touches, schools_by_id, company, base_url, *,
     if from_override:
         company = {**company, **{k: v for k, v in from_override.items() if v}}
 
+    logo = _load_company_logo(company, base_url)   # fetched once, drawn on every label
     buf = io.BytesIO()
 
     if layout == "a4":
@@ -1089,7 +1122,7 @@ def _build_stickers_pdf(touches, schools_by_id, company, base_url, *,
             c.setDash(2, 2); c.setLineWidth(0.4); c.setStrokeGray(0.7)
             c.rect(cx, cyy, cw, ch); c.setDash(); c.setStrokeGray(0)
             _render_label(c, cx, cyy, cw, ch, schools_by_id.get(t.get("school_id"), {}),
-                          t.get("qr_token", ""), company, base_url)
+                          t.get("qr_token", ""), company, base_url, logo=logo)
         c.save()
         return buf.getvalue()
 
@@ -1103,7 +1136,7 @@ def _build_stickers_pdf(touches, schools_by_id, company, base_url, *,
         c.showPage()
     for t in touches:
         _render_label(c, 0, 0, W, H, schools_by_id.get(t.get("school_id"), {}),
-                      t.get("qr_token", ""), company, base_url)
+                      t.get("qr_token", ""), company, base_url, logo=logo)
         c.showPage()
     c.save()
     return buf.getvalue()
