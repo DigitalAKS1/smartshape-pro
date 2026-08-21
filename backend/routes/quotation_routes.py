@@ -19,8 +19,14 @@ router = APIRouter()
 UPLOADS_DIR = os.environ.get("UPLOADS_DIR", "/app/uploads")
 
 
-def _compute_totals(lines: list, d1: float, d2: float, fr: float) -> dict:
-    """New formula: freight in sub-total, per-line GST rates, combined GST line."""
+# Currency → symbol. INR carries Indian GST; foreign currencies do not (export).
+CURRENCY_SYMBOLS = {"INR": "₹", "USD": "$", "EUR": "€", "AED": "د.إ", "GBP": "£", "SGD": "S$", "AUD": "A$"}
+
+
+def _compute_totals(lines: list, d1: float, d2: float, fr: float, currency: str = "INR") -> dict:
+    """Freight in sub-total, per-line GST rates, combined GST line. GST applies
+    ONLY for INR — a foreign-currency quote (USD/EUR/AED…) is an export/outside-India
+    sale and carries no Indian GST, so all GST fields are zeroed."""
     items_total  = sum(l.get("line_subtotal", 0) for l in lines)
     disc1_amount = items_total * (d1 / 100)
     after_d1     = items_total - disc1_amount
@@ -53,7 +59,7 @@ def _compute_totals(lines: list, d1: float, d2: float, fr: float) -> dict:
         slab["amount"]  += freight_gst
     gst_breakup = [slabs[r] for r in sorted(slabs, reverse=True) if slabs[r]["amount"] > 0]
 
-    return dict(
+    result = dict(
         subtotal            = items_total,
         disc1_amount        = disc1_amount,
         after_disc1         = after_d1,
@@ -71,6 +77,20 @@ def _compute_totals(lines: list, d1: float, d2: float, fr: float) -> dict:
         total_with_gst      = after_disc + total_gst,
         grand_total         = grand_total,
     )
+    if (currency or "INR").upper() != "INR":
+        # Foreign currency → export sale, no Indian GST. Zero every GST field;
+        # grand total is the sub-total (items after discount + freight, no tax).
+        result.update(
+            items_gst        = 0.0,
+            freight_gst      = 0.0,
+            freight_with_gst = freight_base,
+            freight_total    = freight_base,
+            gst_amount       = 0.0,
+            gst_breakup      = [],
+            total_with_gst   = sub_total,
+            grand_total      = sub_total,
+        )
+    return result
 
 
 async def touch_last_activity(entity_type: str, entity_id: str):
@@ -480,7 +500,8 @@ async def create_quotation(request: Request):
     d1 = body.get("discount1_pct", 0)
     d2 = body.get("discount2_pct", 0)
     fr = body.get("freight_amount", 0)
-    t  = _compute_totals(lines, d1, d2, fr)
+    currency = (body.get("currency") or "INR").upper()
+    t  = _compute_totals(lines, d1, d2, fr, currency)
 
     # Idempotency guard — collapse accidental rapid double-submits (multi-click,
     # network retry, the 401-retry interceptor) into the first quotation instead of
@@ -519,7 +540,8 @@ async def create_quotation(request: Request):
         "sales_person_id": sp.get("sales_person_id"),
         "sales_person_name": sp["name"],
         "sales_person_email": sp["email"],
-        "currency_symbol": body.get("currency_symbol", "₹"),
+        "currency": currency,
+        "currency_symbol": body.get("currency_symbol") or CURRENCY_SYMBOLS.get(currency, "₹"),
         "discount1_pct": d1,
         "discount2_pct": d2,
         "freight_amount": fr,
@@ -587,18 +609,23 @@ async def edit_quotation(quotation_id: str, request: Request):
     allowed = {}
     for key in ("principal_name", "school_name", "address", "customer_email", "customer_phone",
                 "customer_gst", "sales_person_id", "discount1_pct", "discount2_pct",
-                "freight_amount", "lines", "quotation_status", "currency_symbol",
+                "freight_amount", "lines", "quotation_status", "currency", "currency_symbol",
                 "font_size_mode", "bank_details_override", "terms_override",
                 "valid_until", "city", "state", "pincode"):
         if key in body:
             allowed[key] = body[key]
 
-    if "lines" in allowed:
-        lines = allowed["lines"]
+    # Recompute totals when lines OR the currency change (currency toggles GST).
+    if "lines" in allowed or "currency" in allowed:
+        lines = allowed.get("lines", existing.get("lines", []))
         d1 = allowed.get("discount1_pct", existing.get("discount1_pct", 0))
         d2 = allowed.get("discount2_pct", existing.get("discount2_pct", 0))
         fr = allowed.get("freight_amount", existing.get("freight_amount", 0))
-        allowed.update(_compute_totals(lines, d1, d2, fr))
+        currency = (allowed.get("currency") or existing.get("currency") or "INR").upper()
+        allowed["currency"] = currency
+        if "currency_symbol" not in allowed:
+            allowed["currency_symbol"] = CURRENCY_SYMBOLS.get(currency, existing.get("currency_symbol", "₹"))
+        allowed.update(_compute_totals(lines, d1, d2, fr, currency))
         # Editing upgrades the quotation to the new format (AMOUNT excl. GST,
         # GST by slab after subtotal). Un-edited quotations keep their old layout.
         allowed["format_version"] = 2

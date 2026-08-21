@@ -12,7 +12,13 @@ const tPri     = 'text-[var(--text-primary)]';
 const tSec     = 'text-[var(--text-secondary)]';
 const tMut     = 'text-[var(--text-muted)]';
 
-const CURRENCY_SYMBOLS = ['₹', '$', '€', '£', 'AED', '¥'];
+const CURRENCIES = [
+  { code: 'INR', sym: '₹', label: '₹ INR' },
+  { code: 'USD', sym: '$', label: '$ USD' },
+  { code: 'EUR', sym: '€', label: '€ EUR' },
+  { code: 'AED', sym: 'د.إ', label: 'AED' },
+  { code: 'GBP', sym: '£', label: '£ GBP' },
+];
 
 export default function QuotationStep3Pricing({
   formData, setFormData,
@@ -403,29 +409,27 @@ export default function QuotationStep3Pricing({
           <p className={`text-[10px] ${tMut} mt-1`}>Freight added in Sub Total. GST @ 18% on freight calculated separately.</p>
         </div>
         <div>
-          <Label className={`text-xs ${tMut} mb-1`}>Currency Symbol</Label>
+          <Label className={`text-xs ${tMut} mb-1`}>Currency</Label>
           <div className="flex gap-2 flex-wrap">
-            {CURRENCY_SYMBOLS.map(sym => (
+            {CURRENCIES.map(cur => (
               <button
-                key={sym}
+                key={cur.code}
                 type="button"
-                onClick={() => setFormData(p => ({ ...p, currency_symbol: sym }))}
+                onClick={() => setFormData(p => ({ ...p, currency: cur.code, currency_symbol: cur.sym }))}
+                data-testid={`currency-${cur.code}`}
                 className={`px-3 py-2 rounded-lg text-sm font-medium border transition-all ${
-                  formData.currency_symbol === sym
+                  (formData.currency || 'INR') === cur.code
                     ? 'bg-[#e94560] text-white border-[#e94560]'
                     : `bg-[var(--bg-primary)] border-[var(--border-color)] ${tSec} hover:border-[#e94560]/40`
                 }`}
               >
-                {sym}
+                {cur.label}
               </button>
             ))}
-            <Input
-              value={CURRENCY_SYMBOLS.includes(formData.currency_symbol) ? '' : formData.currency_symbol}
-              onChange={e => setFormData(p => ({ ...p, currency_symbol: e.target.value || '₹' }))}
-              placeholder="Other"
-              className={`h-10 w-20 text-sm text-center ${inputCls}`}
-            />
           </div>
+          {(formData.currency || 'INR') !== 'INR' && (
+            <p className="text-[11px] text-amber-500 mt-1.5">Foreign currency — <b>no GST</b> is applied (export sale outside India).</p>
+          )}
         </div>
       </div>
 
@@ -463,7 +467,7 @@ export default function QuotationStep3Pricing({
                 <span className={`text-sm font-semibold ${tPri}`}>Sub Total</span>
                 <span className={`font-mono text-sm font-semibold ${tPri}`}>{fmt(totals.sub_total)}</span>
               </div>
-              {(totals.gst_breakup && totals.gst_breakup.length > 0
+              {totals.total_gst > 0 && (totals.gst_breakup && totals.gst_breakup.length > 0
                 ? totals.gst_breakup
                 : [{ rate: 18, amount: totals.total_gst }]
               ).map((slab, i) => (
@@ -472,6 +476,12 @@ export default function QuotationStep3Pricing({
                   <span className={`font-mono text-sm ${tSec}`}>{fmt(slab.amount)}</span>
                 </div>
               ))}
+              {(formData.currency || 'INR') !== 'INR' && (
+                <div className="flex justify-between items-center">
+                  <span className={`text-sm ${tMut}`}>GST</span>
+                  <span className={`font-mono text-sm ${tMut}`}>Not applicable (export)</span>
+                </div>
+              )}
               {Math.abs(Math.round(totals.grand_total) - totals.grand_total) >= 0.005 && (
                 <div className="flex justify-between items-center">
                   <span className={`text-sm ${tSec}`}>Round Off</span>

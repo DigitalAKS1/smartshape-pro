@@ -8,7 +8,13 @@ import { ArrowLeft, Save, Download, Plus, X, Loader2, Clock, ChevronDown, Chevro
 import SendEmailDialog from '../../components/SendEmailDialog';
 import { useEditQuotation } from '../../hooks/useEditQuotation';
 
-const CURRENCIES = ['₹', '$', '€', '£', 'AED', '¥'];
+const CURRENCIES = [
+  { code: 'INR', sym: '₹', label: '₹ INR' },
+  { code: 'USD', sym: '$', label: '$ USD' },
+  { code: 'EUR', sym: '€', label: '€ EUR' },
+  { code: 'AED', sym: 'د.إ', label: 'AED' },
+  { code: 'GBP', sym: '£', label: '£ GBP' },
+];
 
 export default function EditQuotation() {
   const {
@@ -140,17 +146,19 @@ export default function EditQuotation() {
               <p className="text-[10px] text-[var(--text-muted)] mt-1">Freight appears in Sub Total. GST @ 18% added to combined GST line.</p>
             </div>
             <div>
-              <Label className="text-[var(--text-muted)] text-xs">Currency Symbol</Label>
+              <Label className="text-[var(--text-muted)] text-xs">Currency</Label>
               <div className="flex gap-2 flex-wrap mt-1">
-                {CURRENCIES.map(s => (
-                  <button key={s} type="button" onClick={() => setQuot({...quot, currency_symbol: s})}
-                    className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition-all ${sym === s ? 'bg-[#e94560] text-white border-[#e94560]' : 'bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-secondary)] hover:border-[#e94560]/40'}`}>
-                    {s}
+                {CURRENCIES.map(cur => (
+                  <button key={cur.code} type="button" onClick={() => setQuot({...quot, currency: cur.code, currency_symbol: cur.sym})}
+                    data-testid={`edit-currency-${cur.code}`}
+                    className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition-all ${(quot.currency || 'INR') === cur.code ? 'bg-[#e94560] text-white border-[#e94560]' : 'bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-secondary)] hover:border-[#e94560]/40'}`}>
+                    {cur.label}
                   </button>
                 ))}
-                <Input value={CURRENCIES.includes(sym) ? '' : sym} onChange={e => setQuot({...quot, currency_symbol: e.target.value || '₹'})}
-                  placeholder="Other" className="h-9 w-20 text-sm text-center bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]" />
               </div>
+              {(quot.currency || 'INR') !== 'INR' && (
+                <p className="text-[11px] text-amber-500 mt-1.5">Foreign currency — <b>no GST</b> (export sale).</p>
+              )}
             </div>
           </div>
 
@@ -183,7 +191,7 @@ export default function EditQuotation() {
                 <span className="text-[var(--text-primary)]">Sub Total</span>
                 <span className="font-mono text-[var(--text-primary)]">{fmt(t.sub_total)}</span>
               </div>
-              {(t.gst_breakup && t.gst_breakup.length > 0
+              {t.total_gst > 0 && (t.gst_breakup && t.gst_breakup.length > 0
                 ? t.gst_breakup
                 : [{ rate: 18, amount: t.total_gst }]
               ).map((slab, i) => (
@@ -192,6 +200,12 @@ export default function EditQuotation() {
                   <span className="font-mono text-[var(--text-secondary)]">{fmt(slab.amount)}</span>
                 </div>
               ))}
+              {(quot.currency || 'INR') !== 'INR' && (
+                <div className="flex justify-between text-sm">
+                  <span className="text-[var(--text-muted)]">GST</span>
+                  <span className="font-mono text-[var(--text-muted)]">Not applicable (export)</span>
+                </div>
+              )}
               {Math.abs(Math.round(t.grand_total) - t.grand_total) >= 0.005 && (
                 <div className="flex justify-between text-sm">
                   <span className="text-[var(--text-secondary)]">Round Off</span>

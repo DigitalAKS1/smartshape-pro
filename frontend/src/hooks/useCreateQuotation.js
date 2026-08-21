@@ -52,6 +52,7 @@ export default function useCreateQuotation() {
     freight_amount: 0, lines: [],
     bank_details_override: '', terms_override: '',
     font_size_mode: 'medium',
+    currency: 'INR',
     currency_symbol: '₹',
     valid_until: '',
     portal_login_methods: { email_link: false, magic_link: false, google: false },
@@ -381,6 +382,12 @@ export default function useCreateQuotation() {
       .filter((s) => s.amount > 0)
       .sort((a, b) => b.rate - a.rate);
 
+    // Foreign currency (USD/EUR/AED…) = export sale, no Indian GST.
+    const isForeign = String(formData.currency || 'INR').toUpperCase() !== 'INR';
+    if (isForeign) {
+      return { items_total, disc1_amount, disc2_amount, after_disc, freight_base, sub_total,
+        items_gst: 0, freight_gst: 0, total_gst: 0, gst_breakup: [], grand_total: sub_total };
+    }
     return { items_total, disc1_amount, disc2_amount, after_disc, freight_base, sub_total, items_gst, freight_gst, total_gst, gst_breakup, grand_total };
   };
 

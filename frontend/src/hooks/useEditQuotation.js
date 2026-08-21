@@ -110,6 +110,11 @@ export function useEditQuotation() {
       .filter((s) => s.amount > 0)
       .sort((a, b) => b.rate - a.rate);
 
+    // Foreign currency (USD/EUR/AED…) = export sale, no Indian GST.
+    if (String(quot.currency || 'INR').toUpperCase() !== 'INR') {
+      return { items_total, disc1, after1, disc2, after_disc, freight_base, sub_total,
+        items_gst: 0, freight_gst: 0, total_gst: 0, gst_breakup: [], grand_total: sub_total };
+    }
     return { items_total, disc1, after1, disc2, after_disc, freight_base, sub_total, items_gst, freight_gst, total_gst, gst_breakup, grand_total };
   };
 
