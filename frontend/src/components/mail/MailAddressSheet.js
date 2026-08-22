@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { toast } from 'sonner';
 import { mailRuns, schools as schoolsApi, settingsApi } from '../../lib/api';
-import { X, Printer, Save, AlertTriangle, CheckCircle2, MapPin, Download, SlidersHorizontal } from 'lucide-react';
+import { X, Printer, Save, AlertTriangle, CheckCircle2, MapPin, Download, SlidersHorizontal, ImagePlus } from 'lucide-react';
 
 /**
  * Address-review sheet for a mail run.
@@ -20,12 +20,37 @@ export default function MailAddressSheet({ runId, runName, onClose }) {
   const [opts, setOpts] = useState({ format: '100x150', orientation: 'portrait', customW: '100', customH: '150', skipIncomplete: true });
   const [fromEdit, setFromEdit] = useState(false);
   const [from, setFrom] = useState({ company_name: '', address: '', city: '', state: '', pincode: '' });
+  const [logoUrl, setLogoUrl] = useState('');
+  const [uploadingLogo, setUploadingLogo] = useState(false);
+  const [savingFrom, setSavingFrom] = useState(false);
+  const logoInputRef = useRef(null);
   useEffect(() => {
     settingsApi.getCompany().then(r => {
       const c = r.data || {};
       setFrom({ company_name: c.company_name || '', address: c.address || '', city: c.city || '', state: c.state || '', pincode: c.pincode || '' });
+      setLogoUrl(c.logo_url || '');
     }).catch(() => {});
   }, []);
+
+  const onUploadLogo = async (e) => {
+    const file = e.target.files?.[0]; e.target.value = '';
+    if (!file) return;
+    setUploadingLogo(true);
+    try {
+      const r = await settingsApi.uploadLogo(file);
+      setLogoUrl(r.data?.logo_url || '');
+      toast.success('Logo uploaded — it will print above the From block on your stickers');
+    } catch { toast.error('Logo upload failed'); }
+    finally { setUploadingLogo(false); }
+  };
+  const saveFromAsDefault = async () => {
+    setSavingFrom(true);
+    try {
+      await settingsApi.saveCompany({ company_name: from.company_name, address: from.address, city: from.city, state: from.state, pincode: from.pincode });
+      toast.success('Saved as your company From address');
+    } catch { toast.error('Could not save'); }
+    finally { setSavingFrom(false); }
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -230,22 +255,37 @@ export default function MailAddressSheet({ runId, runName, onClose }) {
               <input type="checkbox" className="accent-[#e94560]" checked={opts.skipIncomplete} onChange={e => setOpts(o => ({ ...o, skipIncomplete: e.target.checked }))} data-testid="skip-incomplete-toggle" />
               Skip incomplete addresses{missingCount > 0 ? ` — ${missingCount} will be skipped` : ''}
             </label>
-            <div>
-              <label className="flex items-center gap-2 text-[13px] text-[var(--text-secondary)]">
-                <input type="checkbox" className="accent-[#e94560]" checked={fromEdit} onChange={e => setFromEdit(e.target.checked)} data-testid="from-override-toggle" />
-                Use a different <b>From</b> address for this batch
-              </label>
-              {fromEdit && (
-                <div className="grid gap-1.5 mt-2">
-                  <input className={cell} placeholder="Company / sender name" value={from.company_name} onChange={e => setFrom(f => ({ ...f, company_name: e.target.value }))} />
-                  <input className={cell} placeholder="Address" value={from.address} onChange={e => setFrom(f => ({ ...f, address: e.target.value }))} />
-                  <div className="grid grid-cols-3 gap-1.5">
-                    <input className={cell} placeholder="City" value={from.city} onChange={e => setFrom(f => ({ ...f, city: e.target.value }))} />
-                    <input className={cell} placeholder="State" value={from.state} onChange={e => setFrom(f => ({ ...f, state: e.target.value }))} />
-                    <input className={cell} placeholder="Pincode" value={from.pincode} onChange={e => setFrom(f => ({ ...f, pincode: e.target.value }))} />
-                  </div>
+            {/* Sender (From) + logo */}
+            <div className="rounded-lg border border-[var(--border-color)] p-3 space-y-2.5">
+              <div className="text-[11px] font-semibold uppercase tracking-wide text-[var(--text-muted)]">Sender (From) &amp; logo</div>
+              <div className="flex items-center gap-3 flex-wrap">
+                {logoUrl
+                  ? <img src={logoUrl} alt="Company logo" className="h-10 max-w-[130px] object-contain bg-white rounded border border-[var(--border-color)] p-0.5" />
+                  : <div className="h-10 w-16 grid place-items-center rounded border border-dashed border-[var(--border-color)] text-[10px] text-[var(--text-muted)]">No logo</div>}
+                <button onClick={() => logoInputRef.current?.click()} disabled={uploadingLogo} className={btnG} data-testid="logo-upload-btn">
+                  <ImagePlus className="h-4 w-4" /> {uploadingLogo ? 'Uploading…' : (logoUrl ? 'Change logo' : 'Upload logo')}
+                </button>
+                <input ref={logoInputRef} type="file" accept="image/*" className="hidden" onChange={onUploadLogo} data-testid="logo-upload-input" />
+                <span className="text-[10px] text-[var(--text-muted)]">Prints above the From block on every sticker.</span>
+              </div>
+              <div className="grid gap-1.5">
+                <input className={cell} placeholder="Company / sender name" value={from.company_name} onChange={e => setFrom(f => ({ ...f, company_name: e.target.value }))} data-testid="from-name" />
+                <input className={cell} placeholder="Address" value={from.address} onChange={e => setFrom(f => ({ ...f, address: e.target.value }))} data-testid="from-address" />
+                <div className="grid grid-cols-3 gap-1.5">
+                  <input className={cell} placeholder="City" value={from.city} onChange={e => setFrom(f => ({ ...f, city: e.target.value }))} />
+                  <input className={cell} placeholder="State" value={from.state} onChange={e => setFrom(f => ({ ...f, state: e.target.value }))} />
+                  <input className={cell} placeholder="Pincode" value={from.pincode} onChange={e => setFrom(f => ({ ...f, pincode: e.target.value }))} />
                 </div>
-              )}
+              </div>
+              <div className="flex items-center gap-3 flex-wrap">
+                <label className="flex items-center gap-2 text-[12px] text-[var(--text-secondary)]">
+                  <input type="checkbox" className="accent-[#e94560]" checked={fromEdit} onChange={e => setFromEdit(e.target.checked)} data-testid="from-override-toggle" />
+                  Use this From for <b>this batch only</b>
+                </label>
+                <button onClick={saveFromAsDefault} disabled={savingFrom} className={btnG + ' h-8 ml-auto'} data-testid="save-from-default">
+                  <Save className="h-3.5 w-3.5" /> {savingFrom ? 'Saving…' : 'Save as default'}
+                </button>
+              </div>
             </div>
           </div>
         )}

@@ -348,7 +348,9 @@ export const mailRuns = {
   create: (data) => API.post('/mail-runs', data),
   updateStatus: (id, status) => API.put(`/mail-runs/${id}/status`, { status }),
   addresses: (id) => API.get(`/mail-runs/${id}/addresses`),
-  stickers: (id, params = {}) => API.get(`/mail-runs/${id}/stickers.pdf`, { params, responseType: 'blob' }),
+  // _ts cache-buster: force a fresh PDF each print (browsers/PWA cache identical blob URLs,
+  // which made a re-print keep an old logo-less sticker).
+  stickers: (id, params = {}) => API.get(`/mail-runs/${id}/stickers.pdf`, { params: { ...params, _ts: Date.now() }, responseType: 'blob' }),
   exportCsv: (id) => API.get(`/mail-runs/${id}/export.csv`, { responseType: 'blob' }),
   analytics: () => API.get('/mail-runs/analytics'),
   import: (file, { name = '', piece_type = 'brochure', send_date = '' } = {}) => {
