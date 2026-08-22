@@ -982,7 +982,7 @@ def _load_company_logo(company, base_url):
     return None
 
 
-def _render_label(c, x, y, w, h, sch, token, company, base_url, logo=None):
+def _render_label(c, x, y, w, h, sch, token, company, base_url, logo=None, frame=True):
     """One address label inside rect (x,y,w,h): TO on top (bold school name),
     FROM below (bold company name), QR bottom-right. Fonts + wrap scale to width."""
     from reportlab.lib.units import mm
@@ -1030,28 +1030,38 @@ def _render_label(c, x, y, w, h, sch, token, company, base_url, logo=None):
     bottom_h = max(24 * mm, h * 0.46)          # From section gets ~half the label
     qsz = max(14 * mm, min(bottom_h - 2 * m, w * 0.32, 32 * mm))
 
-    # ── TO (top) ──
-    cy = y + h - m - f_lbl
-    c.setFont("Helvetica", f_lbl); c.drawString(ix, cy, "To,")
-    cy -= f_body * LH
-    c.setFont("Helvetica", f_body); c.drawString(ix, cy, "The Principal,")
-    cy -= f_name * LH
-    c.setFont("Helvetica-Bold", f_name)
+    # ── clean frame border (finished look; A4 4-up passes frame=False, has cut lines) ──
+    if frame:
+        c.setLineWidth(0.7); c.setStrokeGray(0.72)
+        c.roundRect(x + 1.3 * mm, y + 1.3 * mm, w - 2.6 * mm, h - 2.6 * mm, 2.6 * mm)
+        c.setStrokeGray(0)
+
+    dv = y + bottom_h   # divider between the TO (top) and FROM (bottom) halves
+
+    # ── TO block — build every line first, then centre it (biased high) in the top
+    #    zone so the recipient address is balanced, not crammed against the top edge.
+    to_lines = [("To,", "Helvetica", f_lbl), ("The Principal,", "Helvetica", f_body)]
     nl = _wrap_to_width(c, sch.get("school_name", ""), "Helvetica-Bold", f_name, iw)[:2]
     for i, ln in enumerate(nl):
-        c.drawString(ix, cy, ln + ("," if i == len(nl) - 1 else "")); cy -= f_name * 1.12
-    c.setFont("Helvetica", f_body)
+        to_lines.append((ln + ("," if i == len(nl) - 1 else ""), "Helvetica-Bold", f_name))
     al = _wrap_to_width(c, sch.get("address", ""), "Helvetica", f_body, iw)[:3]
     for i, ln in enumerate(al):
-        c.drawString(ix, cy, ln + ("," if i == len(al) - 1 else "")); cy -= f_body * LH
+        to_lines.append((ln + ("," if i == len(al) - 1 else ""), "Helvetica", f_body))
     cp = " - ".join([z for z in [sch.get("city", ""), sch.get("pincode", "")] if z])
     if cp:
-        c.setFont("Helvetica-Bold", f_pin); c.drawString(ix, cy, cp + ("," if sch.get("state") else ".")); cy -= f_pin * LH
+        to_lines.append((cp + ("," if sch.get("state") else "."), "Helvetica-Bold", f_pin))
     if sch.get("state"):
-        c.setFont("Helvetica", f_body); c.drawString(ix, cy, sch.get("state") + ".")
+        to_lines.append((sch.get("state", "") + ".", "Helvetica", f_body))
+
+    def _lh(sz):
+        return sz * 1.18
+    block_h = sum(_lh(sz) for _, _, sz in to_lines)
+    free = (y + h - m) - dv - block_h
+    cy = (y + h - m) - max(0.0, free) * 0.30     # 30% of slack above → gentle balance
+    for text, font, sz in to_lines:
+        c.setFont(font, sz); c.drawString(ix, cy - sz, text); cy -= _lh(sz)
 
     # ── divider ──
-    dv = y + bottom_h
     c.setLineWidth(0.5); c.setStrokeGray(0.45); c.line(ix, dv, x + w - m, dv); c.setStrokeGray(0)
 
     # ── FROM (bottom-left): logo above, then company name (smaller but BOLD) ──
@@ -1151,7 +1161,7 @@ def _build_stickers_pdf(touches, schools_by_id, company, base_url, *,
             c.setDash(2, 2); c.setLineWidth(0.4); c.setStrokeGray(0.7)
             c.rect(cx, cyy, cw, ch); c.setDash(); c.setStrokeGray(0)
             _render_label(c, cx, cyy, cw, ch, schools_by_id.get(t.get("school_id"), {}),
-                          t.get("qr_token", ""), company, base_url, logo=logo)
+                          t.get("qr_token", ""), company, base_url, logo=logo, frame=False)
         c.save()
         return buf.getvalue()
 
