@@ -1083,15 +1083,16 @@ def _render_label(c, x, y, w, h, sch, token, company, base_url, logo=None):
     fy -= f_lbl
     c.setFont("Helvetica", f_lbl); c.drawString(ix, fy, "From:")
     fy -= f_from * LH
+    # Contact / attention name — sits directly UNDER "From:" (standard sender format)
+    contact = str(company.get("sticker_contact", "") or "").strip()
+    if contact:
+        c.setFont("Helvetica-Bold", f_from)
+        for cl in _wrap_to_width(c, contact, "Helvetica-Bold", f_from, from_w)[:1]:
+            c.drawString(ix, fy, cl); fy -= f_from * LH
+    # Company name (bold)
     c.setFont("Helvetica-Bold", f_from)
     for ln in _wrap_to_width(c, cname, "Helvetica-Bold", f_from, from_w)[:2]:
         c.drawString(ix, fy, ln); fy -= f_from * LH
-    # Optional contact / attention name line
-    contact = str(company.get("sticker_contact", "") or "").strip()
-    if contact:
-        c.setFont("Helvetica", f_from)
-        for cl in _wrap_to_width(c, contact, "Helvetica", f_from, from_w)[:1]:
-            c.drawString(ix, fy, cl); fy -= f_from * LH
     # Address — wrap fully so it isn't cut mid-way (stop only if we run out of room)
     c.setFont("Helvetica", f_lbl)
     for ln in from_body:
