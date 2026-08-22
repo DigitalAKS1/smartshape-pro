@@ -17,9 +17,9 @@ export default function MailAddressSheet({ runId, runName, onClose }) {
 
   // Print options
   const [showPrint, setShowPrint] = useState(false);
-  const [opts, setOpts] = useState({ format: '100x150', orientation: 'portrait', customW: '100', customH: '150', skipIncomplete: true });
+  const [opts, setOpts] = useState({ format: '100x150', orientation: 'portrait', customW: '100', customH: '150', skipIncomplete: true, showLogo: true });
   const [fromEdit, setFromEdit] = useState(false);
-  const [from, setFrom] = useState({ company_name: '', address: '', city: '', state: '', pincode: '', sticker_tagline: '' });
+  const [from, setFrom] = useState({ company_name: '', address: '', city: '', state: '', pincode: '', sticker_tagline: '', sticker_contact: '' });
   const [logoUrl, setLogoUrl] = useState('');
   const [uploadingLogo, setUploadingLogo] = useState(false);
   const [savingFrom, setSavingFrom] = useState(false);
@@ -27,7 +27,7 @@ export default function MailAddressSheet({ runId, runName, onClose }) {
   useEffect(() => {
     settingsApi.getCompany().then(r => {
       const c = r.data || {};
-      setFrom({ company_name: c.company_name || '', address: c.address || '', city: c.city || '', state: c.state || '', pincode: c.pincode || '', sticker_tagline: c.sticker_tagline || '' });
+      setFrom({ company_name: c.company_name || '', address: c.address || '', city: c.city || '', state: c.state || '', pincode: c.pincode || '', sticker_tagline: c.sticker_tagline || '', sticker_contact: c.sticker_contact || '' });
       setLogoUrl(c.logo_url || '');
     }).catch(() => {});
   }, []);
@@ -46,7 +46,7 @@ export default function MailAddressSheet({ runId, runName, onClose }) {
   const saveFromAsDefault = async () => {
     setSavingFrom(true);
     try {
-      await settingsApi.saveCompany({ company_name: from.company_name, address: from.address, city: from.city, state: from.state, pincode: from.pincode, sticker_tagline: from.sticker_tagline });
+      await settingsApi.saveCompany({ company_name: from.company_name, address: from.address, city: from.city, state: from.state, pincode: from.pincode, sticker_tagline: from.sticker_tagline, sticker_contact: from.sticker_contact });
       toast.success('Saved as your company From address');
     } catch { toast.error('Could not save'); }
     finally { setSavingFrom(false); }
@@ -115,10 +115,11 @@ export default function MailAddressSheet({ runId, runName, onClose }) {
       p.size = opts.format === 'custom' ? `${opts.customW}x${opts.customH}` : opts.format;
     }
     if (opts.skipIncomplete) p.skip_incomplete = '1';
+    if (!opts.showLogo) p.no_logo = '1';
     if (fromEdit) {
       p.from_name = from.company_name; p.from_address = from.address;
       p.from_city = from.city; p.from_state = from.state; p.from_pincode = from.pincode;
-      p.from_tagline = from.sticker_tagline;
+      p.from_tagline = from.sticker_tagline; p.from_contact = from.sticker_contact;
     }
     return p;
   };
@@ -267,10 +268,14 @@ export default function MailAddressSheet({ runId, runName, onClose }) {
                   <ImagePlus className="h-4 w-4" /> {uploadingLogo ? 'Uploading…' : (logoUrl ? 'Change logo' : 'Upload logo')}
                 </button>
                 <input ref={logoInputRef} type="file" accept="image/*" className="hidden" onChange={onUploadLogo} data-testid="logo-upload-input" />
-                <span className="text-[10px] text-[var(--text-muted)]">Prints above the From block on every sticker.</span>
               </div>
+              <label className="flex items-center gap-2 text-[12px] text-[var(--text-secondary)]">
+                <input type="checkbox" className="accent-[#e94560]" checked={opts.showLogo} onChange={e => setOpts(o => ({ ...o, showLogo: e.target.checked }))} data-testid="show-logo-toggle" />
+                Show logo on stickers <span className="text-[var(--text-muted)]">(uncheck if it doesn't print well)</span>
+              </label>
               <div className="grid gap-1.5">
                 <input className={cell} placeholder="Company / sender name" value={from.company_name} onChange={e => setFrom(f => ({ ...f, company_name: e.target.value }))} data-testid="from-name" />
+                <input className={cell} placeholder="Contact name (optional — e.g. Vikaas Garodiaa)" value={from.sticker_contact} onChange={e => setFrom(f => ({ ...f, sticker_contact: e.target.value }))} data-testid="from-contact" />
                 <input className={cell} placeholder="Tagline / branding line (optional — prints above From)" value={from.sticker_tagline} onChange={e => setFrom(f => ({ ...f, sticker_tagline: e.target.value }))} data-testid="from-tagline" />
                 <textarea className={cell + ' h-auto py-2 resize-y'} rows={2} placeholder="Address — press Enter for a new line" value={from.address} onChange={e => setFrom(f => ({ ...f, address: e.target.value }))} data-testid="from-address" />
                 <div className="grid grid-cols-3 gap-1.5">

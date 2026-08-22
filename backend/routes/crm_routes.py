@@ -1086,11 +1086,18 @@ def _render_label(c, x, y, w, h, sch, token, company, base_url, logo=None):
     c.setFont("Helvetica-Bold", f_from)
     for ln in _wrap_to_width(c, cname, "Helvetica-Bold", f_from, from_w)[:2]:
         c.drawString(ix, fy, ln); fy -= f_from * LH
+    # Optional contact / attention name line
+    contact = str(company.get("sticker_contact", "") or "").strip()
+    if contact:
+        c.setFont("Helvetica", f_from)
+        for cl in _wrap_to_width(c, contact, "Helvetica", f_from, from_w)[:1]:
+            c.drawString(ix, fy, cl); fy -= f_from * LH
+    # Address — wrap fully so it isn't cut mid-way (stop only if we run out of room)
     c.setFont("Helvetica", f_lbl)
     for ln in from_body:
-        if fy < y + m:
-            break
-        for wl in _wrap_to_width(c, ln, "Helvetica", f_lbl, from_w)[:1]:
+        for wl in _wrap_to_width(c, ln, "Helvetica", f_lbl, from_w):
+            if fy < y + m:
+                break
             c.drawString(ix, fy, wl); fy -= f_lbl * LH
 
     # ── QR (bottom-right) ──
@@ -1105,7 +1112,8 @@ def _render_label(c, x, y, w, h, sch, token, company, base_url, logo=None):
 
 
 def _build_stickers_pdf(touches, schools_by_id, company, base_url, *,
-                        orientation="portrait", size="100x150", layout="label", from_override=None):
+                        orientation="portrait", size="100x150", layout="label",
+                        from_override=None, show_logo=True):
     """Address labels — Godex thermal (one per page) or A4 4-up for a normal
     printer. TO on top, FROM below (company bold), QR, auto-wrapped to the size.
       orientation: portrait | landscape (thermal only)
@@ -1120,7 +1128,7 @@ def _build_stickers_pdf(touches, schools_by_id, company, base_url, *,
     if from_override:
         company = {**company, **{k: v for k, v in from_override.items() if v}}
 
-    logo = _load_company_logo(company, base_url)   # fetched once, drawn on every label
+    logo = _load_company_logo(company, base_url) if show_logo else None   # once, drawn on every label
     buf = io.BytesIO()
 
     if layout == "a4":
@@ -1181,15 +1189,17 @@ async def mail_run_stickers(run_id: str, request: Request):
     layout = "a4" if qp.get("layout") == "a4" else "label"
     size = qp.get("size") or "100x150"
     # Optional per-batch FROM override (else falls back to Settings → Company)
+    show_logo = qp.get("no_logo") not in ("1", "true", "yes")
     from_override = None
-    if qp.get("from_name") or qp.get("from_address") or qp.get("from_tagline"):
+    if any(qp.get(k) for k in ("from_name", "from_address", "from_tagline", "from_contact")):
         from_override = {
             "company_name": qp.get("from_name", ""), "address": qp.get("from_address", ""),
             "city": qp.get("from_city", ""), "state": qp.get("from_state", ""),
             "pincode": qp.get("from_pincode", ""), "sticker_tagline": qp.get("from_tagline", ""),
+            "sticker_contact": qp.get("from_contact", ""),
         }
     pdf = _build_stickers_pdf(touches, schools_by_id, company, base, orientation=orientation,
-                              size=size, layout=layout, from_override=from_override)
+                              size=size, layout=layout, from_override=from_override, show_logo=show_logo)
     return StreamingResponse(io.BytesIO(pdf), media_type="application/pdf",
                              headers={"Content-Disposition": f'attachment; filename="stickers-{run_id}.pdf"'})
 
