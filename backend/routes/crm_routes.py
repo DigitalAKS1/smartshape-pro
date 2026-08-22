@@ -1027,8 +1027,8 @@ def _render_label(c, x, y, w, h, sch, token, company, base_url, logo=None):
     f_pin  = max(7, min(13, 12 * scale))
     LH = 1.22
 
-    bottom_h = max(18 * mm, h * 0.30)
-    qsz = max(12 * mm, min(bottom_h - 2 * m, w * 0.30, 30 * mm))
+    bottom_h = max(24 * mm, h * 0.46)          # From section gets ~half the label
+    qsz = max(14 * mm, min(bottom_h - 2 * m, w * 0.32, 32 * mm))
 
     # ── TO (top) ──
     cy = y + h - m - f_lbl
