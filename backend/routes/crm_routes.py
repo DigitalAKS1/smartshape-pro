@@ -947,21 +947,33 @@ def _company_from_lines(company):
         " - ".join([x for x in [company.get("city", ""), company.get("pincode", "")] if x]),
         company.get("state", ""),
     ] if z]
-    body = _wrap_text(company.get("address", ""), 60)[:2]
+    # Respect explicit newlines the user typed in the From address (each becomes a line).
+    addr = str(company.get("address", "") or "")
+    body = [ln.strip() for ln in addr.splitlines() if ln.strip()][:3]
+    if not body and addr.strip():
+        body = _wrap_text(addr, 60)[:2]
     if tail:
         body.append(", ".join(tail))
     return cname, body
 
 
 def _load_company_logo(company, base_url):
-    """Fetch the company logo as a reportlab ImageReader, or None. logo_url may be
-    an absolute http(s) URL or a server path (/uploads/...) served by the frontend."""
+    """Company logo as a reportlab ImageReader, or None. Reads the local upload file
+    directly when possible (reliable, no network); else fetches the URL."""
     raw = (company.get("logo_url") or "").strip()
     if not raw:
         return None
-    url = raw if raw.startswith("http") else (base_url.rstrip("/") + "/" + raw.lstrip("/"))
     try:
         from reportlab.lib.utils import ImageReader
+        # Local upload (…/api/files/<path> or /uploads/<path>) → read the file directly.
+        if not raw.startswith("http"):
+            rel = raw.split("/api/files/", 1)[-1].split("/uploads/", 1)[-1].lstrip("/")
+            uploads = _os.environ.get("UPLOADS_DIR", "/app/uploads")
+            path = _os.path.join(uploads, rel)
+            if _os.path.exists(path):
+                return ImageReader(path)
+        # Fall back to fetching over HTTP (absolute URL, or if the file wasn't found).
+        url = raw if raw.startswith("http") else (base_url.rstrip("/") + "/" + raw.lstrip("/"))
         r = http_requests.get(url, timeout=6)
         if r.status_code == 200 and r.content:
             return ImageReader(io.BytesIO(r.content))
@@ -1059,6 +1071,14 @@ def _render_label(c, x, y, w, h, sch, token, company, base_url, logo=None):
             fy -= 1.2 * mm
         except Exception:
             pass
+
+    # Optional text tagline / branding "liner" — always prints (unlike an image).
+    tagline = str(company.get("sticker_tagline", "") or "").strip()
+    if tagline:
+        c.setFont("Helvetica-Bold", f_from)
+        for tl in _wrap_to_width(c, tagline, "Helvetica-Bold", f_from, from_w)[:2]:
+            fy -= f_from; c.drawString(ix, fy, tl)
+        fy -= 1 * mm
 
     fy -= f_lbl
     c.setFont("Helvetica", f_lbl); c.drawString(ix, fy, "From:")
@@ -1162,11 +1182,11 @@ async def mail_run_stickers(run_id: str, request: Request):
     size = qp.get("size") or "100x150"
     # Optional per-batch FROM override (else falls back to Settings → Company)
     from_override = None
-    if qp.get("from_name") or qp.get("from_address"):
+    if qp.get("from_name") or qp.get("from_address") or qp.get("from_tagline"):
         from_override = {
             "company_name": qp.get("from_name", ""), "address": qp.get("from_address", ""),
             "city": qp.get("from_city", ""), "state": qp.get("from_state", ""),
-            "pincode": qp.get("from_pincode", ""),
+            "pincode": qp.get("from_pincode", ""), "sticker_tagline": qp.get("from_tagline", ""),
         }
     pdf = _build_stickers_pdf(touches, schools_by_id, company, base, orientation=orientation,
                               size=size, layout=layout, from_override=from_override)
