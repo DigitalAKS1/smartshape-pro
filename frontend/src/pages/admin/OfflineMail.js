@@ -140,11 +140,20 @@ export default function OfflineMail() {
   return (
     <AdminLayout>
       <div className="max-w-5xl mx-auto">
-        <div className="mb-6">
-          <h1 className="text-2xl sm:text-3xl font-semibold text-[var(--text-primary)] tracking-tight flex items-center gap-2">
-            <Mail className="h-6 w-6 text-[#e94560]" /> Offline Mail
-          </h1>
-          <p className="text-sm text-[var(--text-secondary)] mt-1">Define areas, post physical pieces to schools, and track each run. Follow-ups appear in Today's Actions.</p>
+        <div className="mb-6 flex items-start justify-between gap-3">
+          <div>
+            <h1 className="text-2xl sm:text-3xl font-semibold text-[var(--text-primary)] tracking-tight flex items-center gap-2">
+              <Mail className="h-6 w-6 text-[#e94560]" /> Offline Mail
+            </h1>
+            <p className="text-sm text-[var(--text-secondary)] mt-1">Define areas, post physical pieces to schools, and track each run. Stickers use your latest <b>Settings → Company</b> logo on every print.</p>
+          </div>
+          <button
+            onClick={async () => { await load(); toast.success('Updated — every run prints with your latest company logo & format'); }}
+            disabled={loading}
+            className="flex-shrink-0 inline-flex items-center gap-1.5 h-9 px-3.5 rounded-lg bg-[#e94560] hover:bg-[#f05c75] text-white text-sm font-semibold disabled:opacity-50"
+            data-testid="offline-mail-update">
+            <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /> Update
+          </button>
         </div>
 
         {loading ? (
