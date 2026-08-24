@@ -1802,6 +1802,122 @@ async def engagement_attribution(request: Request):
     }
 
 
+def _drill_money(v):
+    try:
+        n = float(v or 0)
+    except (TypeError, ValueError):
+        return ""
+    if n >= 1e5:
+        return f"₹{n / 1e5:.1f}L"
+    if n >= 1e3:
+        return f"₹{n / 1e3:.0f}K"
+    return f"₹{n:.0f}" if n else ""
+
+
+@router.get("/engagement/drill")
+async def engagement_drill(request: Request):
+    """Clickable-report backend: every dashboard number opens the actual linked
+    records behind it. Returns uniform rows {kind, primary, secondary, school_id,
+    lead_id, at, badge} so the frontend can render + deep-link each one."""
+    user = await get_current_user(request)
+    metric = (request.query_params.get("metric") or "").strip()
+    value = (request.query_params.get("value") or "").strip()
+    try:
+        days = max(1, min(365, int(request.query_params.get("days", 30))))
+    except (TypeError, ValueError):
+        days = 30
+    now = datetime.now(timezone.utc)
+    since = (now - timedelta(days=days)).isoformat()
+    stuck_cut = (now - timedelta(days=14)).isoformat()
+    LIMIT = 200
+
+    scope_owner = None if get_team(user) == "admin" else user.get("email", "")
+    lead_q = {}
+    my_lead_ids = None
+    if scope_owner is not None:
+        lead_q["assigned_to"] = scope_owner
+        my_lead_ids = [l["lead_id"] async for l in
+                       db.leads.find({"assigned_to": scope_owner}, {"_id": 0, "lead_id": 1})]
+    lead_scope = ({"lead_id": {"$in": my_lead_ids}} if my_lead_ids is not None else {})
+
+    title, rows = value or metric, []
+
+    if metric == "stage":
+        title = f"{value.title()} leads"
+        docs = await db.leads.find(
+            {**lead_q, "stage": value},
+            {"_id": 0, "lead_id": 1, "school_id": 1, "company_name": 1, "contact_name": 1,
+             "expected_value": 1, "assigned_name": 1, "last_activity_date": 1, "deal_type": 1},
+        ).sort("last_activity_date", -1).to_list(LIMIT)
+        for l in docs:
+            bits = [x for x in [_drill_money(l.get("expected_value")), l.get("assigned_name")] if x]
+            rows.append({"kind": "lead", "primary": l.get("company_name") or l.get("contact_name") or "Lead",
+                         "secondary": " · ".join(bits), "school_id": l.get("school_id", ""),
+                         "lead_id": l.get("lead_id", ""), "at": l.get("last_activity_date"),
+                         "badge": l.get("deal_type") or ""})
+
+    elif metric == "channel":
+        title = f"{value.title()} touches · {days}d"
+        m = {"channel": value, "at": {"$gte": since}, **lead_scope}
+        docs = await db.engagement_events.find(
+            m, {"_id": 0, "title": 1, "kind": 1, "school_id": 1, "lead_id": 1, "at": 1, "direction": 1},
+        ).sort("at", -1).to_list(LIMIT)
+        for e in docs:
+            rows.append({"kind": "event", "primary": e.get("title") or e.get("kind") or "Touch",
+                         "secondary": e.get("kind") or "", "school_id": e.get("school_id", ""),
+                         "lead_id": e.get("lead_id", ""), "at": e.get("at"),
+                         "badge": "response" if e.get("direction") == "in" else ""})
+
+    elif metric in ("brochures_shared", "brochures_opened"):
+        title = "Brochures opened" if metric == "brochures_opened" else "Brochures shared"
+        m = {"created_at": {"$gte": since}, **lead_scope}
+        if metric == "brochures_opened":
+            m["status"] = "opened"
+        docs = await db.brochure_shares.find(
+            m, {"_id": 0, "title": 1, "school_name": 1, "school_id": 1, "lead_id": 1,
+                "created_at": 1, "status": 1, "open_count": 1},
+        ).sort("created_at", -1).to_list(LIMIT)
+        for s in docs:
+            oc = s.get("open_count") or 0
+            rows.append({"kind": "brochure", "primary": s.get("title") or "Brochure",
+                         "secondary": s.get("school_name") or "", "school_id": s.get("school_id", ""),
+                         "lead_id": s.get("lead_id", ""), "at": s.get("created_at"),
+                         "badge": (f"opened ×{oc}" if oc > 1 else "opened") if s.get("status") == "opened" else "sent"})
+
+    elif metric == "hot_signals":
+        title = f"Hot signals · {days}d"
+        m = {"source": "brochure_open", "created_at": {"$gte": since}}
+        if scope_owner is not None:
+            m["assigned_to"] = scope_owner
+        docs = await db.crm_activities.find(
+            m, {"_id": 0, "title": 1, "school_name": 1, "school_id": 1, "assigned_name": 1, "created_at": 1},
+        ).sort("created_at", -1).to_list(LIMIT)
+        for a in docs:
+            rows.append({"kind": "activity", "primary": a.get("title") or "Hot signal",
+                         "secondary": a.get("assigned_name") or "", "school_id": a.get("school_id", ""),
+                         "lead_id": "", "at": a.get("created_at"), "badge": "hot"})
+
+    elif metric == "stuck":
+        title = "Stuck deals"
+        today = now.strftime("%Y-%m-%d")
+        docs = await db.leads.find(
+            {**lead_q, "stage": {"$in": ["quoted", "negotiation"]}, "last_activity_date": {"$lt": stuck_cut}},
+            {"_id": 0, "lead_id": 1, "school_id": 1, "company_name": 1, "stage": 1,
+             "expected_value": 1, "assigned_name": 1, "last_activity_date": 1},
+        ).sort("last_activity_date", 1).to_list(LIMIT)
+        for l in docs:
+            rows.append({"kind": "lead", "primary": l.get("company_name") or "Lead",
+                         "secondary": " · ".join([x for x in [_drill_money(l.get("expected_value")), l.get("assigned_name")] if x]),
+                         "school_id": l.get("school_id", ""), "lead_id": l.get("lead_id", ""),
+                         "at": l.get("last_activity_date"),
+                         "badge": f"{_age_days(l.get('last_activity_date'), today)}d silent"})
+
+    else:
+        raise HTTPException(status_code=400, detail="Unknown drill metric")
+
+    return {"title": title, "count": len(rows), "rows": rows}
+
+
 # ── Activity Types (editable master, powers the Bulk Activity Planner) ────────
 DEFAULT_ACTIVITY_TYPES = ["Newsletter", "Call", "Visit", "WhatsApp", "Sample", "Meeting"]
 

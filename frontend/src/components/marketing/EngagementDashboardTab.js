@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { engagement } from '../../lib/api';
 import { Loader2, TrendingUp, Flame, Send, Trophy, BookOpen, Repeat, AlertTriangle, Award, Clock, Activity } from 'lucide-react';
+import DrillDownPanel from './DrillDownPanel';
 
 const STAGE_META = {
   new: { label: 'New', color: '#64748b' },
@@ -25,9 +26,11 @@ const money = (n) => {
   return `₹${v}`;
 };
 
-function Kpi({ icon: Icon, label, value, sub, color }) {
+function Kpi({ icon: Icon, label, value, sub, color, onClick }) {
+  const clickable = !!onClick;
   return (
-    <div className="bg-[var(--bg-card)] border border-[var(--border-color)] rounded-xl p-4">
+    <div onClick={onClick}
+      className={`bg-[var(--bg-card)] border border-[var(--border-color)] rounded-xl p-4 ${clickable ? 'cursor-pointer hover:border-[var(--text-muted)] active:scale-[0.99] transition-all' : ''}`}>
       <div className="flex items-center gap-2 mb-1.5">
         <span className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: color + '1a' }}>
           <Icon className="h-4 w-4" style={{ color }} />
@@ -46,6 +49,18 @@ export default function EngagementDashboardTab() {
   const [data, setData] = useState(null);
   const [attr, setAttr] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [drill, setDrill] = useState({ open: false, loading: false, title: '', rows: [] });
+
+  const openDrill = async (metric, value = '') => {
+    setDrill({ open: true, loading: true, title: '', rows: [] });
+    try {
+      const r = await engagement.drill(metric, value, days);
+      setDrill({ open: true, loading: false, title: r.data.title, rows: r.data.rows || [] });
+    } catch {
+      setDrill({ open: true, loading: false, title: 'Details', rows: [] });
+    }
+  };
+  const closeDrill = () => setDrill(d => ({ ...d, open: false }));
 
   useEffect(() => {
     let live = true;
@@ -70,7 +85,10 @@ export default function EngagementDashboardTab() {
     <div className="space-y-5">
       {/* Header + period */}
       <div className="flex items-center justify-between flex-wrap gap-2">
-        <h2 className="text-sm font-semibold text-[var(--text-primary)]">Engagement scoreboard</h2>
+        <div>
+          <h2 className="text-sm font-semibold text-[var(--text-primary)]">Engagement scoreboard</h2>
+          <p className="text-[11px] text-[var(--text-muted)]">Tap any number to see the records behind it →</p>
+        </div>
         <div className="flex gap-1">
           {[7, 30, 90].map(d => (
             <button key={d} onClick={() => setDays(d)}
@@ -88,7 +106,8 @@ export default function EngagementDashboardTab() {
         <Kpi icon={TrendingUp} label="Active leads" value={data.totals.active_leads} color="#0ea5e9" />
         <Kpi icon={Trophy} label="Won" value={data.totals.won_count} sub={money(data.totals.won_value)} color="#10b981" />
         <Kpi icon={Send} label={`Touches · ${days}d`} value={data.touches_total} color="#6366f1" />
-        <Kpi icon={Flame} label="Hot signals" value={data.hot_signals} sub="brochure opens" color="#f97316" />
+        <Kpi icon={Flame} label="Hot signals" value={data.hot_signals} sub="brochure opens" color="#f97316"
+          onClick={() => openDrill('hot_signals')} />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
@@ -99,8 +118,9 @@ export default function EngagementDashboardTab() {
             {data.funnel.map(f => {
               const m = STAGE_META[f.stage] || { label: f.stage, color: '#64748b' };
               return (
-                <div key={f.stage} className="flex items-center gap-3">
-                  <span className="w-20 text-xs font-medium text-[var(--text-secondary)] flex-shrink-0">{m.label}</span>
+                <button key={f.stage} type="button" onClick={() => f.count && openDrill('stage', f.stage)}
+                  className={`w-full flex items-center gap-3 rounded ${f.count ? 'hover:opacity-80 active:scale-[0.99] transition-all' : 'cursor-default'}`}>
+                  <span className="w-20 text-xs font-medium text-[var(--text-secondary)] flex-shrink-0 text-left">{m.label}</span>
                   <div className="flex-1 h-5 rounded bg-[var(--bg-primary)] overflow-hidden">
                     <div className="h-full rounded flex items-center px-2 min-w-[24px] transition-all"
                       style={{ width: `${Math.max(6, (f.count / funnelMax) * 100)}%`, background: m.color }}>
@@ -108,7 +128,7 @@ export default function EngagementDashboardTab() {
                     </div>
                   </div>
                   <span className="w-16 text-right text-[11px] text-[var(--text-muted)] font-mono flex-shrink-0">{f.value ? money(f.value) : ''}</span>
-                </div>
+                </button>
               );
             })}
           </div>
@@ -125,15 +145,16 @@ export default function EngagementDashboardTab() {
                 const color = CH_COLOR[c.channel] || '#94a3b8';
                 const total = c.out + c.in;
                 return (
-                  <div key={c.channel} className="flex items-center gap-3">
-                    <span className="w-20 text-xs font-medium text-[var(--text-secondary)] capitalize flex-shrink-0">{c.channel}</span>
+                  <button key={c.channel} type="button" onClick={() => openDrill('channel', c.channel)}
+                    className="w-full flex items-center gap-3 rounded hover:opacity-80 active:scale-[0.99] transition-all">
+                    <span className="w-20 text-xs font-medium text-[var(--text-secondary)] capitalize flex-shrink-0 text-left">{c.channel}</span>
                     <div className="flex-1 h-5 rounded bg-[var(--bg-primary)] overflow-hidden">
                       <div className="h-full rounded" style={{ width: `${Math.max(6, (total / chMax) * 100)}%`, background: color }} />
                     </div>
                     <span className="w-24 text-right text-[11px] text-[var(--text-muted)] font-mono flex-shrink-0">
                       {c.out} sent{c.in ? ` · ${c.in} in` : ''}
                     </span>
-                  </div>
+                  </button>
                 );
               })}
             </div>
@@ -143,8 +164,10 @@ export default function EngagementDashboardTab() {
 
       {/* Brochure + sequences strip */}
       <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
-        <Kpi icon={BookOpen} label="Brochures shared" value={data.brochures.shared} color="#f97316" />
-        <Kpi icon={BookOpen} label="Brochure open rate" value={`${data.brochures.open_rate}%`} sub={`${data.brochures.opened} opened`} color="#22c55e" />
+        <Kpi icon={BookOpen} label="Brochures shared" value={data.brochures.shared} color="#f97316"
+          onClick={() => openDrill('brochures_shared')} />
+        <Kpi icon={BookOpen} label="Brochure open rate" value={`${data.brochures.open_rate}%`} sub={`${data.brochures.opened} opened`} color="#22c55e"
+          onClick={() => openDrill('brochures_opened')} />
         <Kpi icon={Repeat} label="Active sequences" value={data.sequences_active} color="#06b6d4" />
       </div>
 
@@ -234,6 +257,8 @@ export default function EngagementDashboardTab() {
           </div>
         )}
       </div>
+
+      <DrillDownPanel open={drill.open} title={drill.title} rows={drill.rows} loading={drill.loading} onClose={closeDrill} />
     </div>
   );
 }
