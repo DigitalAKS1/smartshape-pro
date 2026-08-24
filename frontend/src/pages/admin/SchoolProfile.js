@@ -26,6 +26,7 @@ import SchoolPostOrderCard from '../../components/school/SchoolPostOrderCard';
 import SchoolActivitiesCard from '../../components/school/SchoolActivitiesCard';
 import SchoolEngagementTimeline from '../../components/school/SchoolEngagementTimeline';
 import ContactDetailPanel from '../../components/crm/ContactDetailPanel';
+import ShareBrochureDialog from '../../components/crm/ShareBrochureDialog';
 import {
   SchoolSalesSection, SchoolMarketingSection,
   SchoolVisitsSection,
@@ -105,6 +106,7 @@ export default function SchoolProfile() {
   const [leadCreateOpen, setLeadCreateOpen] = useState(false);
   const [enrollOpen, setEnrollOpen] = useState(false);
   const [convertTarget, setConvertTarget] = useState(null);
+  const [brochureOpen, setBrochureOpen] = useState(false);
 
   // Contact detail panel (call-logging + follow-ups) — built locally, this page doesn't use useLeadsCRM
   const [detailContact, setDetailContact] = useState(null);
@@ -280,8 +282,12 @@ export default function SchoolProfile() {
               <div className={`lg:col-span-2 ${tk.card} border ${tk.border} rounded-2xl overflow-hidden`}>
                 <div className={`px-5 py-4 border-b ${tk.border} flex items-center justify-between`}>
                   <p className={`text-[10px] uppercase tracking-[0.18em] font-semibold ${tk.tm}`}>School Information</p>
-                  <button onClick={openEditSchool}
-                    className="text-[10px] text-[#e94560] hover:underline">Edit →</button>
+                  <div className="flex items-center gap-3">
+                    <button onClick={() => setBrochureOpen(true)}
+                      className="text-[10px] font-semibold text-[#f97316] hover:underline">Share brochure</button>
+                    <button onClick={openEditSchool}
+                      className="text-[10px] text-[#e94560] hover:underline">Edit →</button>
+                  </div>
                 </div>
                 {/* Profile completeness */}
                 <div className={`px-5 py-3 border-b ${tk.border}`}>
@@ -464,6 +470,9 @@ export default function SchoolProfile() {
         logContactCall={logContactCall} addContactFollowup={addContactFollowup}
         completeContactFollowup={completeContactFollowup}
       />
+
+      <ShareBrochureDialog open={brochureOpen} onClose={() => setBrochureOpen(false)}
+        context={{ schoolId: school.school_id, schoolName: school.school_name, phone: school.phone || '' }} />
 
     </AdminLayout>
   );
