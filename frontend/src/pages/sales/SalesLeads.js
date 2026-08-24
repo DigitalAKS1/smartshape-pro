@@ -157,6 +157,12 @@ export default function SalesLeads() {
                       <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold border ${st.cls}`}>{st.label}</span>
                     </div>
                   </div>
+                  {lead.deal_type && (
+                    <span className="inline-flex items-center text-[10px] font-medium px-2 py-0.5 rounded-full mb-2 mr-2 bg-fuchsia-500/10 text-fuchsia-400"
+                      title={lead.deal_type}>
+                      {lead.deal_type}
+                    </span>
+                  )}
                   {lead.next_followup_date && (
                     <div className={`inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full mb-2 ${
                       overdue ? 'bg-[#e94560]/10 text-[#e94560]' : 'bg-[var(--bg-primary)] ' + tMuted

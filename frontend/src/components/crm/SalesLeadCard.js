@@ -61,6 +61,12 @@ export function KanbanCard({ lead, onTap }) {
             {lead.lead_type}
           </span>
         )}
+        {lead.deal_type && (
+          <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-fuchsia-500/15 text-fuchsia-400 truncate max-w-[110px]"
+            title={lead.deal_type}>
+            {lead.deal_type}
+          </span>
+        )}
         {overdue && <AlertTriangle className="h-3 w-3 text-[#e94560]" />}
         {ds !== null && <span className={`text-[9px] ${tMuted} ml-auto`}>{ds}d</span>}
       </div>
