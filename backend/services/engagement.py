@@ -27,12 +27,20 @@ import uuid
 
 from database import db
 
-# Canonical channels. Kept as plain strings (not an enum) so Mongo docs and JSON
-# stay simple and forward-compatible with channels added in later phases.
+# Known channels — the ones with bespoke folding + frontend icons today. This is
+# a reference set, NOT a hard allow-list: later phases log new channels (brochure,
+# webinar, sms, task…) and must keep their identity, so writes accept any channel
+# string and the frontend falls back to a neutral icon for unknown ones.
 CHANNELS = (
     "call", "visit", "meeting", "quote", "order", "mail",
     "whatsapp", "email", "drip", "greeting", "activity", "note", "event",
+    "brochure", "webinar", "sms",
 )
+
+
+def _clean_channel(channel: str) -> str:
+    """Normalise a channel to a lowercase slug, never empty (defaults 'event')."""
+    return (channel or "").strip().lower() or "event"
 
 # Marketing "communications" rows already carry their own channel string; anything
 # unrecognised collapses to this so the timeline never silently drops a row.
@@ -227,7 +235,7 @@ async def log_engagement_event(
     """
     now = datetime.now(timezone.utc).isoformat()
     doc = {
-        "channel": channel if channel in CHANNELS else "event",
+        "channel": _clean_channel(channel),
         "kind": kind, "title": title,
         "school_id": school_id or "", "lead_id": lead_id or "", "contact_id": contact_id or "",
         "detail": detail or "", "status": status or "", "direction": direction or "out",

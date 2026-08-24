@@ -218,7 +218,15 @@ async def connect_db():
     await _i(db.field_definitions.create_index([("entity", 1), ("is_active", 1)], background=True))
     await _i(db.field_definitions.create_index([("key", 1)], unique=True, background=True))
 
-    logging.info("Database indexes created/verified (%d collections indexed)", 31)
+    # ── Engagement ledger (Engagement OS, Phase 0) ───────────────────────────
+    # Per-account lookups by school/lead/contact, newest-first, plus an
+    # idempotency guard on dedup_key (sparse: only events that set one).
+    await _i(db.engagement_events.create_index([("school_id", 1), ("at", -1)], background=True))
+    await _i(db.engagement_events.create_index([("lead_id", 1), ("at", -1)], background=True))
+    await _i(db.engagement_events.create_index([("contact_id", 1), ("at", -1)], background=True))
+    await _i(db.engagement_events.create_index("dedup_key", unique=True, sparse=True, background=True))
+
+    logging.info("Database indexes created/verified (%d collections indexed)", 32)
 
     # ── Field-definition master seed (28 importable fields) ──────────────────
     from field_registry import seed_field_definitions as _seed_fields

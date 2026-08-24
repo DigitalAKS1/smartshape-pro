@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import {
   Phone, MapPin, Video, FileText, Package, Truck, MessageCircle,
   Mail, Repeat, Gift, CalendarClock, Circle, ArrowDownLeft, Activity,
+  BookOpen, MonitorPlay, MessageSquare,
 } from 'lucide-react';
 
 // ── Channel → icon + colour. Presentation lives here; the API stays neutral. ──
@@ -17,6 +18,10 @@ const CH = {
   drip:     { icon: Repeat,       color: '#06b6d4', label: 'Drip' },
   greeting: { icon: Gift,         color: '#ec4899', label: 'Greeting' },
   activity: { icon: CalendarClock,color: '#64748b', label: 'Planned' },
+  // Forward-looking channels the ledger will record in later phases:
+  brochure: { icon: BookOpen,     color: '#f97316', label: 'Brochure' },
+  webinar:  { icon: MonitorPlay,  color: '#7c3aed', label: 'Webinar' },
+  sms:      { icon: MessageSquare,color: '#14b8a6', label: 'SMS' },
 };
 const FALLBACK = { icon: Circle, color: '#94a3b8', label: 'Other' };
 const meta = (ch) => CH[ch] || FALLBACK;
