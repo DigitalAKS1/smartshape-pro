@@ -1842,19 +1842,24 @@ async def engagement_drill(request: Request):
 
     title, rows = value or metric, []
 
-    if metric == "stage":
-        title = f"{value.title()} leads"
+    if metric in ("stage", "active"):
+        if metric == "active":
+            title = "Active leads"
+            stage_q = {"stage": {"$in": list(OPEN_STAGES)}}
+        else:
+            title = f"{value.title()} leads"
+            stage_q = {"stage": value}
         docs = await db.leads.find(
-            {**lead_q, "stage": value},
+            {**lead_q, **stage_q},
             {"_id": 0, "lead_id": 1, "school_id": 1, "company_name": 1, "contact_name": 1,
-             "expected_value": 1, "assigned_name": 1, "last_activity_date": 1, "deal_type": 1},
+             "stage": 1, "expected_value": 1, "assigned_name": 1, "last_activity_date": 1, "deal_type": 1},
         ).sort("last_activity_date", -1).to_list(LIMIT)
         for l in docs:
             bits = [x for x in [_drill_money(l.get("expected_value")), l.get("assigned_name")] if x]
             rows.append({"kind": "lead", "primary": l.get("company_name") or l.get("contact_name") or "Lead",
                          "secondary": " · ".join(bits), "school_id": l.get("school_id", ""),
                          "lead_id": l.get("lead_id", ""), "at": l.get("last_activity_date"),
-                         "badge": l.get("deal_type") or ""})
+                         "badge": l.get("deal_type") or (l.get("stage") if metric == "active" else "")})
 
     elif metric == "channel":
         title = f"{value.title()} touches · {days}d"

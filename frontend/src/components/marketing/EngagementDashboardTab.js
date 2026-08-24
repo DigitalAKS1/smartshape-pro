@@ -103,8 +103,10 @@ export default function EngagementDashboardTab() {
 
       {/* KPIs */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <Kpi icon={TrendingUp} label="Active leads" value={data.totals.active_leads} color="#0ea5e9" />
-        <Kpi icon={Trophy} label="Won" value={data.totals.won_count} sub={money(data.totals.won_value)} color="#10b981" />
+        <Kpi icon={TrendingUp} label="Active leads" value={data.totals.active_leads} color="#0ea5e9"
+          onClick={() => openDrill('active')} />
+        <Kpi icon={Trophy} label="Won" value={data.totals.won_count} sub={money(data.totals.won_value)} color="#10b981"
+          onClick={() => openDrill('stage', 'won')} />
         <Kpi icon={Send} label={`Touches · ${days}d`} value={data.touches_total} color="#6366f1" />
         <Kpi icon={Flame} label="Hot signals" value={data.hot_signals} sub="brochure opens" color="#f97316"
           onClick={() => openDrill('hot_signals')} />

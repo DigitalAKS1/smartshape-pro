@@ -1,8 +1,28 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { X, Loader2, ChevronRight, Inbox } from 'lucide-react';
+import { X, Loader2, ChevronRight, Inbox, Download } from 'lucide-react';
 
 const KIND_ICON = { lead: '🎯', event: '✉️', brochure: '📖', activity: '🔥' };
+
+const csvCell = (v) => {
+  const s = (v == null ? '' : String(v)).replace(/"/g, '""');
+  return /[",\n]/.test(s) ? `"${s}"` : s;
+};
+
+function exportCsv(title, rows) {
+  const head = ['Name', 'Detail', 'Tag', 'When', 'school_id', 'lead_id'];
+  const lines = [head.join(',')];
+  rows.forEach(r => lines.push([r.primary, r.secondary, r.badge, r.at, r.school_id, r.lead_id].map(csvCell).join(',')));
+  const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${(title || 'report').replace(/[^\w]+/g, '-').toLowerCase()}.csv`;
+  document.body.appendChild(a);   // Firefox/Safari ignore a.click() unless attached
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
 
 function relTime(iso) {
   if (!iso) return '';
@@ -37,9 +57,17 @@ export default function DrillDownPanel({ open, title, rows, loading, onClose }) 
             <p className="text-sm font-semibold text-[var(--text-primary)]">{title || 'Details'}</p>
             {!loading && <p className="text-[11px] text-[var(--text-muted)]">{rows.length} record{rows.length === 1 ? '' : 's'} · tap to open</p>}
           </div>
-          <button onClick={onClose} aria-label="Close" className="p-1.5 rounded-lg text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]">
-            <X className="h-4 w-4" />
-          </button>
+          <div className="flex items-center gap-1">
+            {!loading && rows.length > 0 && (
+              <button onClick={() => exportCsv(title, rows)} title="Download CSV"
+                className="p-1.5 rounded-lg text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]" data-testid="drill-export">
+                <Download className="h-4 w-4" />
+              </button>
+            )}
+            <button onClick={onClose} aria-label="Close" className="p-1.5 rounded-lg text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto p-3">
