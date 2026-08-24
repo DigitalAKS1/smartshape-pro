@@ -410,6 +410,7 @@ export default function DripsTab({ tk, drips, setDrips }) {
                         <option value="whatsapp">WhatsApp</option>
                         <option value="email">Email</option>
                         <option value="physical_material">Physical material</option>
+                        <option value="call_task">Call task (rep reminder)</option>
                       </select>
                       {s.message_type === 'physical_material' && (
                         <select
