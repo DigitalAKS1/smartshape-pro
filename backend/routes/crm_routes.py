@@ -1454,6 +1454,8 @@ async def create_brochure_share(request: Request):
     brochure_url = (body.get("brochure_url") or "").strip()
     if not brochure_url:
         raise HTTPException(status_code=400, detail="brochure_url is required")
+    if not brochure_url.lower().startswith(("http://", "https://", "/api/files/", "/uploads/")):
+        raise HTTPException(status_code=400, detail="brochure_url must be an http(s) or uploaded-file link")
 
     lead_id = (body.get("lead_id") or "").strip()
     school_id = (body.get("school_id") or "").strip()
@@ -1512,6 +1514,60 @@ async def list_brochure_shares(request: Request):
     return rows
 
 
+async def _record_brochure_open(share: dict, token: str):
+    """Record the open + fire the hot signal on the FIRST open. Best-effort:
+    open_brochure wraps this so serving the brochure never depends on tracking."""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    first_open = share.get("status") != "opened"
+    upd = {"status": "opened", "last_opened_at": now_iso}
+    if first_open:
+        upd["first_opened_at"] = now_iso
+    await db.brochure_shares.update_one(
+        {"token": token}, {"$set": upd, "$inc": {"open_count": 1}})
+    if not first_open:
+        return
+
+    # A buying signal: log it on the Timeline (inbound) and raise a HOT call-back
+    # for the owner — but only once, on first open.
+    sid, lid, cid = share.get("school_id", ""), share.get("lead_id", ""), share.get("contact_id", "")
+    try:
+        await log_engagement_event(
+            channel="brochure", kind="Brochure opened",
+            title=f"Opened: {share.get('title', 'Brochure')}",
+            school_id=sid, lead_id=lid, contact_id=cid,
+            status="opened", direction="in", by=share.get("recipient_name", ""),
+            at=now_iso, meta={"share_id": share.get("share_id", "")},
+            dedup_key=f"brochure_open:{token}")
+    except Exception:
+        pass
+    if lid:
+        await db.leads.update_one(
+            {"lead_id": lid},
+            {"$set": {"lead_type": "hot", "brochure_opened_at": now_iso,
+                      "last_activity_date": now_iso}})
+        try:
+            await _auto_enroll_on_trigger(lid, "brochure_opened")
+        except Exception:
+            pass
+    owner_to, owner_name = "", ""
+    if lid:
+        lead = await db.leads.find_one({"lead_id": lid}, {"_id": 0, "assigned_to": 1, "assigned_name": 1})
+        owner_to, owner_name = (lead or {}).get("assigned_to", ""), (lead or {}).get("assigned_name", "")
+    if not owner_to and sid:
+        sch = await db.schools.find_one({"school_id": sid}, {"_id": 0, "assigned_to": 1, "assigned_name": 1})
+        owner_to, owner_name = (sch or {}).get("assigned_to", ""), (sch or {}).get("assigned_name", "")
+    if owner_to:
+        await db.crm_activities.insert_one({
+            "activity_id": f"act_{uuid.uuid4().hex[:10]}",
+            "school_id": sid, "school_name": share.get("school_name", ""),
+            "activity_type": "Call", "channel": "call", "priority": "high",
+            "title": f"🔥 {share.get('school_name') or 'A school'} opened the brochure — call now",
+            "notes": f"Opened '{share.get('title', 'Brochure')}' at {now_iso[:16].replace('T', ' ')}.",
+            "due_date": now_iso[:10], "assigned_to": owner_to, "assigned_name": owner_name,
+            "status": "pending", "source": "brochure_open",
+            "created_by": "system", "created_at": now_iso, "done_at": None})
+
+
 @router.get("/b/{token}")
 async def open_brochure(token: str):
     """PUBLIC — records the open, fires the hot signal on the FIRST open, then
@@ -1521,55 +1577,10 @@ async def open_brochure(token: str):
     if not share:
         raise HTTPException(status_code=404, detail="Brochure not found")
 
-    now_iso = datetime.now(timezone.utc).isoformat()
-    first_open = share.get("status") != "opened"
-    upd = {"status": "opened", "last_opened_at": now_iso}
-    if first_open:
-        upd["first_opened_at"] = now_iso
-    await db.brochure_shares.update_one(
-        {"token": token}, {"$set": upd, "$inc": {"open_count": 1}})
-
-    if first_open:
-        # A buying signal: log it on the Timeline (inbound) and raise a HOT
-        # call-back for the owner — but only once, on first open.
-        sid, lid, cid = share.get("school_id", ""), share.get("lead_id", ""), share.get("contact_id", "")
-        try:
-            await log_engagement_event(
-                channel="brochure", kind="Brochure opened",
-                title=f"Opened: {share.get('title', 'Brochure')}",
-                school_id=sid, lead_id=lid, contact_id=cid,
-                status="opened", direction="in", by=share.get("recipient_name", ""),
-                at=now_iso, meta={"share_id": share.get("share_id", "")},
-                dedup_key=f"brochure_open:{token}")
-        except Exception:
-            pass  # ledger logging is best-effort; the redirect must still succeed
-        if lid:
-            await db.leads.update_one(
-                {"lead_id": lid},
-                {"$set": {"lead_type": "hot", "brochure_opened_at": now_iso,
-                          "last_activity_date": now_iso}})
-            # Branching: a brochure open can auto-start a nurture sequence.
-            try:
-                await _auto_enroll_on_trigger(lid, "brochure_opened")
-            except Exception:
-                pass
-        owner_to, owner_name = "", ""
-        if lid:
-            lead = await db.leads.find_one({"lead_id": lid}, {"_id": 0, "assigned_to": 1, "assigned_name": 1})
-            owner_to, owner_name = (lead or {}).get("assigned_to", ""), (lead or {}).get("assigned_name", "")
-        if not owner_to and sid:
-            sch = await db.schools.find_one({"school_id": sid}, {"_id": 0, "assigned_to": 1, "assigned_name": 1})
-            owner_to, owner_name = (sch or {}).get("assigned_to", ""), (sch or {}).get("assigned_name", "")
-        if owner_to:
-            await db.crm_activities.insert_one({
-                "activity_id": f"act_{uuid.uuid4().hex[:10]}",
-                "school_id": sid, "school_name": share.get("school_name", ""),
-                "activity_type": "Call", "channel": "call", "priority": "high",
-                "title": f"🔥 {share.get('school_name') or 'A school'} opened the brochure — call now",
-                "notes": f"Opened '{share.get('title', 'Brochure')}' at {now_iso[:16].replace('T', ' ')}.",
-                "due_date": now_iso[:10], "assigned_to": owner_to, "assigned_name": owner_name,
-                "status": "pending", "source": "brochure_open",
-                "created_by": "system", "created_at": now_iso, "done_at": None})
+    try:
+        await _record_brochure_open(share, token)
+    except Exception:
+        pass  # tracking is best-effort — the brochure must always load
 
     return RedirectResponse(url=share["brochure_url"], status_code=302)
 
