@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form
-from fastapi.responses import StreamingResponse, HTMLResponse
+from fastapi.responses import StreamingResponse, HTMLResponse, RedirectResponse
 from typing import Optional
 from datetime import datetime, timezone, timedelta
 import uuid
@@ -16,7 +16,7 @@ from rbac import (get_team, require_superadmin, require_module, has_module, has_
                   sees_all, can_read_crm)
 from audit_backup import snapshot_and_delete, preview_counts
 from cascade_delete import build_school_plan, build_contact_plan
-from services.engagement import normalize_timeline, fetch_events
+from services.engagement import normalize_timeline, fetch_events, log_engagement_event
 import crm_contact_calls as cc
 
 router = APIRouter()
@@ -1385,6 +1385,139 @@ async def mail_qr_interest(qr_token: str, request: Request):
         await db.schools.update_one({"school_id": t["school_id"]},
                                     {"$set": {"phone": phone, "last_activity_date": now_iso}})
     return {"ok": True}
+
+
+# ── Trackable brochure share (Engagement OS, Phase 3) ─────────────────────────
+# Share a brochure/catalogue as a tracked link. Opening it records the open,
+# logs a "brochure opened" event on the school Timeline (Phase 0), and drops a
+# HOT call-back task on the owner's plate (calendar + daily queue, Phase 1) —
+# turning a silent send into a buying signal.
+
+def _brochure_public_url(token: str) -> str:
+    base = (_os.environ.get("FRONTEND_URL") or "https://app.smartshape.in").rstrip("/")
+    return f"{base}/api/b/{token}"
+
+
+@router.post("/brochures/share")
+async def create_brochure_share(request: Request):
+    user = await get_current_user(request)
+    body = await request.json()
+    brochure_url = (body.get("brochure_url") or "").strip()
+    if not brochure_url:
+        raise HTTPException(status_code=400, detail="brochure_url is required")
+
+    lead_id = (body.get("lead_id") or "").strip()
+    school_id = (body.get("school_id") or "").strip()
+    contact_id = (body.get("contact_id") or "").strip()
+    school_name = (body.get("school_name") or "").strip()
+    recipient = (body.get("recipient_name") or "").strip()
+
+    # Fill blanks from the linked records so the timeline + hot task read well.
+    if lead_id and not (school_id and school_name):
+        lead = await db.leads.find_one({"lead_id": lead_id},
+                                       {"_id": 0, "school_id": 1, "company_name": 1, "contact_name": 1, "contact_id": 1})
+        if lead:
+            school_id = school_id or lead.get("school_id", "")
+            school_name = school_name or lead.get("company_name", "")
+            recipient = recipient or lead.get("contact_name", "")
+            contact_id = contact_id or lead.get("contact_id", "")
+    if school_id and not school_name:
+        sch = await db.schools.find_one({"school_id": school_id}, {"_id": 0, "school_name": 1})
+        school_name = (sch or {}).get("school_name", "")
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    token = uuid.uuid4().hex[:16]
+    share = {
+        "share_id": f"bsh_{uuid.uuid4().hex[:10]}", "token": token,
+        "brochure_url": brochure_url, "title": (body.get("title") or "Brochure").strip(),
+        "lead_id": lead_id, "school_id": school_id, "contact_id": contact_id,
+        "school_name": school_name, "recipient_name": recipient,
+        "status": "sent", "open_count": 0,
+        "first_opened_at": None, "last_opened_at": None,
+        "created_by": user["email"], "created_by_name": user.get("name", ""),
+        "created_at": now_iso, "sent_at": now_iso,
+    }
+    await db.brochure_shares.insert_one(dict(share))
+
+    await log_engagement_event(
+        channel="brochure", kind="Brochure shared", title=share["title"],
+        school_id=school_id, lead_id=lead_id, contact_id=contact_id,
+        status="sent", direction="out", by=user.get("name", ""), at=now_iso,
+        meta={"share_id": share["share_id"]})
+
+    share.pop("_id", None)
+    return {**share, "share_url": _brochure_public_url(token)}
+
+
+@router.get("/brochures/shares")
+async def list_brochure_shares(request: Request):
+    await get_current_user(request)
+    qp = request.query_params
+    q = {}
+    for k in ("lead_id", "school_id", "contact_id"):
+        if qp.get(k):
+            q[k] = qp.get(k)
+    rows = await db.brochure_shares.find(q, {"_id": 0}).sort("created_at", -1).to_list(500)
+    for r in rows:
+        r["share_url"] = _brochure_public_url(r["token"])
+    return rows
+
+
+@router.get("/b/{token}")
+async def open_brochure(token: str):
+    """PUBLIC — records the open, fires the hot signal on the FIRST open, then
+    redirects the visitor to the actual brochure. No auth (the recipient is a
+    prospect, not a logged-in user)."""
+    share = await db.brochure_shares.find_one({"token": token}, {"_id": 0})
+    if not share:
+        raise HTTPException(status_code=404, detail="Brochure not found")
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    first_open = share.get("status") != "opened"
+    upd = {"status": "opened", "last_opened_at": now_iso}
+    if first_open:
+        upd["first_opened_at"] = now_iso
+    await db.brochure_shares.update_one(
+        {"token": token}, {"$set": upd, "$inc": {"open_count": 1}})
+
+    if first_open:
+        # A buying signal: log it on the Timeline (inbound) and raise a HOT
+        # call-back for the owner — but only once, on first open.
+        sid, lid, cid = share.get("school_id", ""), share.get("lead_id", ""), share.get("contact_id", "")
+        try:
+            await log_engagement_event(
+                channel="brochure", kind="Brochure opened",
+                title=f"Opened: {share.get('title', 'Brochure')}",
+                school_id=sid, lead_id=lid, contact_id=cid,
+                status="opened", direction="in", by=share.get("recipient_name", ""),
+                at=now_iso, meta={"share_id": share.get("share_id", "")},
+                dedup_key=f"brochure_open:{token}")
+        except Exception:
+            pass  # ledger logging is best-effort; the redirect must still succeed
+        if lid:
+            await db.leads.update_one(
+                {"lead_id": lid},
+                {"$set": {"lead_type": "hot", "brochure_opened_at": now_iso,
+                          "last_activity_date": now_iso}})
+        owner_to, owner_name = "", ""
+        if lid:
+            lead = await db.leads.find_one({"lead_id": lid}, {"_id": 0, "assigned_to": 1, "assigned_name": 1})
+            owner_to, owner_name = (lead or {}).get("assigned_to", ""), (lead or {}).get("assigned_name", "")
+        if not owner_to and sid:
+            sch = await db.schools.find_one({"school_id": sid}, {"_id": 0, "assigned_to": 1, "assigned_name": 1})
+            owner_to, owner_name = (sch or {}).get("assigned_to", ""), (sch or {}).get("assigned_name", "")
+        if owner_to:
+            await db.crm_activities.insert_one({
+                "activity_id": f"act_{uuid.uuid4().hex[:10]}",
+                "school_id": sid, "school_name": share.get("school_name", ""),
+                "activity_type": "Call", "channel": "call", "priority": "high",
+                "title": f"🔥 {share.get('school_name') or 'A school'} opened the brochure — call now",
+                "notes": f"Opened '{share.get('title', 'Brochure')}' at {now_iso[:16].replace('T', ' ')}.",
+                "due_date": now_iso[:10], "assigned_to": owner_to, "assigned_name": owner_name,
+                "status": "pending", "source": "brochure_open",
+                "created_by": "system", "created_at": now_iso, "done_at": None})
+
+    return RedirectResponse(url=share["brochure_url"], status_code=302)
 
 
 # ── Activity Types (editable master, powers the Bulk Activity Planner) ────────

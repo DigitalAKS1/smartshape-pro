@@ -2,8 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { toast } from 'sonner';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
-import { Phone, PhoneCall, X, Clock, CheckCircle2 } from 'lucide-react';
+import { Phone, PhoneCall, X, Clock, CheckCircle2, BookOpen } from 'lucide-react';
 import { startCall } from '../../lib/callBus';
+import ShareBrochureDialog from './ShareBrochureDialog';
 
 /** Trigger a Bonvoice click-to-call and open the live call widget. Rings the rep's
  *  phone first, then the customer. Surfaces the backend's 409/422 message when
@@ -47,6 +48,7 @@ export default function ContactDetailPanel({
   const [outcome, setOutcome] = useState('connected');
   const [notes, setNotes] = useState('');
   const [fuForm, setFuForm] = useState({ followup_date: '', followup_time: '', followup_type: 'call', notes: '' });
+  const [brochureOpen, setBrochureOpen] = useState(false);
 
   useEffect(() => {
     setTab('call');
@@ -105,6 +107,10 @@ export default function ContactDetailPanel({
                 <PhoneCall className="h-3.5 w-3.5 mr-1" /> Call {detailContact.phone}
               </Button>
             )}
+            <Button onClick={() => setBrochureOpen(true)} size="sm" variant="outline"
+              className="w-full border-[#f97316]/40 text-[#f97316] hover:bg-[#f97316]/10">
+              <BookOpen className="h-3.5 w-3.5 mr-1" /> Share brochure (tracked)
+            </Button>
             <div>
               <p className="text-xs font-medium text-[var(--text-secondary)] mb-2">Log a call</p>
               <select value={outcome} onChange={e => setOutcome(e.target.value)}
@@ -170,6 +176,9 @@ export default function ContactDetailPanel({
           </div>
         )}
       </div>
+      <ShareBrochureDialog open={brochureOpen} onClose={() => setBrochureOpen(false)}
+        context={{ contactId: detailContact.contact_id, schoolId: detailContact.school_id || '',
+          leadId: detailContact.lead_id || '', schoolName: detailContact.company || '', phone: detailContact.phone || '' }} />
     </div>
   );
 }

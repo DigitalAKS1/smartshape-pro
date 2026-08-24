@@ -334,6 +334,11 @@ export const dealTypes = {
   delete: (id) => API.delete(`/deal-types/${id}`),
 };
 
+export const brochures = {
+  share: (data) => API.post('/brochures/share', data),
+  listShares: (params = {}) => API.get('/brochures/shares', { params }),
+};
+
 export const mailAreas = {
   getAll: () => API.get('/mail-areas'),
   create: (data) => API.post('/mail-areas', data),
