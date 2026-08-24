@@ -343,6 +343,9 @@ export const dealTypes = {
 export const brochures = {
   share: (data) => API.post('/brochures/share', data),
   listShares: (params = {}) => API.get('/brochures/shares', { params }),
+  library: () => API.get('/brochures'),
+  upload: (formData) => API.post('/brochures', formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
+  remove: (id) => API.delete(`/brochures/${id}`),
 };
 
 export const engagement = {

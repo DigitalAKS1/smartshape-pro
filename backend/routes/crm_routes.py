@@ -1520,6 +1520,48 @@ async def open_brochure(token: str):
     return RedirectResponse(url=share["brochure_url"], status_code=302)
 
 
+# ── Brochure library (upload once, reuse — powers one-tap tracked shares) ─────
+
+@router.post("/brochures")
+async def upload_brochure(file: UploadFile = File(...), title: str = Form(""), request: Request = None):
+    user = await get_current_user(request) if request else {"email": "", "name": ""}
+    from services.storage import save_upload
+    ext = file.filename.rsplit(".", 1)[-1].lower() if "." in (file.filename or "") else "pdf"
+    path = f"brochures/{uuid.uuid4().hex[:12]}.{ext}"
+    data = await file.read()
+    url = await save_upload(path, data, file.content_type or "application/pdf", legacy="local")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    doc = {
+        "brochure_id": f"brc_{uuid.uuid4().hex[:10]}",
+        "title": (title or (file.filename or "Brochure").rsplit(".", 1)[0]).strip(),
+        "url": url, "file_type": ext, "size_bytes": len(data),
+        "created_by": user.get("email", ""), "created_by_name": user.get("name", ""),
+        "created_at": now_iso, "is_active": True,
+    }
+    await db.brochures.insert_one(dict(doc))
+    doc.pop("_id", None)
+    return doc
+
+
+@router.get("/brochures")
+async def list_brochures(request: Request):
+    await get_current_user(request)
+    return await db.brochures.find(
+        {"is_active": {"$ne": False}}, {"_id": 0}).sort("created_at", -1).to_list(500)
+
+
+@router.delete("/brochures/{brochure_id}")
+async def delete_brochure(brochure_id: str, request: Request):
+    user = await get_current_user(request)
+    brc = await db.brochures.find_one({"brochure_id": brochure_id}, {"_id": 0})
+    if not brc:
+        raise HTTPException(status_code=404, detail="Brochure not found")
+    if get_team(user) != "admin" and brc.get("created_by") != user.get("email"):
+        raise HTTPException(status_code=403, detail="Only the uploader or an admin can remove this")
+    await db.brochures.update_one({"brochure_id": brochure_id}, {"$set": {"is_active": False}})
+    return {"ok": True}
+
+
 # ── Engagement funnel dashboard (Engagement OS, Phase 5) ──────────────────────
 # The capstone scoreboard: pipeline funnel + cross-channel touch stats + brochure
 # performance + hot signals + stuck deals, in one owner-facing view.

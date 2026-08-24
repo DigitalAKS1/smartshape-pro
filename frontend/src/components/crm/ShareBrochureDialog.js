@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { toast } from 'sonner';
 import { brochures } from '../../lib/api';
-import { X, Link2, Copy, Check, MessageCircle, BookOpen, Eye } from 'lucide-react';
+import { X, Link2, Copy, Check, MessageCircle, BookOpen, Eye, Upload, FileText } from 'lucide-react';
 
 const LS_KEY = 'ss_last_brochure_url';
 
@@ -15,6 +15,37 @@ export default function ShareBrochureDialog({ open, onClose, context = {} }) {
   const [shareUrl, setShareUrl] = useState('');
   const [copied, setCopied] = useState(false);
   const [prior, setPrior] = useState([]);
+  const [library, setLibrary] = useState([]);
+  const [selectedId, setSelectedId] = useState('');
+  const [uploading, setUploading] = useState(false);
+  const fileRef = useRef(null);
+
+  const loadLibrary = useCallback(async () => {
+    try { const r = await brochures.library(); setLibrary(Array.isArray(r.data) ? r.data : []); }
+    catch { /* non-fatal */ }
+  }, []);
+
+  const pickSaved = (b) => {
+    setSelectedId(b.brochure_id);
+    setUrl(b.url);
+    setTitle(b.title || 'Brochure');
+    setShareUrl('');
+  };
+
+  const onUpload = async (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    setUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', f);
+      const r = await brochures.upload(fd);
+      toast.success('Brochure added to library');
+      await loadLibrary();
+      pickSaved(r.data);
+    } catch (err) { toast.error(err?.response?.data?.detail || 'Upload failed'); }
+    finally { setUploading(false); if (fileRef.current) fileRef.current.value = ''; }
+  };
 
   const loadPrior = useCallback(async () => {
     const params = {};
@@ -28,10 +59,11 @@ export default function ShareBrochureDialog({ open, onClose, context = {} }) {
 
   useEffect(() => {
     if (!open) return;
-    setShareUrl(''); setCopied(false);
+    setShareUrl(''); setCopied(false); setSelectedId('');
     try { const last = localStorage.getItem(LS_KEY); if (last) setUrl(last); } catch { /* ignore */ }
     loadPrior();
-  }, [open, loadPrior]);
+    loadLibrary();
+  }, [open, loadPrior, loadLibrary]);
 
   if (!open) return null;
 
@@ -76,9 +108,39 @@ export default function ShareBrochureDialog({ open, onClose, context = {} }) {
         </p>
 
         <div className="grid gap-2.5">
+          {/* Saved brochure library */}
           <div>
-            <label className="text-[10px] uppercase tracking-wider font-semibold text-[var(--text-muted)]">Brochure link (PDF or web)</label>
-            <input className={inp + ' mt-1'} placeholder="https://…/brochure.pdf" value={url} onChange={e => setUrl(e.target.value)} data-testid="brochure-url" />
+            <div className="flex items-center justify-between">
+              <label className="text-[10px] uppercase tracking-wider font-semibold text-[var(--text-muted)]">Choose from library</label>
+              <button onClick={() => fileRef.current?.click()} disabled={uploading}
+                className="text-[11px] font-semibold text-[#f97316] flex items-center gap-1 disabled:opacity-60" data-testid="brochure-upload-btn">
+                <Upload className="h-3 w-3" /> {uploading ? 'Uploading…' : 'Upload new'}
+              </button>
+              <input ref={fileRef} type="file" accept=".pdf,image/*" className="hidden" onChange={onUpload} />
+            </div>
+            {library.length > 0 ? (
+              <div className="mt-1.5 flex flex-wrap gap-1.5 max-h-28 overflow-y-auto">
+                {library.map(b => {
+                  const on = selectedId === b.brochure_id;
+                  return (
+                    <button key={b.brochure_id} onClick={() => pickSaved(b)}
+                      className="px-2.5 py-1.5 rounded-lg border text-xs font-medium flex items-center gap-1.5 transition-colors"
+                      style={on ? { borderColor: '#f97316', background: '#f9731618', color: '#f97316' }
+                        : { borderColor: 'var(--border-color)', color: 'var(--text-secondary)' }}>
+                      <FileText className="h-3 w-3" /> {b.title}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="text-[11px] text-[var(--text-muted)] mt-1">No saved brochures yet — upload one, or paste a link below.</p>
+            )}
+          </div>
+
+          <div>
+            <label className="text-[10px] uppercase tracking-wider font-semibold text-[var(--text-muted)]">…or paste a link (PDF or web)</label>
+            <input className={inp + ' mt-1'} placeholder="https://…/brochure.pdf" value={url}
+              onChange={e => { setUrl(e.target.value); setSelectedId(''); }} data-testid="brochure-url" />
           </div>
           <div>
             <label className="text-[10px] uppercase tracking-wider font-semibold text-[var(--text-muted)]">Title</label>
