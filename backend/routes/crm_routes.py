@@ -1460,6 +1460,8 @@ async def create_activities_bulk(request: Request):
             "activity_id": f"act_{uuid.uuid4().hex[:10]}", "batch_id": batch_id,
             "school_id": sid, "school_name": sch.get("school_name", ""),
             "activity_type": body.get("activity_type", ""), "title": body.get("title", ""),
+            "channel": body.get("channel", ""),   # Phase 1c: which channel this touch is
+            "deal_type": body.get("deal_type", ""),  # which deal this marketing is for
             "notes": body.get("notes", ""), "due_date": body.get("due_date", ""),
             "assigned_to": ato, "assigned_name": aname, "status": "pending",
             "created_by": user["email"], "created_at": now_iso, "done_at": None})
@@ -3607,6 +3609,7 @@ async def create_lead(request: Request):
         "source": body.get("source", ""),
         "source_id": body.get("source_id", ""),
         "lead_type": body.get("lead_type", "warm"),
+        "deal_type": body.get("deal_type", ""),
         "interested_product": body.get("interested_product", ""),
         "stage": initial_stage,
         "priority": body.get("priority", "medium"),
@@ -3668,7 +3671,7 @@ async def update_lead(lead_id: str, request: Request):
     allowed = {}
     for k in ("school_id", "company_name", "contact_name", "designation", "contact_role_id",
               "contact_phone", "contact_email", "source", "source_id",
-              "lead_type", "interested_product", "stage", "priority",
+              "lead_type", "deal_type", "interested_product", "stage", "priority",
               "next_followup_date", "assigned_to", "assigned_name", "notes",
               "assignment_type", "likely_closure_date",
               "expected_value", "lost_reason", "lost_reason_note",

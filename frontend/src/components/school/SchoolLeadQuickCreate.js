@@ -1,19 +1,24 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../ui/dialog';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Label } from '../ui/label';
 import { toast } from 'sonner';
-import { leads as leadsApi } from '../../lib/api';
+import { leads as leadsApi, dealTypes } from '../../lib/api';
 import InterestedProductField from '../crm/InterestedProductField';
 
 export default function SchoolLeadQuickCreate({ open, onOpenChange, school, rolesList = [], sourcesList = [], spList = [], onDone }) {
   const [saving, setSaving] = useState(false);
+  const [dealTypesList, setDealTypesList] = useState([]);
   const [form, setForm] = useState({
     contact_name: '', contact_phone: '', contact_email: '',
     contact_role_id: '', designation: '', lead_type: 'warm', priority: 'medium',
-    interested_product: '', assigned_to: '', source_id: '', source: '',
+    interested_product: '', assigned_to: '', source_id: '', source: '', deal_type: '',
   });
+  useEffect(() => {
+    if (!open) return;
+    dealTypes.getAll().then(r => setDealTypesList(Array.isArray(r.data) ? r.data : [])).catch(() => {});
+  }, [open]);
   const inputCls = 'bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]';
   const textSec = 'text-[var(--text-secondary)]';
 
@@ -82,6 +87,13 @@ export default function SchoolLeadQuickCreate({ open, onOpenChange, school, role
                 {spList.map(sp => <option key={sp.email} value={sp.email}>{sp.name}</option>)}
               </select>
             </div>
+          </div>
+          <div>
+            <Label className={`${textSec} text-xs`}>Deal Type</Label>
+            <select value={form.deal_type} onChange={e => setForm({ ...form, deal_type: e.target.value })} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`} data-testid="ql-deal-type">
+              <option value="">Select deal type…</option>
+              {dealTypesList.map(d => <option key={d.deal_type_id || d.name} value={d.name}>{d.name}</option>)}
+            </select>
           </div>
           <InterestedProductField value={form.interested_product} onChange={v => setForm({ ...form, interested_product: v })} />
         </div>

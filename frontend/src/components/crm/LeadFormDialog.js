@@ -1,11 +1,11 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../ui/dialog';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Label } from '../ui/label';
 import { useTheme } from '../../contexts/ThemeContext';
 import useSchoolTypes from '../../hooks/useSchoolTypes';
-import { tags as tagsApi } from '../../lib/api';
+import { tags as tagsApi, dealTypes } from '../../lib/api';
 import InterestedProductField from './InterestedProductField';
 import AddressFields from './AddressFields';
 import AssignToPicker from './AssignToPicker';
@@ -22,6 +22,11 @@ export default function LeadFormDialog({
 }) {
   const { isDark } = useTheme();
   const schoolTypeOptions = useSchoolTypes();
+  const [dealTypesList, setDealTypesList] = useState([]);
+  useEffect(() => {
+    if (!open) return;
+    dealTypes.getAll().then(r => setDealTypesList(Array.isArray(r.data) ? r.data : [])).catch(() => {});
+  }, [open]);
   const inputCls = 'bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]';
   const textPri = 'text-[var(--text-primary)]';
   const textSec = 'text-[var(--text-secondary)]';
@@ -141,6 +146,15 @@ export default function LeadFormDialog({
                 <option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option>
               </select>
             </div>
+          </div>
+
+          <div>
+            <Label className={`${textSec} text-xs`}>Deal Type</Label>
+            <select value={leadForm.deal_type || ''} onChange={e => setLeadForm({...leadForm, deal_type: e.target.value})}
+              className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`} data-testid="lead-deal-type-select">
+              <option value="">Select deal type…</option>
+              {dealTypesList.map(d => <option key={d.deal_type_id || d.name} value={d.name}>{d.name}</option>)}
+            </select>
           </div>
 
           <InterestedProductField value={leadForm.interested_product} onChange={v => setLeadForm({...leadForm, interested_product: v})} />

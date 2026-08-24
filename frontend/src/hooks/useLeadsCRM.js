@@ -204,7 +204,7 @@ export default function useLeadsCRM() {
   const openCreateLead = () => {
     setEditLead(null);
     setAddNewSchool(false);
-    setLeadForm({ school_id: '', contact_id: '', contact_name: '', designation: '', contact_role_id: '', contact_phone: '', contact_email: '', source: '', source_id: '', lead_type: 'warm', interested_product: '', priority: 'medium', next_followup_date: '', likely_closure_date: '', assignment_type: 'manual', assigned_to: '', assigned_name: '', notes: '', expected_value: '', tags: [], referred_by_contact_id: '', referral_reward_status: 'none' });
+    setLeadForm({ school_id: '', contact_id: '', contact_name: '', designation: '', contact_role_id: '', contact_phone: '', contact_email: '', source: '', source_id: '', lead_type: 'warm', deal_type: '', interested_product: '', priority: 'medium', next_followup_date: '', likely_closure_date: '', assignment_type: 'manual', assigned_to: '', assigned_name: '', notes: '', expected_value: '', tags: [], referred_by_contact_id: '', referral_reward_status: 'none' });
     setNewTagInput('');
     setNewSchool({ school_name: '', school_type: 'CBSE', phone: '', email: '', city: '', state: '', pincode: '', school_strength: 0 });
     setLeadDialogOpen(true);
