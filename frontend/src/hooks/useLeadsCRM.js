@@ -18,6 +18,7 @@ import {
   dripSequences as dripSequencesApi,
   quotations as quotationsApi,
   designations as designationsApi,
+  dealTypes as dealTypesApi,
 } from '../lib/api';
 import { useDataSync, useAutoRefresh } from '../lib/dataSync';
 import { useAuth } from '../contexts/AuthContext';
@@ -36,6 +37,7 @@ export default function useLeadsCRM() {
   const [groupsList, setGroupsList] = useState([]);
   const [sourcesList, setSourcesList] = useState([]);
   const [rolesList, setRolesList] = useState([]);
+  const [dealTypesList, setDealTypesList] = useState([]);
   const [tagsList, setTagsList] = useState([]);
   const [dripSequencesList, setDripSequencesList] = useState([]);
   const [allQuotations, setAllQuotations] = useState([]);
@@ -151,7 +153,7 @@ export default function useLeadsCRM() {
   // ─────────────────────────────────────────────────────────────────────────────
   const fetchData = async () => {
     try {
-      const [lr, sr, tr, spr, cr, gr, srcR, rlR, tgR, dripR, qR, desR] = await Promise.all([
+      const [lr, sr, tr, spr, cr, gr, srcR, rlR, tgR, dripR, qR, desR, dtR] = await Promise.all([
         leadsApi.getAll(), schoolsApi.getAll(), tasksApi.getAll(), salesPersons.getAll(), contactsApi.getAll(),
         groupsApi.getAll().catch(() => ({ data: [] })),
         sourcesApi.getAll().catch(() => ({ data: [] })),
@@ -160,6 +162,7 @@ export default function useLeadsCRM() {
         dripSequencesApi.getAll().catch(() => ({ data: [] })),
         quotationsApi.getAll().catch(() => ({ data: [] })),
         designationsApi.getAll().catch(() => ({ data: [] })),
+        dealTypesApi.getAll().catch(() => ({ data: [] })),
       ]);
       const arr = (x) => Array.isArray(x) ? x : [];
       setLeadsList(arr(lr.data));
@@ -174,6 +177,7 @@ export default function useLeadsCRM() {
       setDripSequencesList(arr(dripR.data));
       setAllQuotations(arr(qR.data));
       setDesignationsList(arr(desR.data));
+      setDealTypesList(arr(dtR.data));
     } catch { toast.error('Failed to load'); }
     finally { setLoading(false); }
   };
@@ -622,11 +626,11 @@ export default function useLeadsCRM() {
     await loadContactDetail(contact.contact_id);
   };
 
-  const logContactCall = async (outcome, content) => {
+  const logContactCall = async (outcome, content, deal_type = '') => {
     if (!detailContact) return;
     try {
-      await contactsApi.logCall(detailContact.contact_id, { outcome, content });
-      toast.success('Call logged');
+      await contactsApi.logCall(detailContact.contact_id, { outcome, content, deal_type });
+      toast.success(deal_type ? 'Call logged · deal linked' : 'Call logged');
       await loadContactDetail(detailContact.contact_id);
       await fetchData();
     } catch { toast.error('Failed to log call'); }
@@ -721,7 +725,8 @@ export default function useLeadsCRM() {
   const filterOptions = useMemo(() => deriveFilterOptions({
     contacts: contactsList, leads: leadsList, schools: schoolsList,
     sources: sourcesList, roles: rolesList, tags: tagsList, salespersons: spList,
-  }), [contactsList, leadsList, schoolsList, sourcesList, rolesList, tagsList, spList]);
+    dealTypes: dealTypesList,
+  }), [contactsList, leadsList, schoolsList, sourcesList, rolesList, tagsList, spList, dealTypesList]);
 
   const masterContexts = useMemo(() => buildMasterContexts({
     schoolsList, leadsList, contactsList, rolesList,

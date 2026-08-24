@@ -4880,6 +4880,9 @@ async def log_contact_call(contact_id: str, request: Request):
 
     now_iso = datetime.now(timezone.utc).isoformat()
     note = cc.build_call_note(contact, user, outcome, body.get("content", ""), now_iso)
+    deal_type = (body.get("deal_type") or "").strip()
+    if deal_type:
+        note["deal_type"] = deal_type
     await db.call_notes.insert_one(dict(note))
 
     await db.contacts.update_one({"contact_id": contact_id}, {"$set": {
@@ -4888,6 +4891,9 @@ async def log_contact_call(contact_id: str, request: Request):
     if contact.get("school_id"):
         await touch_last_activity("school", contact["school_id"])
     if contact.get("lead_id"):
+        # Link the deal to the lead when the rep sets it on the call.
+        if deal_type:
+            await db.leads.update_one({"lead_id": contact["lead_id"]}, {"$set": {"deal_type": deal_type}})
         await touch_last_activity("lead", contact["lead_id"])
 
     return await db.call_notes.find_one({"note_id": note["note_id"]}, {"_id": 0})

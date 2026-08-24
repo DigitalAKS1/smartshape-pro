@@ -1,11 +1,13 @@
-import { useState, useEffect } from 'react';
-import { leads as leadsApi } from '../lib/api';
+import { useState, useEffect, useMemo } from 'react';
+import { leads as leadsApi, dealTypes as dealTypesApi } from '../lib/api';
 import { toast } from 'sonner';
 
 export function useSalesLeads() {
   const [leads, setLeads] = useState([]);
   const [search, setSearch] = useState('');
   const [stageFilter, setStageFilter] = useState('active');
+  const [dealFilter, setDealFilter] = useState('all');
+  const [dealTypesList, setDealTypesList] = useState([]);
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState(
     () => localStorage.getItem('leads_view') || 'list'
@@ -14,6 +16,9 @@ export function useSalesLeads() {
   const [sheetOpen, setSheetOpen] = useState(false);
 
   useEffect(() => { fetchLeads(); }, []);
+  useEffect(() => {
+    dealTypesApi.getAll().then(r => setDealTypesList(Array.isArray(r.data) ? r.data : [])).catch(() => {});
+  }, []);
 
   const fetchLeads = async () => {
     try {
@@ -25,6 +30,14 @@ export function useSalesLeads() {
       setLoading(false);
     }
   };
+
+  // Deal-type options = seeded master ∪ any values already on leads (so nothing hides).
+  const dealOptions = useMemo(() => {
+    const set = new Set();
+    dealTypesList.forEach(d => set.add(d.name || d));
+    leads.forEach(l => { if ((l.deal_type || '').trim()) set.add(l.deal_type.trim()); });
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [dealTypesList, leads]);
 
   const switchView = (v) => {
     setViewMode(v);
@@ -57,13 +70,15 @@ export function useSalesLeads() {
       stageFilter === 'all'    ? true :
       stageFilter === 'active' ? !['won', 'lost'].includes(l.stage) :
       l.stage === stageFilter;
-    return matchSearch && matchStage;
+    const matchDeal = dealFilter === 'all' || (l.deal_type || '').trim() === dealFilter;
+    return matchSearch && matchStage && matchDeal;
   });
 
   return {
     leads, filtered, counts, activeCount, today,
     search, setSearch,
     stageFilter, setStageFilter,
+    dealFilter, setDealFilter, dealOptions,
     loading,
     viewMode, switchView,
     selectedLead, sheetOpen,

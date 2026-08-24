@@ -137,11 +137,11 @@ export default function SchoolProfile() {
     setDetailContact(v);
   };
 
-  const logContactCall = async (outcome, content) => {
+  const logContactCall = async (outcome, content, deal_type = '') => {
     if (!detailContact) return;
     try {
-      await contactsApi.logCall(detailContact.contact_id, { outcome, content });
-      toast.success('Call logged');
+      await contactsApi.logCall(detailContact.contact_id, { outcome, content, deal_type });
+      toast.success(deal_type ? 'Call logged · deal linked' : 'Call logged');
       await loadContactDetail(detailContact.contact_id);
       sp.reload();                             // refresh the CALLS metric + "Never contacted" badge
     } catch { toast.error('Failed to log call'); }

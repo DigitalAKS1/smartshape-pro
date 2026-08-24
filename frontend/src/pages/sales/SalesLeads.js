@@ -22,6 +22,7 @@ export default function SalesLeads() {
     leads, filtered, counts, activeCount, today,
     search, setSearch,
     stageFilter, setStageFilter,
+    dealFilter, setDealFilter, dealOptions,
     loading,
     viewMode, switchView,
     selectedLead, sheetOpen,
@@ -57,6 +58,22 @@ export default function SalesLeads() {
               : <AlignJustify className={`h-4 w-4 ${tMuted}`} />}
           </button>
         </div>
+
+        {/* Deal Type filter */}
+        {dealOptions.length > 0 && (
+          <div className="flex items-center gap-2 mb-3">
+            <span className={`text-[11px] font-semibold ${tMuted} flex-shrink-0`}>Deal</span>
+            <select value={dealFilter} onChange={e => setDealFilter(e.target.value)}
+              className={`h-9 flex-1 px-2.5 text-sm rounded-xl border bg-[var(--bg-card)] border-[var(--border-color)] ${tPri}`}
+              data-testid="sales-deal-filter">
+              <option value="all">All deal types</option>
+              {dealOptions.map(d => <option key={d} value={d}>{d}</option>)}
+            </select>
+            {dealFilter !== 'all' && (
+              <button onClick={() => setDealFilter('all')} className={`text-[11px] ${tMuted} underline flex-shrink-0`}>Clear</button>
+            )}
+          </div>
+        )}
 
         {/* Stage filter pills */}
         <div className="flex gap-1.5 overflow-x-auto pb-2 no-scrollbar mb-4">

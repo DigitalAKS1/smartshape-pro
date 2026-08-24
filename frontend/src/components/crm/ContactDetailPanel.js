@@ -4,6 +4,7 @@ import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Phone, PhoneCall, X, Clock, CheckCircle2, BookOpen } from 'lucide-react';
 import { startCall } from '../../lib/callBus';
+import { dealTypes as dealTypesApi } from '../../lib/api';
 import ShareBrochureDialog from './ShareBrochureDialog';
 
 /** Trigger a Bonvoice click-to-call and open the live call widget. Rings the rep's
@@ -47,6 +48,8 @@ export default function ContactDetailPanel({
   const [tab, setTab] = useState('call');
   const [outcome, setOutcome] = useState('connected');
   const [notes, setNotes] = useState('');
+  const [dealType, setDealType] = useState('');
+  const [dealTypesList, setDealTypesList] = useState([]);
   const [fuForm, setFuForm] = useState({ followup_date: '', followup_time: '', followup_type: 'call', notes: '' });
   const [brochureOpen, setBrochureOpen] = useState(false);
 
@@ -54,15 +57,20 @@ export default function ContactDetailPanel({
     setTab('call');
     setOutcome('connected');
     setNotes('');
+    setDealType(detailContact?.deal_type || '');
     setFuForm({ followup_date: '', followup_time: '', followup_type: 'call', notes: '' });
-  }, [detailContact?.contact_id]);
+  }, [detailContact?.contact_id]); // eslint-disable-line
+
+  useEffect(() => {
+    dealTypesApi.getAll().then(r => setDealTypesList(Array.isArray(r.data) ? r.data : [])).catch(() => {});
+  }, []);
 
   if (!detailContact) return null;
   const d = new Date();
   const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   const pending = contactFollowups.filter(f => f.status === 'pending');
 
-  const submitCall = async () => { await logContactCall(outcome, notes); setNotes(''); };
+  const submitCall = async () => { await logContactCall(outcome, notes, dealType); setNotes(''); };
   const submitFu = async () => {
     await addContactFollowup(fuForm);
     setFuForm({ followup_date: '', followup_time: '', followup_type: 'call', notes: '' });
@@ -116,6 +124,12 @@ export default function ContactDetailPanel({
               <select value={outcome} onChange={e => setOutcome(e.target.value)}
                 className="h-10 w-full px-2 rounded text-sm border border-[var(--border-color)] bg-transparent mb-2">
                 {CALL_OUTCOMES.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+              <select value={dealType} onChange={e => setDealType(e.target.value)}
+                className="h-10 w-full px-2 rounded text-sm border border-[var(--border-color)] bg-transparent mb-2"
+                data-testid="call-deal-type">
+                <option value="">Link a deal type (optional)…</option>
+                {dealTypesList.map(d => <option key={d.deal_type_id || d.name} value={d.name}>{d.name}</option>)}
               </select>
               <Input value={notes} onChange={e => setNotes(e.target.value)} placeholder="What happened?" className="text-sm mb-2" />
               <Button onClick={submitCall} size="sm" className="w-full bg-[#e94560] hover:bg-[#f05c75] text-white">
