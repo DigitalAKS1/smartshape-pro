@@ -24,10 +24,11 @@ import ConvertContactDialog from '../../components/school/ConvertContactDialog';
 import EnrollDripDialog from '../../components/school/EnrollDripDialog';
 import SchoolPostOrderCard from '../../components/school/SchoolPostOrderCard';
 import SchoolActivitiesCard from '../../components/school/SchoolActivitiesCard';
+import SchoolEngagementTimeline from '../../components/school/SchoolEngagementTimeline';
 import ContactDetailPanel from '../../components/crm/ContactDetailPanel';
 import {
   SchoolSalesSection, SchoolMarketingSection,
-  SchoolVisitsSection, SchoolActivityFeed,
+  SchoolVisitsSection,
 } from '../../components/school/SchoolOrdersSection';
 
 // ── Design tokens ────────────────────────────────────────────────────────────
@@ -77,7 +78,7 @@ const TABS = [
   { id: 'sales',     label: 'Sales'     },
   { id: 'marketing', label: 'Marketing' },
   { id: 'visits',    label: 'Visits'    },
-  { id: 'feed',      label: 'Activity'  },
+  { id: 'feed',      label: 'Timeline'  },
 ];
 
 export default function SchoolProfile() {
@@ -187,6 +188,17 @@ export default function SchoolProfile() {
 
   const { school, leads, contacts, quotations, orders = [], invoices = [], visits, call_notes, meetings, dispatches, communications = [], metrics } = profile;
   const rv = (delay = '') => `transition-all duration-500 ease-out ${delay} ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-3'}`;
+
+  // Overview "Recent Activity" teaser now draws from the complete server-side
+  // engagement timeline (every channel) — falling back to the client feed.
+  const CH_DOT = { call: 'bg-blue-400', visit: 'bg-violet-400', meeting: 'bg-indigo-400',
+    quote: 'bg-emerald-400', order: 'bg-fuchsia-400', mail: 'bg-amber-400',
+    whatsapp: 'bg-green-400', email: 'bg-sky-400', drip: 'bg-cyan-400',
+    greeting: 'bg-pink-400', activity: 'bg-slate-400' };
+  const engagementTimeline = Array.isArray(profile.engagement_timeline) ? profile.engagement_timeline : [];
+  const recentActivity = engagementTimeline.length
+    ? engagementTimeline.map(e => ({ date: e.at, dot: CH_DOT[e.channel] || 'bg-slate-400', label: e.title, detail: e.detail }))
+    : sp.feedItems;
 
   // Open the Edit School modal in place, prefilled from the current school
   const openEditSchool = () => {
@@ -306,15 +318,15 @@ export default function SchoolProfile() {
               <div className={`lg:col-span-3 ${tk.card} border ${tk.border} rounded-2xl overflow-hidden`}>
                 <div className={`px-5 py-4 border-b ${tk.border} flex items-center justify-between`}>
                   <p className={`text-[10px] uppercase tracking-[0.18em] font-semibold ${tk.tm}`}>Recent Activity</p>
-                  {sp.feedItems.length > 6 && (
+                  {recentActivity.length > 6 && (
                     <button onClick={() => sp.setActiveTab('feed')}
                       className="text-[11px] text-[#e94560] hover:underline">
-                      All {sp.feedItems.length} →
+                      All {recentActivity.length} →
                     </button>
                   )}
                 </div>
                 <div className="px-5 py-5">
-                  {sp.feedItems.length === 0 ? (
+                  {recentActivity.length === 0 ? (
                     <div className="py-10 text-center">
                       <Activity className="h-8 w-8 mx-auto mb-2" style={{ color: '#d1d9e0' }} strokeWidth={1.2} />
                       <p className="text-sm italic" style={{ color: '#94a3b8' }}>No calls, visits or quotations yet</p>
@@ -323,7 +335,7 @@ export default function SchoolProfile() {
                     <div className="relative pl-6">
                       <div className={`absolute left-1.5 top-0 bottom-0 w-px ${isDark ? 'bg-[var(--border-color)]' : 'bg-[#e2e8f0]'}`} />
                       <div className="space-y-5">
-                        {sp.feedItems.slice(0, 6).map((item, i) => (
+                        {recentActivity.slice(0, 6).map((item, i) => (
                           <div key={i} className="relative">
                             <div className={`absolute -left-[22px] top-1 w-3 h-3 rounded-full border-2 ${isDark ? 'border-[var(--bg-card)]' : 'border-white'} ${item.dot}`} />
                             <p className={`text-sm font-medium ${tk.t1} leading-snug`}>{item.label}</p>
@@ -377,7 +389,9 @@ export default function SchoolProfile() {
           )}
 
           {sp.activeTab === 'feed' && (
-            <SchoolActivityFeed feedItems={sp.feedItems} tk={tk} />
+            <div className="sp-tab">
+              <SchoolEngagementTimeline timeline={profile.engagement_timeline} tk={tk} isDark={isDark} />
+            </div>
           )}
         </div>
       </div>

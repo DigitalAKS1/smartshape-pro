@@ -16,6 +16,7 @@ from rbac import (get_team, require_superadmin, require_module, has_module, has_
                   sees_all, can_read_crm)
 from audit_backup import snapshot_and_delete, preview_counts
 from cascade_delete import build_school_plan, build_contact_plan
+from services.engagement import normalize_timeline, fetch_events
 import crm_contact_calls as cc
 
 router = APIRouter()
@@ -2595,6 +2596,17 @@ async def get_school_profile(school_id: str, request: Request):
     total_invoiced = sum(i.get("total_amount", 0) or 0 for i in invoices)
     total_outstanding = max(0, round(total_invoiced - total_paid, 2))
 
+    # Unified engagement timeline (Phase 0) — every channel folded into one
+    # chronological stream. Built from the streams already fetched above (no new
+    # queries) plus any first-class ledger events future phases have recorded.
+    engagement_events = await fetch_events(
+        school_id=school_id, lead_ids=lead_ids, contact_ids=contact_ids, limit=300)
+    engagement_timeline = normalize_timeline(
+        call_notes=call_notes, visits=visits, meetings=meetings,
+        quotations=quotations, orders=orders, dispatches=dispatches,
+        communications=communications, activities=activities,
+        events=engagement_events, limit=300)
+
     return {
         "school": school,
         "leads": leads,
@@ -2610,6 +2622,7 @@ async def get_school_profile(school_id: str, request: Request):
         "fms_flows": fms_flows,
         "deal_types": deal_types_present,
         "activities": activities,
+        "engagement_timeline": engagement_timeline,
         "metrics": {
             "total_leads": len(leads),
             "active_leads": active_leads_count,
@@ -2625,6 +2638,7 @@ async def get_school_profile(school_id: str, request: Request):
             "total_invoiced": total_invoiced,
             "total_outstanding": total_outstanding,
             "total_communications": len(communications),
+            "total_engagement": len(engagement_timeline),
             "last_contacted": last_contacted,
             "days_since_last_contact": days_since,
         },
