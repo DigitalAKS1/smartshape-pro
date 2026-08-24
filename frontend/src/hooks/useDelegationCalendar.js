@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { delegation as delApi, fms as fmsApi, visitPlans as visitApi, tasks as tasksApi, followups as fuApi, training as trainingApi } from '../lib/api';
+import { delegation as delApi, fms as fmsApi, visitPlans as visitApi, tasks as tasksApi, followups as fuApi, training as trainingApi, activities as activitiesApi } from '../lib/api';
 import { toast } from 'sonner';
 
 /* ── date helpers (local, no deps) ─────────────────────────────────────── */
@@ -12,7 +12,7 @@ const endOfMonth   = (d) => new Date(d.getFullYear(), d.getMonth() + 1, 0);
 const startOfWeek  = (d) => { const x = new Date(d); x.setDate(x.getDate() - x.getDay()); return x; };
 const addDays      = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
 
-const ALL_SOURCES = ['delegation', 'fms', 'visit', 'task', 'followup', 'workshop', 'plan', 'reminder'];
+const ALL_SOURCES = ['delegation', 'fms', 'visit', 'task', 'followup', 'activity', 'workshop', 'plan', 'reminder'];
 
 // Calendar defaults to "mine only": org-wide Workshops and team-wide FMS are
 // hidden out of the box. The user's chip choices are remembered across reloads.
@@ -166,6 +166,8 @@ export function useDelegationCalendar() {
         case 'task:reschedule':     await tasksApi.update(id, { due_date: payload.date }); break;
         case 'followup:log_outcome':await fuApi.update(id, { status: 'done', outcome: payload.outcome || '' }); break;
         case 'followup:reschedule': await fuApi.update(id, { followup_date: payload.date }); break;
+        case 'activity:complete':   await activitiesApi.update(id, { status: 'done' }); break;
+        case 'activity:reschedule': await activitiesApi.update(id, { due_date: payload.date }); break;
         case 'workshop:set_status': await trainingApi.updateSession(id, { status: payload.status || 'completed' }); break;
         case 'plan:delete':         await delApi.planBlocks.delete(id); break;
         case 'event:cancel':        await delApi.events.delete(id); break;

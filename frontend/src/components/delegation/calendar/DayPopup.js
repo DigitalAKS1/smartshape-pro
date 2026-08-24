@@ -3,7 +3,7 @@ import { X, ChevronRight, ExternalLink } from 'lucide-react';
 
 const SOURCE_LABELS = {
   delegation: 'Task', fms: 'FMS', visit: 'Visit', task: 'CRM', followup: 'Call',
-  workshop: 'Workshop', plan: 'Block', reminder: 'Reminder', event: 'Event',
+  activity: 'Marketing', workshop: 'Workshop', plan: 'Block', reminder: 'Reminder', event: 'Event',
 };
 
 export default function DayPopup({ date, events = [], onOpen, onOpenDay, onClose, card, textPri, textSec, textMuted }) {

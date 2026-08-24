@@ -14,11 +14,11 @@ const PINK = '#e94560';
 const SKY = '#0ea5e9';
 const SOURCE_LABELS = {
   delegation: 'Tasks', fms: 'FMS', visit: 'Visits', task: 'CRM', followup: 'Calls',
-  workshop: 'Workshops', plan: 'My Plan', reminder: 'Reminders',
+  activity: 'Marketing', workshop: 'Workshops', plan: 'My Plan', reminder: 'Reminders',
 };
 const SOURCE_COLORS = {
   delegation: '#e94560', fms: '#8b5cf6', visit: '#06b6d4', task: '#f59e0b',
-  followup: '#10b981', workshop: '#6366f1', plan: '#64748b', reminder: '#f97316',
+  followup: '#10b981', activity: '#d946ef', workshop: '#6366f1', plan: '#64748b', reminder: '#f97316',
 };
 
 export default function DelegationCalendar({ onEventClick, card, textPri, textSec, textMuted, inputCls }) {

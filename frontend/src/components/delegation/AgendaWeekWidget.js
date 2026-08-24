@@ -5,7 +5,7 @@ import { CalendarDays, ChevronRight, RefreshCw } from 'lucide-react';
 
 const SOURCE_COLORS = {
   delegation: '#e94560', fms: '#8b5cf6', visit: '#06b6d4', task: '#f59e0b',
-  followup: '#10b981', workshop: '#6366f1', plan: '#64748b', reminder: '#f97316', event: '#0ea5e9',
+  followup: '#10b981', activity: '#d946ef', workshop: '#6366f1', plan: '#64748b', reminder: '#f97316', event: '#0ea5e9',
 };
 
 // Local (not UTC) ISO date — matches how due_dates are stored.

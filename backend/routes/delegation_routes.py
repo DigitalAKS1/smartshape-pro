@@ -1348,7 +1348,7 @@ async def delete_plan_block(block_id: str, request: Request):
 AGENDA_COLORS = {
     "delegation": "#e94560", "fms": "#8b5cf6", "visit": "#06b6d4",
     "task": "#f59e0b", "followup": "#10b981", "workshop": "#6366f1", "plan": "#64748b",
-    "event": "#0ea5e9", "reminder": "#f97316",
+    "event": "#0ea5e9", "reminder": "#f97316", "activity": "#d946ef",
 }
 
 
@@ -1525,6 +1525,35 @@ async def _agenda_followups(email, dfrom, dto):
     return out
 
 
+async def _agenda_activities(email, dfrom, dto):
+    """Planned CRM activities (Bulk Activity Planner + mail-run cadence follow-ups
+    + direct-mail QR call-backs) — the marketing/engagement touches that never
+    used to reach the calendar. Surfaces them on the same agenda the team runs."""
+    if not email:
+        return []
+    rows = await db.crm_activities.find(
+        {"assigned_to": email, "due_date": {"$gte": dfrom, "$lte": dto}}, {"_id": 0}
+    ).to_list(2000)
+    out = []
+    for r in rows:
+        done = r.get("status") in ("done", "completed")
+        acts = ["open"] if done else ["complete", "reschedule", "open"]
+        atype = (r.get("activity_type") or "").strip()
+        school = r.get("school_name", "")
+        title = r.get("title") or (f"{atype} · {school}".strip(" ·") if (atype or school) else "Planned activity")
+        link = f"/school-profile/{r['school_id']}" if r.get("school_id") else "/leads"
+        out.append(_ev(
+            "activity", (atype.lower() or "activity"), title, r["due_date"],
+            r.get("activity_id", ""), link,
+            start_time=(r.get("due_time") or None), status=r.get("status"),
+            priority=r.get("priority"), actions=acts,
+            meta={"school_id": r.get("school_id", ""), "school_name": school,
+                  "notes": r.get("notes", ""), "batch_id": r.get("batch_id", ""),
+                  "source": r.get("source", ""), "activity_type": atype},
+        ))
+    return out
+
+
 async def _agenda_workshops(dfrom, dto):
     # org-wide; platform zoom/meet/physical
     rows = await db.training_sessions.find(
@@ -1577,6 +1606,7 @@ async def get_agenda(request: Request):
     events += await _agenda_visits(s_email, from_, to_)
     events += await _agenda_crm_tasks(s_email, from_, to_)
     events += await _agenda_followups(s_email, from_, to_)
+    events += await _agenda_activities(s_email, from_, to_)
     events += await _agenda_workshops(from_, to_)
     events += await _agenda_events(s_emp, s_email, from_, to_)
     events += await _agenda_reminders(s_emp, s_email, from_, to_)
