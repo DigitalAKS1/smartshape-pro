@@ -183,9 +183,10 @@ export default function DripsTab({ tk, drips, setDrips }) {
   }
 
   const TRIGGERS = [
-    { k: 'lead_created',   l: 'Lead Created',    d: 'Auto-enroll every new lead' },
-    { k: 'quotation_sent', l: 'Quotation Sent',   d: 'Follow up after sending a quote' },
-    { k: 'manual',         l: 'Manual Only',      d: 'Enroll contacts manually' },
+    { k: 'lead_created',    l: 'Lead Created',     d: 'Auto-enroll every new lead' },
+    { k: 'quotation_sent',  l: 'Quotation Sent',   d: 'Follow up after sending a quote' },
+    { k: 'brochure_opened', l: 'Brochure Opened',  d: 'Start when a prospect opens a tracked brochure' },
+    { k: 'manual',          l: 'Manual Only',      d: 'Enroll contacts manually' },
   ];
 
   function findAttach(id) { return attachments.find(a => a.attachment_id === id); }

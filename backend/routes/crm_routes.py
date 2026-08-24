@@ -91,6 +91,55 @@ async def _auto_enroll_lead(lead_doc: dict):
         _log.error(f"_auto_enroll_lead error: {exc}")
 
 
+async def _auto_enroll_on_trigger(lead_id: str, trigger: str) -> int:
+    """Enroll a lead into every active sequence wired to `trigger` — the branching
+    primitive (e.g. 'brochure_opened' → start a nurture flow). Mirrors
+    _auto_enroll_lead's matching + dedup; returns how many enrolments were made."""
+    try:
+        if not lead_id:
+            return 0
+        lead_doc = await db.leads.find_one({"lead_id": lead_id}, {"_id": 0})
+        if not lead_doc:
+            return 0
+        lead_des = (lead_doc.get("designation") or "").strip().lower()
+        role_name = ""
+        if lead_doc.get("contact_role_id"):
+            role = await db.contact_roles.find_one(
+                {"role_id": lead_doc["contact_role_id"]}, {"_id": 0, "name": 1})
+            if role:
+                role_name = role.get("name", "").lower()
+        seqs = await db.drip_sequences.find(
+            {"trigger": trigger, "is_active": True}, {"_id": 0}).to_list(50)
+        now = datetime.now(timezone.utc)
+        enrolled = 0
+        for seq in seqs:
+            filt = (seq.get("filter_designation") or "").strip().lower()
+            if filt and lead_des != filt and role_name != filt:
+                continue
+            if not seq.get("steps"):
+                continue
+            existing = await db.drip_enrollments.find_one(
+                {"sequence_id": seq["sequence_id"], "lead_id": lead_id, "status": "active"})
+            if existing:
+                continue
+            first_delay = seq["steps"][0].get("delay_days", 0)
+            await db.drip_enrollments.insert_one({
+                "enrollment_id": f"denr_{uuid.uuid4().hex[:10]}",
+                "sequence_id": seq["sequence_id"], "lead_id": lead_id,
+                "current_step": 0, "status": "active",
+                "enrolled_at": now.isoformat(),
+                "next_step_at": (now + timedelta(days=first_delay)).isoformat(),
+                "last_step_at": None, "completed_at": None,
+                "enrolled_by": f"trigger:{trigger}",
+            })
+            enrolled += 1
+        return enrolled
+    except Exception as exc:
+        import logging as _log
+        _log.error(f"_auto_enroll_on_trigger error: {exc}")
+        return 0
+
+
 async def log_activity(user_email: str, action: str, entity_type: str, entity_id: str, details: str = ""):
     await db.activity_logs.insert_one({
         "log_id": f"act_{uuid.uuid4().hex[:8]}",
@@ -1499,6 +1548,11 @@ async def open_brochure(token: str):
                 {"lead_id": lid},
                 {"$set": {"lead_type": "hot", "brochure_opened_at": now_iso,
                           "last_activity_date": now_iso}})
+            # Branching: a brochure open can auto-start a nurture sequence.
+            try:
+                await _auto_enroll_on_trigger(lid, "brochure_opened")
+            except Exception:
+                pass
         owner_to, owner_name = "", ""
         if lid:
             lead = await db.leads.find_one({"lead_id": lid}, {"_id": 0, "assigned_to": 1, "assigned_name": 1})
