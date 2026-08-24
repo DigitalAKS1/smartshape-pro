@@ -1587,6 +1587,74 @@ async def challan_due_loop():
             await asyncio.sleep(3600)
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# JOB 13 — Keep-in-touch: re-touch silent accounts (Engagement OS, Phase 4)
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def run_silence_retouch(force=False):
+    """Queue a keep-in-touch call task for each active lead that has gone silent
+    for N+ days, so no account quietly goes cold. Idempotent per lead (never
+    stacks) and capped per run. The task lands on the owner's calendar + daily
+    Marketing-Touches queue (Phase 1)."""
+    cfg = await db.settings.find_one({"type": "keepintouch"}, {"_id": 0}) or {}
+    if not force and not cfg.get("enabled"):
+        return {"created": 0, "skipped": "disabled"}
+    days = max(7, int(cfg.get("silence_days", 60) or 60))
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+    cutoff = (now - timedelta(days=days)).isoformat()
+    today = now.strftime("%Y-%m-%d")
+
+    created = 0
+    cur = db.leads.find(
+        {"stage": {"$in": list(OPEN_STAGES)}},
+        {"_id": 0, "lead_id": 1, "school_id": 1, "company_name": 1,
+         "assigned_to": 1, "assigned_name": 1, "last_activity_date": 1, "created_at": 1})
+    async for lead in cur:
+        if created >= 300:
+            break
+        owner = lead.get("assigned_to")
+        if not owner:
+            continue  # nobody to action it → skip rather than orphan
+        la = lead.get("last_activity_date") or lead.get("created_at") or ""
+        if not la or la >= cutoff:
+            continue  # touched recently
+        lid = lead.get("lead_id")
+        exists = await db.crm_activities.find_one(
+            {"lead_id": lid, "source": "keepintouch", "status": "pending"}, {"_id": 0, "activity_id": 1})
+        if exists:
+            continue  # already has an open keep-in-touch
+        await db.crm_activities.insert_one({
+            "activity_id": f"act_{uuid.uuid4().hex[:10]}",
+            "lead_id": lid, "school_id": lead.get("school_id", ""),
+            "school_name": lead.get("company_name", ""),
+            "activity_type": "Call", "channel": "call", "priority": "medium",
+            "title": f"Keep in touch — no contact in {days}+ days",
+            "notes": "Auto keep-in-touch: this account has gone quiet. A quick check-in keeps it warm.",
+            "due_date": today, "assigned_to": owner, "assigned_name": lead.get("assigned_name", ""),
+            "status": "pending", "source": "keepintouch",
+            "created_by": "system", "created_at": now_iso, "done_at": None})
+        created += 1
+    log.info(f"[keepintouch] queued {created} re-touch tasks (silence >= {days}d)")
+    return {"created": created, "silence_days": days}
+
+
+async def keepintouch_loop():
+    log.info("[scheduler] keep-in-touch loop started")
+    last_fired = None
+    while True:
+        try:
+            cfg = await db.settings.find_one({"type": "keepintouch"}, {"_id": 0}) or {}
+            now_ist = datetime.now(IST)
+            today = now_ist.date().isoformat()
+            if cfg.get("enabled") and now_ist.strftime("%H:%M") == cfg.get("send_time", "09:30") and last_fired != today:
+                last_fired = today
+                await run_silence_retouch()
+        except Exception as exc:
+            log.error(f"[keepintouch loop] {exc}")
+        await asyncio.sleep(45)
+
+
 async def start_scheduler():
     """Start all background automation loops. Call once from FastAPI startup."""
     asyncio.create_task(email_sender_loop())
@@ -1601,5 +1669,6 @@ async def start_scheduler():
     asyncio.create_task(daily_orders_report_loop())
     asyncio.create_task(challan_due_loop())
     asyncio.create_task(webinar_lifecycle_loop())
+    asyncio.create_task(keepintouch_loop())
     log.info("[scheduler] cert loop running")
-    log.info("[scheduler] all 12 background jobs running")
+    log.info("[scheduler] all 13 background jobs running")

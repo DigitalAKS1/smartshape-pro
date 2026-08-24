@@ -155,6 +155,12 @@ export const dailyDigest = {
   runNow: () => API.post('/admin/daily-digest/run'),
 };
 
+export const keepInTouch = {
+  get:    () => API.get('/admin/keepintouch-settings'),
+  save:   (data) => API.put('/admin/keepintouch-settings', data),
+  runNow: () => API.post('/admin/keepintouch/run'),
+};
+
 // Daily evening "Orders Received" report (in-app notification + WhatsApp)
 export const ordersReport = {
   get:    () => API.get('/admin/daily-orders-report-settings'),
