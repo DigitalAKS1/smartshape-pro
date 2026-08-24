@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { engagement } from '../../lib/api';
-import { Loader2, TrendingUp, Flame, Send, Trophy, BookOpen, Repeat, AlertTriangle } from 'lucide-react';
+import { Loader2, TrendingUp, Flame, Send, Trophy, BookOpen, Repeat, AlertTriangle, Award, Clock, Activity } from 'lucide-react';
 
 const STAGE_META = {
   new: { label: 'New', color: '#64748b' },
@@ -44,14 +44,16 @@ export default function EngagementDashboardTab() {
   const nav = useNavigate();
   const [days, setDays] = useState(30);
   const [data, setData] = useState(null);
+  const [attr, setAttr] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let live = true;
     setLoading(true);
-    engagement.dashboard(days)
-      .then(r => { if (live) setData(r.data); })
-      .catch(() => { if (live) setData(null); })
+    Promise.all([
+      engagement.dashboard(days).then(r => r.data).catch(() => null),
+      engagement.attribution(Math.max(days, 90)).then(r => r.data).catch(() => null),
+    ]).then(([d, a]) => { if (live) { setData(d); setAttr(a); } })
       .finally(() => { if (live) setLoading(false); });
     return () => { live = false; };
   }, [days]);
@@ -145,6 +147,53 @@ export default function EngagementDashboardTab() {
         <Kpi icon={BookOpen} label="Brochure open rate" value={`${data.brochures.open_rate}%`} sub={`${data.brochures.opened} opened`} color="#22c55e" />
         <Kpi icon={Repeat} label="Active sequences" value={data.sequences_active} color="#06b6d4" />
       </div>
+
+      {/* What wins deals — close attribution */}
+      {attr && (
+        <div className="bg-[var(--bg-card)] border border-[var(--border-color)] rounded-xl p-5">
+          <div className="flex items-center gap-2 mb-3">
+            <Award className="h-4 w-4 text-emerald-500" />
+            <p className="text-[10px] uppercase tracking-[0.18em] font-semibold text-[var(--text-muted)]">
+              What wins deals · last {attr.days}d
+            </p>
+          </div>
+          {attr.won_count === 0 ? (
+            <p className="text-sm italic text-[var(--text-muted)] py-4 text-center">No deals won in this window yet.</p>
+          ) : (
+            <>
+              <div className="grid grid-cols-3 gap-3 mb-4">
+                <div className="text-center">
+                  <p className="text-2xl font-bold font-mono text-[var(--text-primary)] leading-none">{attr.won_count}</p>
+                  <p className="text-[10px] uppercase tracking-wider text-[var(--text-muted)] mt-1 flex items-center justify-center gap-1"><Trophy className="h-3 w-3" /> won</p>
+                </div>
+                <div className="text-center">
+                  <p className="text-2xl font-bold font-mono text-[var(--text-primary)] leading-none">{attr.avg_touches}</p>
+                  <p className="text-[10px] uppercase tracking-wider text-[var(--text-muted)] mt-1 flex items-center justify-center gap-1"><Activity className="h-3 w-3" /> avg touches</p>
+                </div>
+                <div className="text-center">
+                  <p className="text-2xl font-bold font-mono text-[var(--text-primary)] leading-none">{attr.avg_days_to_close ?? '—'}</p>
+                  <p className="text-[10px] uppercase tracking-wider text-[var(--text-muted)] mt-1 flex items-center justify-center gap-1"><Clock className="h-3 w-3" /> days to close</p>
+                </div>
+              </div>
+              <p className="text-[11px] text-[var(--text-muted)] mb-2">Share of won deals that had each touch:</p>
+              <div className="space-y-2">
+                {attr.signals.map(s => (
+                  <div key={s.key} className="flex items-center gap-3">
+                    <span className="w-28 text-xs font-medium text-[var(--text-secondary)] flex-shrink-0">{s.label}</span>
+                    <div className="flex-1 h-5 rounded bg-[var(--bg-primary)] overflow-hidden">
+                      <div className="h-full rounded flex items-center px-2 min-w-[28px] transition-all"
+                        style={{ width: `${Math.max(8, s.pct)}%`, background: '#10b981' }}>
+                        <span className="text-[10px] font-bold text-white font-mono">{s.pct}%</span>
+                      </div>
+                    </div>
+                    <span className="w-14 text-right text-[11px] text-[var(--text-muted)] font-mono flex-shrink-0">{s.count}/{attr.won_count}</span>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      )}
 
       {/* Stuck deals */}
       <div className="bg-[var(--bg-card)] border border-[var(--border-color)] rounded-xl p-5">

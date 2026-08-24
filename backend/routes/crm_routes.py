@@ -1620,6 +1620,78 @@ async def engagement_dashboard(request: Request):
     }
 
 
+@router.get("/engagement/attribution")
+async def engagement_attribution(request: Request):
+    """Close attribution — of the deals won in the window, what share had each
+    kind of touch (call / visit / sequence / meeting / brochure open), plus the
+    average touches and days to close. Answers 'what actually wins deals'."""
+    user = await get_current_user(request)
+    try:
+        days = max(7, min(730, int(request.query_params.get("days", 90))))
+    except (TypeError, ValueError):
+        days = 90
+    now = datetime.now(timezone.utc)
+    since = (now - timedelta(days=days)).isoformat()
+
+    q = {"stage": "won"}
+    if get_team(user) != "admin":
+        q["assigned_to"] = user.get("email", "")
+    won = await db.leads.find(
+        q, {"_id": 0, "lead_id": 1, "school_id": 1, "created_at": 1, "updated_at": 1,
+            "pipeline_history": 1, "expected_value": 1},
+    ).to_list(3000)
+
+    picked, total_days, dc_n = [], 0, 0
+    for l in won:
+        won_at = None
+        for h in (l.get("pipeline_history") or []):
+            if h.get("to_stage") == "won" and h.get("at") and (not won_at or h["at"] > won_at):
+                won_at = h["at"]
+        won_at = won_at or l.get("updated_at") or l.get("created_at")
+        if not won_at or won_at < since:
+            continue
+        picked.append(l)
+        ca = l.get("created_at")
+        if ca and won_at:
+            total_days += _age_days(ca, won_at[:10])
+            dc_n += 1
+
+    W = len(picked)
+    ids = [l["lead_id"] for l in picked]
+
+    async def _leads_with(coll, extra=None):
+        if not ids:
+            return 0
+        match = {"lead_id": {"$in": ids}}
+        if extra:
+            match.update(extra)
+        vals = await coll.distinct("lead_id", match)
+        return len([v for v in vals if v])
+
+    calls = await _leads_with(db.call_notes)
+    visits = await _leads_with(db.visit_plans)
+    drips = await _leads_with(db.drip_enrollments)
+    meetings = await _leads_with(db.followups, {"followup_type": "meeting"})
+    broch = await _leads_with(db.brochure_shares, {"status": "opened"})
+    touches = await db.engagement_events.count_documents({"lead_id": {"$in": ids}}) if ids else 0
+
+    def _sig(key, label, c):
+        return {"key": key, "label": label, "count": c, "pct": round(c / W * 100) if W else 0}
+
+    signals = [
+        _sig("call", "Called", calls), _sig("visit", "Visited on-site", visits),
+        _sig("meeting", "Met / demoed", meetings), _sig("drip", "In a sequence", drips),
+        _sig("brochure", "Opened a brochure", broch),
+    ]
+    signals.sort(key=lambda s: s["count"], reverse=True)
+    return {
+        "days": days, "won_count": W,
+        "avg_days_to_close": round(total_days / dc_n) if dc_n else None,
+        "avg_touches": round(touches / W, 1) if W else 0,
+        "signals": signals,
+    }
+
+
 # ── Activity Types (editable master, powers the Bulk Activity Planner) ────────
 DEFAULT_ACTIVITY_TYPES = ["Newsletter", "Call", "Visit", "WhatsApp", "Sample", "Meeting"]
 
