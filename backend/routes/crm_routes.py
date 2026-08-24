@@ -1643,61 +1643,61 @@ async def engagement_dashboard(request: Request):
         my_lead_ids = [l["lead_id"] async for l in
                        db.leads.find({"assigned_to": scope_owner}, {"_id": 0, "lead_id": 1})]
 
-    # 1) Pipeline funnel — count + expected value per stage.
-    agg = await db.leads.aggregate([
-        {"$match": lead_q},
-        {"$group": {"_id": "$stage", "count": {"$sum": 1},
-                    "value": {"$sum": {"$ifNull": ["$expected_value", 0]}}}},
-    ]).to_list(None)
+    # Assemble every query spec, then run the independent reads concurrently
+    # (funnel, channels, brochure counts, sequences, hot signals, stuck deals).
+    ev_match = {"at": {"$gte": since}}
+    b_match = {"created_at": {"$gte": since}}
+    seq_q = {"status": "active"}
+    if my_lead_ids is not None:
+        _in = {"$in": my_lead_ids}
+        ev_match["lead_id"] = _in
+        b_match["lead_id"] = _in
+        seq_q["lead_id"] = _in
+    hot_q = {"source": "brochure_open", "created_at": {"$gte": since}}
+    if scope_owner is not None:
+        hot_q["assigned_to"] = scope_owner
+
+    agg, ev_agg, shared, opened, sequences_active, hot_signals, stuck_rows = await asyncio.gather(
+        db.leads.aggregate([
+            {"$match": lead_q},
+            {"$group": {"_id": "$stage", "count": {"$sum": 1},
+                        "value": {"$sum": {"$ifNull": ["$expected_value", 0]}}}},
+        ]).to_list(None),
+        db.engagement_events.aggregate([
+            {"$match": ev_match},
+            {"$group": {"_id": {"channel": "$channel", "direction": "$direction"}, "n": {"$sum": 1}}},
+        ]).to_list(None),
+        db.brochure_shares.count_documents(b_match),
+        db.brochure_shares.count_documents({**b_match, "status": "opened"}),
+        db.drip_enrollments.count_documents(seq_q),
+        db.crm_activities.count_documents(hot_q),
+        db.leads.find(
+            {**lead_q, "stage": {"$in": ["quoted", "negotiation"]},
+             "last_activity_date": {"$lt": stuck_cut}},
+            {"_id": 0, "lead_id": 1, "company_name": 1, "school_id": 1, "stage": 1,
+             "expected_value": 1, "assigned_name": 1, "last_activity_date": 1},
+        ).sort("last_activity_date", 1).to_list(25),
+    )
+
+    # Pipeline funnel — count + expected value per stage.
     by_stage = {a["_id"]: a for a in agg}
     funnel = [{"stage": s, "count": by_stage.get(s, {}).get("count", 0),
                "value": round(by_stage.get(s, {}).get("value", 0) or 0, 2)} for s in _FUNNEL_STAGES]
 
-    # 2) Cross-channel touches from the ledger (period).
-    ev_match = {"at": {"$gte": since}}
-    if my_lead_ids is not None:
-        ev_match["lead_id"] = {"$in": my_lead_ids}
-    ev_agg = await db.engagement_events.aggregate([
-        {"$match": ev_match},
-        {"$group": {"_id": {"channel": "$channel", "direction": "$direction"}, "n": {"$sum": 1}}},
-    ]).to_list(None)
+    # Cross-channel touches from the ledger.
     channels = {}
     touches_total = 0
     for row in ev_agg:
         ch = row["_id"].get("channel") or "other"
         direction = row["_id"].get("direction") or "out"
-        n = row["n"]
-        touches_total += n
+        touches_total += row["n"]
         c = channels.setdefault(ch, {"channel": ch, "out": 0, "in": 0})
-        c["in" if direction == "in" else "out"] += n
+        c["in" if direction == "in" else "out"] += row["n"]
     channels = sorted(channels.values(), key=lambda c: c["out"] + c["in"], reverse=True)
 
-    # 3) Brochure performance (period).
-    b_match = {"created_at": {"$gte": since}}
-    if my_lead_ids is not None:
-        b_match["lead_id"] = {"$in": my_lead_ids}
-    shared = await db.brochure_shares.count_documents(b_match)
-    opened = await db.brochure_shares.count_documents({**b_match, "status": "opened"})
     brochures = {"shared": shared, "opened": opened,
                  "open_rate": round(opened / shared * 100, 1) if shared else 0}
 
-    # 4) Active sequences + hot signals raised in period.
-    seq_q = {"status": "active"}
-    if my_lead_ids is not None:
-        seq_q["lead_id"] = {"$in": my_lead_ids}
-    sequences_active = await db.drip_enrollments.count_documents(seq_q)
-    hot_q = {"source": "brochure_open", "created_at": {"$gte": since}}
-    if scope_owner is not None:
-        hot_q["assigned_to"] = scope_owner
-    hot_signals = await db.crm_activities.count_documents(hot_q)
-
-    # 5) Stuck deals — quoted / negotiating but gone quiet ≥ 14 days.
-    stuck_rows = await db.leads.find(
-        {**lead_q, "stage": {"$in": ["quoted", "negotiation"]},
-         "last_activity_date": {"$lt": stuck_cut}},
-        {"_id": 0, "lead_id": 1, "company_name": 1, "school_id": 1, "stage": 1,
-         "expected_value": 1, "assigned_name": 1, "last_activity_date": 1},
-    ).sort("last_activity_date", 1).to_list(25)
     today = now.strftime("%Y-%m-%d")
     stuck = [{**r, "days_silent": _age_days(r.get("last_activity_date"), today)} for r in stuck_rows]
 
@@ -1764,12 +1764,15 @@ async def engagement_attribution(request: Request):
         vals = await coll.distinct("lead_id", match)
         return len([v for v in vals if v])
 
-    calls = await _leads_with(db.call_notes)
-    visits = await _leads_with(db.visit_plans)
-    drips = await _leads_with(db.drip_enrollments)
-    meetings = await _leads_with(db.followups, {"followup_type": "meeting"})
-    broch = await _leads_with(db.brochure_shares, {"status": "opened"})
-    touches = await db.engagement_events.count_documents({"lead_id": {"$in": ids}}) if ids else 0
+    # All six presence/count reads are independent → run them concurrently.
+    calls, visits, drips, meetings, broch, touches = await asyncio.gather(
+        _leads_with(db.call_notes),
+        _leads_with(db.visit_plans),
+        _leads_with(db.drip_enrollments),
+        _leads_with(db.followups, {"followup_type": "meeting"}),
+        _leads_with(db.brochure_shares, {"status": "opened"}),
+        db.engagement_events.count_documents({"lead_id": {"$in": ids}}),
+    )
 
     def _sig(key, label, c):
         return {"key": key, "label": label, "count": c, "pct": round(c / W * 100) if W else 0}
