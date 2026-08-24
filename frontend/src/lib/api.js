@@ -345,6 +345,10 @@ export const brochures = {
   listShares: (params = {}) => API.get('/brochures/shares', { params }),
 };
 
+export const engagement = {
+  dashboard: (days = 30) => API.get('/engagement/dashboard', { params: { days } }),
+};
+
 export const mailAreas = {
   getAll: () => API.get('/mail-areas'),
   create: (data) => API.post('/mail-areas', data),

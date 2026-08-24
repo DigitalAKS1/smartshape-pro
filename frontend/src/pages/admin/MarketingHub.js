@@ -10,7 +10,7 @@ import { Button } from '../../components/ui/button';
 import { toast } from 'sonner';
 import {
   BarChart2, Megaphone, FileText, Gift, Zap, PieChart, Mail,
-  Wifi, QrCode, RefreshCw, Loader2, Smartphone as PhoneIcon,
+  Wifi, QrCode, RefreshCw, Loader2, Smartphone as PhoneIcon, Target,
 } from 'lucide-react';
 
 import { useTk, mapCampaign, mapRule, mapSeq } from '../../lib/marketingUtils';
@@ -20,6 +20,7 @@ import TemplatesTab  from '../../components/marketing/TemplatesTab';
 import GreetingsTab  from '../../components/marketing/GreetingsTab';
 import DripsTab      from '../../components/marketing/DripsTab';
 import AnalyticsTab  from '../../components/marketing/AnalyticsTab';
+import EngagementDashboardTab from '../../components/marketing/EngagementDashboardTab';
 import SetupTab      from '../../components/marketing/SetupTab';
 import EmailHubTab   from '../../components/marketing/EmailHubTab';
 
@@ -30,6 +31,7 @@ const TABS = [
   { key: 'greetings',  label: 'Greetings',  Icon: Gift },
   { key: 'drips',      label: 'Drip',       Icon: Zap },
   { key: 'analytics',  label: 'Analytics',  Icon: PieChart },
+  { key: 'engagement', label: 'Engagement', Icon: Target },
   { key: 'setup',      label: 'WhatsApp',   Icon: PhoneIcon },
   { key: 'email',      label: 'Email',      Icon: Mail },
 ];
@@ -198,6 +200,7 @@ export default function MarketingHub() {
           {tab === 'greetings' && <GreetingsTab  tk={tk} greetings={greetings} setGreetings={setGreetings} />}
           {tab === 'drips'     && <DripsTab      tk={tk} drips={drips} setDrips={setDrips} />}
           {tab === 'analytics' && <AnalyticsTab  tk={tk} analytics={analytics} campaigns={campaigns} />}
+          {tab === 'engagement' && <EngagementDashboardTab />}
           {tab === 'setup'     && <SetupTab      tk={tk} waConnected={waConnected} setWaConnected={setWaConnected} evolutionState={evolutionState} openQrDialog={openQrDialog} />}
           {tab === 'email'     && <EmailHubTab   tk={tk} />}
         </div>
