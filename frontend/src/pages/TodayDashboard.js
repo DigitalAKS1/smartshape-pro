@@ -1,7 +1,7 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { Phone, CheckCircle2, MapPin, AlertTriangle, Loader2, RefreshCw, ClipboardList, ChevronRight, ListChecks, CalendarDays } from 'lucide-react';
+import { Phone, CheckCircle2, MapPin, AlertTriangle, Loader2, RefreshCw, ClipboardList, ChevronRight, ListChecks, CalendarDays, Megaphone, Check } from 'lucide-react';
 import AgendaWeekWidget from '../components/delegation/AgendaWeekWidget';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -19,6 +19,27 @@ function StatChip({ count, label, color, testid }) {
     <div className={`border rounded-xl px-3 py-2.5 text-center ${color}`} data-testid={testid}>
       <p className="text-2xl font-bold font-mono">{count}</p>
       <p className="text-[10px] uppercase tracking-wider">{label}</p>
+    </div>
+  );
+}
+
+function TouchCard({ card, overdue, onView, onDone }) {
+  return (
+    <div className={`border rounded-xl p-3 flex items-center gap-3 bg-[var(--bg-card)] ${overdue ? 'border-red-500/30' : 'border-[var(--border-color)]'}`}>
+      <span className="w-9 h-9 rounded-lg bg-fuchsia-400/10 flex items-center justify-center flex-shrink-0">
+        <Megaphone className="h-4 w-4 text-fuchsia-400" />
+      </span>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-semibold text-[var(--text-primary)] truncate">{card.title}</p>
+        <p className="text-xs text-[var(--text-muted)] truncate">
+          {card.school_name || '—'}{card.activity_type ? ` · ${card.activity_type}` : ''}
+          {overdue && <span className="text-red-400 font-medium"> · due {card.due_date}</span>}
+        </p>
+      </div>
+      <button onClick={onView} className="text-[11px] px-2.5 py-1.5 rounded-lg border border-[var(--border-color)] text-[var(--text-secondary)] flex-shrink-0 active:opacity-70">View</button>
+      <button onClick={onDone} className="text-[11px] px-2.5 py-1.5 rounded-lg bg-green-600 text-white flex-shrink-0 flex items-center gap-1 active:opacity-70">
+        <Check className="h-3 w-3" /> Done
+      </button>
     </div>
   );
 }
@@ -45,7 +66,7 @@ export default function TodayDashboard() {
     data, loading, refreshing, delgData,
     markDoneCard, markNote, markFollowup, markSaving,
     waOpen, waCtx,
-    load, openMarkDone, saveMarkDone, openWa,
+    load, openMarkDone, saveMarkDone, openWa, markTouchDone,
     setMarkDoneCard, setMarkNote, setMarkFollowup, setWaOpen,
   } = useTodayDashboard();
 
@@ -60,8 +81,9 @@ export default function TodayDashboard() {
   }
   if (!data) return <AppShell><div className="p-6 text-[var(--text-muted)]">No data</div></AppShell>;
 
-  const { overdue = [], calls_today = [], visits_today = [], counts, today } = data;
+  const { overdue = [], calls_today = [], visits_today = [], touches_today = [], touches_overdue = [], counts, today } = data;
   const total = counts.total || 0;
+  const goSchool = (c) => nav(c.school_id ? `/school-profile/${c.school_id}` : (isSales ? '/sales/leads' : '/leads'));
 
   return (
     <AppShell>
@@ -198,6 +220,22 @@ export default function TodayDashboard() {
                 showSwipeHint={overdue.length === 0 && calls_today.length === 0 && i === 0}
                 onView={() => nav(isSales ? '/sales/visits' : '/visit-planning')}
               />
+            ))}
+          </Section>
+        )}
+
+        {/* Marketing Touches — planned engagement touches (mailer follow-ups,
+            bulk planner, QR call-backs). Overdue first, then due today. */}
+        {(touches_overdue.length > 0 || touches_today.length > 0) && (
+          <Section title="Marketing Touches" count={touches_overdue.length + touches_today.length}
+            icon={Megaphone} accent="text-fuchsia-400" testid="section-touches">
+            {touches_overdue.map((c) => (
+              <TouchCard key={c.activity_id} card={c} overdue
+                onView={() => goSchool(c)} onDone={() => markTouchDone(c.activity_id)} />
+            ))}
+            {touches_today.map((c) => (
+              <TouchCard key={c.activity_id} card={c}
+                onView={() => goSchool(c)} onDone={() => markTouchDone(c.activity_id)} />
             ))}
           </Section>
         )}

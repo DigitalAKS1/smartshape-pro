@@ -786,6 +786,39 @@ async def today_actions(request: Request):
         elif vdate < today:
             overdue_visits.append(card)
 
+    # Marketing / engagement touches (Bulk Activity Planner + mail-cadence
+    # follow-ups + direct-mail QR call-backs live in crm_activities). Kept in
+    # their own arrays so the lead-centric mark-done flow is never entangled.
+    act_query = {"status": {"$nin": ["done", "completed", "cancelled"]}}
+    if team != "admin":
+        act_query["assigned_to"] = user["email"]
+    touches_today = []
+    touches_overdue = []
+    for a in await db.crm_activities.find(act_query, {"_id": 0}).to_list(10000):
+        due = a.get("due_date")
+        if not due:
+            continue
+        atype = (a.get("activity_type") or "").strip()
+        school = a.get("school_name", "")
+        card = {
+            "kind": "touch" if due >= today else "overdue_touch",
+            "activity_id": a.get("activity_id"),
+            "school_id": a.get("school_id"),
+            "school_name": school,
+            "title": a.get("title") or (f"{atype} · {school}".strip(" ·") if (atype or school) else "Planned touch"),
+            "activity_type": atype,
+            "notes": a.get("notes", ""),
+            "priority": a.get("priority", "medium"),
+            "source": a.get("source", ""),
+            "due_date": due,
+        }
+        if due == today:
+            touches_today.append(card)
+        elif due < today:
+            touches_overdue.append(card)
+    touches_today.sort(key=lambda c: c.get("due_date") or "")
+    touches_overdue.sort(key=lambda c: c.get("due_date") or "")
+
     def _sort_key(c):
         pri_order = {"high": 0, "medium": 1, "low": 2}
         return (pri_order.get(c.get("priority", "medium"), 1), -(c.get("days_stale") or 0))
@@ -799,11 +832,16 @@ async def today_actions(request: Request):
         "overdue": overdue,
         "calls_today": calls_today,
         "visits_today": visits_today,
+        "touches_today": touches_today,
+        "touches_overdue": touches_overdue,
         "counts": {
             "overdue": len(overdue),
             "calls_today": len(calls_today),
             "visits_today": len(visits_today),
-            "total": len(overdue) + len(calls_today) + len(visits_today),
+            "touches_today": len(touches_today),
+            "touches_overdue": len(touches_overdue),
+            "total": (len(overdue) + len(calls_today) + len(visits_today)
+                      + len(touches_today) + len(touches_overdue)),
         },
         "role": role,
     }

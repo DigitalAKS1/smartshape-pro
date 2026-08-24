@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { todayActions, delegation as delegationApi } from '../lib/api';
+import { todayActions, delegation as delegationApi, activities as activitiesApi } from '../lib/api';
 import { useDataSync, useAutoRefresh } from '../lib/dataSync';
 import { useAuth } from '../contexts/AuthContext';
 import { toast } from 'sonner';
@@ -121,6 +121,19 @@ export function useTodayDashboard() {
     }
   };
 
+  // Marketing touches complete straight through the activities API — no note /
+  // follow-up dialog, so the lead mark-done flow stays untouched.
+  const markTouchDone = async (activityId) => {
+    if (!activityId) return;
+    try {
+      await activitiesApi.update(activityId, { status: 'done' });
+      toast.success('Touch marked done');
+      load(true);
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Failed to mark done');
+    }
+  };
+
   const openWa = (card) => {
     setWaCtx({
       module: card.kind.includes('visit') ? 'visit' : 'lead',
@@ -138,7 +151,7 @@ export function useTodayDashboard() {
     data, loading, refreshing, delgData, isSales,
     markDoneCard, markNote, markFollowup, markSaving,
     waOpen, waCtx,
-    load, openMarkDone, saveMarkDone, openWa,
+    load, openMarkDone, saveMarkDone, openWa, markTouchDone,
     setMarkDoneCard, setMarkNote, setMarkFollowup, setWaOpen,
   };
 }
