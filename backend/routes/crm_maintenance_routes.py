@@ -1630,6 +1630,21 @@ async def merge_schools(request: Request):
         "The child FK rewrite is NOT auto-reverted: replay child_preimage_backup_id "
         "to restore each child's original school_id/school_name.")
 
+    # Structured merge-log so the merge is one-click undoable (backups + FKs).
+    merge_op_id = f"mrg_{uuid.uuid4().hex[:12]}"
+    await db.school_merges.insert_one({
+        "merge_op_id": merge_op_id, "survivor_id": survivor_id,
+        "survivor_name": survivor_name, "merge_ids": merge_ids,
+        "merge_names": [merge_names.get(m, "") for m in merge_ids],
+        "records_moved": sum(applied_moves.values()),
+        "preimage_backup_id": pre["backup_id"],
+        "child_preimage_backup_id": child_pre["backup_id"],
+        "removed_backup_id": del_res["backup_id"],
+        "by": user.get("email", ""), "at": datetime.now(timezone.utc).isoformat(),
+        "reason": reason, "undone": False,
+    })
+    result["merge_op_id"] = merge_op_id
+
     for mid in merge_ids:
         await _log_activity(
             user.get("email", ""), "school_merge", mid,
@@ -1637,3 +1652,83 @@ async def merge_schools(request: Request):
             f"(backups {pre['backup_id']}/{child_pre['backup_id']}/{del_res['backup_id']}; "
             f"reason: {reason or 'n/a'})")
     return result
+
+
+# Domain-id field per school-child collection, for the undo's child replay. Falls
+# back (below) to any *_id key on the doc if a collection isn't listed here.
+_UNDO_ID = {
+    "leads": "lead_id", "contacts": "contact_id", "quotations": "quotation_id",
+    "orders": "order_id", "dispatches": "dispatch_id", "invoices": "invoice_id",
+    "visit_plans": "plan_id", "field_visits": "visit_id", "teachers": "teacher_id",
+    "fms_flows": "flow_id", "school_notifications": "notification_id",
+    "school_requests": "request_id",
+}
+
+
+async def _read_backup_docs(backup_id: str) -> dict:
+    """Reconstruct {collection: [docs]} from an audit_backups pre-image bundle."""
+    from audit_backup import CHUNK
+    out = {}
+    async for ch in db.audit_backups.find({"backup_id": backup_id, "kind": CHUNK}, {"_id": 0}).sort("seq", 1):
+        coll = ch.get("collection")
+        if coll:
+            out.setdefault(coll, []).extend(ch.get("docs") or [])
+    return out
+
+
+@router.get("/schools/merge-log")
+async def list_school_merges(request: Request):
+    """SUPERADMIN. Recent, still-reversible school merges (newest first)."""
+    user = await get_current_user(request)
+    require_superadmin(user)
+    rows = await db.school_merges.find(
+        {"undone": {"$ne": True}}, {"_id": 0}).sort("at", -1).to_list(50)
+    return {"merges": rows, "count": len(rows)}
+
+
+@router.post("/schools/merge/{merge_op_id}/undo")
+async def undo_school_merge(merge_op_id: str, request: Request):
+    """SUPERADMIN. One-click un-merge: re-create the duplicate school rows and
+    replay each moved child's ORIGINAL school_id/school_name from the pre-image.
+    Idempotent-guarded (a merge can be undone once)."""
+    user = await get_current_user(request)
+    require_superadmin(user)
+    rec = await db.school_merges.find_one({"merge_op_id": merge_op_id}, {"_id": 0})
+    if not rec:
+        raise HTTPException(status_code=404, detail="Merge not found")
+    if rec.get("undone"):
+        raise HTTPException(status_code=409, detail="This merge has already been undone")
+
+    from audit_backup import restore_bundle
+    # 1. Re-create the deleted duplicate school shells.
+    restore = await restore_bundle(rec["removed_backup_id"], restored_by=user.get("email", ""))
+
+    # 2. Replay every moved child back to its ORIGINAL school_id / school_name.
+    reverted, skipped = {}, {}
+    child_docs = await _read_backup_docs(rec["child_preimage_backup_id"])
+    for coll, docs in child_docs.items():
+        idf = _UNDO_ID.get(coll)
+        namef = _NAME_FIELD.get(coll)
+        for d in docs:
+            key = idf if (idf and idf in d) else next(
+                (k for k in d if k.endswith("_id") and k != "school_id" and d.get(k)), None)
+            if not key:
+                skipped[coll] = skipped.get(coll, 0) + 1
+                continue
+            set_doc = {"school_id": d.get("school_id", "")}
+            if namef and namef in d:
+                set_doc[namef] = d.get(namef, "")
+            r = await db[coll].update_one({key: d[key]}, {"$set": set_doc})
+            if getattr(r, "modified_count", 0):
+                reverted[coll] = reverted.get(coll, 0) + 1
+
+    await db.school_merges.update_one(
+        {"merge_op_id": merge_op_id},
+        {"$set": {"undone": True, "undone_at": datetime.now(timezone.utc).isoformat(),
+                  "undone_by": user.get("email", "")}})
+    for mid in rec.get("merge_ids", []):
+        await _log_activity(user.get("email", ""), "school_merge_undo", mid,
+                            f"un-merged {mid} from {rec['survivor_id']} (op {merge_op_id})")
+    return {"ok": True, "merge_op_id": merge_op_id,
+            "schools_restored": restore.get("total", 0),
+            "children_reverted": reverted, "children_skipped": skipped}

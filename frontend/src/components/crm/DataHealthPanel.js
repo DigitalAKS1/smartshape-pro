@@ -1,4 +1,4 @@
-import React, { useCallback, useState, useRef } from 'react';
+import React, { useCallback, useState, useRef, useEffect } from 'react';
 import { toast } from 'sonner';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/dialog';
 import { Button } from '../ui/button';
@@ -301,6 +301,26 @@ function ExcelDedupeCard() {
   const [uploading, setUploading] = useState(false);
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState('');
+  const [merges, setMerges] = useState([]);
+  const [undoing, setUndoing] = useState('');
+
+  const loadMerges = useCallback(() => {
+    crmMaintenance.mergeLog().then(r => setMerges(r.data.merges || [])).catch(() => {});
+  }, []);
+  useEffect(() => { loadMerges(); }, [loadMerges]);
+
+  const undo = async (m) => {
+    if (!window.confirm(`Undo the merge of "${(m.merge_names || []).join(', ')}" into "${m.survivor_name}"?\n\nThe duplicate school(s) and every moved record are restored.`)) return;
+    setUndoing(m.merge_op_id);
+    try {
+      const { data } = await crmMaintenance.undoMerge(m.merge_op_id);
+      const rev = Object.values(data.children_reverted || {}).reduce((a, b) => a + b, 0);
+      toast.success(`Un-merged · ${data.schools_restored} school(s) + ${rev} record(s) restored`);
+      loadMerges();
+      window.dispatchEvent?.(new Event('crm:data-changed'));
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Undo failed'); }
+    finally { setUndoing(''); }
+  };
 
   const download = async () => {
     setDownloading(true);
@@ -347,6 +367,7 @@ function ExcelDedupeCard() {
     setRunning(false); setProgress('');
     toast.success(`Merged ${done} group(s) · ${moved} records moved`);
     setPlan(null);
+    loadMerges();
     window.dispatchEvent?.(new Event('crm:data-changed'));
   };
 
@@ -394,6 +415,25 @@ function ExcelDedupeCard() {
           ) : (
             <p className="text-[11px] text-[var(--text-muted)]">No rows marked "merge" (with a "keep" survivor).</p>
           )}
+        </div>
+      )}
+
+      {merges.length > 0 && (
+        <div className="rounded-md border border-[var(--border-color)] p-2.5">
+          <p className="text-[10px] uppercase tracking-wider font-semibold text-[var(--text-muted)] mb-1.5">Recent merges — one-click undo</p>
+          <div className="space-y-1.5 max-h-40 overflow-y-auto">
+            {merges.map((m) => (
+              <div key={m.merge_op_id} className="flex items-center gap-2 text-[11px]">
+                <span className="flex-1 truncate text-[var(--text-secondary)]">
+                  <b className="text-[var(--text-primary)]">{m.survivor_name}</b> ← {(m.merge_names || []).join(', ')} · {m.records_moved} rec
+                </span>
+                <button onClick={() => undo(m)} disabled={undoing === m.merge_op_id}
+                  className="flex-shrink-0 h-7 px-2.5 rounded-lg border border-[var(--border-color)] text-[var(--text-secondary)] hover:text-red-500 hover:border-red-500/50 font-semibold">
+                  {undoing === m.merge_op_id ? 'Undoing…' : 'Undo'}
+                </button>
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </div>
