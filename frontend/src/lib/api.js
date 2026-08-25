@@ -504,6 +504,7 @@ export const dripSequences = {
   update: (id, data) => API.put(`/drip/sequences/${id}`, data),
   delete: (id) => API.delete(`/drip/sequences/${id}`),
   enroll: (data) => API.post('/drip/enroll', data),
+  enrollSchools: (data) => API.post('/drip/enroll-schools', data),
   enrollments: (params) => API.get('/drip/enrollments', { params }),
   cancelEnrollment: (id) => API.put(`/drip/enrollments/${id}/cancel`),
 };

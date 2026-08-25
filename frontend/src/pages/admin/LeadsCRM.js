@@ -25,6 +25,7 @@ import LeadDetailPanel from '../../components/crm/LeadDetailPanel';
 import LeadFormDialog from '../../components/crm/LeadFormDialog';
 import ForecastBar from '../../components/crm/ForecastBar';
 import PlanActivityDialog from '../../components/crm/PlanActivityDialog';
+import SequenceEnrollDialog from '../../components/crm/SequenceEnrollDialog';
 import SchoolFormDialog from '../../components/crm/SchoolFormDialog';
 import ContactFormDialog from '../../components/crm/ContactFormDialog';
 import ContactsTab from '../../components/crm/ContactsTab';
@@ -126,6 +127,7 @@ export default function LeadsCRM() {
   // Bulk school assignment (admin): select many schools, assign all to one Sales Exec.
   const [selectedSchoolIds, setSelectedSchoolIds] = React.useState(new Set());
   const [planActivityOpen, setPlanActivityOpen] = React.useState(false);
+  const [seqEnrollOpen, setSeqEnrollOpen] = React.useState(false);
   const [unassignedOnly, setUnassignedOnly] = React.useState(false);
   const toggleSchoolSelect = (id) => setSelectedSchoolIds(prev => {
     const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n;
@@ -789,6 +791,7 @@ export default function LeadsCRM() {
                     className="w-48"
                   />
                   <Button size="sm" onClick={() => setPlanActivityOpen(true)} className="bg-[#e94560] hover:bg-[#f05c75] text-white h-8" data-testid="plan-activity-btn">Plan Activity</Button>
+                  <Button size="sm" onClick={() => setSeqEnrollOpen(true)} className="bg-[#6d4ad8] hover:bg-[#7d5ae0] text-white h-8" data-testid="start-sequence-btn">Start Sequence</Button>
                   <Button size="sm" variant="outline" onClick={createMailRunFromSelection} disabled={mailRunBusy} className={`border-[var(--border-color)] ${textSec} h-8`} data-testid="mail-run-btn">
                     <Printer className="mr-1 h-3 w-3" /> {mailRunBusy ? 'Creating…' : 'Mail Run'}
                   </Button>
@@ -1109,6 +1112,13 @@ export default function LeadsCRM() {
           onClose={() => setPlanActivityOpen(false)}
           schoolIds={Array.from(selectedSchoolIds)}
           spList={crm.spList}
+          onDone={() => { setSelectedSchoolIds(new Set()); crm.fetchData(); }}
+        />
+
+        <SequenceEnrollDialog
+          open={seqEnrollOpen}
+          onClose={() => setSeqEnrollOpen(false)}
+          schoolIds={Array.from(selectedSchoolIds)}
           onDone={() => { setSelectedSchoolIds(new Set()); crm.fetchData(); }}
         />
 

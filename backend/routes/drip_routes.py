@@ -426,6 +426,68 @@ async def enroll_lead(request: Request):
     return enr
 
 
+@router.post("/drip/enroll-schools")
+async def enroll_schools(request: Request):
+    """Start a marketing plan on many schools at once: enrol each selected
+    school's lead into one sequence. Finds the school's active lead (or creates a
+    Direct-Mail lead assigned to that school's sales agent), so every Call / Mail
+    / WhatsApp step lands on the right agent's plate — surfacing in Delegation
+    and School Activity. Idempotent: skips leads already active in the sequence."""
+    user = await get_current_user(request)
+    require_module(user, "leads", "read_write")
+    body = await request.json()
+    sequence_id = body.get("sequence_id")
+    school_ids = body.get("school_ids", []) or []
+    if not sequence_id:
+        raise HTTPException(400, "sequence_id is required")
+    if not school_ids:
+        raise HTTPException(400, "school_ids is required")
+    seq = await db.drip_sequences.find_one({"sequence_id": sequence_id}, {"_id": 0})
+    if not seq or not seq.get("steps"):
+        raise HTTPException(404, "Sequence not found or has no steps")
+
+    from routes.crm_routes import OPEN_STAGES, _upsert_direct_mail_lead
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+    first_delay = seq["steps"][0].get("delay_days", 0)
+    enrolled, skipped, leads_created = 0, 0, 0
+
+    for sid in school_ids:
+        # Prefer an active lead for this school; else any lead; else create one.
+        lead = await db.leads.find_one(
+            {"school_id": sid, "stage": {"$in": list(OPEN_STAGES)}, "is_deleted": {"$ne": True}},
+            {"_id": 0, "lead_id": 1})
+        if not lead:
+            lead = await db.leads.find_one(
+                {"school_id": sid, "is_deleted": {"$ne": True}}, {"_id": 0, "lead_id": 1})
+        if not lead:
+            sch = await db.schools.find_one({"school_id": sid}, {"_id": 0, "assigned_to": 1})
+            owner_email = (sch or {}).get("assigned_to") or user["email"]  # the school's sales agent
+            lead_id = await _upsert_direct_mail_lead(sid, seq.get("deal_type", ""), owner_email, now_iso)
+            leads_created += 1
+        else:
+            lead_id = lead["lead_id"]
+        if not lead_id:
+            continue
+        if await db.drip_enrollments.find_one(
+                {"sequence_id": sequence_id, "lead_id": lead_id, "status": "active"}, {"_id": 0, "enrollment_id": 1}):
+            skipped += 1
+            continue
+        await db.drip_enrollments.insert_one({
+            "enrollment_id": f"denr_{uuid.uuid4().hex[:10]}",
+            "sequence_id": sequence_id, "lead_id": lead_id,
+            "current_step": 0, "status": "active", "enrolled_at": now_iso,
+            "next_step_at": (now + timedelta(days=first_delay)).isoformat(),
+            "last_step_at": None, "completed_at": None,
+            "enrolled_by": user["email"],
+        })
+        enrolled += 1
+
+    return {"sequence_id": sequence_id, "sequence_name": seq.get("name", ""),
+            "enrolled": enrolled, "skipped": skipped, "leads_created": leads_created,
+            "total": len(school_ids)}
+
+
 @router.get("/drip/enrollments")
 async def list_enrollments(request: Request):
     user = await get_current_user(request)
