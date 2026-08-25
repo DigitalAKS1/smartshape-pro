@@ -10,10 +10,12 @@ especially how many blank schools still carry leads/contacts/quotes/orders,
 because those must NOT be blindly removed.
 """
 import re as _re
+import io
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, UploadFile, File
+from fastapi.responses import StreamingResponse
 
 from database import db
 from auth_utils import get_current_user
@@ -1092,6 +1094,244 @@ async def dismiss_duplicate_pair(request: Request):
         upsert=True,
     )
     return {"dismissed": pair}
+
+
+# ── Excel round-trip for manual, team-verified de-duplication ─────────────────
+# The abbreviation problem (DPS = Delhi Public School) can't be judged by an
+# algorithm — a human must confirm. So we EXPORT candidate groups to a highlighted
+# workbook, the team marks keep/merge/ignore in Excel, then UPLOAD applies only the
+# confirmed merges. The algorithm only surfaces + suggests; it never decides.
+
+_ABBREV = {
+    r"\bdps\b": "delhi public school", r"\bkv\b": "kendriya vidyalaya",
+    r"\bdav\b": "dayanand anglo vedic", r"\bggs\b": "guru gobind singh",
+    r"\bst\b": "saint", r"\bsr\b": "senior", r"\bjr\b": "junior",
+    r"\bsec\b": "secondary", r"\bpub\b": "public", r"\bsch\b": "school",
+    r"\bconv\b": "convent", r"\bhs\b": "high school", r"\bmnt\b": "montessori",
+    r"\bintl\b": "international", r"\bacad\b": "academy", r"\bvidy\b": "vidyalaya",
+}
+
+
+def _expand_name(name) -> str:
+    """Spell out common school abbreviations to HELP a human spot a match
+    (DPS → Delhi Public School). A hint only — never used to auto-merge."""
+    s = " " + (name or "").lower() + " "
+    for pat, full in _ABBREV.items():
+        s = _re.sub(pat, " " + full + " ", s)
+    return _re.sub(r"\s+", " ", s).strip().title()
+
+
+def _cluster_groups(pairs):
+    """Union-find the fuzzy PAIRS into GROUPS, so DPS + Delhi Public School +
+    variants of one school land in a single cluster. Returns list of
+    (schools_in_group, best_score)."""
+    parent, docs, best = {}, {}, {}
+
+    def find(x):
+        parent.setdefault(x, x)
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for score, a, b in pairs:
+        ia, ib = a["school_id"], b["school_id"]
+        docs[ia], docs[ib] = a, b
+        ra, rb = find(ia), find(ib)
+        if ra != rb:
+            parent[rb] = ra
+        root = find(ia)
+        best[root] = max(best.get(root, 0), score)
+
+    groups = {}
+    for sid in list(docs):
+        groups.setdefault(find(sid), []).append(docs[sid])
+    out = [(members, round(best.get(root, 0), 3)) for root, members in groups.items() if len(members) > 1]
+    out.sort(key=lambda g: g[1], reverse=True)
+    return out
+
+
+_EXPORT_HEADERS = ["group", "match_score", "ACTION (keep/merge/ignore)", "school_id",
+                   "school_name", "name_expanded", "city", "pincode", "phone", "address",
+                   "leads", "contacts", "quotations", "orders", "created_at", "note"]
+
+
+@router.get("/duplicate-schools/export.xlsx")
+async def export_duplicate_schools_xlsx(request: Request):
+    """SUPERADMIN. Download a highlighted workbook of likely-duplicate school
+    GROUPS for manual Excel review. Each group is pre-suggested (survivor = most
+    records) but the team decides: set ACTION = keep / merge / ignore per row,
+    then re-upload to apply."""
+    user = await get_current_user(request)
+    require_superadmin(user)
+    from openpyxl import Workbook
+    from openpyxl.styles import PatternFill, Font, Alignment
+
+    schools = await db.schools.find({"is_deleted": {"$ne": True}}, _FUZZY_FIELDS).to_list(_CAP)
+    dismissed = set()
+    async for d in db.merge_dismissals.find({}, {"_id": 0, "pair": 1}):
+        p = d.get("pair") or []
+        if len(p) == 2:
+            dismissed.add(frozenset(p))
+    pairs = [(s, a, b) for (s, a, b) in school_merge.find_candidates(schools)
+             if frozenset((a["school_id"], b["school_id"])) not in dismissed]
+    groups = _cluster_groups(pairs)
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Duplicate review"
+    hdr_fill = PatternFill("solid", fgColor="1F4BD8")
+    action_fill = PatternFill("solid", fgColor="FFF3C4")   # yellow — the human fills this
+    band_a = PatternFill("solid", fgColor="EEF2FF")
+    band_b = PatternFill("solid", fgColor="FFFFFF")
+    ws.append(_EXPORT_HEADERS)
+    for c in ws[1]:
+        c.fill = hdr_fill
+        c.font = Font(bold=True, color="FFFFFF", size=10)
+        c.alignment = Alignment(vertical="center", wrap_text=True)
+    ws.freeze_panes = "A2"
+
+    gi = 0
+    for members, score in groups:
+        gi += 1
+        # survivor suggestion = the school carrying the most records
+        counts = {m["school_id"]: await _school_child_counts(m["school_id"]) for m in members}
+        members.sort(key=lambda m: sum(counts[m["school_id"]].values()), reverse=True)
+        band = band_a if gi % 2 else band_b
+        for idx, m in enumerate(members):
+            cc = counts[m["school_id"]]
+            action = "keep" if idx == 0 else "merge"   # suggestion only
+            ws.append([
+                gi, score if idx == 0 else "", action, m["school_id"],
+                m.get("school_name", ""), _expand_name(m.get("school_name")),
+                m.get("city", ""), m.get("pincode", ""), m.get("phone", ""),
+                m.get("address", ""), cc.get("leads", 0), cc.get("contacts", 0),
+                cc.get("quotations", 0), cc.get("orders", 0), (m.get("created_at") or "")[:10], "",
+            ])
+            row = ws[ws.max_row]
+            for c in row:
+                c.fill = band
+            row[2].fill = action_fill   # ACTION column always highlighted
+
+    ws.column_dimensions["E"].width = 32
+    ws.column_dimensions["F"].width = 32
+    ws.column_dimensions["J"].width = 28
+    for col in ("A", "B", "C", "D", "G", "H", "I", "K", "L", "M", "N", "O"):
+        ws.column_dimensions[col].width = 14
+
+    # Instructions sheet
+    ins = wb.create_sheet("How to use")
+    for line in [
+        ["Manual duplicate review — how to use"],
+        [""],
+        ["1. Each 'group' is a set of schools that MIGHT be the same (e.g. DPS Vasant Vihar ="],
+        ["   Delhi Public School Vasant Vihar). The algorithm only suggests — you decide."],
+        ["2. In the ACTION column (yellow), per row, put:"],
+        ["      keep    = this is the survivor (the school to keep). One per group."],
+        ["      merge   = merge this row's school INTO the group's 'keep' school."],
+        ["      ignore  = not a duplicate / leave it alone."],
+        ["3. A group of 4 can have e.g. 1 keep + 2 merge + 1 ignore — merge only what you're sure of."],
+        ["4. 'name_expanded' spells out abbreviations to help you spot matches."],
+        ["5. Save, then upload this file back — you'll get a preview before anything is merged."],
+        ["6. Merging moves all leads/contacts/quotes/orders onto the survivor; backups are kept."],
+    ]:
+        ins.append(line)
+    ins.column_dimensions["A"].width = 100
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    fname = f"duplicate-schools-review-{datetime.now(timezone.utc).strftime('%Y%m%d')}.xlsx"
+    return StreamingResponse(
+        buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
+@router.post("/duplicate-schools/apply")
+async def apply_duplicate_review(file: UploadFile = File(...), request: Request = None):
+    """SUPERADMIN. Read the team-verified workbook and build the merge PLAN — one
+    entry per group with a 'keep' survivor + 'merge' rows. NO writes here: returns
+    the plan + child counts + validation errors for a confirm screen; the client
+    then runs each merge through POST /schools/merge."""
+    if request:
+        require_superadmin(await get_current_user(request))
+    from openpyxl import load_workbook
+    data = await file.read()
+    try:
+        wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Could not read the file — upload the .xlsx you downloaded")
+    ws = wb["Duplicate review"] if "Duplicate review" in wb.sheetnames else wb.active
+
+    rows = list(ws.iter_rows(values_only=True))
+    if not rows:
+        raise HTTPException(status_code=400, detail="Empty sheet")
+    header = [str(h or "").strip().lower() for h in rows[0]]
+
+    def col(name_frag):
+        for i, h in enumerate(header):
+            if name_frag in h:
+                return i
+        return -1
+    ci_group, ci_action, ci_sid, ci_name = col("group"), col("action"), col("school_id"), col("school_name")
+    if min(ci_group, ci_action, ci_sid) < 0:
+        raise HTTPException(status_code=400, detail="Missing required columns (group, ACTION, school_id)")
+
+    groups = {}
+    for r in rows[1:]:
+        if not r or ci_group >= len(r):
+            continue
+        g = r[ci_group]
+        if g in (None, ""):
+            continue
+        action = str(r[ci_action] or "").strip().lower() if ci_action < len(r) else ""
+        sid = str(r[ci_sid] or "").strip() if ci_sid < len(r) else ""
+        name = str(r[ci_name] or "").strip() if 0 <= ci_name < len(r) else ""
+        if not sid:
+            continue
+        groups.setdefault(g, []).append({"action": action, "school_id": sid, "school_name": name})
+
+    plan, errors = [], []
+    for g, members in groups.items():
+        keeps = [m for m in members if m["action"] == "keep"]
+        merges = [m for m in members if m["action"] == "merge"]
+        if not merges:
+            continue  # nothing to do for this group
+        if len(keeps) != 1:
+            errors.append(f"Group {g}: needs exactly one 'keep' row (found {len(keeps)}).")
+            continue
+        survivor = keeps[0]
+        merge_ids = [m["school_id"] for m in merges if m["school_id"] != survivor["school_id"]]
+        if not merge_ids:
+            continue
+        # Validate the schools still exist + count what will move.
+        surv_doc = await db.schools.find_one(
+            {"school_id": survivor["school_id"], "is_deleted": {"$ne": True}}, {"_id": 0, "school_name": 1})
+        if not surv_doc:
+            errors.append(f"Group {g}: survivor {survivor['school_id']} not found / deleted.")
+            continue
+        valid_merges, moved = [], 0
+        for mid in merge_ids:
+            md = await db.schools.find_one({"school_id": mid, "is_deleted": {"$ne": True}}, {"_id": 0, "school_name": 1})
+            if not md:
+                errors.append(f"Group {g}: merge school {mid} not found / deleted — skipped.")
+                continue
+            cc = await _school_child_counts(mid)
+            valid_merges.append({"school_id": mid, "school_name": md.get("school_name", ""),
+                                 "moves": {k: v for k, v in cc.items() if v}})
+            moved += sum(cc.values())
+        if not valid_merges:
+            continue
+        plan.append({
+            "group": g, "survivor_id": survivor["school_id"],
+            "survivor_name": surv_doc.get("school_name", ""),
+            "merge_ids": [m["school_id"] for m in valid_merges],
+            "merges": valid_merges, "records_moving": moved,
+        })
+
+    return {"plan": plan, "groups_to_merge": len(plan),
+            "total_schools_merged": sum(len(p["merge_ids"]) for p in plan),
+            "records_moving": sum(p["records_moving"] for p in plan), "errors": errors}
 
 
 async def _resolve_merge_queries(merge_ids: list, merge_names: dict):

@@ -1,4 +1,5 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useState, useRef } from 'react';
+import { toast } from 'sonner';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/dialog';
 import { Button } from '../ui/button';
 import {
@@ -290,6 +291,115 @@ const FUZZY_FIELDS = [
 ];
 const childTotal = (c) => (c ? (c.leads + c.contacts + c.quotations + c.orders) : 0);
 
+// Team-verified Excel round-trip: download candidate groups → mark in Excel →
+// upload → preview plan → execute merges. Because DPS = Delhi Public School can
+// only be judged by a human, the algorithm just surfaces + the team decides.
+function ExcelDedupeCard() {
+  const fileRef = useRef(null);
+  const [downloading, setDownloading] = useState(false);
+  const [plan, setPlan] = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const [running, setRunning] = useState(false);
+  const [progress, setProgress] = useState('');
+
+  const download = async () => {
+    setDownloading(true);
+    try {
+      const res = await crmMaintenance.exportDuplicatesXlsx();
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement('a');
+      a.href = url; a.download = `duplicate-schools-review-${new Date().toISOString().slice(0, 10)}.xlsx`;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      toast.success('Downloaded — review in Excel, mark keep/merge/ignore, then upload back');
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Download failed'); }
+    finally { setDownloading(false); }
+  };
+
+  const onUpload = async (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    setUploading(true); setPlan(null);
+    try {
+      const fd = new FormData(); fd.append('file', f);
+      const { data } = await crmMaintenance.applyDuplicateReview(fd);
+      setPlan(data);
+      if (!data.groups_to_merge) toast('No merges marked in this file');
+    } catch (err) { toast.error(err?.response?.data?.detail || 'Could not read the file'); }
+    finally { setUploading(false); if (fileRef.current) fileRef.current.value = ''; }
+  };
+
+  const execute = async () => {
+    if (!plan?.plan?.length) return;
+    if (!window.confirm(`Merge ${plan.total_schools_merged} school(s) into ${plan.groups_to_merge} survivor(s)? Backups are kept.`)) return;
+    setRunning(true);
+    let done = 0, moved = 0;
+    for (const g of plan.plan) {
+      setProgress(`Merging ${g.survivor_name}… (${done + 1}/${plan.plan.length})`);
+      try {
+        const { data } = await crmMaintenance.mergeSchools({
+          survivor_id: g.survivor_id, merge_ids: g.merge_ids,
+          dry_run: false, confirm: true, reason: 'Excel-verified duplicate review' });
+        moved += Object.values(data.moved || {}).reduce((a, b) => a + b, 0);
+        done++;
+      } catch (err) { toast.error(`Group ${g.group} failed: ${err?.response?.data?.detail || 'error'}`); }
+    }
+    setRunning(false); setProgress('');
+    toast.success(`Merged ${done} group(s) · ${moved} records moved`);
+    setPlan(null);
+    window.dispatchEvent?.(new Event('crm:data-changed'));
+  };
+
+  return (
+    <div className="rounded-lg border border-[var(--border-color)] p-3 space-y-2.5 bg-[var(--bg-primary)]/40">
+      <p className="text-xs font-semibold text-[var(--text-primary)]">Manual review in Excel (team-verified)</p>
+      <p className="text-[11px] text-[var(--text-muted)]">
+        DPS Vasant Vihar = Delhi Public School Vasant Vihar — only a human can be sure. Download the grouped
+        candidates, mark <b>keep / merge / ignore</b> in Excel, upload back, then execute the confirmed merges.
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button type="button" size="sm" variant="outline" onClick={download} disabled={downloading}
+          className="border-[var(--border-color)] text-[var(--text-secondary)]" data-testid="dup-download-btn">
+          {downloading ? 'Preparing…' : '⬇ Download for Excel'}
+        </Button>
+        <Button type="button" size="sm" variant="outline" onClick={() => fileRef.current?.click()} disabled={uploading}
+          className="border-[var(--border-color)] text-[var(--text-secondary)]" data-testid="dup-upload-btn">
+          {uploading ? 'Reading…' : '⬆ Upload verified'}
+        </Button>
+        <input ref={fileRef} type="file" accept=".xlsx" className="hidden" onChange={onUpload} />
+      </div>
+
+      {plan && (
+        <div className="rounded-md border border-[var(--border-color)] p-2.5 space-y-1.5">
+          {plan.errors?.length > 0 && plan.errors.map((er, i) => (
+            <p key={i} className="text-[11px] text-amber-500">⚠ {er}</p>
+          ))}
+          {plan.groups_to_merge > 0 ? (
+            <>
+              <p className="text-xs font-medium text-[var(--text-primary)]">
+                {plan.groups_to_merge} group(s) → merge {plan.total_schools_merged} school(s), moving {plan.records_moving} records.
+              </p>
+              <div className="max-h-40 overflow-y-auto space-y-1">
+                {plan.plan.map((g) => (
+                  <div key={g.group} className="text-[11px] text-[var(--text-secondary)]">
+                    <b>{g.survivor_name}</b> ← {g.merges.map(m => m.school_name).join(', ')}
+                  </div>
+                ))}
+              </div>
+              <Button type="button" size="sm" onClick={execute} disabled={running}
+                className="bg-[#e94560] hover:bg-[#f05c75] text-white" data-testid="dup-execute-btn">
+                {running ? (progress || 'Merging…') : `Execute ${plan.groups_to_merge} merge(s)`}
+              </Button>
+            </>
+          ) : (
+            <p className="text-[11px] text-[var(--text-muted)]">No rows marked "merge" (with a "keep" survivor).</p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function FuzzyDuplicatesSection() {
   const [cands, setCands] = useState(null);
   const [idx, setIdx] = useState(0);
@@ -367,6 +477,8 @@ function FuzzyDuplicatesSection() {
   if (!cands) {
     return (
       <div className="space-y-3">
+        <ExcelDedupeCard />
+        <p className="text-[11px] text-[var(--text-muted)] pt-1">— or review pairs one-by-one in the app —</p>
         <Button type="button" size="sm" onClick={load} disabled={loading} data-testid="find-fuzzy-btn"
           variant="outline" className="border-[var(--accent)]/40 text-[var(--accent)] hover:bg-[var(--accent)]/10">
           {loading ? <><Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> Scanning…</> : 'Find near-duplicates'}
