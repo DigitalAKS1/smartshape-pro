@@ -64,6 +64,7 @@ export default function DripsTab({ tk, drips, setDrips }) {
         delay_days: s.delay_days,
         attachment_id: s.attachment_id || null,
         material_type: s.material_type || 'brochure',
+        material_name: s.material_name || '',
       })),
     });
     setEditingSeq(d);
@@ -144,7 +145,7 @@ export default function DripsTab({ tk, drips, setDrips }) {
             message_type: s.message_type || 'whatsapp',
             message_template: isPhysical ? '' : (s.message_template || `Step ${i + 1}`),
             message_plain: isPhysical ? '' : plain,
-            ...(isPhysical ? { material_type: s.material_type || 'brochure' } : {}),
+            ...(isPhysical ? { material_type: s.material_type || 'brochure', material_name: (s.material_name || '').trim() } : {}),
             ...(s.attachment_id ? { attachment_id: s.attachment_id } : {}),
           };
         }),
@@ -414,17 +415,25 @@ export default function DripsTab({ tk, drips, setDrips }) {
                         <option value="call_task">Call task (rep reminder)</option>
                       </select>
                       {s.message_type === 'physical_material' && (
-                        <select
-                          value={s.material_type || 'brochure'}
-                          onChange={e => setForm(p => ({ ...p, steps: p.steps.map((ss, ii) => ii === i ? { ...ss, material_type: e.target.value } : ss) }))}
-                          className="h-9 px-2 rounded text-sm bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]"
-                          data-testid={`step-material-${i}`}>
-                          <option value="brochure">Brochure</option>
-                          <option value="sample">Sample</option>
-                          <option value="catalogue">Catalogue</option>
-                          <option value="kit">Kit</option>
-                          <option value="gift">Gift</option>
-                        </select>
+                        <>
+                          <select
+                            value={s.material_type || 'brochure'}
+                            onChange={e => setForm(p => ({ ...p, steps: p.steps.map((ss, ii) => ii === i ? { ...ss, material_type: e.target.value } : ss) }))}
+                            className="h-9 px-2 rounded text-sm bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]"
+                            data-testid={`step-material-${i}`}>
+                            <option value="brochure">Brochure</option>
+                            <option value="sample">Sample</option>
+                            <option value="catalogue">Catalogue</option>
+                            <option value="kit">Kit</option>
+                            <option value="gift">Gift</option>
+                          </select>
+                          <input
+                            value={s.material_name || ''}
+                            onChange={e => setForm(p => ({ ...p, steps: p.steps.map((ss, ii) => ii === i ? { ...ss, material_name: e.target.value } : ss) }))}
+                            className="h-9 px-2 rounded text-sm bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)] flex-1 min-w-[160px]"
+                            placeholder="Item name — what are you sending? (e.g. 2026 Die Catalogue + Sample Kit)"
+                            data-testid={`step-material-name-${i}`} />
+                        </>
                       )}
                     </div>
                     {s.message_type !== 'physical_material' && (

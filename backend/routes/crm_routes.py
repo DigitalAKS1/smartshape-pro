@@ -156,15 +156,23 @@ async def log_activity(user_email: str, action: str, entity_type: str, entity_id
         pass
 
 
-async def create_physical_from_drip(lead: dict, material_type: str, seq_name: str) -> str:
-    """Queue a physical dispatch + a rep task from a drip step. Returns dispatch_id."""
-    now_iso = datetime.now(timezone.utc).isoformat()
+async def create_physical_from_drip(lead: dict, material_type: str, seq_name: str,
+                                    material_name: str = "") -> str:
+    """A drip physical step → physically send to the school. Queues a dispatch +
+    a rep task, AND (if the lead has a school) drops a printable, QR-tracked
+    mailer into Offline Mail under today's "Drip Mailers" run — so it's a real,
+    trackable posting, not just a ship-it note. `material_name` is what you're
+    actually sending (free text); it shows on the task + the mailer."""
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+    item = (material_name or "").strip() or (material_type or "brochure")
     dispatch_id = f"pd_{uuid.uuid4().hex[:12]}"
     await db.physical_dispatches.insert_one({
         "dispatch_id": dispatch_id,
         "lead_id": lead.get("lead_id", ""),
         "lead_name": lead.get("contact_name", ""),
         "material_type": material_type or "brochure",
+        "material_name": (material_name or "").strip(),
         "description": f"Auto-queued by drip: {seq_name}",
         "courier_name": "", "tracking_number": "", "sent_date": "",
         "received_confirmed": False,
@@ -173,13 +181,45 @@ async def create_physical_from_drip(lead: dict, material_type: str, seq_name: st
     })
     await db.tasks.insert_one({
         "task_id": f"task_{uuid.uuid4().hex[:10]}",
-        "title": f"Ship {material_type or 'material'} → {lead.get('company_name', '')}",
+        "title": f"Ship {item} → {lead.get('company_name', '')}",
         "description": f"Auto-created by drip sequence '{seq_name}'. Add courier + tracking after shipping.",
         "type": "other", "lead_id": lead.get("lead_id", ""),
         "assigned_to": lead.get("assigned_to", ""),
         "due_date": "", "due_time": "", "priority": "medium",
         "status": "pending", "created_by": "system", "created_at": now_iso,
     })
+
+    # Physically send to the school: a printable, QR-tracked mailer (Offline Mail).
+    sid = lead.get("school_id", "")
+    if sid:
+        try:
+            today = now.strftime("%Y-%m-%d")
+            run = await db.mail_runs.find_one({"is_drip_run": True, "send_date": today}, {"_id": 0, "run_id": 1})
+            if not run:
+                run_id = f"run_{uuid.uuid4().hex[:10]}"
+                await db.mail_runs.insert_one({
+                    "run_id": run_id, "name": f"Drip Mailers — {today}", "area_id": "",
+                    "piece_type": material_type or "brochure", "deal_type_target": "", "school_ids": [],
+                    "send_date": today, "courier": "", "tracking_no": "", "courier_cost": 0,
+                    "status": "planned", "is_drip_run": True,
+                    "created_by": "system", "created_at": now_iso,
+                    "counts": {"sent": 0, "delivered": 0, "responded": 0, "appointments": 0}})
+            else:
+                run_id = run["run_id"]
+            # One mailer per school per day's drip run (no duplicates).
+            if not await db.mail_touches.find_one({"run_id": run_id, "school_id": sid}, {"_id": 0, "touch_id": 1}):
+                await db.mail_touches.insert_one({
+                    "touch_id": f"mt_{uuid.uuid4().hex[:10]}", "run_id": run_id, "school_id": sid,
+                    "lead_id": lead.get("lead_id", ""), "piece_type": material_type or "brochure",
+                    "item_name": item, "posted_at": None,
+                    "qr_token": uuid.uuid4().hex[:16], "delivery_status": "pending",
+                    "responded": False, "responded_at": None, "response_channel": "",
+                    "appointment": False, "next_action_date": "", "outcome_note": "",
+                    "owner": lead.get("assigned_to", "") or "system", "created_at": now_iso})
+                await db.mail_runs.update_one(
+                    {"run_id": run_id}, {"$addToSet": {"school_ids": sid}, "$inc": {"counts.sent": 1}})
+        except Exception:
+            pass  # mailer is best-effort; the dispatch + task already exist
     return dispatch_id
 
 

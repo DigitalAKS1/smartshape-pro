@@ -270,6 +270,7 @@ def _normalise_steps(raw_steps: list) -> list:
             "message_template": s.get("message_template", ""),
             "message_plain": s.get("message_plain", ""),
             "material_type": s.get("material_type", ""),
+            "material_name": s.get("material_name", ""),
         }
         if s.get("attachment_id"):
             step["attachment_id"] = s["attachment_id"]

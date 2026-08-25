@@ -454,7 +454,9 @@ async def run_drip_executor():
 
             if msg_type == "physical_material":
                 try:
-                    await create_physical_from_drip(lead, step.get("material_type", "brochure"), seq.get("name", "drip"))
+                    await create_physical_from_drip(
+                        lead, step.get("material_type", "brochure"), seq.get("name", "drip"),
+                        material_name=step.get("material_name", ""))
                     sent = True
                 except Exception as e:
                     err_detail = str(e)[:200]
