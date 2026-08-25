@@ -51,10 +51,10 @@ export default function EngagementDashboardTab() {
   const [loading, setLoading] = useState(true);
   const [drill, setDrill] = useState({ open: false, loading: false, title: '', rows: [] });
 
-  const openDrill = async (metric, value = '') => {
+  const openDrill = async (metric, value = '', daysOverride) => {
     setDrill({ open: true, loading: true, title: '', rows: [] });
     try {
-      const r = await engagement.drill(metric, value, days);
+      const r = await engagement.drill(metric, value, daysOverride || days);
       setDrill({ open: true, loading: false, title: r.data.title, rows: r.data.rows || [] });
     } catch {
       setDrill({ open: true, loading: false, title: 'Details', rows: [] });
@@ -203,8 +203,10 @@ export default function EngagementDashboardTab() {
               <p className="text-[11px] text-[var(--text-muted)] mb-2">Share of won deals that had each touch:</p>
               <div className="space-y-2">
                 {attr.signals.map(s => (
-                  <div key={s.key} className="flex items-center gap-3">
-                    <span className="w-28 text-xs font-medium text-[var(--text-secondary)] flex-shrink-0">{s.label}</span>
+                  <button key={s.key} type="button"
+                    onClick={() => s.count && openDrill('won_touch', s.key, Math.max(days, 90))}
+                    className={`w-full flex items-center gap-3 rounded ${s.count ? 'hover:opacity-80 active:scale-[0.99] transition-all' : 'cursor-default'}`}>
+                    <span className="w-28 text-xs font-medium text-[var(--text-secondary)] flex-shrink-0 text-left">{s.label}</span>
                     <div className="flex-1 h-5 rounded bg-[var(--bg-primary)] overflow-hidden">
                       <div className="h-full rounded flex items-center px-2 min-w-[28px] transition-all"
                         style={{ width: `${Math.max(8, s.pct)}%`, background: '#10b981' }}>
@@ -212,7 +214,7 @@ export default function EngagementDashboardTab() {
                       </div>
                     </div>
                     <span className="w-14 text-right text-[11px] text-[var(--text-muted)] font-mono flex-shrink-0">{s.count}/{attr.won_count}</span>
-                  </div>
+                  </button>
                 ))}
               </div>
             </>

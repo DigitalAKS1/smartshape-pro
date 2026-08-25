@@ -1902,6 +1902,48 @@ async def engagement_drill(request: Request):
                          "secondary": a.get("assigned_name") or "", "school_id": a.get("school_id", ""),
                          "lead_id": "", "at": a.get("created_at"), "badge": "hot"})
 
+    elif metric == "won_touch":
+        # Won deals (in the window) that had a specific touch — the clickable
+        # half of "what wins deals". Window mirrors attribution (default 90d).
+        won = await db.leads.find(
+            {**lead_q, "stage": "won"},
+            {"_id": 0, "lead_id": 1, "school_id": 1, "company_name": 1, "expected_value": 1,
+             "assigned_name": 1, "created_at": 1, "updated_at": 1, "pipeline_history": 1},
+        ).to_list(3000)
+        picked = []
+        for l in won:
+            won_at = None
+            for h in (l.get("pipeline_history") or []):
+                if h.get("to_stage") == "won" and h.get("at") and (not won_at or h["at"] > won_at):
+                    won_at = h["at"]
+            won_at = won_at or l.get("updated_at") or l.get("created_at")
+            if won_at and won_at >= since:
+                picked.append(l)
+        ids = [l["lead_id"] for l in picked]
+        coll, extra = db.call_notes, None
+        if value == "visit":
+            coll = db.visit_plans
+        elif value == "drip":
+            coll = db.drip_enrollments
+        elif value == "meeting":
+            coll, extra = db.followups, {"followup_type": "meeting"}
+        elif value == "brochure":
+            coll, extra = db.brochure_shares, {"status": "opened"}
+        match = {"lead_id": {"$in": ids}}
+        if extra:
+            match.update(extra)
+        have = {v for v in (await coll.distinct("lead_id", match)) if v}
+        label = {"call": "Called", "visit": "Visited", "meeting": "Met / demoed",
+                 "drip": "In a sequence", "brochure": "Opened a brochure"}.get(value, value)
+        title = f"Won deals · {label}"
+        for l in picked:
+            if l["lead_id"] not in have:
+                continue
+            bits = [x for x in [_drill_money(l.get("expected_value")), l.get("assigned_name")] if x]
+            rows.append({"kind": "lead", "primary": l.get("company_name") or "Lead",
+                         "secondary": " · ".join(bits), "school_id": l.get("school_id", ""),
+                         "lead_id": l.get("lead_id", ""), "at": None, "badge": "won"})
+
     elif metric == "stuck":
         title = "Stuck deals"
         today = now.strftime("%Y-%m-%d")
