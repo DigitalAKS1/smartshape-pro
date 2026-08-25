@@ -4,7 +4,7 @@ import {
   Smartphone, Layers, IndianRupee, UserCog, Store, MapPin, Target,
   CalendarDays, Calendar, ShoppingCart, Upload, Activity,
   Home, MoreHorizontal, Zap, Heart, Truck, Award, Video, Trophy, Inbox, CalendarClock,
-  SlidersHorizontal, FormInput, PhoneCall,
+  SlidersHorizontal, FormInput, PhoneCall, Rocket,
 } from 'lucide-react';
 
 /**
@@ -70,6 +70,7 @@ export const MODULE_ROUTE_MAP = {
     { path: '/module-master', icon: Layers, label: 'Module Master' },
   ],
   settings: [
+    { path: '/activation', icon: Rocket, label: 'Activation Center' },
     { path: '/app-settings', icon: Settings, label: 'App Settings' },
     { path: '/import-center', icon: Upload, label: 'Import Center' },
     { path: '/activity-logs', icon: Activity, label: 'Activity Logs' },

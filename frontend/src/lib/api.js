@@ -157,6 +157,10 @@ export const dailyDigest = {
   runNow: () => API.post('/admin/daily-digest/run'),
 };
 
+export const activation = {
+  status: () => API.get('/admin/activation-status'),
+};
+
 export const keepInTouch = {
   get:    () => API.get('/admin/keepintouch-settings'),
   save:   (data) => API.put('/admin/keepintouch-settings', data),

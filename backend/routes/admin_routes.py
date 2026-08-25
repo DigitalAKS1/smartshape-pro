@@ -2174,6 +2174,78 @@ async def run_keepintouch_now(request: Request):
     return await run_silence_retouch(force=True)
 
 
+# ── Activation Center — one place to see what's switched on ────────────────────
+
+@router.get("/admin/activation-status")
+async def activation_status(request: Request):
+    """One glance at what's live vs dormant — powers the Activation Center.
+    Read-only: aggregates the settings docs + a couple of counts. No secrets."""
+    await get_current_user(request)
+    s = {}
+    async for doc in db.settings.find({}, {"_id": 0}):
+        if doc.get("type"):
+            s[doc["type"]] = doc
+    wa, em, tel = s.get("whatsapp", {}), s.get("email", {}), s.get("telephony", {})
+    comp, cloud = s.get("company", {}), s.get("cloudinary", {})
+    kit, bal, dig = s.get("keepintouch", {}), s.get("balance_reminder", {}), s.get("daily_digest", {})
+    portal = s.get("school_portal", {})
+
+    total_users = await db.users.count_documents({"is_active": {"$ne": False}})
+    reps_with_phone = await db.users.count_documents(
+        {"is_active": {"$ne": False}, "phone": {"$nin": ["", None]}})
+
+    def on(v):
+        return "On" if v else "Off"
+
+    items = [
+        {"key": "whatsapp", "label": "WhatsApp provider", "status": bool(wa.get("username") or wa.get("provider") or wa.get("enabled")),
+         "detail": (wa.get("provider") or "Connected") if (wa.get("username") or wa.get("provider")) else "Not configured",
+         "impact": "Unlocks marketing campaigns, drips, form confirmations and daily digests — all at once.",
+         "cta": "App Settings → WhatsApp", "priority": 1},
+        {"key": "email", "label": "Email sending (SMTP)", "status": bool(em.get("sender_email") and em.get("gmail_app_password")),
+         "detail": em.get("sender_email") or "Not configured",
+         "impact": "Email campaigns, catalogue emails and email drip steps.",
+         "cta": "App Settings → Email", "priority": 1},
+        {"key": "telephony", "label": "Click-to-Call (Bonvoice)", "status": bool(tel.get("enabled") and tel.get("username") and tel.get("caller_id_did")),
+         "detail": f"{reps_with_phone} of {total_users} team members have a phone number",
+         "impact": "Ring rep → customer, auto-log the call + recording, live call widget.",
+         "cta": "App Settings → Telephony", "priority": 2},
+        {"key": "company_address", "label": "Company From-address", "status": bool((comp.get("address") or "").strip() and (comp.get("pincode") or "").strip()),
+         "detail": "Filled" if (comp.get("address") or "").strip() else "Blank — stickers print name only",
+         "impact": "Offline-mail stickers print a real return address.",
+         "cta": "App Settings → Company", "priority": 2},
+        {"key": "keepintouch", "label": "Keep-in-touch nurture", "status": bool(kit.get("enabled") or kit.get("customers_enabled")),
+         "detail": on(kit.get("enabled") or kit.get("customers_enabled")),
+         "impact": "No lead or customer goes cold — auto check-in tasks.",
+         "cta": "App Settings → Notifications", "priority": 2},
+        {"key": "balance_reminder", "label": "Balance-due reminders", "status": bool(bal.get("enabled")),
+         "detail": on(bal.get("enabled")),
+         "impact": "Outstanding balances get chased, not just reported.",
+         "cta": "App Settings → Notifications", "priority": 2},
+        {"key": "daily_digest", "label": "Daily WhatsApp digest", "status": bool(dig.get("enabled")),
+         "detail": on(dig.get("enabled")),
+         "impact": "Every rep gets their due tasks each morning (needs WhatsApp).",
+         "cta": "App Settings → Notifications", "priority": 3},
+        {"key": "cloudinary", "label": "Cloud file storage", "status": bool(cloud.get("cloud_name") and cloud.get("api_key")),
+         "detail": "Cloudinary" if cloud.get("cloud_name") else "Local files (works, less resilient)",
+         "impact": "Resilient brochure / logo / document uploads.",
+         "cta": "App Settings → Cloudinary", "optional": True, "priority": 3},
+        {"key": "school_portal", "label": "School Portal", "status": bool(portal.get("email_link_enabled") or portal.get("magic_link_enabled") or portal.get("google_enabled")),
+         "detail": on(portal.get("email_link_enabled") or portal.get("magic_link_enabled") or portal.get("google_enabled")),
+         "impact": "Schools log in for payments, docs, reorder and engagement.",
+         "cta": "App Settings → School Portal", "optional": True, "priority": 3},
+    ]
+    items.sort(key=lambda i: (i.get("priority", 3), i["status"]))
+    core = [i for i in items if not i.get("optional")]
+    done = sum(1 for i in core if i["status"])
+    return {
+        "items": items,
+        "core_done": done, "core_total": len(core),
+        "percent": round(done / len(core) * 100) if core else 0,
+        "reps_with_phone": reps_with_phone, "total_users": total_users,
+    }
+
+
 # ── Balance-due reminders (chase money on shipped / credit orders) ─────────────
 
 @router.get("/admin/balance-reminder-settings")

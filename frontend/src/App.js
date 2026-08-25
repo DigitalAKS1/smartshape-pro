@@ -52,6 +52,7 @@ const VisitPlanning = lazy(() => import('./pages/admin/VisitPlanning'));
 const VisitCalendar = lazy(() => import('./pages/admin/VisitCalendar'));
 const OrdersManagement = lazy(() => import('./pages/admin/OrdersManagement'));
 const AppSettings = lazy(() => import('./pages/admin/AppSettings'));
+const ActivationCenter = lazy(() => import('./pages/admin/ActivationCenter'));
 const ImportCenter = lazy(() => import('./pages/admin/ImportCenter'));
 const CallsLog = lazy(() => import('./pages/admin/CallsLog'));
 const ActivityLogsPage = lazy(() => import('./pages/admin/ActivityLogs'));
@@ -234,6 +235,7 @@ function AppRouter() {
       <Route path="/visit-calendar" element={<ProtectedRoute><VisitCalendar /></ProtectedRoute>} />
       <Route path="/orders" element={<ProtectedRoute><OrdersManagement /></ProtectedRoute>} />
       <Route path="/app-settings" element={<ProtectedRoute><AppSettings /></ProtectedRoute>} />
+      <Route path="/activation" element={<ProtectedRoute><ActivationCenter /></ProtectedRoute>} />
       <Route path="/import-center" element={<ProtectedRoute><ImportCenter /></ProtectedRoute>} />
       <Route path="/activity-logs" element={<ProtectedRoute><ActivityLogsPage /></ProtectedRoute>} />
       <Route path="/dispatch-tracking" element={<ProtectedRoute><DispatchTracking /></ProtectedRoute>} />
