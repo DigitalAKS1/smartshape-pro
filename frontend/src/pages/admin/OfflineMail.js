@@ -130,6 +130,15 @@ export default function OfflineMail() {
     catch { toast.error('Update failed'); }
   };
 
+  const deleteRun = async (run) => {
+    if (!window.confirm(`Delete mail run "${run.name}"?\n\nThis removes the run and its follow-up tasks. School addresses are kept.`)) return;
+    try {
+      const r = await mailRuns.remove(run.run_id);
+      toast.success(`Deleted "${run.name}"${r.data.deleted_followups ? ` · ${r.data.deleted_followups} follow-ups removed` : ''}`);
+      load();
+    } catch { toast.error('Delete failed'); }
+  };
+
   const areaName = (id) => areas.find(a => a.area_id === id)?.name || '—';
   const perfById = Object.fromEntries((analytics.runs || []).map(x => [x.run_id, x]));
 
@@ -331,11 +340,18 @@ export default function OfflineMail() {
                           </select>
                         </td>
                         <td className="py-2.5 pr-3 text-right">
-                          <button onClick={() => setSheetRun({ run_id: r.run_id, name: r.name })}
-                            className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border border-[var(--border-color)] text-[11px] font-semibold text-[var(--text-secondary)] hover:text-[#e94560] hover:border-[#e94560]"
-                            data-testid={`addresses-${r.run_id}`}>
-                            <Printer className="h-3.5 w-3.5" /> Addresses / Print
-                          </button>
+                          <div className="inline-flex items-center gap-1.5">
+                            <button onClick={() => setSheetRun({ run_id: r.run_id, name: r.name })}
+                              className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border border-[var(--border-color)] text-[11px] font-semibold text-[var(--text-secondary)] hover:text-[#e94560] hover:border-[#e94560]"
+                              data-testid={`addresses-${r.run_id}`}>
+                              <Printer className="h-3.5 w-3.5" /> Addresses / Print
+                            </button>
+                            <button onClick={() => deleteRun(r)} title="Delete this mail run"
+                              className="inline-flex items-center justify-center h-8 w-8 rounded-lg border border-[var(--border-color)] text-[var(--text-muted)] hover:text-red-500 hover:border-red-500/50"
+                              data-testid={`delete-run-${r.run_id}`}>
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}

@@ -50,7 +50,7 @@ export default function useOrdersManagement() {
   // ── Dispatch dialog ──────────────────────────────────────────────────────
   const [dispatchOpen,   setDispatchOpen]   = useState(false);
   const [dispatchTarget, setDispatchTarget] = useState(null);
-  const [dispatchForm,   setDispatchForm]   = useState({ courier_name: '', tracking_number: '', notes: '' });
+  const [dispatchForm,   setDispatchForm]   = useState({ courier_name: '', tracking_number: '', notes: '', dispatch_on_credit: false, credit_reason: '' });
 
   // ── Payment dialog ───────────────────────────────────────────────────────
   const [paymentOpen,       setPaymentOpen]       = useState(false);

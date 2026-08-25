@@ -2136,6 +2136,8 @@ async def get_keepintouch_settings(request: Request):
     cfg = await db.settings.find_one({"type": "keepintouch"}, {"_id": 0}) or {}
     return {"enabled": bool(cfg.get("enabled", False)),
             "silence_days": int(cfg.get("silence_days", 60) or 60),
+            "customers_enabled": bool(cfg.get("customers_enabled", False)),
+            "customer_silence_days": int(cfg.get("customer_silence_days", 45) or 45),
             "send_time": cfg.get("send_time", "09:30")}
 
 
@@ -2149,14 +2151,18 @@ async def put_keepintouch_settings(request: Request):
     st = (body.get("send_time") or "09:30").strip()
     if not _re.match(r"^([01]\d|2[0-3]):[0-5]\d$", st):
         raise HTTPException(400, "send_time must be HH:MM (24-hour)")
-    days = int(body.get("silence_days", 60) or 60)
-    days = max(7, min(365, days))
+    days = max(7, min(365, int(body.get("silence_days", 60) or 60)))
+    cdays = max(7, min(365, int(body.get("customer_silence_days", 45) or 45)))
     enabled = bool(body.get("enabled"))
+    customers_enabled = bool(body.get("customers_enabled"))
     await db.settings.update_one(
         {"type": "keepintouch"},
-        {"$set": {"type": "keepintouch", "enabled": enabled, "silence_days": days, "send_time": st}},
+        {"$set": {"type": "keepintouch", "enabled": enabled, "silence_days": days,
+                  "customers_enabled": customers_enabled, "customer_silence_days": cdays,
+                  "send_time": st}},
         upsert=True)
-    return {"enabled": enabled, "silence_days": days, "send_time": st}
+    return {"enabled": enabled, "silence_days": days, "customers_enabled": customers_enabled,
+            "customer_silence_days": cdays, "send_time": st}
 
 
 @router.post("/admin/keepintouch/run")
@@ -2166,6 +2172,45 @@ async def run_keepintouch_now(request: Request):
         raise HTTPException(403, "Admin only")
     from scheduler import run_silence_retouch
     return await run_silence_retouch(force=True)
+
+
+# ── Balance-due reminders (chase money on shipped / credit orders) ─────────────
+
+@router.get("/admin/balance-reminder-settings")
+async def get_balance_reminder_settings(request: Request):
+    await get_current_user(request)
+    cfg = await db.settings.find_one({"type": "balance_reminder"}, {"_id": 0}) or {}
+    return {"enabled": bool(cfg.get("enabled", False)),
+            "days": int(cfg.get("days", 7) or 7),
+            "send_time": cfg.get("send_time", "10:00")}
+
+
+@router.put("/admin/balance-reminder-settings")
+async def put_balance_reminder_settings(request: Request):
+    user = await get_current_user(request)
+    if user.get("role") != "admin":
+        raise HTTPException(403, "Admin only")
+    import re as _re
+    body = await request.json()
+    st = (body.get("send_time") or "10:00").strip()
+    if not _re.match(r"^([01]\d|2[0-3]):[0-5]\d$", st):
+        raise HTTPException(400, "send_time must be HH:MM (24-hour)")
+    days = max(0, min(180, int(body.get("days", 7) or 7)))
+    enabled = bool(body.get("enabled"))
+    await db.settings.update_one(
+        {"type": "balance_reminder"},
+        {"$set": {"type": "balance_reminder", "enabled": enabled, "days": days, "send_time": st}},
+        upsert=True)
+    return {"enabled": enabled, "days": days, "send_time": st}
+
+
+@router.post("/admin/balance-reminder/run")
+async def run_balance_reminder_now(request: Request):
+    user = await get_current_user(request)
+    if user.get("role") != "admin":
+        raise HTTPException(403, "Admin only")
+    from scheduler import run_balance_reminders
+    return await run_balance_reminders(force=True)
 
 
 # ── Daily evening "Orders Received" report (in-app notification + WhatsApp) ─────

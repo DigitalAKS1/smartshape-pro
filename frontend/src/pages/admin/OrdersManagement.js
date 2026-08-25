@@ -388,6 +388,18 @@ export default function OrdersManagement() {
                 <div><Label className={`${textSec} text-xs`}>Courier Name</Label><Input value={om.dispatchForm.courier_name} onChange={e => om.setDispatchForm({...om.dispatchForm, courier_name: e.target.value})} className={inputCls} placeholder="e.g. BlueDart, FedEx" /></div>
                 <div><Label className={`${textSec} text-xs`}>Tracking Number</Label><Input value={om.dispatchForm.tracking_number} onChange={e => om.setDispatchForm({...om.dispatchForm, tracking_number: e.target.value})} className={inputCls} placeholder="Tracking ID" /></div>
                 <div><Label className={`${textSec} text-xs`}>Notes</Label><Input value={om.dispatchForm.notes} onChange={e => om.setDispatchForm({...om.dispatchForm, notes: e.target.value})} className={inputCls} placeholder="Optional notes" /></div>
+                <div className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-2.5">
+                  <label className="flex items-center gap-2 text-sm cursor-pointer" style={{ color: '#b7791f' }}>
+                    <input type="checkbox" checked={!!om.dispatchForm.dispatch_on_credit}
+                      onChange={e => om.setDispatchForm({...om.dispatchForm, dispatch_on_credit: e.target.checked})}
+                      data-testid="dispatch-on-credit" />
+                    Dispatch on credit — ship without full payment (schools / existing customers)
+                  </label>
+                  {om.dispatchForm.dispatch_on_credit && (
+                    <Input value={om.dispatchForm.credit_reason} onChange={e => om.setDispatchForm({...om.dispatchForm, credit_reason: e.target.value})}
+                      className={inputCls + ' mt-2'} placeholder="Reason / terms (e.g. trusted customer, 30-day terms)" />
+                  )}
+                </div>
               </div>
             )}
             <DialogFooter>

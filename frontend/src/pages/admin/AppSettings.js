@@ -13,6 +13,7 @@ import SheetsSection from '../../components/settings/SheetsSection';
 import NotificationsSection from '../../components/settings/NotificationsSection';
 import DailyDigestSection from '../../components/settings/DailyDigestSection';
 import KeepInTouchSection from '../../components/settings/KeepInTouchSection';
+import BalanceReminderSection from '../../components/settings/BalanceReminderSection';
 import OrdersReportSection from '../../components/settings/OrdersReportSection';
 import SchoolPortalSection from '../../components/settings/SchoolPortalSection';
 import WhatsAppConnectionSection from '../../components/settings/WhatsAppConnectionSection';
@@ -233,6 +234,7 @@ export default function AppSettings() {
                 <NotificationsSection prefs={s.notifPrefs} setPrefs={s.setNotifPrefs} save={s.saveNotifPrefs} />
                 <DailyDigestSection />
                 <KeepInTouchSection />
+                <BalanceReminderSection />
                 <OrdersReportSection />
               </div>
             )}

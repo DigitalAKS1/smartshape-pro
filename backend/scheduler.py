@@ -1592,51 +1592,74 @@ async def challan_due_loop():
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def run_silence_retouch(force=False):
-    """Queue a keep-in-touch call task for each active lead that has gone silent
-    for N+ days, so no account quietly goes cold. Idempotent per lead (never
-    stacks) and capped per run. The task lands on the owner's calendar + daily
-    Marketing-Touches queue (Phase 1)."""
+    """Keep-in-touch: queue a check-in call task for accounts that have gone
+    silent, so nothing goes cold. Two rhythms:
+      • Active leads (open stages) — the sales nudge.
+      • Won customers — the post-sale reorder/referral nudge (closes the
+        'funnel forgets customers the moment they buy' gap).
+    Idempotent per lead, capped, lands on the owner's calendar + daily queue."""
     cfg = await db.settings.find_one({"type": "keepintouch"}, {"_id": 0}) or {}
-    if not force and not cfg.get("enabled"):
-        return {"created": 0, "skipped": "disabled"}
-    days = max(7, int(cfg.get("silence_days", 60) or 60))
     now = datetime.now(timezone.utc)
     now_iso = now.isoformat()
-    cutoff = (now - timedelta(days=days)).isoformat()
     today = now.strftime("%Y-%m-%d")
+    total = {"created": 0}
 
-    created = 0
-    cur = db.leads.find(
-        {"stage": {"$in": list(OPEN_STAGES)}},
-        {"_id": 0, "lead_id": 1, "school_id": 1, "company_name": 1,
-         "assigned_to": 1, "assigned_name": 1, "last_activity_date": 1, "created_at": 1})
-    async for lead in cur:
-        if created >= 300:
-            break
-        owner = lead.get("assigned_to")
-        if not owner:
-            continue  # nobody to action it → skip rather than orphan
-        la = lead.get("last_activity_date") or lead.get("created_at") or ""
-        if not la or la >= cutoff:
-            continue  # touched recently
-        lid = lead.get("lead_id")
-        exists = await db.crm_activities.find_one(
-            {"lead_id": lid, "source": "keepintouch", "status": "pending"}, {"_id": 0, "activity_id": 1})
-        if exists:
-            continue  # already has an open keep-in-touch
-        await db.crm_activities.insert_one({
-            "activity_id": f"act_{uuid.uuid4().hex[:10]}",
-            "lead_id": lid, "school_id": lead.get("school_id", ""),
-            "school_name": lead.get("company_name", ""),
-            "activity_type": "Call", "channel": "call", "priority": "medium",
-            "title": f"Keep in touch — no contact in {days}+ days",
-            "notes": "Auto keep-in-touch: this account has gone quiet. A quick check-in keeps it warm.",
-            "due_date": today, "assigned_to": owner, "assigned_name": lead.get("assigned_name", ""),
-            "status": "pending", "source": "keepintouch",
-            "created_by": "system", "created_at": now_iso, "done_at": None})
-        created += 1
-    log.info(f"[keepintouch] queued {created} re-touch tasks (silence >= {days}d)")
-    return {"created": created, "silence_days": days}
+    async def _pass(stages, days, title, note, source):
+        cutoff = (now - timedelta(days=days)).isoformat()
+        n = 0
+        cur = db.leads.find(
+            {"stage": {"$in": list(stages)}},
+            {"_id": 0, "lead_id": 1, "school_id": 1, "company_name": 1,
+             "assigned_to": 1, "assigned_name": 1, "last_activity_date": 1, "created_at": 1})
+        async for lead in cur:
+            if n >= 300:
+                break
+            owner = lead.get("assigned_to")
+            if not owner:
+                continue
+            la = lead.get("last_activity_date") or lead.get("created_at") or ""
+            if not la or la >= cutoff:
+                continue
+            lid = lead.get("lead_id")
+            if await db.crm_activities.find_one(
+                    {"lead_id": lid, "source": source, "status": "pending"}, {"_id": 0, "activity_id": 1}):
+                continue
+            await db.crm_activities.insert_one({
+                "activity_id": f"act_{uuid.uuid4().hex[:10]}",
+                "lead_id": lid, "school_id": lead.get("school_id", ""),
+                "school_name": lead.get("company_name", ""),
+                "activity_type": "Call", "channel": "call", "priority": "medium",
+                "title": title, "notes": note, "due_date": today,
+                "assigned_to": owner, "assigned_name": lead.get("assigned_name", ""),
+                "status": "pending", "source": source,
+                "created_by": "system", "created_at": now_iso, "done_at": None})
+            n += 1
+        return n
+
+    # Sales pass — active leads.
+    leads_days = 0
+    if force or cfg.get("enabled"):
+        leads_days = max(7, int(cfg.get("silence_days", 60) or 60))
+        total["created"] += await _pass(
+            OPEN_STAGES, leads_days,
+            f"Keep in touch — no contact in {leads_days}+ days",
+            "Auto keep-in-touch: this account has gone quiet. A quick check-in keeps it warm.",
+            "keepintouch")
+
+    # Customer pass — Won accounts (reorder / referral nurture).
+    cust_days = 0
+    if force or cfg.get("customers_enabled"):
+        cust_days = max(7, int(cfg.get("customer_silence_days", 45) or 45))
+        total["created"] += await _pass(
+            ["won"], cust_days,
+            f"Keep in touch with customer — {cust_days}+ days since contact",
+            "Post-sale keep-in-touch: check in on this customer — reorder, referral, or a simple hello keeps them loyal.",
+            "keepintouch_customer")
+
+    if not force and not cfg.get("enabled") and not cfg.get("customers_enabled"):
+        return {"created": 0, "skipped": "disabled"}
+    log.info(f"[keepintouch] queued {total['created']} (leads>={leads_days}d, customers>={cust_days}d)")
+    return {"created": total["created"], "silence_days": leads_days, "customer_silence_days": cust_days}
 
 
 async def keepintouch_loop():
@@ -1647,11 +1670,88 @@ async def keepintouch_loop():
             cfg = await db.settings.find_one({"type": "keepintouch"}, {"_id": 0}) or {}
             now_ist = datetime.now(IST)
             today = now_ist.date().isoformat()
-            if cfg.get("enabled") and now_ist.strftime("%H:%M") == cfg.get("send_time", "09:30") and last_fired != today:
+            on = cfg.get("enabled") or cfg.get("customers_enabled")
+            if on and now_ist.strftime("%H:%M") == cfg.get("send_time", "09:30") and last_fired != today:
                 last_fired = today
                 await run_silence_retouch()
         except Exception as exc:
             log.error(f"[keepintouch loop] {exc}")
+        await asyncio.sleep(45)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# JOB 14 — Balance-due reminders (chase money on dispatched/credit orders)
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def run_balance_reminders(force=False):
+    """Queue a 'collect balance' task for every shipped order that still has an
+    outstanding balance older than N days — so credit/part-paid sales get chased
+    instead of just sitting on the outstanding report. Idempotent per order."""
+    cfg = await db.settings.find_one({"type": "balance_reminder"}, {"_id": 0}) or {}
+    if not force and not cfg.get("enabled"):
+        return {"created": 0, "skipped": "disabled"}
+    days = max(0, int(cfg.get("days", 7) or 7))
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+    today = now.strftime("%Y-%m-%d")
+    cutoff = (now - timedelta(days=days)).strftime("%Y-%m-%d")
+
+    created = 0
+    shipped = {"$in": ["dispatched", "delivered", "partially_dispatched"]}
+    cur = db.orders.find(
+        {"order_status": shipped},
+        {"_id": 0, "order_id": 1, "order_number": 1, "school_id": 1, "school_name": 1,
+         "grand_total": 1, "total_paid": 1, "payment_received": 1, "assigned_to": 1,
+         "assigned_name": 1, "dispatch_date": 1, "created_at": 1, "dispatched_on_credit": 1})
+    async for o in cur:
+        if created >= 300:
+            break
+        grand = float(o.get("grand_total", 0) or 0)
+        paid = float(o.get("total_paid", o.get("payment_received", 0)) or 0)
+        outstanding = round(grand - paid, 2)
+        if outstanding <= 0:
+            continue
+        ship_day = (o.get("dispatch_date") or o.get("created_at") or "")[:10]
+        if not ship_day or ship_day > cutoff:
+            continue  # too recent
+        oid = o.get("order_id")
+        if await db.crm_activities.find_one(
+                {"order_id": oid, "source": "balance_due", "status": "pending"}, {"_id": 0, "activity_id": 1}):
+            continue
+        owner = o.get("assigned_to", "")
+        owner_name = o.get("assigned_name", "")
+        if not owner and o.get("school_id"):
+            sch = await db.schools.find_one({"school_id": o["school_id"]}, {"_id": 0, "assigned_to": 1, "assigned_name": 1})
+            owner = (sch or {}).get("assigned_to", "")
+            owner_name = (sch or {}).get("assigned_name", "")
+        credit = " (credit)" if o.get("dispatched_on_credit") else ""
+        await db.crm_activities.insert_one({
+            "activity_id": f"act_{uuid.uuid4().hex[:10]}", "order_id": oid,
+            "school_id": o.get("school_id", ""), "school_name": o.get("school_name", ""),
+            "activity_type": "Call", "channel": "call", "priority": "high",
+            "title": f"💰 Collect balance ₹{outstanding:,.0f} — {o.get('school_name') or o.get('order_number') or 'order'}{credit}",
+            "notes": f"Order {o.get('order_number', oid)} shipped {ship_day}; balance ₹{outstanding:,.0f} of ₹{grand:,.0f} outstanding.",
+            "due_date": today, "assigned_to": owner, "assigned_name": owner_name,
+            "status": "pending", "source": "balance_due",
+            "created_by": "system", "created_at": now_iso, "done_at": None})
+        created += 1
+    log.info(f"[balance] queued {created} balance-due reminders (>= {days}d after dispatch)")
+    return {"created": created, "days": days}
+
+
+async def balance_reminder_loop():
+    log.info("[scheduler] balance-reminder loop started")
+    last_fired = None
+    while True:
+        try:
+            cfg = await db.settings.find_one({"type": "balance_reminder"}, {"_id": 0}) or {}
+            now_ist = datetime.now(IST)
+            today = now_ist.date().isoformat()
+            if cfg.get("enabled") and now_ist.strftime("%H:%M") == cfg.get("send_time", "10:00") and last_fired != today:
+                last_fired = today
+                await run_balance_reminders()
+        except Exception as exc:
+            log.error(f"[balance loop] {exc}")
         await asyncio.sleep(45)
 
 
@@ -1670,5 +1770,6 @@ async def start_scheduler():
     asyncio.create_task(challan_due_loop())
     asyncio.create_task(webinar_lifecycle_loop())
     asyncio.create_task(keepintouch_loop())
+    asyncio.create_task(balance_reminder_loop())
     log.info("[scheduler] cert loop running")
-    log.info("[scheduler] all 13 background jobs running")
+    log.info("[scheduler] all 14 background jobs running")

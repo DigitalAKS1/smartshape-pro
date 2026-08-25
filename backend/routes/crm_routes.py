@@ -844,6 +844,52 @@ async def get_mail_run_addresses(run_id: str, request: Request):
             "missing_count": sum(1 for r in rows if r["missing"])}
 
 
+@router.delete("/mail-runs/{run_id}")
+async def delete_mail_run(run_id: str, request: Request):
+    """Delete a mail run + its per-school touches + the follow-up cadence tasks it
+    generated. Does NOT touch the school records (their addresses stay)."""
+    user = await get_current_user(request)
+    run = await db.mail_runs.find_one({"run_id": run_id}, {"_id": 0})
+    if not run:
+        raise HTTPException(status_code=404, detail="Mail run not found")
+    t = await db.mail_touches.delete_many({"run_id": run_id})
+    a = await db.crm_activities.delete_many({"batch_id": run_id, "source": "mail_cadence"})
+    await db.mail_runs.delete_one({"run_id": run_id})
+    return {"ok": True, "deleted_touches": t.deleted_count, "deleted_followups": a.deleted_count}
+
+
+@router.post("/mail-runs/{run_id}/sync-schools")
+async def sync_mail_run_to_schools(run_id: str, request: Request):
+    """Manual sync: push the address the run is using for each school back onto
+    that school's record — a one-click 'save everything to the school database'.
+    Only writes non-empty fields so it never blanks a school."""
+    await get_current_user(request)
+    run = await db.mail_runs.find_one({"run_id": run_id}, {"_id": 0})
+    if not run:
+        raise HTTPException(status_code=404, detail="Mail run not found")
+    body = await _parse_json_body(request) if request else {}
+    rows = body.get("rows") or []
+    synced = 0
+    for r in rows:
+        sid = r.get("school_id")
+        if not sid:
+            continue
+        upd = {k: v for k, v in {
+            "address": (r.get("address") or "").strip(),
+            "city": (r.get("city") or "").strip(),
+            "state": (r.get("state") or "").strip(),
+            "pincode": (r.get("pincode") or "").strip(),
+            "primary_contact_name": (r.get("primary_contact_name") or "").strip(),
+            "phone": (r.get("phone") or "").strip(),
+        }.items() if v}
+        if not upd:
+            continue
+        res = await db.schools.update_one({"school_id": sid}, {"$set": upd})
+        if res.matched_count:
+            synced += 1
+    return {"ok": True, "synced": synced}
+
+
 def _build_mail_run_csv(run, touches, schools_by_id):
     """Courier manifest / records: one row per school with postal address + contact
     + piece + response status. Returns CSV text."""

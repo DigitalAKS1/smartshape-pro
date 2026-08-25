@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { toast } from 'sonner';
 import { mailRuns, schools as schoolsApi, settingsApi } from '../../lib/api';
-import { X, Printer, Save, AlertTriangle, CheckCircle2, MapPin, Download, SlidersHorizontal, ImagePlus } from 'lucide-react';
+import { X, Printer, Save, AlertTriangle, CheckCircle2, MapPin, Download, SlidersHorizontal, ImagePlus, RefreshCw } from 'lucide-react';
 
 /**
  * Address-review sheet for a mail run.
@@ -69,6 +69,21 @@ export default function MailAddressSheet({ runId, runName, onClose }) {
   const edit = (sid, field, val) => {
     setRows(rs => rs.map(r => r.school_id === sid ? { ...r, [field]: val, missing: undefined } : r));
     setDirty(d => ({ ...d, [sid]: true }));
+  };
+
+  // Manual sync: push every row's address onto its school record (not just edits).
+  const syncAll = async () => {
+    setSaving(true);
+    try {
+      const r = await mailRuns.syncSchools(runId, rows.map(x => ({
+        school_id: x.school_id, address: x.address, city: x.city, state: x.state,
+        pincode: x.pincode, primary_contact_name: x.primary_contact_name, phone: x.phone,
+      })));
+      toast.success(`Synced ${r.data.synced} school${r.data.synced === 1 ? '' : 's'} to the database`);
+      setDirty({});
+      load();
+    } catch { toast.error('Sync failed'); }
+    finally { setSaving(false); }
   };
 
   const saveAll = async () => {
@@ -303,6 +318,7 @@ export default function MailAddressSheet({ runId, runName, onClose }) {
           <div className="flex items-center gap-2 flex-wrap">
             <button className={btnG} onClick={exportList} disabled={loading || rows.length === 0} data-testid="export-list-btn"><Download className="h-4 w-4" /> Export list</button>
             <button className={btnG} onClick={saveAll} disabled={saving || dirtyCount === 0}><Save className="h-4 w-4" /> {saving ? 'Saving…' : 'Save addresses'}</button>
+            <button className={btnG} onClick={syncAll} disabled={saving || rows.length === 0} data-testid="sync-schools-btn" title="Push every address to the school database"><RefreshCw className="h-4 w-4" /> Sync to schools</button>
             <button className={btnG} onClick={() => setShowPrint(s => !s)} data-testid="print-opts-toggle"><SlidersHorizontal className="h-4 w-4" /> Options</button>
             <button className={btnP} onClick={printStickers} disabled={printing || loading || rows.length === 0}><Printer className="h-4 w-4" /> {printing ? 'Preparing…' : 'Print stickers'}</button>
           </div>

@@ -161,6 +161,12 @@ export const keepInTouch = {
   runNow: () => API.post('/admin/keepintouch/run'),
 };
 
+export const balanceReminder = {
+  get:    () => API.get('/admin/balance-reminder-settings'),
+  save:   (data) => API.put('/admin/balance-reminder-settings', data),
+  runNow: () => API.post('/admin/balance-reminder/run'),
+};
+
 // Daily evening "Orders Received" report (in-app notification + WhatsApp)
 export const ordersReport = {
   get:    () => API.get('/admin/daily-orders-report-settings'),
@@ -368,6 +374,8 @@ export const mailRuns = {
   create: (data) => API.post('/mail-runs', data),
   updateStatus: (id, status) => API.put(`/mail-runs/${id}/status`, { status }),
   addresses: (id) => API.get(`/mail-runs/${id}/addresses`),
+  remove: (id) => API.delete(`/mail-runs/${id}`),
+  syncSchools: (id, rows) => API.post(`/mail-runs/${id}/sync-schools`, { rows }),
   // _ts cache-buster: force a fresh PDF each print (browsers/PWA cache identical blob URLs,
   // which made a re-print keep an old logo-less sticker).
   stickers: (id, params = {}) => API.get(`/mail-runs/${id}/stickers.pdf`, { params: { ...params, _ts: Date.now() }, responseType: 'blob' }),

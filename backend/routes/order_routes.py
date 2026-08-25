@@ -32,17 +32,33 @@ async def log_activity(user_email: str, action: str, entity_type: str, entity_id
     })
 
 
-async def _assert_dispatchable(order, items):
-    """Guard shared by all dispatch paths: block out-of-stock items and
-    enforce the payment threshold before an order can leave the building."""
+async def _assert_dispatchable(order, items, allow_credit=False):
+    """Guard shared by all dispatch paths: block out-of-stock items and enforce
+    the payment threshold before an order can leave the building.
+
+    ``allow_credit=True`` waives ONLY the payment threshold — a deliberate
+    "dispatch on credit" for trusted schools / existing customers. The
+    out-of-stock check always holds (you still can't ship what you don't have)."""
     for it in items:
         if it.get("status") == "out_of_stock":
             raise HTTPException(status_code=400, detail=f"Cannot dispatch — item out of stock: {it.get('die_name','')}")
+    if allow_credit:
+        return
     threshold = float(order.get("payment_threshold_pct", 50))
     grand = float(order.get("grand_total", 0) or 0)
     received = float(order.get("total_paid", order.get("payment_received", 0)) or 0)
     if grand > 0 and (received / grand * 100) < threshold:
-        raise HTTPException(status_code=400, detail=f"Cannot dispatch — payment below threshold ({threshold}% required)")
+        raise HTTPException(status_code=400, detail=f"Cannot dispatch — payment below threshold ({threshold}% required). Tick 'Dispatch on credit' to ship anyway.")
+
+
+def _credit_stamp(user, body):
+    """Audit fields recorded when an order is dispatched on credit (unpaid)."""
+    return {
+        "dispatched_on_credit": True,
+        "credit_reason": (body.get("credit_reason") or "").strip(),
+        "credit_by": user.get("email", ""),
+        "credit_at": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 # ==================== STOCK AVAILABILITY ====================
@@ -478,7 +494,10 @@ async def update_order_status(order_id: str, request: Request):
     if new_status == "dispatched":
         update_data["dispatch_date"] = body.get("dispatch_date", datetime.now(timezone.utc).strftime("%Y-%m-%d"))
         items = await db.order_items.find({"order_id": order_id}, {"_id": 0}).to_list(1000)
-        await _assert_dispatchable(order, items)
+        allow_credit = bool(body.get("dispatch_on_credit"))
+        await _assert_dispatchable(order, items, allow_credit=allow_credit)
+        if allow_credit:
+            update_data.update(_credit_stamp(user, body))
         for item in items:
             if item.get("status") in ("on_hold", "confirmed", "partially_dispatched"):
                 remaining = _remaining_qty(item)
@@ -538,7 +557,7 @@ async def update_order_production_stage(order_id: str, request: Request):
         raise HTTPException(status_code=404, detail="Order not found")
     if new_stage == "dispatched":
         items = await db.order_items.find({"order_id": order_id}, {"_id": 0}).to_list(1000)
-        await _assert_dispatchable(order, items)
+        await _assert_dispatchable(order, items, allow_credit=bool(body.get("dispatch_on_credit")))
     now_iso = datetime.now(timezone.utc).isoformat()
     await db.orders.update_one({"order_id": order_id}, {"$set": {
         "production_stage": new_stage,
@@ -854,7 +873,10 @@ async def create_dispatch(request: Request):
 
     items = await db.order_items.find(
         {"order_id": order_id, "status": {"$ne": "removed"}}, {"_id": 0}).to_list(1000)
-    await _assert_dispatchable(order, items)
+    allow_credit = bool(body.get("dispatch_on_credit"))
+    await _assert_dispatchable(order, items, allow_credit=allow_credit)
+    if allow_credit:
+        await db.orders.update_one({"order_id": order_id}, {"$set": _credit_stamp(user, body)})
 
     dispatchable = [it for it in items if it.get("status") in COMMITTING_ITEM_STATUSES and _remaining_qty(it) > 0]
     by_id = {it["order_item_id"]: it for it in dispatchable}

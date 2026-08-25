@@ -14,6 +14,8 @@ export default function KeepInTouchSection({
 }) {
   const [enabled, setEnabled] = useState(false);
   const [days, setDays] = useState(60);
+  const [custEnabled, setCustEnabled] = useState(false);
+  const [custDays, setCustDays] = useState(45);
   const [time, setTime] = useState('09:30');
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(false);
@@ -24,6 +26,8 @@ export default function KeepInTouchSection({
         const r = await keepInTouch.get();
         setEnabled(!!r.data.enabled);
         setDays(r.data.silence_days || 60);
+        setCustEnabled(!!r.data.customers_enabled);
+        setCustDays(r.data.customer_silence_days || 45);
         setTime(r.data.send_time || '09:30');
       } catch { /* defaults */ }
     })();
@@ -31,8 +35,11 @@ export default function KeepInTouchSection({
 
   const save = async () => {
     setSaving(true);
-    try { await keepInTouch.save({ enabled, silence_days: Number(days) || 60, send_time: time }); toast.success('Saved'); }
-    catch (e) { toast.error(e?.response?.data?.detail || 'Save failed'); }
+    try {
+      await keepInTouch.save({ enabled, silence_days: Number(days) || 60,
+        customers_enabled: custEnabled, customer_silence_days: Number(custDays) || 45, send_time: time });
+      toast.success('Saved');
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Save failed'); }
     finally { setSaving(false); }
   };
   const runNow = async () => {
@@ -70,6 +77,23 @@ export default function KeepInTouchSection({
             className={`h-9 px-2 text-sm rounded-lg border ${inputCls}`} />
         </div>
       </div>
+
+      <div className="border-t border-[var(--border-color)] pt-3 mt-1">
+        <label className={`flex items-center gap-2 text-sm ${textSec}`}>
+          <input type="checkbox" checked={custEnabled} onChange={e => setCustEnabled(e.target.checked)} data-testid="kit-customers-enabled" />
+          Also keep in touch with <b className="font-semibold">Won customers</b> (reorder / referral nurture)
+        </label>
+        <p className={`text-[11px] ${textMuted} mt-1 ml-6`}>Your best relationships shouldn't go quiet after the sale — this nudges a check-in on paying customers too.</p>
+        {custEnabled && (
+          <div className="flex items-center gap-2 mt-2 ml-6">
+            <label className={`text-xs ${textMuted}`}>Silent for</label>
+            <input type="number" min={7} max={365} value={custDays} onChange={e => setCustDays(e.target.value)}
+              className={`h-9 w-20 px-2 text-sm rounded-lg border ${inputCls}`} />
+            <span className={`text-xs ${textMuted}`}>days after last contact</span>
+          </div>
+        )}
+      </div>
+
       <div className="flex gap-2 pt-1">
         <button onClick={save} disabled={saving}
           className="h-9 px-4 rounded-lg text-sm font-semibold text-white" style={{ background: '#e94560' }}>
