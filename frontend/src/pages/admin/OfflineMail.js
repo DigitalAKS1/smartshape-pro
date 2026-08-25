@@ -6,6 +6,7 @@ import { useNavigate } from 'react-router-dom';
 import { MapPin, Mail, Plus, RefreshCw, Trash2, X, Printer, TrendingUp, QrCode, CalendarCheck, FileText, IndianRupee, ListPlus, Filter, Upload, Download } from 'lucide-react';
 import MailAddressSheet from '../../components/mail/MailAddressSheet';
 import ManualMailRunBuilder from '../../components/mail/ManualMailRunBuilder';
+import { useDataSync } from '../../lib/dataSync';
 
 const inr = (n) => '₹' + Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 });
 
@@ -66,6 +67,7 @@ export default function OfflineMail() {
     finally { setLoading(false); }
   }, []);
   useEffect(() => { load(); }, [load]);
+  useDataSync('mail', load);   // auto-refresh on any mail-run change (no manual refresh)
 
   const addArea = async () => {
     const f = areaForm;

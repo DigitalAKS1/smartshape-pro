@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { orders as ordersApi, holds as holdsApi, quotations as quotApi, dispatches as dispatchesApi, dispatchApi, dies as diesApi, downloadBlob } from '../lib/api';
+import { useDataSync, useAutoRefresh } from '../lib/dataSync';
 import { useAuth } from '../contexts/AuthContext';
 import { toast } from 'sonner';
 
@@ -113,6 +114,11 @@ export default function useOrdersManagement() {
   };
 
   useEffect(() => { fetchData(); }, []);
+  // Live-sync: refetch when any order/dispatch/hold mutation fires (this tab or
+  // another) + on tab focus — no manual refresh needed.
+  const stableFetch = useCallback(() => { fetchData(); }, []); // eslint-disable-line
+  useDataSync('orders', stableFetch);
+  useAutoRefresh(stableFetch, 90000);
 
   // ── Create order ─────────────────────────────────────────────────────────
   const openCreate = async () => {

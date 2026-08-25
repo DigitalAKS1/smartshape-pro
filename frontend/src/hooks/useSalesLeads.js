@@ -1,5 +1,6 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { leads as leadsApi, dealTypes as dealTypesApi } from '../lib/api';
+import { useDataSync, useAutoRefresh } from '../lib/dataSync';
 import { toast } from 'sonner';
 
 export function useSalesLeads() {
@@ -19,6 +20,10 @@ export function useSalesLeads() {
   useEffect(() => {
     dealTypesApi.getAll().then(r => setDealTypesList(Array.isArray(r.data) ? r.data : [])).catch(() => {});
   }, []);
+  // Live-sync: refresh the pipeline when any lead changes + on tab focus.
+  const stableFetch = useCallback(() => { fetchLeads(); }, []); // eslint-disable-line
+  useDataSync('crm', stableFetch);
+  useAutoRefresh(stableFetch, 90000);
 
   const fetchLeads = async () => {
     try {
