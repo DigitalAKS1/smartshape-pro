@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import AdminLayout from '../../components/layouts/AdminLayout';
 import { useTheme } from '../../contexts/ThemeContext';
@@ -90,6 +90,17 @@ export default function SchoolProfile() {
 
   const sp = useSchoolProfile(school_id);
   const { profile, loading, mounted } = sp;
+
+  // Deep-link a tab from the URL (?tab=feed) so reports can land on the exact
+  // relevant data (Timeline for a touch, Leads for a lead, etc.), once.
+  const [searchParams, setSearchParams] = useSearchParams();
+  useEffect(() => {
+    const t = searchParams.get('tab');
+    if (t && TABS.some(x => x.id === t)) {
+      sp.setActiveTab(t);
+      setSearchParams({}, { replace: true });
+    }
+  }, [searchParams]); // eslint-disable-line
 
   // Edit-school dialog (opened from the "Edit →" button on this page)
   const [editTarget, setEditTarget] = useState(null);

@@ -41,9 +41,13 @@ export default function DrillDownPanel({ open, title, rows, loading, onClose }) 
   const nav = useNavigate();
   if (!open) return null;
 
+  // Land on the most relevant data: a touch/brochure/hot-signal opens the
+  // school's Timeline; a lead opens the Leads tab (or the lead detail).
+  const TAB_FOR = { lead: 'leads', event: 'feed', brochure: 'feed', activity: 'feed' };
   const go = (r) => {
-    if (r.school_id) nav(`/school-profile/${r.school_id}`);
+    if (r.school_id) nav(`/school-profile/${r.school_id}?tab=${TAB_FOR[r.kind] || 'overview'}`);
     else if (r.lead_id) nav(`/leads?lead=${r.lead_id}`);
+    else return;
     onClose();
   };
 
