@@ -2,7 +2,7 @@ import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { X, Loader2, ChevronRight, Inbox, Download } from 'lucide-react';
 
-const KIND_ICON = { lead: '🎯', event: '✉️', brochure: '📖', activity: '🔥' };
+const KIND_ICON = { lead: '🎯', event: '✉️', brochure: '📖', activity: '🔥', quote: '📄' };
 
 const csvCell = (v) => {
   const s = (v == null ? '' : String(v)).replace(/"/g, '""');

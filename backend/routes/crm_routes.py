@@ -2045,6 +2045,108 @@ async def engagement_drill(request: Request):
                          "at": l.get("last_activity_date"),
                          "badge": f"{_age_days(l.get('last_activity_date'), today)}d silent"})
 
+    elif metric == "all_leads":
+        title = "All leads"
+        docs = await db.leads.find(
+            {**lead_q},
+            {"_id": 0, "lead_id": 1, "school_id": 1, "company_name": 1, "contact_name": 1,
+             "stage": 1, "expected_value": 1, "assigned_name": 1, "last_activity_date": 1, "deal_type": 1},
+        ).sort("last_activity_date", -1).to_list(LIMIT)
+        for l in docs:
+            bits = [x for x in [_drill_money(l.get("expected_value")), l.get("assigned_name")] if x]
+            rows.append({"kind": "lead", "primary": l.get("company_name") or l.get("contact_name") or "Lead",
+                         "secondary": " · ".join(bits), "school_id": l.get("school_id", ""),
+                         "lead_id": l.get("lead_id", ""), "at": l.get("last_activity_date"),
+                         "badge": l.get("stage") or ""})
+
+    elif metric == "rep":
+        # A salesperson-leaderboard cell: value=<rep email>, sub=won|lost|active|
+        # quotations|revenue. Admins may drill any rep; a rep only ever their own.
+        is_admin = get_team(user) == "admin"
+        rep = value if is_admin else user.get("email", "")
+        sub = (request.query_params.get("sub") or "leads").strip()
+        rep_name = ""
+        sp = await db.salespersons.find_one({"email": rep}, {"_id": 0, "name": 1})
+        if sp:
+            rep_name = sp.get("name") or ""
+        if sub in ("quotations", "revenue"):
+            qm = {"sales_person_email": rep}
+            if sub == "revenue":
+                qm["quotation_status"] = "confirmed"
+            title = f"{rep_name or rep} · {'confirmed quotations' if sub == 'revenue' else 'quotations'}"
+            docs = await db.quotations.find(
+                qm, {"_id": 0, "quotation_id": 1, "quote_number": 1, "school_name": 1,
+                     "school_id": 1, "grand_total": 1, "quotation_status": 1, "created_at": 1},
+            ).sort("created_at", -1).to_list(LIMIT)
+            for q in docs:
+                rows.append({"kind": "quote",
+                             "primary": q.get("school_name") or q.get("quote_number") or "Quotation",
+                             "secondary": " · ".join([x for x in [q.get("quote_number"), _drill_money(q.get("grand_total"))] if x]),
+                             "school_id": q.get("school_id", ""), "lead_id": "",
+                             "at": q.get("created_at"), "badge": q.get("quotation_status") or ""})
+        else:
+            stage_map = {"won": {"stage": "won"}, "lost": {"stage": "lost"},
+                         "active": {"stage": {"$nin": ["won", "lost"]}}, "leads": {}}
+            title = f"{rep_name or rep} · {sub if sub in stage_map else 'leads'}"
+            docs = await db.leads.find(
+                {"assigned_to": rep, **stage_map.get(sub, {})},
+                {"_id": 0, "lead_id": 1, "school_id": 1, "company_name": 1, "contact_name": 1,
+                 "stage": 1, "expected_value": 1, "last_activity_date": 1, "deal_type": 1},
+            ).sort("last_activity_date", -1).to_list(LIMIT)
+            for l in docs:
+                rows.append({"kind": "lead", "primary": l.get("company_name") or l.get("contact_name") or "Lead",
+                             "secondary": _drill_money(l.get("expected_value")) or "",
+                             "school_id": l.get("school_id", ""), "lead_id": l.get("lead_id", ""),
+                             "at": l.get("last_activity_date"), "badge": l.get("stage") or ""})
+
+    elif metric == "quotations":
+        # Quotation-stats tile: value=total|draft|sent|confirmed.
+        qm = {} if value in ("", "total") else {"quotation_status": value}
+        if scope_owner is not None:
+            qm["sales_person_email"] = scope_owner
+        title = f"{(value or 'total').title()} quotations"
+        docs = await db.quotations.find(
+            qm, {"_id": 0, "quotation_id": 1, "quote_number": 1, "school_name": 1, "school_id": 1,
+                 "grand_total": 1, "quotation_status": 1, "sales_person_name": 1, "created_at": 1},
+        ).sort("created_at", -1).to_list(LIMIT)
+        for q in docs:
+            bits = [x for x in [q.get("quote_number"), _drill_money(q.get("grand_total")), q.get("sales_person_name")] if x]
+            rows.append({"kind": "quote", "primary": q.get("school_name") or q.get("quote_number") or "Quotation",
+                         "secondary": " · ".join(bits), "school_id": q.get("school_id", ""), "lead_id": "",
+                         "at": q.get("created_at"), "badge": q.get("quotation_status") or ""})
+
+    elif metric == "lost_reason":
+        title = f"Lost · {value or 'unspecified'}"
+        rq = {**lead_q, "stage": "lost"}
+        rq["lost_reason"] = value if value else {"$in": [None, ""]}
+        docs = await db.leads.find(
+            rq, {"_id": 0, "lead_id": 1, "school_id": 1, "company_name": 1, "contact_name": 1,
+                 "expected_value": 1, "assigned_name": 1, "last_activity_date": 1, "lost_reason": 1},
+        ).sort("last_activity_date", -1).to_list(LIMIT)
+        for l in docs:
+            rows.append({"kind": "lead", "primary": l.get("company_name") or l.get("contact_name") or "Lead",
+                         "secondary": " · ".join([x for x in [_drill_money(l.get("expected_value")), l.get("assigned_name")] if x]),
+                         "school_id": l.get("school_id", ""), "lead_id": l.get("lead_id", ""),
+                         "at": l.get("last_activity_date"), "badge": l.get("lost_reason") or "no reason"})
+
+    elif metric == "tasks":
+        # Task-stats tile: value=total|pending|done|missed.
+        tq = {} if value in ("", "total") else {"status": value}
+        if scope_owner is not None:
+            tq["assigned_to"] = scope_owner
+        title = f"{(value or 'total').title()} tasks"
+        docs = await db.tasks.find(
+            tq, {"_id": 0, "task_id": 1, "title": 1, "school_id": 1, "lead_id": 1,
+                 "assigned_name": 1, "assigned_to": 1, "due_date": 1, "status": 1, "created_at": 1},
+        ).sort("created_at", -1).to_list(LIMIT)
+        for t in docs:
+            who = t.get("assigned_name") or t.get("assigned_to") or ""
+            due = t.get("due_date") or ""
+            rows.append({"kind": "event", "primary": t.get("title") or "Task",
+                         "secondary": " · ".join([x for x in [who, (f"due {due}" if due else "")] if x]),
+                         "school_id": t.get("school_id", ""), "lead_id": t.get("lead_id", ""),
+                         "at": t.get("created_at"), "badge": t.get("status") or ""})
+
     else:
         raise HTTPException(status_code=400, detail="Unknown drill metric")
 

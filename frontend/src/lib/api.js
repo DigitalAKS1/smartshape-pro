@@ -367,7 +367,7 @@ export const brochures = {
 export const engagement = {
   dashboard: (days = 30) => API.get('/engagement/dashboard', { params: { days } }),
   attribution: (days = 90) => API.get('/engagement/attribution', { params: { days } }),
-  drill: (metric, value = '', days = 30) => API.get('/engagement/drill', { params: { metric, value, days } }),
+  drill: (metric, value = '', days = 30, extra = {}) => API.get('/engagement/drill', { params: { metric, value, days, ...extra } }),
 };
 
 export const mailAreas = {
