@@ -258,98 +258,80 @@ async def _seed_templates():
 # ── Audience resolution helpers ────────────────────────────────────────────────
 
 async def _resolve_audience(audience_filter: dict) -> list:
-    roles        = audience_filter.get("roles", [])
-    boards       = audience_filter.get("boards", [])
-    cities       = audience_filter.get("cities", [])
-    tags         = audience_filter.get("tags", [])          # list of tag_ids — ANY match
-    lead_stages  = audience_filter.get("lead_stages", [])   # P2-A: contacts via lead stage
-    school_types = audience_filter.get("school_types", [])  # P3-A: filter by school board type
-    min_strength = audience_filter.get("min_strength")      # P3-A: filter by school strength
-    school_cities   = audience_filter.get("school_cities", [])   # P3-A: filter by school city
-    contact_ids     = audience_filter.get("contact_ids", [])      # direct hand-pick (webinar)
-    not_purchased   = audience_filter.get("not_purchased", False)  # non-won lead funnel
-
-    base_filt = {"is_deleted": {"$ne": True}}
-
-    # Direct contact selection — hand-picked list (webinar / zoom invites)
-    if contact_ids:
+    """Combined audience — AND across facets, OR within — matching the email
+    resolver + the live recipient count, so what you filter is what you send.
+    Hand-pick and non-purchasers stay one-off modes; everything else combines."""
+    contact_ids = audience_filter.get("contact_ids") or []
+    if contact_ids:  # hand-pick (webinar / direct list)
         return await db.contacts.find(
-            {"contact_id": {"$in": contact_ids}, "is_deleted": {"$ne": True}},
-            {"_id": 0}
-        ).to_list(None)
+            {"contact_id": {"$in": contact_ids}, "is_deleted": {"$ne": True}}, {"_id": 0}).to_list(None)
 
-    # Marketing funnel: contacts NOT linked to any won deal — uses DB-side $nin for performance
-    if not_purchased:
-        won_leads = await db.leads.find(
-            {"stage": "won", "is_deleted": {"$ne": True}},
-            {"_id": 0, "converted_from_contact": 1, "school_id": 1}
-        ).to_list(None)
-        won_contact_ids = [l["converted_from_contact"] for l in won_leads if l.get("converted_from_contact")]
-        won_school_ids  = [l["school_id"] for l in won_leads if l.get("school_id")]
-        excl: dict = {"is_deleted": {"$ne": True}}
-        if won_contact_ids:
-            excl["contact_id"] = {"$nin": won_contact_ids}
+    if audience_filter.get("not_purchased"):  # funnel: schools with no won deal
+        won_school_ids = {l["school_id"] async for l in db.leads.find(
+            {"stage": "won", "is_deleted": {"$ne": True}}, {"_id": 0, "school_id": 1}) if l.get("school_id")}
+        q = {"is_deleted": {"$ne": True}}
         if won_school_ids:
-            excl["school_id"] = {"$nin": won_school_ids}
-        return await db.contacts.find(excl, {"_id": 0}).to_list(None)
+            q["school_id"] = {"$nin": list(won_school_ids)}
+        return await db.contacts.find(q, {"_id": 0}).to_list(None)
 
-    # P2-A — By lead stage: collect contacts linked to leads in given stages
-    if lead_stages:
-        leads_in_stage = await db.leads.find(
-            {"stage": {"$in": lead_stages}, "is_deleted": {"$ne": True}},
-            {"_id": 0, "converted_from_contact": 1, "school_id": 1},
-        ).to_list(None)
-        cfc_ids   = [l["converted_from_contact"] for l in leads_in_stage if l.get("converted_from_contact")]
-        sch_ids   = [l["school_id"] for l in leads_in_stage if l.get("school_id")]
-        or_clauses = []
-        if cfc_ids:
-            or_clauses.append({"contact_id": {"$in": cfc_ids}})
-        if sch_ids:
-            or_clauses.append({"school_id": {"$in": sch_ids}})
-        if not or_clauses:
-            return []
-        stage_filt = {"$and": [base_filt, {"$or": or_clauses}]}
-        return await db.contacts.find(stage_filt, {"_id": 0}).to_list(None)
+    # ── Combinable facets ───────────────────────────────────────────────────
+    sources      = audience_filter.get("sources") or []
+    roles        = audience_filter.get("roles") or []
+    tags         = audience_filter.get("tags") or []
+    lead_stages  = audience_filter.get("lead_stages") or []
+    school_types = audience_filter.get("school_types") or []
+    cities       = audience_filter.get("cities") or audience_filter.get("school_cities") or []
+    min_strength = audience_filter.get("min_strength")
+    max_strength = audience_filter.get("max_strength")
 
-    # P3-A — By school attributes: filter schools first, then contacts
-    if school_types or min_strength is not None or school_cities:
+    contact_q = {"is_deleted": {"$ne": True}}
+
+    # School-level facets → intersect into one school_id set
+    school_id_sets = []
+    if school_types or cities or min_strength is not None or max_strength is not None:
         sch_q: dict = {}
         if school_types:
             sch_q["school_type"] = {"$in": school_types}
-        if min_strength is not None:
-            sch_q["school_strength"] = {"$gte": int(min_strength)}
-        if school_cities:
-            sch_q["city"] = {"$in": school_cities}
-        school_ids = [s["school_id"] async for s in db.schools.find(sch_q, {"_id": 0, "school_id": 1})]
+        if cities:
+            sch_q["city"] = {"$in": cities}
+        if min_strength is not None or max_strength is not None:
+            strq: dict = {}
+            if min_strength is not None:
+                strq["$gte"] = int(min_strength)
+            if max_strength is not None:
+                strq["$lte"] = int(max_strength)
+            sch_q["school_strength"] = strq
+        school_id_sets.append(
+            {s["school_id"] async for s in db.schools.find(sch_q, {"_id": 0, "school_id": 1})})
+    if lead_stages:
+        stage_ids = set()
+        async for l in db.leads.find(
+                {"stage": {"$in": lead_stages}, "is_deleted": {"$ne": True}}, {"_id": 0, "school_id": 1}):
+            if l.get("school_id"):
+                stage_ids.add(l["school_id"])
+        school_id_sets.append(stage_ids)
+    if school_id_sets:
+        school_ids = set.intersection(*school_id_sets)
         if not school_ids:
             return []
-        base_filt["school_id"] = {"$in": school_ids}
-        return await db.contacts.find(base_filt, {"_id": 0}).to_list(None)
+        contact_q["school_id"] = {"$in": list(school_ids)}
 
-    # Existing filters
-    if boards:
-        base_filt["board"] = {"$in": boards}
-    if cities:
-        base_filt["city"] = {"$in": cities}
-
+    if sources:
+        contact_q["source"] = {"$in": sources}
     if tags:
-        base_filt["tag_ids"] = {"$in": tags}
-        return await db.contacts.find(base_filt, {"_id": 0}).to_list(None)
+        contact_q["tag_ids"] = {"$in": tags}
 
+    contacts = await db.contacts.find(contact_q, {"_id": 0}).to_list(None)
+
+    # Role facet: OR over contact_role_id and free-text designation (post-filter)
     if roles:
-        role_docs = await db.contact_roles.find(
-            {"name": {"$in": roles}}, {"role_id": 1, "name": 1}
-        ).to_list(None)
+        role_docs = await db.contact_roles.find({"name": {"$in": roles}}, {"role_id": 1, "name": 1}).to_list(None)
         role_ids = {r["role_id"] for r in role_docs}
-        role_names_lower = {r["name"].lower() for r in role_docs}
-        all_contacts = await db.contacts.find(base_filt, {"_id": 0}).to_list(None)
-        return [
-            c for c in all_contacts
-            if c.get("contact_role_id") in role_ids
-            or (c.get("designation") or "").lower() in role_names_lower
-        ]
-
-    return await db.contacts.find(base_filt, {"_id": 0}).to_list(None)
+        role_names_lower = {r["name"].lower() for r in role_docs} | {r.lower() for r in roles}
+        contacts = [c for c in contacts
+                    if c.get("contact_role_id") in role_ids
+                    or (c.get("designation") or "").lower() in role_names_lower]
+    return contacts
 
 
 # ── Templates endpoints ────────────────────────────────────────────────────────

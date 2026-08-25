@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import {
   Megaphone, Plus, RefreshCw, Play, Eye, Check, Wifi, QrCode,
   Users, Target, TrendingUp, School, Video, UserX, Brain, Upload,
-  Loader2, Paperclip, X, Search, MessageSquare,
+  Loader2, Paperclip, X, Search, MessageSquare, SlidersHorizontal,
 } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
@@ -11,6 +11,7 @@ import { Switch } from '../ui/switch';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '../ui/dialog';
 import { toast } from 'sonner';
 import { whatsApp as waApi } from '../../lib/api';
+import AudienceFilterBuilder from './AudienceFilterBuilder';
 import { STATUS_CHIP, pct, mapCampaign, personalize } from '../../lib/marketingUtils';
 
 const TMPL_CAT_LABELS = { intro: 'Intro', catalogue: 'Catalogue', offer: 'Offer', followup: 'Follow-up', reengagement: 'Re-engagement', seasonal: 'Seasonal' };
@@ -28,7 +29,7 @@ export default function CampaignsTab({ tk, campaigns, setCampaigns, roles, conta
   const [previewContact, setPreviewContact] = useState(0);
   const [contactSearch, setContactSearch] = useState('');
   const [contactTagFilter, setContactTagFilter] = useState('');
-  const [form, setForm] = useState({ name: '', audience: 'all', role_id: '', tag_ids: [], lead_stages: [], school_types: [], min_strength: '', school_cities: '', contact_ids: [], template_id: '', message: '', schedule: 'draft', schedule_at: '', ai_personalization: true, attachment_id: null });
+  const [form, setForm] = useState({ name: '', audience: 'filter', audience_filter: {}, role_id: '', tag_ids: [], lead_stages: [], school_types: [], min_strength: '', school_cities: '', contact_ids: [], template_id: '', message: '', schedule: 'draft', schedule_at: '', ai_personalization: true, attachment_id: null });
 
   useEffect(() => {
     waApi.listAttachments().then(r => setAttachments(r.data || [])).catch(() => {});
@@ -88,7 +89,7 @@ export default function CampaignsTab({ tk, campaigns, setCampaigns, roles, conta
   function closeCreate() {
     setShowCreate(false); setStep(1);
     setContactSearch(''); setContactTagFilter('');
-    setForm({ name: '', audience: 'all', role_id: '', tag_ids: [], lead_stages: [], school_types: [], min_strength: '', school_cities: '', contact_ids: [], template_id: '', message: '', schedule: 'draft', schedule_at: '', ai_personalization: true, attachment_id: null });
+    setForm({ name: '', audience: 'filter', audience_filter: {}, role_id: '', tag_ids: [], lead_stages: [], school_types: [], min_strength: '', school_cities: '', contact_ids: [], template_id: '', message: '', schedule: 'draft', schedule_at: '', ai_personalization: true, attachment_id: null });
   }
 
   function filteredContactsForPicker() {
@@ -116,7 +117,18 @@ export default function CampaignsTab({ tk, campaigns, setCampaigns, roles, conta
     try {
       let audience_filter = {};
       let audienceLabel = 'All Contacts';
-      if (form.audience === 'role' && form.role_id) {
+      if (form.audience === 'filter') {
+        audience_filter = form.audience_filter || {};
+        const parts = [];
+        if (audience_filter.sources?.length) parts.push(audience_filter.sources.join('/'));
+        if (audience_filter.lead_stages?.length) parts.push(audience_filter.lead_stages.join('/'));
+        if (audience_filter.roles?.length) parts.push(audience_filter.roles.join('/'));
+        if (audience_filter.school_types?.length) parts.push(audience_filter.school_types.join('/'));
+        if (audience_filter.cities?.length) parts.push(audience_filter.cities.join('/'));
+        if (audience_filter.tags?.length) parts.push(`${audience_filter.tags.length} tag(s)`);
+        if (audience_filter.min_strength) parts.push(`${audience_filter.min_strength}+ students`);
+        audienceLabel = parts.length ? parts.join(' · ') : 'All Contacts';
+      } else if (form.audience === 'role' && form.role_id) {
         const rName = roles.find(r => r.role_id === form.role_id)?.name;
         audience_filter = { roles: [rName].filter(Boolean) };
         audienceLabel = rName || 'By Role';
@@ -170,6 +182,7 @@ export default function CampaignsTab({ tk, campaigns, setCampaigns, roles, conta
   }
 
   const AUDIENCE_OPTS = [
+    { key: 'filter',          label: 'Full filter (like Leads & CRM)', desc: 'Combine Source, Stage, Role, City, Type, Strength & Tags — with a live recipient count', icon: SlidersHorizontal },
     { key: 'all',             label: 'All Contacts',           desc: `${contacts.length} contacts in your database`, icon: Users },
     { key: 'role',            label: 'By Designation',         desc: 'Principal, Teacher, Purchase Head, etc.', icon: Users },
     { key: 'tags',            label: 'By Tags',                desc: 'Hot Lead, Demo Done, Budget Approved, etc.', icon: Target },
@@ -324,7 +337,7 @@ export default function CampaignsTab({ tk, campaigns, setCampaigns, roles, conta
 
       {/* Create Campaign Dialog */}
       <Dialog open={showCreate} onOpenChange={v => { if (!v) closeCreate(); else setShowCreate(true); }}>
-        <DialogContent className={`${tk.card} border ${tk.bdr} w-[calc(100vw-2rem)] max-w-lg`}>
+        <DialogContent className={`${tk.card} border ${tk.bdr} w-[calc(100vw-2rem)] max-w-lg max-h-[90vh] overflow-y-auto`}>
           <DialogHeader>
             <DialogTitle className={tk.t1}>New WhatsApp Campaign</DialogTitle>
           </DialogHeader>
@@ -390,6 +403,13 @@ export default function CampaignsTab({ tk, campaigns, setCampaigns, roles, conta
                             <p className={`text-[11px] ${tk.tm}`}>{opt.desc}</p>
                           </div>
                         </button>
+                        {/* Full CRM-style multi-filter */}
+                        {opt.key === 'filter' && form.audience === 'filter' && (
+                          <div className="mt-2 ml-7 mr-1 rounded-lg border border-[var(--border-color)] p-3">
+                            <AudienceFilterBuilder value={form.audience_filter}
+                              onChange={v => setForm(f => ({ ...f, audience_filter: v }))} />
+                          </div>
+                        )}
                         {/* Role sub-selector */}
                         {opt.key === 'role' && form.audience === 'role' && roles.length > 0 && (
                           <div className="mt-2 ml-7 flex flex-wrap gap-1.5">
