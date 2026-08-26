@@ -63,21 +63,30 @@ export default function OrdersManagement() {
           </Button>
         </div>
 
-        {/* Stats */}
+        {/* Stats — each tile filters the list below (Holds jumps to the Holds tab) */}
         <div className="grid grid-cols-3 sm:grid-cols-6 gap-3">
           {[
-            { label: 'Total',      value: om.stats.total,       color: textPri },
-            { label: 'Pending',    value: om.stats.pending,     color: 'text-yellow-400' },
-            { label: 'Confirmed',  value: om.stats.confirmed,   color: 'text-blue-400' },
-            { label: 'Dispatched', value: om.stats.dispatched,  color: 'text-purple-400' },
-            { label: 'Delivered',  value: om.stats.delivered,   color: 'text-green-400' },
-            { label: 'Holds',      value: om.stats.activeHolds, color: 'text-orange-400' },
-          ].map(s => (
-            <div key={s.label} className={`${card} border rounded-md p-3 text-center`}>
-              <div className={`text-2xl font-mono font-bold ${s.color}`}>{s.value}</div>
-              <p className={`text-xs ${textMuted} mt-0.5`}>{s.label}</p>
-            </div>
-          ))}
+            { label: 'Total',      value: om.stats.total,       color: textPri,          filter: 'all' },
+            { label: 'Pending',    value: om.stats.pending,     color: 'text-yellow-400', filter: 'pending' },
+            { label: 'Confirmed',  value: om.stats.confirmed,   color: 'text-blue-400',   filter: 'confirmed' },
+            { label: 'Dispatched', value: om.stats.dispatched,  color: 'text-purple-400', filter: 'dispatched' },
+            { label: 'Delivered',  value: om.stats.delivered,   color: 'text-green-400',  filter: 'delivered' },
+            { label: 'Holds',      value: om.stats.activeHolds, color: 'text-orange-400', tab: 'holds' },
+          ].map(s => {
+            const active = s.tab ? om.activeTab === 'holds' : (om.activeTab === 'orders' && om.statusFilter === s.filter);
+            return (
+              <button key={s.label} type="button"
+                onClick={() => {
+                  if (s.tab) { om.setActiveTab('holds'); }
+                  else { om.setActiveTab('orders'); om.setStatusFilter(s.filter); }
+                }}
+                className={`${card} border rounded-md p-3 text-center transition-all hover:border-[#e94560]/50 hover:bg-[var(--bg-hover)] ${active ? 'ring-1 ring-[#e94560]/60 border-[#e94560]/50' : ''}`}
+                data-testid={`order-stat-${s.label.toLowerCase()}`}>
+                <div className={`text-2xl font-mono font-bold ${s.color}`}>{s.value}</div>
+                <p className={`text-xs ${textMuted} mt-0.5`}>{s.label}</p>
+              </button>
+            );
+          })}
         </div>
 
         {/* Bulk invoice import + unmatched review (admin / accounts) */}
