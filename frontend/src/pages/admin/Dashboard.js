@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import AdminLayout from '../../components/layouts/AdminLayout';
-import { analytics, quotations as quotApi, activities } from '../../lib/api';
+import { analytics, quotations as quotApi, activities, engagement } from '../../lib/api';
+import DrillDownPanel from '../../components/marketing/DrillDownPanel';
 import { formatCurrency } from '../../lib/utils';
 import { Package, AlertTriangle, IndianRupee, QrCode, Clock } from 'lucide-react';
 import { Link } from 'react-router-dom';
@@ -21,6 +22,18 @@ export default function Dashboard() {
   const [attention, setAttention]          = useState({ hot: 0, overdue: 0 });
   const [loading, setLoading]              = useState(true);
   const [mounted, setMounted]              = useState(false);
+  const [drill, setDrill]                  = useState({ open: false, loading: false, title: '', rows: [] });
+
+  const openDrill = async (metric, value = '', extra = {}) => {
+    setDrill({ open: true, loading: true, title: '', rows: [] });
+    try {
+      const r = await engagement.drill(metric, value, 90, extra);
+      setDrill({ open: true, loading: false, title: r.data.title, rows: r.data.rows || [] });
+    } catch {
+      setDrill({ open: true, loading: false, title: 'Details', rows: [] });
+    }
+  };
+  const closeDrill = () => setDrill(d => ({ ...d, open: false }));
 
   useEffect(() => {
     (async () => {
@@ -150,12 +163,14 @@ export default function Dashboard() {
         <RecentQuotationsCard recentQuotations={recentQuotations} tk={tk} isDark={isDark} rv={rv} />
 
         {/* Agent Performance */}
-        <AgentPerformanceCard conversion={conversion} tk={tk} isDark={isDark} rv={rv} />
+        <AgentPerformanceCard conversion={conversion} tk={tk} isDark={isDark} rv={rv} onDrill={openDrill} />
 
         {/* Lead Pipeline */}
-        <LeadPipelineCard conversion={conversion} tk={tk} isDark={isDark} rv={rv} />
+        <LeadPipelineCard conversion={conversion} tk={tk} isDark={isDark} rv={rv} onDrill={openDrill} />
 
       </div>
+
+      <DrillDownPanel open={drill.open} title={drill.title} rows={drill.rows} loading={drill.loading} onClose={closeDrill} />
     </AdminLayout>
   );
 }

@@ -7,8 +7,15 @@ import { formatCurrency } from '../../lib/utils';
  * Agent performance report section.
  * Props: conversion (salesperson_conversion array), tk (theme tokens), isDark, rv (animation fn)
  */
-export default function AgentPerformanceCard({ conversion, tk, isDark, rv }) {
+export default function AgentPerformanceCard({ conversion, tk, isDark, rv, onDrill }) {
   if (!conversion?.salesperson_conversion?.length) return null;
+
+  // A number that drills into the rep's records when a handler is provided.
+  const Clk = ({ n, sub, email, className }) =>
+    (onDrill && n > 0)
+      ? <button type="button" onClick={() => onDrill('rep', email, { sub })}
+          className={`underline decoration-dotted underline-offset-2 hover:text-[#e94560] ${className || ''}`}>{n}</button>
+      : <span className={className}>{n}</span>;
 
   return (
     <div className={`${rv('delay-[200ms]')} ${tk.card} border rounded-2xl overflow-hidden`}>
@@ -49,15 +56,19 @@ export default function AgentPerformanceCard({ conversion, tk, isDark, rv }) {
                     </div>
                     <div className="min-w-0">
                       <p className={`text-sm font-semibold ${tk.t1} truncate`}>{sp.name}</p>
-                      <p className={`text-xs ${tk.tm} truncate`}>{sp.active} active leads</p>
+                      <p className={`text-xs ${tk.tm} truncate`}><Clk n={sp.active} sub="active" email={sp.email} /> active leads</p>
                     </div>
                   </div>
                 </td>
                 <td className={`px-4 sm:px-5 py-3 text-sm font-mono ${tk.t2}`}>{sp.calls ?? '—'}</td>
                 <td className={`px-4 sm:px-5 py-3 text-sm font-mono ${tk.t2}`}>{sp.visits ?? '—'}</td>
-                <td className={`px-4 sm:px-5 py-3 text-sm font-mono ${tk.t2}`}>{sp.quotations}</td>
-                <td className="px-4 sm:px-5 py-3 text-sm font-mono text-emerald-400 font-semibold">{sp.won}</td>
-                <td className={`px-4 sm:px-5 py-3 text-sm font-mono font-bold ${tk.t1}`}>{formatCurrency(sp.revenue)}</td>
+                <td className={`px-4 sm:px-5 py-3 text-sm font-mono ${tk.t2}`}><Clk n={sp.quotations} sub="quotations" email={sp.email} /></td>
+                <td className="px-4 sm:px-5 py-3 text-sm font-mono text-emerald-400 font-semibold"><Clk n={sp.won} sub="won" email={sp.email} /></td>
+                <td className={`px-4 sm:px-5 py-3 text-sm font-mono font-bold ${tk.t1}`}>
+                  {onDrill && sp.revenue > 0
+                    ? <button type="button" onClick={() => onDrill('rep', sp.email, { sub: 'revenue' })} className="underline decoration-dotted underline-offset-2 hover:text-[#e94560]">{formatCurrency(sp.revenue)}</button>
+                    : formatCurrency(sp.revenue)}
+                </td>
                 <td className="px-4 sm:px-5 py-3">
                   <div className="flex items-center gap-2">
                     <div className="flex-1 bg-[var(--bg-primary)] rounded-full h-1.5 min-w-[50px]">
@@ -94,11 +105,13 @@ export default function AgentPerformanceCard({ conversion, tk, isDark, rv }) {
               {[
                 { label: 'Calls',  val: sp.calls ?? 0,   icon: Phone },
                 { label: 'Visits', val: sp.visits ?? 0,  icon: MapPin },
-                { label: 'Quotes', val: sp.quotations,   icon: FileText },
-                { label: 'Won',    val: sp.won,           icon: Target },
-              ].map(({ label, val, icon: Icon }) => (
+                { label: 'Quotes', val: sp.quotations,   icon: FileText, sub: 'quotations' },
+                { label: 'Won',    val: sp.won,           icon: Target,   sub: 'won' },
+              ].map(({ label, val, icon: Icon, sub }) => (
                 <div key={label} className="bg-[var(--bg-primary)] rounded-lg py-2">
-                  <p className={`text-lg font-black ${tk.t1} tabular-nums`}>{val}</p>
+                  <p className={`text-lg font-black ${tk.t1} tabular-nums`}>
+                    {sub ? <Clk n={val} sub={sub} email={sp.email} /> : val}
+                  </p>
                   <p className={`text-[9px] uppercase tracking-wide ${tk.tm} font-semibold`}>{label}</p>
                 </div>
               ))}

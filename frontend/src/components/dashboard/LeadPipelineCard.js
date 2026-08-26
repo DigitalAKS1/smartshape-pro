@@ -16,7 +16,7 @@ const PIPELINE_STAGES = [
  * Lead pipeline summary section.
  * Props: conversion (pipeline object), tk (theme tokens), isDark, rv (animation fn)
  */
-export default function LeadPipelineCard({ conversion, tk, isDark, rv }) {
+export default function LeadPipelineCard({ conversion, tk, isDark, rv, onDrill }) {
   if (!conversion?.pipeline) return null;
 
   return (
@@ -37,12 +37,18 @@ export default function LeadPipelineCard({ conversion, tk, isDark, rv }) {
       </div>
 
       <div className="grid grid-cols-4 sm:grid-cols-7 divide-x divide-[var(--border-color)]">
-        {PIPELINE_STAGES.map(({ stage, label, color }) => (
-          <div key={stage} className={`px-3 py-4 text-center ${tk.row} transition-colors`}>
-            <p className={`text-2xl font-black ${color} tabular-nums`}>{conversion.pipeline[stage] || 0}</p>
-            <p className={`text-[9px] uppercase tracking-widest font-semibold ${tk.tm} mt-0.5`}>{label}</p>
-          </div>
-        ))}
+        {PIPELINE_STAGES.map(({ stage, label, color }) => {
+          const n = conversion.pipeline[stage] || 0;
+          const clickable = onDrill && n > 0;
+          return (
+            <button key={stage} type="button" disabled={!clickable}
+              onClick={() => clickable && onDrill('stage', stage)}
+              className={`px-3 py-4 text-center ${tk.row} transition-colors ${clickable ? 'cursor-pointer' : 'cursor-default'}`}>
+              <p className={`text-2xl font-black ${color} tabular-nums`}>{n}</p>
+              <p className={`text-[9px] uppercase tracking-widest font-semibold ${tk.tm} mt-0.5`}>{label}</p>
+            </button>
+          );
+        })}
       </div>
     </div>
   );
