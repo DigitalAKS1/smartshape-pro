@@ -888,7 +888,8 @@ async def mail_queue_stickers(request: Request):
         size=(qp.get("size") or "100x150"),
         layout=("a4" if qp.get("layout") == "a4" else "label"),
         show_logo=(qp.get("no_logo") not in ("1", "true", "yes")),
-        endorsement=endorsement, endorsement_pt=endorsement_pt, text_scale=text_scale)
+        endorsement=endorsement, endorsement_pt=endorsement_pt, text_scale=text_scale,
+        show_phone=(qp.get("no_phone") not in ("1", "true", "yes")))
     return StreamingResponse(io.BytesIO(pdf), media_type="application/pdf",
                              headers={"Content-Disposition": f'attachment; filename="post-{today}.pdf"'})
 
@@ -1489,7 +1490,7 @@ def _load_company_logo(company, base_url):
 
 
 def _render_label(c, x, y, w, h, sch, token, company, base_url, logo=None, frame=True,
-                  endorsement="", endorsement_pt=0, text_scale=1.0):
+                  endorsement="", endorsement_pt=0, text_scale=1.0, show_phone=True):
     """One address label inside rect (x,y,w,h): TO on top (bold school name),
     FROM below (bold company name), QR bottom-right. Fonts + wrap scale to width.
 
@@ -1561,7 +1562,11 @@ def _render_label(c, x, y, w, h, sch, token, company, base_url, logo=None, frame
 
     # ── TO block — build every line first, then centre it (biased high) in the top
     #    zone so the recipient address is balanced, not crammed against the top edge.
-    to_lines = [("To,", "Helvetica", f_lbl), ("The Principal,", "Helvetica", f_body)]
+    #    Postal order: NAME → SCHOOL → ADDRESS → PHONE. The person's own name goes
+    #    first (falling back to "The Principal" only when we don't know it), because
+    #    a cover addressed to a named person actually reaches that person.
+    person = str(sch.get("primary_contact_name") or "").strip() or "The Principal"
+    to_lines = [("To,", "Helvetica", f_lbl), (person + ",", "Helvetica", f_body)]
     nl = _wrap_to_width(c, sch.get("school_name", ""), "Helvetica-Bold", f_name, iw)[:2]
     for i, ln in enumerate(nl):
         to_lines.append((ln + ("," if i == len(nl) - 1 else ""), "Helvetica-Bold", f_name))
@@ -1573,6 +1578,9 @@ def _render_label(c, x, y, w, h, sch, token, company, base_url, logo=None, frame
         to_lines.append((cp + ("," if sch.get("state") else "."), "Helvetica-Bold", f_pin))
     if sch.get("state"):
         to_lines.append((sch.get("state", "") + ".", "Helvetica", f_body))
+    to_phone = str(sch.get("phone") or "").strip()
+    if show_phone and to_phone:
+        to_lines.append(("Ph: " + to_phone, "Helvetica", f_body))
 
     def _lh(sz):
         return sz * 1.18
@@ -1648,6 +1656,10 @@ def _render_label(c, x, y, w, h, sch, token, company, base_url, logo=None, frame
             if fy < y + m:
                 break
             c.drawString(ix, fy, wl); fy -= f_lbl * LH
+    # Sender phone last — the line the recipient uses to call back.
+    from_phone = str(company.get("phone") or "").strip()
+    if show_phone and from_phone and fy >= y + m:
+        c.drawString(ix, fy, "Ph: " + from_phone[:24]); fy -= f_lbl * LH
 
     # ── QR (bottom-right) ──
     if token:
@@ -1663,7 +1675,7 @@ def _render_label(c, x, y, w, h, sch, token, company, base_url, logo=None, frame
 def _build_stickers_pdf(touches, schools_by_id, company, base_url, *,
                         orientation="portrait", size="100x150", layout="label",
                         from_override=None, show_logo=True,
-                        endorsement="", endorsement_pt=0, text_scale=1.0):
+                        endorsement="", endorsement_pt=0, text_scale=1.0, show_phone=True):
     """Address labels — Godex thermal (one per page) or A4 4-up for a normal
     printer. TO on top, FROM below (company bold), QR, auto-wrapped to the size.
       orientation: portrait | landscape (thermal only)
@@ -1702,7 +1714,7 @@ def _build_stickers_pdf(touches, schools_by_id, company, base_url, *,
             _render_label(c, cx, cyy, cw, ch, schools_by_id.get(t.get("school_id"), {}),
                           t.get("qr_token", ""), company, base_url, logo=logo, frame=False,
                           endorsement=endorsement, endorsement_pt=endorsement_pt,
-                          text_scale=text_scale)
+                          text_scale=text_scale, show_phone=show_phone)
         c.save()
         return buf.getvalue()
 
@@ -1718,7 +1730,7 @@ def _build_stickers_pdf(touches, schools_by_id, company, base_url, *,
         _render_label(c, 0, 0, W, H, schools_by_id.get(t.get("school_id"), {}),
                       t.get("qr_token", ""), company, base_url, logo=logo,
                       endorsement=endorsement, endorsement_pt=endorsement_pt,
-                      text_scale=text_scale)
+                      text_scale=text_scale, show_phone=show_phone)
         c.showPage()
     c.save()
     return buf.getvalue()
@@ -1763,17 +1775,18 @@ async def mail_run_stickers(run_id: str, request: Request):
     # Optional per-batch FROM override (else falls back to Settings → Company)
     show_logo = qp.get("no_logo") not in ("1", "true", "yes")
     from_override = None
-    if any(qp.get(k) for k in ("from_name", "from_address", "from_tagline", "from_contact")):
+    if any(qp.get(k) for k in ("from_name", "from_address", "from_tagline", "from_contact", "from_phone")):
         from_override = {
             "company_name": qp.get("from_name", ""), "address": qp.get("from_address", ""),
             "city": qp.get("from_city", ""), "state": qp.get("from_state", ""),
             "pincode": qp.get("from_pincode", ""), "sticker_tagline": qp.get("from_tagline", ""),
-            "sticker_contact": qp.get("from_contact", ""),
+            "sticker_contact": qp.get("from_contact", ""), "phone": qp.get("from_phone", ""),
         }
     pdf = _build_stickers_pdf(touches, schools_by_id, company, base, orientation=orientation,
                               size=size, layout=layout, from_override=from_override,
                               show_logo=show_logo, endorsement=endorsement,
-                              endorsement_pt=endorsement_pt, text_scale=text_scale)
+                              endorsement_pt=endorsement_pt, text_scale=text_scale,
+                              show_phone=(qp.get("no_phone") not in ("1", "true", "yes")))
     return StreamingResponse(io.BytesIO(pdf), media_type="application/pdf",
                              headers={"Content-Disposition": f'attachment; filename="stickers-{run_id}.pdf"'})
 

@@ -10,7 +10,8 @@ import { Switch } from '../ui/switch';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '../ui/dialog';
 import { toast } from 'sonner';
 import RichMessageEditor from '../RichMessageEditor';
-import { dripSequences as dripApi, whatsApp as waApi } from '../../lib/api';
+import { dripSequences as dripApi, whatsApp as waApi, mailRuns } from '../../lib/api';
+import { useNavigate } from 'react-router-dom';
 import { mapSeq } from '../../lib/marketingUtils';
 
 const BLANK_FORM = { name: '', description: '', trigger: 'lead_created', filter_designation: '', steps: [{ message_type: 'whatsapp', message_template: '', delay_days: 0, attachment_id: null, material_type: 'brochure' }] };
@@ -27,6 +28,35 @@ export default function DripsTab({ tk, drips, setDrips }) {
   const [pickingFor, setPickingFor]        = useState(null);
   const [loadingAttach, setLoadingAttach]  = useState(false);
   const [uploadingAttach, setUploadingAttach] = useState(false);
+
+  const navigate = useNavigate();
+  const [pending, setPending]         = useState({});   // { sequence_id: pieces waiting to print }
+  const [deliveries, setDeliveries]   = useState(null); // { id, loading, rows, totals }
+
+  // How many mailers this sequence has queued but nobody has posted yet.
+  React.useEffect(() => {
+    mailRuns.getAll().then(r => {
+      const acc = {};
+      (r.data || []).forEach(run => {
+        if (run.is_drip_run && run.sequence_id && run.status !== 'closed') {
+          acc[run.sequence_id] = (acc[run.sequence_id] || 0) + (run.counts?.pending ?? run.counts?.sent ?? 0);
+        }
+      });
+      setPending(acc);
+    }).catch(() => {});
+  }, []);
+
+  async function openDeliveries(d) {
+    if (deliveries?.id === d.id) { setDeliveries(null); return; }
+    setDeliveries({ id: d.id, loading: true, rows: [], totals: {} });
+    try {
+      const r = await dripApi.deliveries(d.sequence_id || d.id);
+      setDeliveries({ id: d.id, loading: false, rows: r.data.rows || [], totals: r.data.totals || {} });
+    } catch {
+      toast.error('Could not load deliveries');
+      setDeliveries(null);
+    }
+  }
 
   async function toggle(d) {
     try {
@@ -233,6 +263,14 @@ export default function DripsTab({ tk, drips, setDrips }) {
                   <p className={`text-xs font-semibold ${tk.t1}`}>{d.completed}</p>
                   <p className={`text-[10px] ${tk.tm}`}>done</p>
                 </div>
+                {pending[d.sequence_id] > 0 && (
+                  <button onClick={() => navigate('/offline-mail')}
+                    className="h-7 px-2 rounded-lg bg-[#e94560]/10 text-[#e94560] text-[10px] font-semibold flex-shrink-0"
+                    title="Mailers queued by this sequence are waiting to be printed and posted"
+                    data-testid={`waiting-print-${d.sequence_id}`}>
+                    {pending[d.sequence_id]} to print
+                  </button>
+                )}
                 <Switch checked={d.active} onCheckedChange={() => toggle(d)} />
                 <button onClick={() => startEdit(d)} title="Edit sequence"
                   className={`h-7 w-7 rounded-lg ${tk.hov} flex items-center justify-center`}>
@@ -284,10 +322,73 @@ export default function DripsTab({ tk, drips, setDrips }) {
                     );
                   })}
                 </div>
-                <button onClick={() => startEdit(d)}
-                  className={`mt-3 w-full h-8 rounded-lg border ${tk.bdr} text-xs ${tk.tm} ${tk.hov} flex items-center justify-center gap-1.5 transition-colors`}>
-                  <Pencil className="h-3 w-3" /> Edit sequence
-                </button>
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  <button onClick={() => startEdit(d)}
+                    className={`h-8 rounded-lg border ${tk.bdr} text-xs ${tk.tm} ${tk.hov} flex items-center justify-center gap-1.5 transition-colors`}>
+                    <Pencil className="h-3 w-3" /> Edit sequence
+                  </button>
+                  <button onClick={() => openDeliveries(d)} data-testid={`deliveries-${d.id}`}
+                    className={`h-8 rounded-lg border ${tk.bdr} text-xs ${tk.tm} ${tk.hov} flex items-center justify-center gap-1.5 transition-colors`}>
+                    <ChevronRight className="h-3 w-3" /> What was sent, and where
+                  </button>
+                </div>
+
+                {deliveries?.id === d.id && (
+                  <div className="mt-3 border-t border-[var(--border-color)] pt-3" data-testid="deliveries-table">
+                    {deliveries.loading ? (
+                      <p className={`text-xs ${tk.tm} py-4 text-center`}>Loading…</p>
+                    ) : (
+                      <>
+                        <div className="flex flex-wrap gap-1.5 mb-2">
+                          {Object.entries(deliveries.totals).map(([k, v]) => (
+                            <span key={k} className={`text-[10px] px-2 py-0.5 rounded-full ${k === 'sent' ? 'bg-green-500/15 text-green-500' : (k === 'not_sent' || k === 'failed') ? 'bg-red-500/15 text-red-400' : 'bg-[var(--accent)]/10 text-[var(--accent)]'}`}>
+                              {k.replace('_', ' ')} · {v}
+                            </span>
+                          ))}
+                        </div>
+                        <div className="overflow-x-auto max-h-72 overflow-y-auto">
+                          <table className="w-full text-xs">
+                            <thead className="sticky top-0 bg-[var(--bg-primary)]">
+                              <tr className={`text-[10px] uppercase tracking-wide ${tk.tm} text-left`}>
+                                <th className="py-1.5 pr-2">School</th><th className="py-1.5 pr-2">Step</th>
+                                <th className="py-1.5 pr-2">Channel</th><th className="py-1.5 pr-2">Item</th>
+                                <th className="py-1.5 pr-2">Planned</th><th className="py-1.5 pr-2">Actual</th>
+                                <th className="py-1.5 pr-2">Status</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {deliveries.rows.map((r, i) => (
+                                <tr key={i} className="border-t border-[var(--border-color)]">
+                                  <td className="py-1.5 pr-2">
+                                    {r.school_id ? (
+                                      <button onClick={() => navigate(`/school-profile/${r.school_id}`)}
+                                        className={`${tk.t1} font-medium hover:text-[var(--accent)] hover:underline text-left`}>
+                                        {r.school_name}
+                                      </button>
+                                    ) : <span className={tk.tm}>{r.school_name}</span>}
+                                  </td>
+                                  <td className={`py-1.5 pr-2 font-mono ${tk.tm}`}>{r.step_number}</td>
+                                  <td className={`py-1.5 pr-2 capitalize ${tk.tm}`}>{r.channel}</td>
+                                  <td className={`py-1.5 pr-2 ${tk.tm}`}>{r.item || '—'}</td>
+                                  <td className={`py-1.5 pr-2 font-mono ${tk.tm}`}>{r.planned_date || '—'}</td>
+                                  <td className={`py-1.5 pr-2 font-mono ${tk.tm}`}>{r.actual_date || '—'}</td>
+                                  <td className="py-1.5 pr-2">
+                                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${r.status === 'sent' ? 'bg-green-500/15 text-green-500' : (r.status === 'not_sent' || r.status === 'failed') ? 'bg-red-500/15 text-red-400' : 'bg-yellow-500/15 text-yellow-600'}`}>
+                                      {r.status.replace('_', ' ')}
+                                    </span>
+                                  </td>
+                                </tr>
+                              ))}
+                              {deliveries.rows.length === 0 && (
+                                <tr><td colSpan="7" className={`py-6 text-center ${tk.tm}`}>Nobody is enrolled in this sequence yet.</td></tr>
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </div>
