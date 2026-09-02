@@ -5,7 +5,11 @@ const cell = 'h-10 w-full rounded-lg px-3 text-[13px] bg-[var(--bg-primary)] bor
 const btnP = 'inline-flex items-center gap-1.5 h-10 px-4 rounded-lg bg-[#e94560] hover:bg-[#f05c75] text-white text-sm font-semibold disabled:opacity-50';
 const btnG = 'inline-flex items-center gap-1.5 h-10 px-4 rounded-lg border border-[var(--border-color)] text-[var(--text-secondary)] hover:text-[#e94560] hover:border-[#e94560] text-sm font-semibold disabled:opacity-50';
 
-const ENDORSEMENTS = ['Book Post', 'Open Post', 'Printed Matter', 'Book Packet'];
+// India Post abolished Book Post on 18 Dec 2024; Gyan Post (1 May 2025) replaced it
+// but only covers academic material, which a sales brochure is not. Book Post and
+// Open Post are kept because counter practice still varies locally — the field is
+// free text precisely so the owner can print whatever their post office accepts.
+const ENDORSEMENTS = ['Speed Post', 'Book Post', 'Open Post', 'Printed Matter', 'Gyan Post'];
 
 /** +/- stepper. `hint` replaces the number when set (e.g. "auto"). */
 function Stepper({ label, value, suffix, min, max, step, onChange, hint, testId }) {
@@ -130,7 +134,11 @@ export default function PrintOptionsDialog({
                 hint={opts.endorsementPt === 0 ? 'auto' : null}
                 onChange={v => setOpts(o => ({ ...o, endorsementPt: v }))} testId="endorsement-pt" />
             </div>
-            <p className="text-[11px] text-[var(--text-muted)] mt-2">Prints bold in the top-right of the label, where the counter clerk looks.</p>
+            <p className="text-[11px] text-[var(--text-muted)] mt-2">
+              Prints bold in the top-right of the label, where the counter clerk looks.
+              {' '}India Post withdrew <b>Book Post</b> in Dec 2024 — <b>Speed Post</b> is the
+              tracked replacement, and Gyan Post covers academic material only.
+            </p>
           </Section>
 
           <Section icon={MapPin} title="Sender (From) & logo" hint="name → company → address → phone">

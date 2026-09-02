@@ -373,6 +373,29 @@ async def process_wa_queue():
 # JOB 3 — Drip Step Executor
 # ══════════════════════════════════════════════════════════════════════════════
 
+async def _wa_consent_ok(lead: dict) -> bool:
+    """May we send a MARKETING WhatsApp to this lead?
+
+    Meta requires prior opt-in for marketing-category templates; sending without it
+    risks the whole number being suspended, not just one message. Consent is read
+    from the lead, falling back to the school — opt-in is given by the school, not
+    by a row in our CRM. The rule itself is a setting (`require_wa_consent`, in
+    App Settings -> Notifications) but it defaults to ON, because the safe default
+    for a policy whose downside is a permanent ban is to refuse.
+    """
+    cfg = await db.settings.find_one({"type": "notifications"}, {"_id": 0}) or {}
+    if not cfg.get("require_wa_consent", True):
+        return True
+    if lead.get("wa_consent"):
+        return True
+    sid = lead.get("school_id")
+    if sid:
+        sch = await db.schools.find_one({"school_id": sid}, {"_id": 0, "wa_consent": 1})
+        if (sch or {}).get("wa_consent"):
+            return True
+    return False
+
+
 # Consecutive send failures on one step before the enrolment pauses and the owner
 # is told. Retries happen on the loop's own 1-hour cadence.
 DRIP_MAX_STEP_FAILURES = 3
@@ -455,6 +478,7 @@ async def run_drip_executor():
             text = step["message_template"].replace("{name}", first_name).replace("{school_name}", school)
             msg_type = step.get("message_type", "whatsapp")
             sent = False
+            skipped = False          # refused on policy, not a send failure
             err_detail = ""
 
             if msg_type == "physical_material":
@@ -471,7 +495,13 @@ async def run_drip_executor():
 
             elif msg_type == "whatsapp" and wa_cfg:
                 phone = lead.get("contact_phone", "")
-                if phone:
+                if not await _wa_consent_ok(lead):
+                    # Not a failure — a refusal. Retrying would stall the school on a
+                    # step that can never send, so it is skipped and the sequence
+                    # carries on to the post and call steps, which need no opt-in.
+                    skipped = True
+                    err_detail = "no WhatsApp consent on record for this school"
+                elif phone:
                     try:
                         await _send_wa(wa_cfg, phone, text)
                         sent = True
@@ -537,7 +567,7 @@ async def run_drip_executor():
                 "lead_id": enr["lead_id"],
                 "step_number": step["step_number"],
                 "message_type": msg_type,
-                "status": "sent" if sent else "failed",
+                "status": "sent" if sent else ("skipped" if skipped else "failed"),
                 "error": err_detail,
                 "fired_at": now_iso,
             })
@@ -546,7 +576,7 @@ async def run_drip_executor():
             # guard, an unconfigured provider burned every step and closed the
             # enrolment, so the school was marked "completed" having received
             # nothing — and could never be enrolled again.
-            if not sent:
+            if not sent and not skipped:
                 fails = int(enr.get("step_fail_count", 0) or 0) + 1
                 if fails >= DRIP_MAX_STEP_FAILURES:
                     await db.drip_enrollments.update_one(
