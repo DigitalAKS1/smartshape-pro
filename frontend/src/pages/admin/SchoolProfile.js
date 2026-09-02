@@ -5,6 +5,7 @@ import AdminLayout from '../../components/layouts/AdminLayout';
 import { useTheme } from '../../contexts/ThemeContext';
 import SchoolFormDialog from '../../components/crm/SchoolFormDialog';
 import ContactFormDialog from '../../components/crm/ContactFormDialog';
+import SchoolDripsCard from '../../components/crm/SchoolDripsCard';
 import {
   schools as schoolsApi, groups as groupsApi, designations as designationsApi,
   salesPersons as salesPersonsApi, contactRoles as contactRolesApi,
@@ -385,12 +386,17 @@ export default function SchoolProfile() {
           )}
 
           {sp.activeTab === 'leads' && (
-            <SchoolLeadsSection
-              leads={leads} filteredLeads={sp.filteredLeads}
-              stageFilter={sp.stageFilter} setStageFilter={sp.setStageFilter}
-              tk={tk} schoolId={school.school_id}
-              onCreate={() => setLeadCreateOpen(true)}
-              onEnroll={() => setEnrollOpen(true)} />
+            <div className="grid gap-4">
+              {/* What marketing is already running on this school — the question a
+                  rep asks right before calling. */}
+              <SchoolDripsCard schoolId={school.school_id} />
+              <SchoolLeadsSection
+                leads={leads} filteredLeads={sp.filteredLeads}
+                stageFilter={sp.stageFilter} setStageFilter={sp.setStageFilter}
+                tk={tk} schoolId={school.school_id}
+                onCreate={() => setLeadCreateOpen(true)}
+                onEnroll={() => setEnrollOpen(true)} />
+            </div>
           )}
 
           {sp.activeTab === 'sales' && (

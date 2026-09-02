@@ -491,10 +491,25 @@ async def enroll_schools(request: Request):
     body = await request.json()
     sequence_id = body.get("sequence_id")
     school_ids = body.get("school_ids", []) or []
+    tag_id = (body.get("tag_id") or "").strip()
     if not sequence_id:
         raise HTTPException(400, "sequence_id is required")
+
+    # Target by tag: the labels the team already keeps become the audience, instead
+    # of a list assembled by hand every time.
+    matched_by_tag = 0
+    if tag_id:
+        tagged = await db.schools.find({"tags": tag_id}, {"_id": 0, "school_id": 1}).to_list(5000)
+        matched_by_tag = len(tagged)
+        for row in tagged:
+            if row["school_id"] not in school_ids:
+                school_ids.append(row["school_id"])
+        if not school_ids:
+            # Enrolling nobody and reporting success is indistinguishable from a
+            # campaign that ran — say so instead.
+            raise HTTPException(400, "That tag matched no schools, so nobody was enrolled.")
     if not school_ids:
-        raise HTTPException(400, "school_ids is required")
+        raise HTTPException(400, "school_ids or tag_id is required")
     seq = await db.drip_sequences.find_one({"sequence_id": sequence_id}, {"_id": 0})
     if not seq or not seq.get("steps"):
         raise HTTPException(404, "Sequence not found or has no steps")
@@ -538,7 +553,7 @@ async def enroll_schools(request: Request):
 
     return {"sequence_id": sequence_id, "sequence_name": seq.get("name", ""),
             "enrolled": enrolled, "skipped": skipped, "leads_created": leads_created,
-            "total": len(school_ids)}
+            "matched_by_tag": matched_by_tag, "total": len(school_ids)}
 
 
 @router.get("/drip/enrollments")
@@ -586,6 +601,59 @@ async def resume_enrollment(enrollment_id: str, request: Request):
         {"$set": {"status": "active", "step_fail_count": 0, "next_step_at": now_iso,
                   "paused_reason": "", "completed_at": None}})
     return await db.drip_enrollments.find_one({"enrollment_id": enrollment_id}, {"_id": 0})
+
+
+# ── What marketing is THIS school getting? ────────────────────────────────────
+
+@router.get("/schools/{school_id}/drips")
+async def school_drips(school_id: str, request: Request):
+    """The sequences a school is enrolled in, from the school's side.
+
+    The deliveries drill-down answers "who is in this sequence"; a rep about to ring
+    a school needs the opposite — "what has this school already been sent, and what
+    lands next?" Both read the same enrolments; only the direction differs.
+    """
+    user = await get_current_user(request)
+    require_module(user, "leads", "read")
+
+    leads = await db.leads.find({"school_id": school_id},
+                                {"_id": 0, "lead_id": 1}).to_list(500)
+    lead_ids = [l["lead_id"] for l in leads]
+    if not lead_ids:
+        return {"school_id": school_id, "rows": [], "active": 0, "total": 0}
+
+    enrolments = await db.drip_enrollments.find(
+        {"lead_id": {"$in": lead_ids}}, {"_id": 0}).sort("enrolled_at", -1).to_list(200)
+    seq_ids = list({e["sequence_id"] for e in enrolments})
+    seqs = {s["sequence_id"]: s for s in await db.drip_sequences.find(
+        {"sequence_id": {"$in": seq_ids}}, {"_id": 0}).to_list(200)}
+
+    rows = []
+    for e in enrolments:
+        seq = seqs.get(e["sequence_id"], {})
+        steps = sorted(seq.get("steps", []), key=lambda x: x["step_number"])
+        idx = int(e.get("current_step", 0) or 0)
+        live = e.get("status") == "active" and idx < len(steps)
+        nxt = steps[idx] if live else None
+        rows.append({
+            "enrollment_id": e["enrollment_id"],
+            "sequence_id": e["sequence_id"],
+            "sequence_name": seq.get("name", "(deleted sequence)"),
+            "lead_id": e["lead_id"],
+            "status": e.get("status", "active"),
+            "paused_reason": e.get("paused_reason", ""),
+            "step": idx + 1 if live else idx,
+            "total_steps": len(steps),
+            "enrolled_at": str(e.get("enrolled_at") or "")[:10],
+            "next_channel": _CHANNEL_OF.get(nxt.get("message_type", ""),
+                                            nxt.get("message_type", "")) if nxt else "",
+            "next_item": (nxt.get("material_name") or nxt.get("material_type") or "") if nxt else "",
+            "next_due": str(e.get("next_step_at") or "")[:10] if live else "",
+        })
+
+    return {"school_id": school_id, "rows": rows,
+            "active": sum(1 for r in rows if r["status"] == "active"),
+            "total": len(rows)}
 
 
 # ── Sequence deliveries drill-down ─────────────────────────────────────────────

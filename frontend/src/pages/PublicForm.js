@@ -36,6 +36,7 @@ export default function PublicForm() {
   const [answers, setAnswers] = useState({});
   const [errors, setErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
+  const [waConsent, setWaConsent] = useState(false);   // opt-in, unticked by default
   const [thanks, setThanks] = useState(null);
   const [hp, setHp] = useState(''); // honeypot
 
@@ -57,7 +58,7 @@ export default function PublicForm() {
   const submit = async () => {
     setSubmitting(true);
     try {
-      const r = await publicForms.submit(token, { answers, website: hp });
+      const r = await publicForms.submit(token, { answers, website: hp, wa_consent: waConsent });
       setThanks(r.data.thank_you || {});
       setState('done');
       window.scrollTo(0, 0);
@@ -189,6 +190,20 @@ export default function PublicForm() {
             )}
           </div>
         ))}
+
+        {/* WhatsApp opt-in — shown only when this form asks for it. Unticked by
+            default: silence is not consent, and Meta requires a real opt-in before
+            any marketing message. */}
+        {form.wa_consent_text ? (
+          <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginTop: 18,
+                          padding: '12px 14px', border: '1px solid #e2e2e2', borderRadius: 10,
+                          fontSize: 14, lineHeight: 1.45, cursor: 'pointer' }}>
+            <input type="checkbox" checked={waConsent}
+                   onChange={e => setWaConsent(e.target.checked)}
+                   style={{ marginTop: 2, width: 18, height: 18, accentColor: ACCENT, flexShrink: 0 }} />
+            <span>{form.wa_consent_text}</span>
+          </label>
+        ) : null}
 
         {/* Honeypot — visually hidden from humans, bots fill it */}
         <input type="text" value={hp} onChange={e => setHp(e.target.value)}

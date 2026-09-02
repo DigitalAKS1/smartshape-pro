@@ -1342,6 +1342,20 @@ async def _create_mail_cadence(run, posted_iso, planner):
                 "source": "mail_cadence", "created_at": now_iso, "done_at": None})
 
 
+def _require_master_admin(user):
+    """Renaming or deleting CRM master data is an admin act.
+
+    These lists (designations, tags, activity types, school types) are shared by
+    every lead form, school form and contact dialog in the app — deleting one row
+    changes what every user sees. Creating a row stays open to any signed-in user,
+    because a stray extra tag is harmless and reps legitimately add them; it is the
+    destructive half that needed a gate.
+    """
+    if get_team(user) != "admin" and user.get("role") != "admin":
+        raise HTTPException(status_code=403,
+                            detail="Only an admin can change or delete master data")
+
+
 VERIFY_STATUSES = ("pending", "sent", "not_sent", "skipped")
 
 
@@ -2738,7 +2752,8 @@ async def create_activity_type(request: Request):
 
 @router.put("/activity-types/{at_id}")
 async def update_activity_type(at_id: str, request: Request):
-    await get_current_user(request)
+    user = await get_current_user(request)
+    _require_master_admin(user)
     body = await request.json()
     if "name" in body:
         await db.activity_types.update_one({"activity_type_id": at_id}, {"$set": {"name": body["name"]}})
@@ -2747,7 +2762,8 @@ async def update_activity_type(at_id: str, request: Request):
 
 @router.delete("/activity-types/{at_id}")
 async def delete_activity_type(at_id: str, request: Request):
-    await get_current_user(request)
+    user = await get_current_user(request)
+    _require_master_admin(user)
     await db.activity_types.delete_one({"activity_type_id": at_id})
     return {"message": "Activity type deleted"}
 
@@ -2979,7 +2995,8 @@ async def create_school_type(request: Request):
 
 @router.put("/school-types/{type_id}")
 async def update_school_type(type_id: str, request: Request):
-    await get_current_user(request)
+    user = await get_current_user(request)
+    _require_master_admin(user)
     body = await request.json()
     allowed = {k: body[k] for k in ("name", "is_active") if k in body}
     if allowed:
@@ -2989,7 +3006,8 @@ async def update_school_type(type_id: str, request: Request):
 
 @router.delete("/school-types/{type_id}")
 async def delete_school_type(type_id: str, request: Request):
-    await get_current_user(request)
+    user = await get_current_user(request)
+    _require_master_admin(user)
     await db.school_types.delete_one({"type_id": type_id})
     return {"message": "School type deleted"}
 
@@ -3111,7 +3129,8 @@ async def create_designation(request: Request):
 
 @router.put("/designations/{designation_id}")
 async def update_designation(designation_id: str, request: Request):
-    await get_current_user(request)
+    user = await get_current_user(request)
+    _require_master_admin(user)
     body = await request.json()
     allowed = {k: v for k, v in body.items() if k in ("name", "department", "is_active")}
     if allowed:
@@ -3120,7 +3139,8 @@ async def update_designation(designation_id: str, request: Request):
 
 @router.delete("/designations/{designation_id}")
 async def delete_designation(designation_id: str, request: Request):
-    await get_current_user(request)
+    user = await get_current_user(request)
+    _require_master_admin(user)
     await db.designations.delete_one({"designation_id": designation_id})
     return {"message": "Designation deleted"}
 
@@ -3193,7 +3213,8 @@ async def create_tag(request: Request):
 
 @router.put("/tags/{tag_id}")
 async def update_tag(tag_id: str, request: Request):
-    await get_current_user(request)
+    user = await get_current_user(request)
+    _require_master_admin(user)
     body = await request.json()
     allowed = {k: body[k] for k in ("name", "color") if k in body}
     await db.tags.update_one({"tag_id": tag_id}, {"$set": allowed})
@@ -3202,7 +3223,8 @@ async def update_tag(tag_id: str, request: Request):
 
 @router.delete("/tags/{tag_id}")
 async def delete_tag(tag_id: str, request: Request):
-    await get_current_user(request)
+    user = await get_current_user(request)
+    _require_master_admin(user)
     await db.tags.delete_one({"tag_id": tag_id})
     return {"message": "Tag deleted"}
 
@@ -3540,6 +3562,32 @@ async def create_school(request: Request):
     return await db.schools.find_one({"school_id": school_id}, {"_id": 0})
 
 
+@router.post("/schools/bulk-tag")
+async def bulk_tag_schools(request: Request):
+    """Add or remove one tag across many schools.
+
+    Tags were kept on contacts and leads but not on schools, so the labels the team
+    already maintains ("CBSE", "1000+ students") could not be used to build a mailing
+    or a sequence audience. Tagging in bulk is the only way it happens in practice —
+    nobody tags 400 schools one at a time.
+    """
+    user = await get_current_user(request)
+    require_module(user, "leads", "read_write")
+    body = await _parse_json_body(request)
+    ids = body.get("school_ids") or []
+    tag_id = (body.get("tag_id") or "").strip()
+    action = body.get("action", "add")
+    if not ids or not tag_id:
+        raise HTTPException(status_code=400, detail="school_ids and tag_id are required")
+    if action not in ("add", "remove"):
+        raise HTTPException(status_code=400, detail="action must be add or remove")
+    if not await db.tags.find_one({"tag_id": tag_id}):
+        raise HTTPException(status_code=404, detail="Tag not found")
+    op = {"$addToSet": {"tags": tag_id}} if action == "add" else {"$pull": {"tags": tag_id}}
+    res = await db.schools.update_many({"school_id": {"$in": ids}}, op)
+    return {"ok": True, "updated": res.modified_count, "tag_id": tag_id, "action": action}
+
+
 @router.post("/schools/wa-consent")
 async def record_wa_consent(request: Request):
     """Record WhatsApp opt-in for many schools at once.
@@ -3592,6 +3640,8 @@ async def update_school(school_id: str, request: Request):
               "wa_consent", "wa_consent_source"):
         if k in body:
             allowed[k] = body[k]
+    if "tags" in body:
+        allowed["tags"] = await _resolve_tags(body["tags"], user["email"])
     if "wa_consent" in allowed:
         allowed["wa_consent"] = bool(allowed["wa_consent"])
         allowed["wa_consent_at"] = datetime.now(timezone.utc).isoformat() if allowed["wa_consent"] else None
