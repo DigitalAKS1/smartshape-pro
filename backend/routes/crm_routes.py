@@ -6,6 +6,7 @@ import uuid
 import csv
 import io
 import re
+import logging
 import html as _html
 import asyncio
 import requests as http_requests
@@ -896,19 +897,29 @@ async def get_mail_run_addresses(run_id: str, request: Request):
     schools = await db.schools.find({"school_id": {"$in": ids}}, {"_id": 0}).to_list(None)
     by_id = {s["school_id"]: s for s in schools}
     rows = []
-    for sid in ids:
+    for t in touches:
+        sid = t["school_id"]
         s = by_id.get(sid, {"school_id": sid, "school_name": "(deleted school)"})
         rows.append({
             "school_id": sid,
+            "touch_id": t.get("touch_id", ""),
             "school_name": s.get("school_name", ""),
             "primary_contact_name": s.get("primary_contact_name", ""),
             "address": s.get("address", ""), "city": s.get("city", ""),
             "state": s.get("state", ""), "pincode": s.get("pincode", ""),
             "phone": s.get("phone", ""),
             "missing": _addr_missing(s),
+            # Lifecycle — drives the Verify & post tab.
+            "verify_status": t.get("verify_status", "pending"),
+            "planned_date": t.get("planned_date", ""),
+            "posted_at": t.get("posted_at"),
+            "printed_at": t.get("printed_at"),
+            "reason": t.get("reason", ""),
+            "replan_count": int(t.get("replan_count", 0) or 0),
         })
     return {"run_id": run_id, "rows": rows, "total": len(rows),
-            "missing_count": sum(1 for r in rows if r["missing"])}
+            "missing_count": sum(1 for r in rows if r["missing"]),
+            "pending_count": sum(1 for r in rows if r["verify_status"] == "pending")}
 
 
 @router.delete("/mail-runs/{run_id}")
@@ -1031,6 +1042,149 @@ async def _create_mail_cadence(run, posted_iso, planner):
                 "source": "mail_cadence", "created_at": now_iso, "done_at": None})
 
 
+VERIFY_STATUSES = ("pending", "sent", "not_sent", "skipped")
+
+
+async def _recompute_run_counts(run_id: str):
+    """Run status is DERIVED from its touches, never set blind: 'planned' while any
+    piece is unresolved, 'posted' once every piece is sent or deliberately skipped.
+    'closed' is only ever set by an explicit user action."""
+    touches = await db.mail_touches.find({"run_id": run_id},
+                                         {"_id": 0, "verify_status": 1}).to_list(None)
+    tally = {s: 0 for s in VERIFY_STATUSES}
+    for t in touches:
+        st = t.get("verify_status", "pending")
+        tally[st] = tally.get(st, 0) + 1
+    run = await db.mail_runs.find_one({"run_id": run_id}, {"_id": 0, "status": 1})
+    _set = {
+        "counts.verified_sent": tally["sent"],
+        "counts.not_sent": tally["not_sent"],
+        "counts.pending": tally["pending"],
+    }
+    if (run or {}).get("status") != "closed":
+        _set["status"] = "posted" if (touches and tally["pending"] == 0) else "planned"
+    await db.mail_runs.update_one({"run_id": run_id}, {"$set": _set})
+    return await db.mail_runs.find_one({"run_id": run_id}, {"_id": 0})
+
+
+async def _do_verify(run_id: str, user: dict, body: dict):
+    """Core of verification, shared by the endpoint and the legacy status dropdown."""
+    run = await db.mail_runs.find_one({"run_id": run_id}, {"_id": 0})
+    if not run:
+        raise HTTPException(status_code=404, detail="Mail run not found")
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    if body.get("undo"):
+        ids = body.get("touch_ids") or []
+        await db.mail_touches.update_many(
+            {"run_id": run_id, "touch_id": {"$in": ids}},
+            {"$set": {"verify_status": "pending", "posted_at": None,
+                      "verified_by": "", "verified_at": None, "reason": ""}})
+        for tid in ids:
+            await db.engagement_events.delete_many({"dedup_key": f"mailtouch:{tid}"})
+        return await _recompute_run_counts(run_id)
+
+    posted_date = (body.get("posted_date") or "").strip()
+    posted_iso = f"{posted_date}T00:00:00+00:00" if posted_date else now_iso
+    if body.get("select_all"):
+        status = body.get("verify_status", "sent")
+        pending = await db.mail_touches.find(
+            {"run_id": run_id, "verify_status": "pending"}, {"_id": 0, "touch_id": 1}).to_list(None)
+        rows = [{"touch_id": t["touch_id"], "verify_status": status} for t in pending]
+    else:
+        rows = body.get("rows") or []
+
+    for r in rows:
+        if r.get("verify_status") not in VERIFY_STATUSES:
+            raise HTTPException(status_code=400,
+                                detail=f"Invalid verify_status: {r.get('verify_status')}")
+
+    newly_sent = []
+    for r in rows:
+        tid, status = r.get("touch_id"), r["verify_status"]
+        touch = await db.mail_touches.find_one({"run_id": run_id, "touch_id": tid}, {"_id": 0})
+        if not touch:
+            continue
+        was_sent = touch.get("verify_status") == "sent"
+        actual = (r.get("posted_date") or posted_date)
+        _set = {"verify_status": status, "verified_by": user["email"], "verified_at": now_iso,
+                "reason": (r.get("reason") or "").strip()}
+        _set["posted_at"] = (f"{actual}T00:00:00+00:00" if actual else posted_iso) \
+            if status == "sent" else None
+        await db.mail_touches.update_one({"touch_id": tid}, {"$set": _set})
+        if status == "sent" and not was_sent:
+            newly_sent.append({**touch, "posted_at": _set["posted_at"]})
+
+    for t in newly_sent:
+        try:
+            await log_engagement_event(
+                channel="mail", kind=f"{t.get('piece_type', 'mailer')} posted",
+                title=f"{t.get('item_name') or t.get('piece_type', 'Mailer')} posted",
+                school_id=t.get("school_id", ""), lead_id=t.get("lead_id", ""),
+                status="sent", direction="out", by=user["email"], at=t["posted_at"],
+                meta={"run_id": run_id, "touch_id": t["touch_id"]},
+                dedup_key=f"mailtouch:{t['touch_id']}")
+        except Exception as e:
+            logging.getLogger("crm").warning("[mail] ledger log failed: %s", str(e)[:180])
+        # Follow-up cadence per school, and ONLY for pieces that really went out —
+        # a school whose mailer never left must not be asked if it arrived.
+        already = await db.crm_activities.count_documents(
+            {"batch_id": run_id, "school_id": t.get("school_id", ""), "source": "mail_cadence"})
+        if not already:
+            await _create_mail_cadence({**run, "school_ids": [t.get("school_id", "")]},
+                                       t["posted_at"], user)
+
+    return await _recompute_run_counts(run_id)
+
+
+@router.post("/mail-runs/{run_id}/verify")
+async def verify_mail_run(run_id: str, request: Request):
+    """Record what was ACTUALLY posted, one school at a time.
+
+    Body is either {rows: [{touch_id, verify_status, posted_date?, reason?}]},
+    {select_all: true, verify_status, posted_date?}, or {touch_ids: [...], undo: true}.
+    """
+    user = await get_current_user(request)
+    return await _do_verify(run_id, user, await _parse_json_body(request))
+
+
+@router.post("/mail-runs/{run_id}/replan")
+async def replan_mail_run(run_id: str, request: Request):
+    """Push the pieces that didn't go out onto a new date.
+
+    Deliberately does NOT touch the drip enrolment schedule: a postage delay must
+    never stall the WhatsApp and call cadence behind it (design spec 7.4).
+    """
+    await get_current_user(request)
+    run = await db.mail_runs.find_one({"run_id": run_id}, {"_id": 0})
+    if not run:
+        raise HTTPException(status_code=404, detail="Mail run not found")
+    body = await _parse_json_body(request)
+    new_date = (body.get("new_date") or "").strip()
+    if not new_date:
+        raise HTTPException(status_code=400, detail="new_date is required")
+
+    movable = ("pending", "not_sent")
+    if body.get("select_pending"):
+        touches = await db.mail_touches.find(
+            {"run_id": run_id, "verify_status": {"$in": list(movable)}}, {"_id": 0}).to_list(None)
+    else:
+        ids = body.get("touch_ids") or []
+        touches = await db.mail_touches.find(
+            {"run_id": run_id, "touch_id": {"$in": ids}}, {"_id": 0}).to_list(None)
+        blocked = [t["touch_id"] for t in touches if t.get("verify_status") not in movable]
+        if blocked:
+            raise HTTPException(status_code=400,
+                detail=f"Already posted, cannot be re-planned: {', '.join(blocked)}")
+
+    for t in touches:
+        await db.mail_touches.update_one({"touch_id": t["touch_id"]}, {
+            "$set": {"planned_date": new_date, "verify_status": "pending", "reason": ""},
+            "$inc": {"replan_count": 1}})
+    run = await _recompute_run_counts(run_id)
+    return {**run, "moved": len(touches), "new_date": new_date}
+
+
 @router.put("/mail-runs/{run_id}/status")
 async def update_mail_run_status(run_id: str, request: Request):
     user = await get_current_user(request)
@@ -1038,16 +1192,12 @@ async def update_mail_run_status(run_id: str, request: Request):
     status = body.get("status")
     if status not in ("planned", "posted", "closed"):
         raise HTTPException(status_code=400, detail="Invalid status")
-    _set = {"status": status}
     if status == "posted":
-        _set["posted_at"] = datetime.now(timezone.utc).isoformat()
-        await db.mail_touches.update_many({"run_id": run_id}, {"$set": {"posted_at": _set["posted_at"]}})
-        # Auto-create the follow-up cadence exactly once (idempotent on re-post).
-        run = await db.mail_runs.find_one({"run_id": run_id}, {"_id": 0})
-        already = await db.crm_activities.count_documents({"batch_id": run_id, "source": "mail_cadence"})
-        if run and already == 0:
-            await _create_mail_cadence(run, _set["posted_at"], user)
-    await db.mail_runs.update_one({"run_id": run_id}, {"$set": _set})
+        # "Posted" now means "every pending piece really went out", so it routes
+        # through verification — keeping the per-school truth (and the follow-up
+        # cadence) honest instead of blind-stamping the whole run.
+        return await _do_verify(run_id, user, {"select_all": True, "verify_status": "sent"})
+    await db.mail_runs.update_one({"run_id": run_id}, {"$set": {"status": status}})
     return await db.mail_runs.find_one({"run_id": run_id}, {"_id": 0})
 
 
