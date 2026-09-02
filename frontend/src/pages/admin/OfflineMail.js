@@ -6,6 +6,8 @@ import { useNavigate } from 'react-router-dom';
 import { MapPin, Mail, Plus, RefreshCw, Trash2, X, Printer, TrendingUp, QrCode, CalendarCheck, FileText, IndianRupee, ListPlus, Filter, Upload, Download } from 'lucide-react';
 import MailAddressSheet from '../../components/mail/MailAddressSheet';
 import ManualMailRunBuilder from '../../components/mail/ManualMailRunBuilder';
+import TodayPostQueue from '../../components/mail/TodayPostQueue';
+import GapReportPanel from '../../components/mail/GapReportPanel';
 import { useDataSync } from '../../lib/dataSync';
 
 const inr = (n) => '₹' + Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 });
@@ -171,6 +173,7 @@ export default function OfflineMail() {
           <div className="py-16 text-center text-[var(--text-muted)]">Loading…</div>
         ) : (
           <div className="grid gap-6">
+            <TodayPostQueue onOpenRun={(run_id, name) => setSheetRun({ run_id, name })} />
             {/* HOT LEADS — schools that scanned a mailer QR and replied. Call now. */}
             {hotLeads.length > 0 && (
               <div className={`${card} p-5 border-l-4`} style={{ borderLeftColor: '#e94560' }}>
@@ -222,6 +225,9 @@ export default function OfflineMail() {
                 </div>
               );
             })()}
+
+            {/* PLAN vs ACTUAL — what was planned against what really went out */}
+            <GapReportPanel />
 
             {/* AREAS */}
             <div className={`${card} p-5`}>
@@ -283,7 +289,7 @@ export default function OfflineMail() {
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0">
                           <p className="text-sm font-semibold text-[var(--text-primary)] truncate">{r.name}</p>
-                          <p className="text-[11px] text-[var(--text-muted)] capitalize">{areaName(r.area_id)} · {r.piece_type}{r.courier ? ` · ${r.courier}` : ''}</p>
+                          <p className="text-[11px] text-[var(--text-muted)] capitalize">{r.is_drip_run ? (r.sequence_name || 'Drip') : areaName(r.area_id)} · {r.piece_type}{r.courier ? ` · ${r.courier}` : ''}</p>
                         </div>
                         <select value={r.status} onChange={e => setStatus(r, e.target.value)}
                           className="text-[11px] font-semibold rounded-full px-2 py-1 bg-transparent border flex-shrink-0"
@@ -324,7 +330,15 @@ export default function OfflineMail() {
                   <tbody>
                     {runs.map(r => (
                       <tr key={r.run_id} className="border-t border-[var(--border-color)]" data-testid={`run-${r.run_id}`}>
-                        <td className="py-2.5 pr-3 text-[var(--text-primary)] font-medium">{r.name}</td>
+                        <td className="py-2.5 pr-3 text-[var(--text-primary)] font-medium">
+                          {r.name}
+                          {r.is_drip_run && (
+                            <span className="ml-1.5 align-middle text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-[#e94560]/10 text-[#e94560]"
+                              title={r.sequence_name ? `Auto-created by the "${r.sequence_name}" sequence` : 'Auto-created by a drip sequence'}>
+                              Drip
+                            </span>
+                          )}
+                        </td>
                         <td className="py-2.5 pr-3 text-[var(--text-secondary)]">{areaName(r.area_id)}</td>
                         <td className="py-2.5 pr-3 text-[var(--text-secondary)] capitalize">{r.piece_type}</td>
                         <td className="py-2.5 pr-3 font-mono">{r.counts?.sent ?? 0}</td>

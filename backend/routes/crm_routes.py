@@ -6,6 +6,7 @@ import uuid
 import csv
 import io
 import re
+import logging
 import html as _html
 import asyncio
 import requests as http_requests
@@ -157,12 +158,18 @@ async def log_activity(user_email: str, action: str, entity_type: str, entity_id
 
 
 async def create_physical_from_drip(lead: dict, material_type: str, seq_name: str,
-                                    material_name: str = "") -> str:
+                                    material_name: str = "", sequence_id: str = "",
+                                    enrollment_id: str = "", step_number: int = 0,
+                                    planned_date: str = "") -> str:
     """A drip physical step → physically send to the school. Queues a dispatch +
     a rep task, AND (if the lead has a school) drops a printable, QR-tracked
-    mailer into Offline Mail under today's "Drip Mailers" run — so it's a real,
-    trackable posting, not just a ship-it note. `material_name` is what you're
-    actually sending (free text); it shows on the task + the mailer."""
+    mailer into Offline Mail under the run for this sequence + piece + day — so
+    it's a real, trackable posting, not just a ship-it note. `material_name` is
+    what you're actually sending (free text); it shows on the task + the mailer.
+
+    The sequence/enrolment/step ids are carried onto the touch so the sequence
+    drill-down can show what went to which school, and so the gap report can tell
+    a slipped brochure apart from a slipped sample."""
     now = datetime.now(timezone.utc)
     now_iso = now.isoformat()
     item = (material_name or "").strip() or (material_type or "brochure")
@@ -194,14 +201,30 @@ async def create_physical_from_drip(lead: dict, material_type: str, seq_name: st
     if sid:
         try:
             today = now.strftime("%Y-%m-%d")
-            run = await db.mail_runs.find_one({"is_drip_run": True, "send_date": today}, {"_id": 0, "run_id": 1})
+            piece = material_type or "brochure"
+            planned = planned_date or today
+            # One run per (sequence, piece, day), so a brochure step and a sample step
+            # from two sequences don't collapse into one unprintable pile.
+            run = await db.mail_runs.find_one(
+                {"is_drip_run": True, "send_date": today,
+                 "sequence_id": sequence_id, "piece_type": piece},
+                {"_id": 0, "run_id": 1})
+            if not run:
+                # Mid-day deploy safety: reuse a run made by the older, coarser key
+                # rather than creating a second run and posting a school twice.
+                run = await db.mail_runs.find_one(
+                    {"is_drip_run": True, "send_date": today, "piece_type": piece,
+                     "sequence_id": {"$exists": False}},
+                    {"_id": 0, "run_id": 1})
             if not run:
                 run_id = f"run_{uuid.uuid4().hex[:10]}"
+                label = f"{seq_name} · {piece} — {today}" if seq_name else f"Drip Mailers — {today}"
                 await db.mail_runs.insert_one({
-                    "run_id": run_id, "name": f"Drip Mailers — {today}", "area_id": "",
-                    "piece_type": material_type or "brochure", "deal_type_target": "", "school_ids": [],
+                    "run_id": run_id, "name": label, "area_id": "",
+                    "piece_type": piece, "deal_type_target": "", "school_ids": [],
                     "send_date": today, "courier": "", "tracking_no": "", "courier_cost": 0,
                     "status": "planned", "is_drip_run": True,
+                    "sequence_id": sequence_id, "sequence_name": seq_name,
                     "created_by": "system", "created_at": now_iso,
                     "counts": {"sent": 0, "delivered": 0, "responded": 0, "appointments": 0}})
             else:
@@ -210,12 +233,17 @@ async def create_physical_from_drip(lead: dict, material_type: str, seq_name: st
             if not await db.mail_touches.find_one({"run_id": run_id, "school_id": sid}, {"_id": 0, "touch_id": 1}):
                 await db.mail_touches.insert_one({
                     "touch_id": f"mt_{uuid.uuid4().hex[:10]}", "run_id": run_id, "school_id": sid,
-                    "lead_id": lead.get("lead_id", ""), "piece_type": material_type or "brochure",
+                    "lead_id": lead.get("lead_id", ""), "piece_type": piece,
                     "item_name": item, "posted_at": None,
                     "qr_token": uuid.uuid4().hex[:16], "delivery_status": "pending",
                     "responded": False, "responded_at": None, "response_channel": "",
                     "appointment": False, "next_action_date": "", "outcome_note": "",
-                    "owner": lead.get("assigned_to", "") or "system", "created_at": now_iso})
+                    "owner": lead.get("assigned_to", "") or "system", "created_at": now_iso,
+                    # lifecycle + drip back-links
+                    "planned_date": planned, "verify_status": "pending",
+                    "printed_at": None, "print_batch_id": "", "replan_count": 0,
+                    "source": "drip", "sequence_id": sequence_id,
+                    "enrollment_id": enrollment_id, "step_number": step_number})
                 await db.mail_runs.update_one(
                     {"run_id": run_id}, {"$addToSet": {"school_ids": sid}, "$inc": {"counts.sent": 1}})
         except Exception:
@@ -785,6 +813,191 @@ async def get_mail_runs(request: Request):
     return await db.mail_runs.find({}, {"_id": 0}).sort("created_at", -1).to_list(500)
 
 
+async def _queued_touches(date_str: str):
+    """Every piece that should already be in the post: due today or overdue."""
+    return await db.mail_touches.find(
+        {"verify_status": "pending", "planned_date": {"$lte": date_str, "$ne": ""}},
+        {"_id": 0}).to_list(None)
+
+
+# NOTE: static path — MUST stay above /mail-runs/{run_id} (see the analytics note).
+@router.get("/mail-runs/today-queue")
+async def mail_today_queue(request: Request):
+    """The posting job for today, across every run — a drip mailer and a manual run
+    are one task to whoever carries the bundle to the counter."""
+    await get_current_user(request)
+    today = request.query_params.get("date") or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    touches = await _queued_touches(today)
+    runs = {r["run_id"]: r for r in await db.mail_runs.find({}, {"_id": 0}).to_list(None)}
+
+    groups = {}
+    for t in touches:
+        rid = t.get("run_id", "")
+        run = runs.get(rid, {})
+        g = groups.setdefault(rid, {
+            "run_id": rid, "run_name": run.get("name", "(deleted run)"),
+            "sequence_name": run.get("sequence_name", ""),
+            "is_drip_run": bool(run.get("is_drip_run")),
+            "piece_type": run.get("piece_type", t.get("piece_type", "")),
+            "count": 0, "overdue": 0, "touch_ids": []})
+        g["count"] += 1
+        g["touch_ids"].append(t["touch_id"])
+        if t.get("planned_date", "") < today:
+            g["overdue"] += 1
+
+    rows = sorted(groups.values(), key=lambda g: (-g["overdue"], -g["count"]))
+    return {"date": today, "total": len(touches),
+            "overdue": sum(g["overdue"] for g in rows), "groups": rows}
+
+
+# NOTE: static path — MUST stay above /mail-runs/{run_id} (see the analytics note).
+@router.get("/mail-runs/queue-stickers.pdf")
+async def mail_queue_stickers(request: Request):
+    """One combined sticker PDF for the whole day's queue — the printer gets loaded
+    once, not once per run."""
+    await get_current_user(request)
+    qp = request.query_params
+    today = qp.get("date") or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    touches = await _queued_touches(today)
+    ids = [t["school_id"] for t in touches]
+    schools = await db.schools.find({"school_id": {"$in": ids}}, {"_id": 0}).to_list(None)
+    schools_by_id = {s["school_id"]: s for s in schools}
+    if qp.get("skip_incomplete") in ("1", "true", "yes"):
+        touches = _complete_touches(touches, schools_by_id)
+    company = await db.settings.find_one({"type": "company"}, {"_id": 0}) or {}
+    base = (_os.environ.get("FRONTEND_URL") or "https://app.smartshape.in").rstrip("/")
+
+    endorsement = qp.get("endorsement")
+    if endorsement is None:
+        endorsement = company.get("sticker_endorsement", "")
+    try:
+        endorsement_pt = float(qp.get("endorsement_pt") or company.get("sticker_endorsement_pt") or 0)
+    except (TypeError, ValueError):
+        endorsement_pt = 0
+    text_scale = _clamp_scale(qp.get("text_scale") or company.get("sticker_text_scale") or 1.0)
+
+    if touches:
+        await db.mail_touches.update_many(
+            {"touch_id": {"$in": [t["touch_id"] for t in touches]}},
+            {"$set": {"printed_at": datetime.now(timezone.utc).isoformat(),
+                      "print_batch_id": f"pb_{uuid.uuid4().hex[:12]}"}})
+
+    pdf = _build_stickers_pdf(
+        touches, schools_by_id, company, base,
+        orientation=("landscape" if qp.get("orientation") == "landscape" else "portrait"),
+        size=(qp.get("size") or "100x150"),
+        layout=("a4" if qp.get("layout") == "a4" else "label"),
+        show_logo=(qp.get("no_logo") not in ("1", "true", "yes")),
+        endorsement=endorsement, endorsement_pt=endorsement_pt, text_scale=text_scale,
+        show_phone=(qp.get("no_phone") not in ("1", "true", "yes")))
+    return StreamingResponse(io.BytesIO(pdf), media_type="application/pdf",
+                             headers={"Content-Disposition": f'attachment; filename="post-{today}.pdf"'})
+
+
+def _days_late(planned: str, posted_at: str):
+    """Whole days between the planned date and the actual posting, or None when
+    either is missing — a touch with no plan is excluded rather than scored on time."""
+    if not planned or not posted_at:
+        return None
+    try:
+        p = datetime.fromisoformat(planned).date()
+        a = datetime.fromisoformat(str(posted_at).replace("Z", "+00:00")).date()
+    except ValueError:
+        return None
+    return (a - p).days
+
+
+# NOTE: this static path MUST stay above /mail-runs/{run_id} or FastAPI matches
+# "gap-report" as a run_id and this endpoint is never reached.
+@router.get("/mail-runs/gap-report")
+async def mail_gap_report(request: Request):
+    """Planned vs actual across every mail touch, grouped, with the reasons behind
+    the gap — counts alone say work slipped, not what to fix."""
+    await get_current_user(request)
+    qp = request.query_params
+    group_by = qp.get("group_by") or "run"
+    filt = {}
+    d_from, d_to = qp.get("from"), qp.get("to")
+    if d_from or d_to:
+        rng = {}
+        if d_from:
+            rng["$gte"] = d_from
+        if d_to:
+            rng["$lte"] = d_to
+        filt["planned_date"] = rng
+
+    touches = await db.mail_touches.find(filt, {"_id": 0}).to_list(None)
+    runs = {r["run_id"]: r for r in await db.mail_runs.find({}, {"_id": 0}).to_list(None)}
+    schools = {s["school_id"]: s for s in await db.schools.find(
+        {}, {"_id": 0, "school_id": 1, "school_name": 1}).to_list(None)}
+
+    def _key_label(t):
+        run = runs.get(t.get("run_id"), {})
+        if group_by == "sequence":
+            return run.get("sequence_id") or "_none", run.get("sequence_name") or "Not from a sequence"
+        if group_by == "owner":
+            o = t.get("owner") or "unassigned"
+            return o, o
+        if group_by == "school":
+            sid = t.get("school_id", "")
+            return sid, schools.get(sid, {}).get("school_name", "(deleted school)")
+        return t.get("run_id", ""), run.get("name", "(deleted run)")
+
+    groups, reasons = {}, {}
+    for t in touches:
+        key, label = _key_label(t)
+        g = groups.setdefault(key, {"key": key, "label": label, "planned": 0, "sent": 0,
+                                    "not_sent": 0, "pending": 0, "printed_not_posted": 0,
+                                    "replans": 0, "_late": [], "postage_exposure": 0.0})
+        st = t.get("verify_status", "pending")
+        g["planned"] += 1
+        g["replans"] += int(t.get("replan_count", 0) or 0)
+        if st == "sent":
+            g["sent"] += 1
+            dl = _days_late(t.get("planned_date", ""), t.get("posted_at"))
+            if dl is not None:
+                g["_late"].append(dl)
+        elif st == "not_sent":
+            g["not_sent"] += 1
+            r = (t.get("reason") or "").strip() or "no reason given"
+            reasons[r] = reasons.get(r, 0) + 1
+        elif st == "pending":
+            g["pending"] += 1
+        if st != "sent" and t.get("printed_at"):
+            g["printed_not_posted"] += 1        # a sticker printed for nothing
+        # Budgeted postage riding on a piece that never went out.
+        if st == "not_sent":
+            run = runs.get(t.get("run_id"), {})
+            n = len(run.get("school_ids") or []) or 1
+            g["postage_exposure"] += float(run.get("courier_cost") or 0) / n
+
+    rows = []
+    for g in groups.values():
+        late = g.pop("_late")
+        g["avg_days_late"] = round(sum(late) / len(late), 2) if late else None
+        g["on_time_pct"] = round(100.0 * sum(1 for d in late if d <= 0) / len(late), 2) if late else None
+        g["postage_exposure"] = round(g["postage_exposure"], 2)
+        rows.append(g)
+    rows.sort(key=lambda r: (-(r["pending"] + r["not_sent"]), -r["planned"]))
+
+    all_late = [d for t in touches if t.get("verify_status") == "sent"
+                for d in [_days_late(t.get("planned_date", ""), t.get("posted_at"))] if d is not None]
+    totals = {
+        "planned": sum(r["planned"] for r in rows),
+        "sent": sum(r["sent"] for r in rows),
+        "not_sent": sum(r["not_sent"] for r in rows),
+        "pending": sum(r["pending"] for r in rows),
+        "printed_not_posted": sum(r["printed_not_posted"] for r in rows),
+        "replans": sum(r["replans"] for r in rows),
+        "postage_exposure": round(sum(r["postage_exposure"] for r in rows), 2),
+        "avg_days_late": round(sum(all_late) / len(all_late), 2) if all_late else None,
+        "on_time_pct": round(100.0 * sum(1 for d in all_late if d <= 0) / len(all_late), 2) if all_late else None,
+    }
+    return {"group_by": group_by, "rows": rows, "totals": totals,
+            "reasons": sorted([{"reason": k, "count": v} for k, v in reasons.items()],
+                              key=lambda x: -x["count"])}
+
+
 # NOTE: this static path MUST stay above /mail-runs/{run_id} or FastAPI matches
 # "analytics" as a run_id and this endpoint is never reached.
 @router.get("/mail-runs/analytics")
@@ -869,19 +1082,29 @@ async def get_mail_run_addresses(run_id: str, request: Request):
     schools = await db.schools.find({"school_id": {"$in": ids}}, {"_id": 0}).to_list(None)
     by_id = {s["school_id"]: s for s in schools}
     rows = []
-    for sid in ids:
+    for t in touches:
+        sid = t["school_id"]
         s = by_id.get(sid, {"school_id": sid, "school_name": "(deleted school)"})
         rows.append({
             "school_id": sid,
+            "touch_id": t.get("touch_id", ""),
             "school_name": s.get("school_name", ""),
             "primary_contact_name": s.get("primary_contact_name", ""),
             "address": s.get("address", ""), "city": s.get("city", ""),
             "state": s.get("state", ""), "pincode": s.get("pincode", ""),
             "phone": s.get("phone", ""),
             "missing": _addr_missing(s),
+            # Lifecycle — drives the Verify & post tab.
+            "verify_status": t.get("verify_status", "pending"),
+            "planned_date": t.get("planned_date", ""),
+            "posted_at": t.get("posted_at"),
+            "printed_at": t.get("printed_at"),
+            "reason": t.get("reason", ""),
+            "replan_count": int(t.get("replan_count", 0) or 0),
         })
     return {"run_id": run_id, "rows": rows, "total": len(rows),
-            "missing_count": sum(1 for r in rows if r["missing"])}
+            "missing_count": sum(1 for r in rows if r["missing"]),
+            "pending_count": sum(1 for r in rows if r["verify_status"] == "pending")}
 
 
 @router.delete("/mail-runs/{run_id}")
@@ -1004,6 +1227,149 @@ async def _create_mail_cadence(run, posted_iso, planner):
                 "source": "mail_cadence", "created_at": now_iso, "done_at": None})
 
 
+VERIFY_STATUSES = ("pending", "sent", "not_sent", "skipped")
+
+
+async def _recompute_run_counts(run_id: str):
+    """Run status is DERIVED from its touches, never set blind: 'planned' while any
+    piece is unresolved, 'posted' once every piece is sent or deliberately skipped.
+    'closed' is only ever set by an explicit user action."""
+    touches = await db.mail_touches.find({"run_id": run_id},
+                                         {"_id": 0, "verify_status": 1}).to_list(None)
+    tally = {s: 0 for s in VERIFY_STATUSES}
+    for t in touches:
+        st = t.get("verify_status", "pending")
+        tally[st] = tally.get(st, 0) + 1
+    run = await db.mail_runs.find_one({"run_id": run_id}, {"_id": 0, "status": 1})
+    _set = {
+        "counts.verified_sent": tally["sent"],
+        "counts.not_sent": tally["not_sent"],
+        "counts.pending": tally["pending"],
+    }
+    if (run or {}).get("status") != "closed":
+        _set["status"] = "posted" if (touches and tally["pending"] == 0) else "planned"
+    await db.mail_runs.update_one({"run_id": run_id}, {"$set": _set})
+    return await db.mail_runs.find_one({"run_id": run_id}, {"_id": 0})
+
+
+async def _do_verify(run_id: str, user: dict, body: dict):
+    """Core of verification, shared by the endpoint and the legacy status dropdown."""
+    run = await db.mail_runs.find_one({"run_id": run_id}, {"_id": 0})
+    if not run:
+        raise HTTPException(status_code=404, detail="Mail run not found")
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    if body.get("undo"):
+        ids = body.get("touch_ids") or []
+        await db.mail_touches.update_many(
+            {"run_id": run_id, "touch_id": {"$in": ids}},
+            {"$set": {"verify_status": "pending", "posted_at": None,
+                      "verified_by": "", "verified_at": None, "reason": ""}})
+        for tid in ids:
+            await db.engagement_events.delete_many({"dedup_key": f"mailtouch:{tid}"})
+        return await _recompute_run_counts(run_id)
+
+    posted_date = (body.get("posted_date") or "").strip()
+    posted_iso = f"{posted_date}T00:00:00+00:00" if posted_date else now_iso
+    if body.get("select_all"):
+        status = body.get("verify_status", "sent")
+        pending = await db.mail_touches.find(
+            {"run_id": run_id, "verify_status": "pending"}, {"_id": 0, "touch_id": 1}).to_list(None)
+        rows = [{"touch_id": t["touch_id"], "verify_status": status} for t in pending]
+    else:
+        rows = body.get("rows") or []
+
+    for r in rows:
+        if r.get("verify_status") not in VERIFY_STATUSES:
+            raise HTTPException(status_code=400,
+                                detail=f"Invalid verify_status: {r.get('verify_status')}")
+
+    newly_sent = []
+    for r in rows:
+        tid, status = r.get("touch_id"), r["verify_status"]
+        touch = await db.mail_touches.find_one({"run_id": run_id, "touch_id": tid}, {"_id": 0})
+        if not touch:
+            continue
+        was_sent = touch.get("verify_status") == "sent"
+        actual = (r.get("posted_date") or posted_date)
+        _set = {"verify_status": status, "verified_by": user["email"], "verified_at": now_iso,
+                "reason": (r.get("reason") or "").strip()}
+        _set["posted_at"] = (f"{actual}T00:00:00+00:00" if actual else posted_iso) \
+            if status == "sent" else None
+        await db.mail_touches.update_one({"touch_id": tid}, {"$set": _set})
+        if status == "sent" and not was_sent:
+            newly_sent.append({**touch, "posted_at": _set["posted_at"]})
+
+    for t in newly_sent:
+        try:
+            await log_engagement_event(
+                channel="mail", kind=f"{t.get('piece_type', 'mailer')} posted",
+                title=f"{t.get('item_name') or t.get('piece_type', 'Mailer')} posted",
+                school_id=t.get("school_id", ""), lead_id=t.get("lead_id", ""),
+                status="sent", direction="out", by=user["email"], at=t["posted_at"],
+                meta={"run_id": run_id, "touch_id": t["touch_id"]},
+                dedup_key=f"mailtouch:{t['touch_id']}")
+        except Exception as e:
+            logging.getLogger("crm").warning("[mail] ledger log failed: %s", str(e)[:180])
+        # Follow-up cadence per school, and ONLY for pieces that really went out —
+        # a school whose mailer never left must not be asked if it arrived.
+        already = await db.crm_activities.count_documents(
+            {"batch_id": run_id, "school_id": t.get("school_id", ""), "source": "mail_cadence"})
+        if not already:
+            await _create_mail_cadence({**run, "school_ids": [t.get("school_id", "")]},
+                                       t["posted_at"], user)
+
+    return await _recompute_run_counts(run_id)
+
+
+@router.post("/mail-runs/{run_id}/verify")
+async def verify_mail_run(run_id: str, request: Request):
+    """Record what was ACTUALLY posted, one school at a time.
+
+    Body is either {rows: [{touch_id, verify_status, posted_date?, reason?}]},
+    {select_all: true, verify_status, posted_date?}, or {touch_ids: [...], undo: true}.
+    """
+    user = await get_current_user(request)
+    return await _do_verify(run_id, user, await _parse_json_body(request))
+
+
+@router.post("/mail-runs/{run_id}/replan")
+async def replan_mail_run(run_id: str, request: Request):
+    """Push the pieces that didn't go out onto a new date.
+
+    Deliberately does NOT touch the drip enrolment schedule: a postage delay must
+    never stall the WhatsApp and call cadence behind it (design spec 7.4).
+    """
+    await get_current_user(request)
+    run = await db.mail_runs.find_one({"run_id": run_id}, {"_id": 0})
+    if not run:
+        raise HTTPException(status_code=404, detail="Mail run not found")
+    body = await _parse_json_body(request)
+    new_date = (body.get("new_date") or "").strip()
+    if not new_date:
+        raise HTTPException(status_code=400, detail="new_date is required")
+
+    movable = ("pending", "not_sent")
+    if body.get("select_pending"):
+        touches = await db.mail_touches.find(
+            {"run_id": run_id, "verify_status": {"$in": list(movable)}}, {"_id": 0}).to_list(None)
+    else:
+        ids = body.get("touch_ids") or []
+        touches = await db.mail_touches.find(
+            {"run_id": run_id, "touch_id": {"$in": ids}}, {"_id": 0}).to_list(None)
+        blocked = [t["touch_id"] for t in touches if t.get("verify_status") not in movable]
+        if blocked:
+            raise HTTPException(status_code=400,
+                detail=f"Already posted, cannot be re-planned: {', '.join(blocked)}")
+
+    for t in touches:
+        await db.mail_touches.update_one({"touch_id": t["touch_id"]}, {
+            "$set": {"planned_date": new_date, "verify_status": "pending", "reason": ""},
+            "$inc": {"replan_count": 1}})
+    run = await _recompute_run_counts(run_id)
+    return {**run, "moved": len(touches), "new_date": new_date}
+
+
 @router.put("/mail-runs/{run_id}/status")
 async def update_mail_run_status(run_id: str, request: Request):
     user = await get_current_user(request)
@@ -1011,16 +1377,12 @@ async def update_mail_run_status(run_id: str, request: Request):
     status = body.get("status")
     if status not in ("planned", "posted", "closed"):
         raise HTTPException(status_code=400, detail="Invalid status")
-    _set = {"status": status}
     if status == "posted":
-        _set["posted_at"] = datetime.now(timezone.utc).isoformat()
-        await db.mail_touches.update_many({"run_id": run_id}, {"$set": {"posted_at": _set["posted_at"]}})
-        # Auto-create the follow-up cadence exactly once (idempotent on re-post).
-        run = await db.mail_runs.find_one({"run_id": run_id}, {"_id": 0})
-        already = await db.crm_activities.count_documents({"batch_id": run_id, "source": "mail_cadence"})
-        if run and already == 0:
-            await _create_mail_cadence(run, _set["posted_at"], user)
-    await db.mail_runs.update_one({"run_id": run_id}, {"$set": _set})
+        # "Posted" now means "every pending piece really went out", so it routes
+        # through verification — keeping the per-school truth (and the follow-up
+        # cadence) honest instead of blind-stamping the whole run.
+        return await _do_verify(run_id, user, {"select_all": True, "verify_status": "sent"})
+    await db.mail_runs.update_one({"run_id": run_id}, {"$set": {"status": status}})
     return await db.mail_runs.find_one({"run_id": run_id}, {"_id": 0})
 
 
@@ -1048,6 +1410,15 @@ _STICKER_SIZES = {
     "65x38":   (65, 38),
     "50x25":   (50, 25),
 }
+
+
+def _clamp_scale(v):
+    """Sticker text scale — user-controlled, but bounded so a label can never be
+    scaled into unreadability or off its own edges."""
+    try:
+        return max(0.8, min(1.3, float(v)))
+    except (TypeError, ValueError):
+        return 1.0
 
 
 def _parse_sticker_size(size):
@@ -1118,9 +1489,15 @@ def _load_company_logo(company, base_url):
     return None
 
 
-def _render_label(c, x, y, w, h, sch, token, company, base_url, logo=None, frame=True):
+def _render_label(c, x, y, w, h, sch, token, company, base_url, logo=None, frame=True,
+                  endorsement="", endorsement_pt=0, text_scale=1.0, show_phone=True):
     """One address label inside rect (x,y,w,h): TO on top (bold school name),
-    FROM below (bold company name), QR bottom-right. Fonts + wrap scale to width."""
+    FROM below (bold company name), QR bottom-right. Fonts + wrap scale to width.
+
+    `endorsement` is the postal tariff note ("Book Post" / "Open Post") that used to
+    be written on by hand; it prints right-aligned above the To block, where the
+    counter clerk looks and clear of the address. `text_scale` (0.8–1.3) sizes the
+    whole label up or down."""
     from reportlab.lib.units import mm
     from reportlab.graphics.barcode import qr
     from reportlab.graphics.shapes import Drawing
@@ -1128,14 +1505,23 @@ def _render_label(c, x, y, w, h, sch, token, company, base_url, logo=None, frame
 
     m = max(2 * mm, 0.05 * min(w, h))
     ix, iw = x + m, w - 2 * m
+    ts = _clamp_scale(text_scale)
+    endorsement = str(endorsement or "").strip()
 
     # Compact layout for small labels (can't fit full address + FROM + big QR).
     if h < 45 * mm:
-        f_name = max(6, min(9.5, (h / mm) * 0.30))
+        f_name = max(6, min(9.5, (h / mm) * 0.30)) * ts
         f_body = max(5, f_name * 0.8)
         qsz = max(9 * mm, min(h - 2 * m, w * 0.30))
         tw = w - qsz - 3 * m
         cy = y + h - m - f_name
+        if endorsement:
+            # Only if it fits one line — a small label must not lose the address.
+            e_sz = float(endorsement_pt) if endorsement_pt else f_name * 0.8
+            if c.stringWidth(endorsement, "Helvetica-Bold", e_sz) <= tw:
+                c.setFont("Helvetica-Bold", e_sz)
+                c.drawString(ix, cy, endorsement)
+                cy -= e_sz * 1.15
         c.setFont("Helvetica-Bold", f_name)
         for ln in _wrap_to_width(c, sch.get("school_name", ""), "Helvetica-Bold", f_name, tw)[:2]:
             c.drawString(ix, cy, ln); cy -= f_name * 1.12
@@ -1157,10 +1543,10 @@ def _render_label(c, x, y, w, h, sch, token, company, base_url, logo=None, frame
         return
 
     scale = w / (100 * mm)
-    f_lbl  = max(5.5, min(9, 8 * scale))
-    f_body = max(6.5, min(11, 11 * scale))
-    f_name = max(8, min(15, 14 * scale))
-    f_pin  = max(7, min(13, 12 * scale))
+    f_lbl  = max(5.5, min(9, 8 * scale)) * ts
+    f_body = max(6.5, min(11, 11 * scale)) * ts
+    f_name = max(8, min(15, 14 * scale)) * ts
+    f_pin  = max(7, min(13, 12 * scale)) * ts
     LH = 1.22
 
     bottom_h = max(24 * mm, h * 0.46)          # From section gets ~half the label
@@ -1176,7 +1562,11 @@ def _render_label(c, x, y, w, h, sch, token, company, base_url, logo=None, frame
 
     # ── TO block — build every line first, then centre it (biased high) in the top
     #    zone so the recipient address is balanced, not crammed against the top edge.
-    to_lines = [("To,", "Helvetica", f_lbl), ("The Principal,", "Helvetica", f_body)]
+    #    Postal order: NAME → SCHOOL → ADDRESS → PHONE. The person's own name goes
+    #    first (falling back to "The Principal" only when we don't know it), because
+    #    a cover addressed to a named person actually reaches that person.
+    person = str(sch.get("primary_contact_name") or "").strip() or "The Principal"
+    to_lines = [("To,", "Helvetica", f_lbl), (person + ",", "Helvetica", f_body)]
     nl = _wrap_to_width(c, sch.get("school_name", ""), "Helvetica-Bold", f_name, iw)[:2]
     for i, ln in enumerate(nl):
         to_lines.append((ln + ("," if i == len(nl) - 1 else ""), "Helvetica-Bold", f_name))
@@ -1188,12 +1578,32 @@ def _render_label(c, x, y, w, h, sch, token, company, base_url, logo=None, frame
         to_lines.append((cp + ("," if sch.get("state") else "."), "Helvetica-Bold", f_pin))
     if sch.get("state"):
         to_lines.append((sch.get("state", "") + ".", "Helvetica", f_body))
+    to_phone = str(sch.get("phone") or "").strip()
+    if show_phone and to_phone:
+        to_lines.append(("Ph: " + to_phone, "Helvetica", f_body))
 
     def _lh(sz):
         return sz * 1.18
     block_h = sum(_lh(sz) for _, _, sz in to_lines)
-    free = (y + h - m) - dv - block_h
-    cy = (y + h - m) - max(0.0, free) * 0.30     # 30% of slack above → gentle balance
+
+    top = y + h - m
+    if endorsement:
+        # Right-aligned above "To," — the TO block wraps to the full inner width, so
+        # an overlay in the right margin would collide; this never can.
+        e_sz = float(endorsement_pt) if endorsement_pt else f_name * 0.8
+        c.setFont("Helvetica-Bold", e_sz)
+        c.drawRightString(x + w - m, top - e_sz, endorsement[:40])
+        top -= e_sz * 1.25
+
+    # A larger text scale must never push the address down into the From block: if
+    # the lines no longer fit the top zone, shrink them proportionally to fit.
+    top_h = top - dv
+    if block_h > top_h > 0:
+        shrink = top_h / block_h
+        to_lines = [(t, f, sz * shrink) for t, f, sz in to_lines]
+        block_h = top_h
+
+    cy = top - max(0.0, top_h - block_h) * 0.30     # 30% of slack above → gentle balance
     for text, font, sz in to_lines:
         c.setFont(font, sz); c.drawString(ix, cy - sz, text); cy -= _lh(sz)
 
@@ -1246,6 +1656,10 @@ def _render_label(c, x, y, w, h, sch, token, company, base_url, logo=None, frame
             if fy < y + m:
                 break
             c.drawString(ix, fy, wl); fy -= f_lbl * LH
+    # Sender phone last — the line the recipient uses to call back.
+    from_phone = str(company.get("phone") or "").strip()
+    if show_phone and from_phone and fy >= y + m:
+        c.drawString(ix, fy, "Ph: " + from_phone[:24]); fy -= f_lbl * LH
 
     # ── QR (bottom-right) ──
     if token:
@@ -1260,7 +1674,8 @@ def _render_label(c, x, y, w, h, sch, token, company, base_url, logo=None, frame
 
 def _build_stickers_pdf(touches, schools_by_id, company, base_url, *,
                         orientation="portrait", size="100x150", layout="label",
-                        from_override=None, show_logo=True):
+                        from_override=None, show_logo=True,
+                        endorsement="", endorsement_pt=0, text_scale=1.0, show_phone=True):
     """Address labels — Godex thermal (one per page) or A4 4-up for a normal
     printer. TO on top, FROM below (company bold), QR, auto-wrapped to the size.
       orientation: portrait | landscape (thermal only)
@@ -1297,7 +1712,9 @@ def _build_stickers_pdf(touches, schools_by_id, company, base_url, *,
             c.setDash(2, 2); c.setLineWidth(0.4); c.setStrokeGray(0.7)
             c.rect(cx, cyy, cw, ch); c.setDash(); c.setStrokeGray(0)
             _render_label(c, cx, cyy, cw, ch, schools_by_id.get(t.get("school_id"), {}),
-                          t.get("qr_token", ""), company, base_url, logo=logo, frame=False)
+                          t.get("qr_token", ""), company, base_url, logo=logo, frame=False,
+                          endorsement=endorsement, endorsement_pt=endorsement_pt,
+                          text_scale=text_scale, show_phone=show_phone)
         c.save()
         return buf.getvalue()
 
@@ -1311,7 +1728,9 @@ def _build_stickers_pdf(touches, schools_by_id, company, base_url, *,
         c.showPage()
     for t in touches:
         _render_label(c, 0, 0, W, H, schools_by_id.get(t.get("school_id"), {}),
-                      t.get("qr_token", ""), company, base_url, logo=logo)
+                      t.get("qr_token", ""), company, base_url, logo=logo,
+                      endorsement=endorsement, endorsement_pt=endorsement_pt,
+                      text_scale=text_scale, show_phone=show_phone)
         c.showPage()
     c.save()
     return buf.getvalue()
@@ -1335,18 +1754,39 @@ async def mail_run_stickers(run_id: str, request: Request):
     orientation = "landscape" if qp.get("orientation") == "landscape" else "portrait"
     layout = "a4" if qp.get("layout") == "a4" else "label"
     size = qp.get("size") or "100x150"
+    # Endorsement ("Book Post" / "Open Post") + text size: a per-batch query param
+    # wins, else the saved Settings → Company defaults.
+    endorsement = qp.get("endorsement")
+    if endorsement is None:
+        endorsement = company.get("sticker_endorsement", "")
+    try:
+        endorsement_pt = float(qp.get("endorsement_pt") or company.get("sticker_endorsement_pt") or 0)
+    except (TypeError, ValueError):
+        endorsement_pt = 0
+    text_scale = _clamp_scale(qp.get("text_scale") or company.get("sticker_text_scale") or 1.0)
+    # Printing IS the event: stamp the batch so "printed but never posted" is
+    # answerable later. Only the labels actually rendered get marked — a touch
+    # skipped for an incomplete address was never printed.
+    if touches:
+        await db.mail_touches.update_many(
+            {"touch_id": {"$in": [t["touch_id"] for t in touches if t.get("touch_id")]}},
+            {"$set": {"printed_at": datetime.now(timezone.utc).isoformat(),
+                      "print_batch_id": f"pb_{uuid.uuid4().hex[:12]}"}})
     # Optional per-batch FROM override (else falls back to Settings → Company)
     show_logo = qp.get("no_logo") not in ("1", "true", "yes")
     from_override = None
-    if any(qp.get(k) for k in ("from_name", "from_address", "from_tagline", "from_contact")):
+    if any(qp.get(k) for k in ("from_name", "from_address", "from_tagline", "from_contact", "from_phone")):
         from_override = {
             "company_name": qp.get("from_name", ""), "address": qp.get("from_address", ""),
             "city": qp.get("from_city", ""), "state": qp.get("from_state", ""),
             "pincode": qp.get("from_pincode", ""), "sticker_tagline": qp.get("from_tagline", ""),
-            "sticker_contact": qp.get("from_contact", ""),
+            "sticker_contact": qp.get("from_contact", ""), "phone": qp.get("from_phone", ""),
         }
     pdf = _build_stickers_pdf(touches, schools_by_id, company, base, orientation=orientation,
-                              size=size, layout=layout, from_override=from_override, show_logo=show_logo)
+                              size=size, layout=layout, from_override=from_override,
+                              show_logo=show_logo, endorsement=endorsement,
+                              endorsement_pt=endorsement_pt, text_scale=text_scale,
+                              show_phone=(qp.get("no_phone") not in ("1", "true", "yes")))
     return StreamingResponse(io.BytesIO(pdf), media_type="application/pdf",
                              headers={"Content-Disposition": f'attachment; filename="stickers-{run_id}.pdf"'})
 

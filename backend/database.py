@@ -232,6 +232,48 @@ async def connect_db():
     from field_registry import seed_field_definitions as _seed_fields
     await _seed_fields(db)
 
+    # ── Offline-mail touch lifecycle backfill ────────────────────────────────
+    try:
+        res = await backfill_mail_touch_lifecycle(db)
+        if res["updated"]:
+            logging.info("mail-touch lifecycle backfilled on %d touch(es)", res["updated"])
+    except Exception as e:            # never let a backfill break startup
+        logging.warning("mail-touch backfill skipped: %s", str(e)[:180])
+
+
+async def backfill_mail_touch_lifecycle(target_db) -> dict:
+    """Give every pre-lifecycle mail touch a planned date and a verify status.
+
+    A touch on a run that was already marked 'posted' backfills as SENT — the old
+    UI stamped the whole run at once, and treating that history as 'pending' would
+    make every past campaign read as never-posted and collapse the ROI numbers.
+    Idempotent: only touches missing the fields are written, so it is safe on every
+    boot and safe to re-run by hand.
+    """
+    scanned = updated = 0
+    runs = {}
+    cursor = target_db.mail_touches.find({"verify_status": {"$exists": False}}, {"_id": 0})
+    async for t in cursor:
+        scanned += 1
+        rid = t.get("run_id", "")
+        if rid not in runs:
+            runs[rid] = await target_db.mail_runs.find_one(
+                {"run_id": rid}, {"_id": 0, "status": 1, "send_date": 1, "created_at": 1}) or {}
+        run = runs[rid]
+        planned = str(run.get("send_date") or "").strip() or str(run.get("created_at") or "")[:10]
+        was_posted = run.get("status") in ("posted", "closed") or bool(t.get("posted_at"))
+        res = await target_db.mail_touches.update_one({"touch_id": t["touch_id"]}, {"$set": {
+            "planned_date": planned,
+            "verify_status": "sent" if was_posted else "pending",
+            "printed_at": t.get("printed_at"),
+            "print_batch_id": t.get("print_batch_id", ""),
+            "replan_count": int(t.get("replan_count", 0) or 0),
+            "source": t.get("source", "manual"),
+        }})
+        updated += res.modified_count
+    return {"scanned": scanned, "updated": updated}
+
+
 async def close_db():
     """Called on shutdown — closes the Motor client."""
     if client is not None:

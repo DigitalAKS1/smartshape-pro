@@ -391,6 +391,13 @@ export const mailRuns = {
   stickers: (id, params = {}) => API.get(`/mail-runs/${id}/stickers.pdf`, { params: { ...params, _ts: Date.now() }, responseType: 'blob' }),
   exportCsv: (id) => API.get(`/mail-runs/${id}/export.csv`, { responseType: 'blob' }),
   analytics: () => API.get('/mail-runs/analytics'),
+  // Plan vs actual: what really went into the post
+  verify: (id, payload) => API.post(`/mail-runs/${id}/verify`, payload),
+  undoVerify: (id, touch_ids) => API.post(`/mail-runs/${id}/verify`, { undo: true, touch_ids }),
+  replan: (id, payload) => API.post(`/mail-runs/${id}/replan`, payload),
+  gapReport: (params = {}) => API.get('/mail-runs/gap-report', { params }),
+  todayQueue: (date) => API.get('/mail-runs/today-queue', { params: date ? { date } : {} }),
+  queueStickers: (params = {}) => API.get('/mail-runs/queue-stickers.pdf', { params: { ...params, _ts: Date.now() }, responseType: 'blob' }),
   import: (file, { name = '', piece_type = 'brochure', send_date = '' } = {}) => {
     const fd = new FormData();
     fd.append('file', file);
@@ -515,6 +522,7 @@ export const dripSequences = {
   enrollSchools: (data) => API.post('/drip/enroll-schools', data),
   enrollments: (params) => API.get('/drip/enrollments', { params }),
   cancelEnrollment: (id) => API.put(`/drip/enrollments/${id}/cancel`),
+  deliveries: (id, params = {}) => API.get(`/drip/sequences/${id}/deliveries`, { params }),
 };
 
 // Tags
