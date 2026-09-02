@@ -1685,6 +1685,73 @@ async def keepintouch_loop():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# JOB 15 — Overdue post: pieces that were planned but never actually went out
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def run_mail_overdue_nudge():
+    """Post that was planned but never posted. Opt-in, once per run per day.
+
+    Two deliberately quiet thresholds: printed but unposted for over a day (the
+    sticker exists, the packet didn't move), and planned but never even printed
+    for over three days.
+    """
+    cfg = await db.settings.find_one({"type": "notifications"}, {"_id": 0}) or {}
+    if not cfg.get("mail_overdue_nudge"):
+        return
+
+    now = datetime.now(timezone.utc)
+    today = now.strftime("%Y-%m-%d")
+    printed_cut = (now - timedelta(days=1)).isoformat()
+    planned_cut = (now - timedelta(days=3)).strftime("%Y-%m-%d")
+
+    overdue = await db.mail_touches.find({
+        "verify_status": "pending",
+        "planned_date": {"$lt": today, "$ne": ""},
+        "$or": [
+            {"printed_at": {"$ne": None, "$lt": printed_cut}},
+            {"printed_at": None, "planned_date": {"$lt": planned_cut}},
+        ],
+    }, {"_id": 0}).to_list(2000)
+    if not overdue:
+        return
+
+    by_run = {}
+    for t in overdue:
+        by_run.setdefault(t.get("run_id", ""), []).append(t)
+
+    for run_id, touches in by_run.items():
+        dedup = f"mailnudge:{run_id}:{today}"
+        if await db.crm_notifications.find_one({"dedup_key": dedup}, {"_id": 0, "notif_id": 1}):
+            continue
+        run = await db.mail_runs.find_one({"run_id": run_id}, {"_id": 0}) or {}
+        owner = touches[0].get("owner") or run.get("created_by") or ""
+        if not owner:
+            continue
+        n = len(touches)
+        await db.crm_notifications.insert_one({
+            "notif_id": f"crmn_{uuid.uuid4().hex[:10]}",
+            "email": owner, "type": "mail_overdue", "dedup_key": dedup,
+            "title": "📮 Post still waiting to go out",
+            "body": (f"{n} piece{'s' if n != 1 else ''} from \"{run.get('name', 'a mail run')}\" "
+                     f"{'were' if n != 1 else 'was'} planned earlier and "
+                     f"{'have' if n != 1 else 'has'} not been posted yet."),
+            "ref_type": "mail_run", "ref_id": run_id,
+            "from_name": "Offline Mail", "is_read": False,
+            "created_at": now.isoformat()})
+        log.info(f"[mail] overdue nudge → {owner}: {n} piece(s) on run {run_id}")
+
+
+async def mail_overdue_loop():
+    log.info("[scheduler] mail overdue nudge started (interval: 6 hr)")
+    while True:
+        try:
+            await run_mail_overdue_nudge()
+        except Exception as exc:
+            log.error(f"[mail overdue loop] {exc}")
+        await asyncio.sleep(6 * 60 * 60)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # JOB 14 — Balance-due reminders (chase money on dispatched/credit orders)
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -1776,5 +1843,6 @@ async def start_scheduler():
     asyncio.create_task(webinar_lifecycle_loop())
     asyncio.create_task(keepintouch_loop())
     asyncio.create_task(balance_reminder_loop())
+    asyncio.create_task(mail_overdue_loop())
     log.info("[scheduler] cert loop running")
     log.info("[scheduler] all 14 background jobs running")
