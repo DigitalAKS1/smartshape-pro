@@ -7,9 +7,39 @@ import io
 import os
 from typing import Optional
 
+import requests
+
 from database import db
 
 UPLOADS_DIR = os.environ.get("UPLOADS_DIR", "/app/uploads")
+
+# Emergent object store — the legacy upload target for certificates and WhatsApp
+# media. Moved here from server.py, which was 5,576 lines of unmounted code that
+# only this one function still needed (see tests/test_no_dead_routes.py).
+STORAGE_URL = "https://integrations.emergentagent.com/objstore/api/v1/storage"
+EMERGENT_KEY = os.environ.get("EMERGENT_LLM_KEY")
+_storage_key = None
+
+
+def init_storage():
+    global _storage_key
+    if _storage_key:
+        return _storage_key
+    resp = requests.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_KEY}, timeout=30)
+    resp.raise_for_status()
+    _storage_key = resp.json()["storage_key"]
+    return _storage_key
+
+
+def put_object(path: str, data: bytes, content_type: str) -> dict:
+    key = init_storage()
+    resp = requests.put(
+        f"{STORAGE_URL}/objects/{path}",
+        headers={"X-Storage-Key": key, "Content-Type": content_type},
+        data=data, timeout=120,
+    )
+    resp.raise_for_status()
+    return resp.json()
 
 
 async def _cloudinary_config() -> Optional[dict]:
@@ -43,8 +73,6 @@ def _save_file_local(path: str, data: bytes) -> None:
 
 
 def _put_object_emergent(path: str, data: bytes, content_type: str) -> None:
-    # lazy import to avoid a circular import with server.py at module load
-    from server import put_object
     put_object(path, data, content_type)
 
 
