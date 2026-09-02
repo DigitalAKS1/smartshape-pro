@@ -58,6 +58,7 @@ const CallsLog = lazy(() => import('./pages/admin/CallsLog'));
 const ActivityLogsPage = lazy(() => import('./pages/admin/ActivityLogs'));
 const DispatchTracking = lazy(() => import('./pages/admin/DispatchTracking'));
 const SchoolProfile = lazy(() => import('./pages/admin/SchoolProfile'));
+const ReportsHub = lazy(() => import('./pages/admin/ReportsHub'));
 const MarketingHub = lazy(() => import('./pages/admin/MarketingHub'));
 const DelegationApp = lazy(() => import('./pages/admin/DelegationApp'));
 const FlowManagement = lazy(() => import('./pages/admin/FlowManagement'));
@@ -241,6 +242,7 @@ function AppRouter() {
       <Route path="/dispatch-tracking" element={<ProtectedRoute><DispatchTracking /></ProtectedRoute>} />
       <Route path="/customer-engagement" element={<ProtectedRoute><CustomerEngagement /></ProtectedRoute>} />
       <Route path="/school-profile/:school_id" element={<ProtectedRoute><SchoolProfile /></ProtectedRoute>} />
+      <Route path="/reports" element={<ProtectedRoute><ReportsHub /></ProtectedRoute>} />
       <Route path="/marketing" element={<ProtectedRoute><MarketingHub /></ProtectedRoute>} />
       <Route path="/delegation" element={<ProtectedRoute><DelegationApp /></ProtectedRoute>} />
       <Route path="/flow-management" element={<ProtectedRoute><FlowManagement /></ProtectedRoute>} />

@@ -26,6 +26,8 @@ export const MODULE_ROUTE_MAP = {
   stock_management: { path: '/stock-management', icon: Warehouse, label: 'Stock Management' },
   physical_count: { path: '/physical-count', icon: ClipboardList, label: 'Physical Count' },
   analytics: [
+    // The catalogue of every report — the way in to the ones below it.
+    { path: '/reports', icon: BarChart3, label: 'Reports' },
     { path: '/analytics', icon: BarChart3, label: 'Analytics' },
     { path: '/admin-control', icon: Target, label: 'Admin Control' },
     { path: '/conversion', icon: Target, label: 'Conversion Tracking' },

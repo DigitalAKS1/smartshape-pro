@@ -227,69 +227,9 @@ async def reject_reimbursement(reimbursement_id: str, notes: str, request: Reque
 
 # ==================== DESIGNATIONS ====================
 
-@router.get("/designations")
-async def get_designations(request: Request):
-    user = await get_current_user(request)
-    require_module(user, "user_management", "read")
-    # Always upsert system designations so role_level changes are applied immediately
-    for d in DEFAULT_DESIGNATIONS:
-        d_copy = {**d, "created_at": datetime.now(timezone.utc).isoformat()}
-        await db.designations.update_one(
-            {"designation_id": d["designation_id"]},
-            {"$set": d_copy},
-            upsert=True,
-        )
-    designations = await db.designations.find({}, {"_id": 0}).sort("name", 1).to_list(100)
-    return designations
-
-
-@router.post("/designations")
-async def create_designation(request: Request):
-    user = await get_current_user(request)
-    require_module(user, "user_management", "read_write")
-    body = await request.json()
-    if not body.get("name") or not body.get("code"):
-        raise HTTPException(status_code=400, detail="name and code required")
-    existing = await db.designations.find_one({"code": body["code"]})
-    if existing:
-        raise HTTPException(status_code=400, detail="Designation code already exists")
-    desg_id = f"desg_{uuid.uuid4().hex[:12]}"
-    doc = {
-        "designation_id": desg_id,
-        "name": body["name"],
-        "code": body["code"],
-        "role_level": body.get("role_level", "sales_person"),
-        "default_modules": body.get("default_modules", []),
-        "description": body.get("description", ""),
-        "is_system": False,
-        "is_active": True,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-    await db.designations.insert_one(doc)
-    return await db.designations.find_one({"designation_id": desg_id}, {"_id": 0})
-
-
-@router.put("/designations/{designation_id}")
-async def update_designation(designation_id: str, request: Request):
-    user = await get_current_user(request)
-    require_module(user, "user_management", "read_write")
-    body = await request.json()
-    allowed = {}
-    for k in ("name", "description", "default_modules", "role_level", "is_active"):
-        if k in body:
-            allowed[k] = body[k]
-    await db.designations.update_one({"designation_id": designation_id}, {"$set": allowed})
-    return await db.designations.find_one({"designation_id": designation_id}, {"_id": 0})
-
-
-@router.delete("/designations/{designation_id}")
-async def delete_designation(designation_id: str, request: Request):
-    user = await get_current_user(request)
-    require_module(user, "user_management", "read_write")
-    desg = await db.designations.find_one({"designation_id": designation_id})
-    if not desg:
-        raise HTTPException(status_code=404, detail="Not found")
-    if desg.get("is_system"):
-        raise HTTPException(status_code=400, detail="Cannot delete system designations")
-    await db.designations.delete_one({"designation_id": designation_id})
-    return {"message": "Designation deleted"}
+# -- Designations live in the CRM, not here ----------------------------------
+# hr_routes used to declare its own GET/POST/PUT/DELETE /designations. They were
+# unreachable: crm_router is mounted before hr_router in main.py, so FastAPI served
+# the CRM handlers and these never ran -- and no screen called them either. The
+# DEFAULT_DESIGNATIONS list above is kept as reference for the intended role
+# mapping; nothing seeds it. Removed 2026-09-02 with the duplicate-route sweep.

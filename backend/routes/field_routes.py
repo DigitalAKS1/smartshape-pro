@@ -649,27 +649,104 @@ async def get_visits(request: Request):
 
 @router.put("/sales/visits/{visit_id}")
 async def update_field_visit(visit_id: str, request: Request):
-    """Edit a self-created field visit. A rep may edit their OWN visit only while
-    it is today's visit (add/correct notes, outcome, contact); admins may edit any
-    visit any day. This lets reps append what they forgot without reopening a
-    closed record forever."""
+    """Update a field visit, or an admin-assigned visit plan.
+
+    ONE handler on purpose. This route was declared twice (81f741d); FastAPI serves
+    the first match, so the second — which owned check-out, completion and visit
+    plans — was unreachable, and a rep ending a visit silently saved nothing.
+
+    Rules: a rep may edit their OWN visit's content only on the day of the visit;
+    an admin may edit any visit any day. Check-out and status are not content, so
+    they are always allowed for the owner — ending a visit must never depend on the
+    edit window.
+    """
     user = await get_current_user(request)
-    v = await db.field_visits.find_one({"visit_id": visit_id}, {"_id": 0})
-    if not v:
-        raise HTTPException(status_code=404, detail="Visit not found")
-    is_admin = user.get("role") == "admin"
-    if v.get("sales_person_email") != user["email"] and not is_admin:
-        raise HTTPException(status_code=403, detail="You can only edit your own visits")
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    if (v.get("visit_date") or "")[:10] != today and not is_admin:
-        raise HTTPException(status_code=403, detail="A visit can only be edited on the same day. Ask an admin to change an older visit.")
     body = await request.json()
-    allowed = {k: body[k] for k in
-               ("notes", "outcome", "contact_person", "contact_phone", "purpose", "school_name", "visit_time")
-               if k in body}
-    allowed["updated_at"] = datetime.now(timezone.utc).isoformat()
-    await db.field_visits.update_one({"visit_id": visit_id}, {"$set": allowed})
-    return await db.field_visits.find_one({"visit_id": visit_id}, {"_id": 0})
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    CONTENT_FIELDS = ("notes", "outcome", "contact_person", "contact_phone",
+                      "purpose", "school_name", "visit_time")
+    LIVE_FIELDS = ("status", "check_in_time", "check_out_time",
+                   "check_out_lat", "check_out_lng", "check_out_address")
+
+    v = await db.field_visits.find_one({"visit_id": visit_id}, {"_id": 0})
+    if v:
+        is_admin = user.get("role") == "admin"
+        if v.get("sales_person_email") != user["email"] and not is_admin:
+            raise HTTPException(status_code=403, detail="You can only edit your own visits")
+
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        if (any(k in body for k in CONTENT_FIELDS)
+                and (v.get("visit_date") or "")[:10] != today and not is_admin):
+            raise HTTPException(status_code=403, detail="A visit can only be edited on the same day. Ask an admin to change an older visit.")
+
+        safe = {k: body[k] for k in CONTENT_FIELDS + LIVE_FIELDS if k in body}
+        if safe.get("status") == "completed" and not safe.get("check_out_time"):
+            safe["check_out_time"] = now_iso
+        if safe.get("check_out_lat") and safe.get("check_out_lng") and not safe.get("check_out_address"):
+            safe["check_out_lat"] = float(safe["check_out_lat"])
+            safe["check_out_lng"] = float(safe["check_out_lng"])
+            safe["check_out_address"] = reverse_geocode(safe["check_out_lat"], safe["check_out_lng"])
+        safe["updated_at"] = now_iso
+        await db.field_visits.update_one({"visit_id": visit_id}, {"$set": safe})
+
+        if safe.get("status") == "completed":
+            await _visit_completion_hooks(
+                lead_id=v.get("lead_id"),
+                school_name=v.get("school_name", ""),
+                outcome=safe.get("outcome", "") or v.get("outcome", ""),
+                assigned_to=v.get("sales_person_email") or user["email"],
+                now_iso=now_iso,
+            )
+        return await db.field_visits.find_one({"visit_id": visit_id}, {"_id": 0})
+
+    # An admin-assigned plan lives in visit_plans, not field_visits. Admins may
+    # close one on a rep's behalf; a rep only ever sees their own.
+    plan = await db.visit_plans.find_one({"plan_id": visit_id, "assigned_to": user["email"]})
+    if not plan and user.get("role") == "admin":
+        plan = await db.visit_plans.find_one({"plan_id": visit_id})
+    if plan:
+        safe = {}
+        status = body.get("status")
+        if status == "completed":
+            safe["status"]         = "completed"
+            safe["check_out_time"] = now_iso
+            # Capture check-out GPS for visit_plans too
+            if body.get("check_out_lat") and body.get("check_out_lng"):
+                safe["check_out_lat"] = float(body["check_out_lat"])
+                safe["check_out_lng"] = float(body["check_out_lng"])
+                safe["check_out_address"] = body.get("check_out_address") or reverse_geocode(
+                    safe["check_out_lat"], safe["check_out_lng"]
+                )
+        elif status == "checked_in":
+            safe["status"] = "in_progress"
+        if "notes" in body:
+            safe["visit_notes"] = body["notes"]
+        if "outcome" in body:
+            safe["outcome"] = body["outcome"]
+        if safe:
+            await db.visit_plans.update_one({"plan_id": visit_id}, {"$set": safe})
+        if status == "completed":
+            if plan.get("lead_id"):
+                await db.leads.update_one(
+                    {"lead_id": plan["lead_id"]},
+                    {"$set": {"last_activity_date": now_iso, "last_visit_date": now_iso}},
+                )
+            if plan.get("school_id"):
+                await touch_last_activity("school", plan["school_id"])
+            await log_activity(user["email"], "visit_complete", "visit_plan", visit_id,
+                               details=f"Completed visit at {plan.get('school_name','')}")
+            outcome = body.get("outcome", "")
+            await _visit_completion_hooks(
+                lead_id=plan.get("lead_id"),
+                school_name=plan.get("school_name", ""),
+                outcome=outcome,
+                assigned_to=user["email"],
+                now_iso=now_iso,
+            )
+        return await db.visit_plans.find_one({"plan_id": visit_id}, {"_id": 0})
+
+    raise HTTPException(status_code=404, detail="Visit not found")
 
 
 @router.post("/sales/visits/{visit_id}/check-in")
@@ -720,84 +797,6 @@ async def check_in_visit(visit_id: str, lat: float, lng: float, request: Request
     raise HTTPException(status_code=404, detail="Visit not found")
 
 
-@router.put("/sales/visits/{visit_id}")
-async def update_visit(visit_id: str, request: Request):
-    user = await get_current_user(request)
-    body = await request.json()
-    now_iso = datetime.now(timezone.utc).isoformat()
-
-    # Try own field_visits first
-    visit = await db.field_visits.find_one(
-        {"visit_id": visit_id, "sales_person_email": user["email"]}
-    )
-    if visit:
-        allowed = ("status", "notes", "outcome", "check_out_time", "check_in_time",
-                   "check_out_lat", "check_out_lng", "check_out_address")
-        safe = {k: v for k, v in body.items() if k in allowed}
-        if safe.get("status") == "completed" and not safe.get("check_out_time"):
-            safe["check_out_time"] = now_iso
-        # Reverse-geocode check-out coords if address not provided
-        if safe.get("check_out_lat") and safe.get("check_out_lng") and not safe.get("check_out_address"):
-            safe["check_out_address"] = reverse_geocode(safe["check_out_lat"], safe["check_out_lng"])
-        await db.field_visits.update_one(
-            {"visit_id": visit_id, "sales_person_email": user["email"]},
-            {"$set": safe},
-        )
-        if safe.get("status") == "completed":
-            outcome = safe.get("outcome", "")
-            await _visit_completion_hooks(
-                lead_id=None,
-                school_name=visit.get("school_name", ""),
-                outcome=outcome,
-                assigned_to=user["email"],
-                now_iso=now_iso,
-            )
-        return await db.field_visits.find_one({"visit_id": visit_id}, {"_id": 0})
-
-    # Try admin-assigned visit plan
-    plan = await db.visit_plans.find_one({"plan_id": visit_id, "assigned_to": user["email"]})
-    if plan:
-        safe = {}
-        status = body.get("status")
-        if status == "completed":
-            safe["status"]         = "completed"
-            safe["check_out_time"] = now_iso
-            # Capture check-out GPS for visit_plans too
-            if body.get("check_out_lat") and body.get("check_out_lng"):
-                safe["check_out_lat"] = float(body["check_out_lat"])
-                safe["check_out_lng"] = float(body["check_out_lng"])
-                safe["check_out_address"] = body.get("check_out_address") or reverse_geocode(
-                    safe["check_out_lat"], safe["check_out_lng"]
-                )
-        elif status == "checked_in":
-            safe["status"] = "in_progress"
-        if "notes" in body:
-            safe["visit_notes"] = body["notes"]
-        if "outcome" in body:
-            safe["outcome"] = body["outcome"]
-        if safe:
-            await db.visit_plans.update_one({"plan_id": visit_id}, {"$set": safe})
-        if status == "completed":
-            if plan.get("lead_id"):
-                await db.leads.update_one(
-                    {"lead_id": plan["lead_id"]},
-                    {"$set": {"last_activity_date": now_iso, "last_visit_date": now_iso}},
-                )
-            if plan.get("school_id"):
-                await touch_last_activity("school", plan["school_id"])
-            await log_activity(user["email"], "visit_complete", "visit_plan", visit_id,
-                               details=f"Completed visit at {plan.get('school_name','')}")
-            outcome = body.get("outcome", "")
-            await _visit_completion_hooks(
-                lead_id=plan.get("lead_id"),
-                school_name=plan.get("school_name", ""),
-                outcome=outcome,
-                assigned_to=user["email"],
-                now_iso=now_iso,
-            )
-        return await db.visit_plans.find_one({"plan_id": visit_id}, {"_id": 0})
-
-    raise HTTPException(status_code=404, detail="Visit not found")
 
 
 @router.get("/leads/{lead_id}/visit-history")
