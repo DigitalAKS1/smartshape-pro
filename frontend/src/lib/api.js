@@ -1037,6 +1037,10 @@ export const modules = {
 };
 
 // Designations
+export const reports = {
+  hub: () => API.get('/reports/hub'),
+};
+
 export const designations = {
   getAll: () => API.get('/designations'),
   create: (data) => API.post('/designations', data),

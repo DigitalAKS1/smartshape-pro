@@ -907,6 +907,121 @@ def _days_late(planned: str, posted_at: str):
     return (a - p).days
 
 
+# ── Reports hub ───────────────────────────────────────────────────────────────
+# Fifteen reports were spread across twelve screens with nothing listing them, so
+# nobody could find the one they needed and a report with no screen was invisible.
+# This is the catalogue WITH a live headline number per report, so it reads as a
+# dashboard rather than a menu.
+
+async def _safe(coro, default="—"):
+    """A headline number is a convenience, never a reason for the page to fail."""
+    try:
+        return await coro
+    except Exception:
+        return default
+
+
+REPORT_CATALOGUE = [
+    ("sales", "Sales", [
+        ("funnel", "Lead funnel", "Where every open lead sits, stage by stage.",
+         "/analytics", False),
+        ("conversion", "Conversion tracking", "What turns into a quotation, and what closes.",
+         "/conversion-tracking", True),
+        ("quotations", "Quotations", "Value quoted, confirmed and still open.",
+         "/quotations", False),
+    ]),
+    ("marketing", "Marketing", [
+        ("drip", "Drip sequences", "Who is enrolled, what fired, and what stalled.",
+         "/marketing", False),
+        ("mail_gap", "Post: plan vs actual", "What you planned to post against what really went out.",
+         "/offline-mail", False),
+        ("mail_roi", "Postage ROI", "Response, appointments and cost per reply for each run.",
+         "/offline-mail", False),
+        ("engagement", "Engagement", "Every touch across WhatsApp, email, call and post.",
+         "/marketing", False),
+    ]),
+    ("operations", "Operations", [
+        ("orders", "Orders", "Open, on hold and dispatched.",
+         "/orders", False),
+        ("stock", "Stock", "What is reserved against what is physically there.",
+         "/stock", True),
+    ]),
+    ("people", "People", [
+        ("field", "Field sales", "Visits logged and attendance, per rep.",
+         "/field-sales", True),
+        ("delegation", "Delegation", "Tasks assigned, done and overdue.",
+         "/delegation", False),
+    ]),
+]
+
+
+@router.get("/reports/hub")
+async def reports_hub(request: Request):
+    """Every report in one place, each with a live number and a flag when it needs
+    attention. Admin-only reports are filtered out for a rep rather than 403ing."""
+    user = await get_current_user(request)
+    is_admin = get_team(user) == "admin" or user.get("role") == "admin"
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    # ── the handful of numbers the hub shows, each independently guarded ──
+    open_leads = await _safe(db.leads.count_documents(
+        {"stage": {"$in": list(OPEN_STAGES)}, "is_deleted": {"$ne": True}}), "—")
+    overdue_post = await _safe(db.mail_touches.count_documents(
+        {"verify_status": "pending", "planned_date": {"$lt": today, "$ne": ""}}), 0)
+    posted = await _safe(db.mail_touches.count_documents({"verify_status": "sent"}), 0)
+    active_enrol = await _safe(db.drip_enrollments.count_documents({"status": "active"}), 0)
+    stalled = await _safe(db.drip_enrollments.count_documents({"status": "paused"}), 0)
+    open_quotes = await _safe(db.quotations.count_documents(
+        {"status": {"$in": ["draft", "sent"]}}), "—")
+    open_orders = await _safe(db.orders.count_documents(
+        {"status": {"$nin": ["dispatched", "cancelled", "completed"]}}), "—")
+    visits_today = await _safe(db.field_visits.count_documents({"visit_date": today}), "—")
+    tasks_due = await _safe(db.tasks.count_documents(
+        {"status": "pending", "due_date": {"$lte": today, "$ne": ""}}), "—")
+    touches = await _safe(db.engagement_events.count_documents({}), "—")
+
+    def _n(v):
+        return v if isinstance(v, int) else "—"
+
+    metrics = {
+        "funnel":     {"label": "open leads", "value": _n(open_leads), "tone": "neutral"},
+        "conversion": {"label": "quotations open", "value": _n(open_quotes), "tone": "neutral"},
+        "quotations": {"label": "quotations open", "value": _n(open_quotes), "tone": "neutral"},
+        "drip": {
+            "label": "stalled" if stalled else "active enrolments",
+            "value": stalled if stalled else active_enrol,
+            "tone": "warn" if stalled else "neutral",
+        },
+        "mail_gap": {
+            "label": "overdue to post" if overdue_post else "posted",
+            "value": overdue_post if overdue_post else posted,
+            "tone": "warn" if overdue_post else "neutral",
+        },
+        "mail_roi":    {"label": "pieces posted", "value": posted, "tone": "neutral"},
+        "engagement":  {"label": "touches logged", "value": _n(touches), "tone": "neutral"},
+        "orders":      {"label": "orders open", "value": _n(open_orders), "tone": "neutral"},
+        "stock":       {"label": "see report", "value": "—", "tone": "neutral"},
+        "field":       {"label": "visits today", "value": _n(visits_today), "tone": "neutral"},
+        "delegation":  {"label": "tasks due", "value": _n(tasks_due), "tone": "neutral"},
+    }
+
+    sections, attention = [], 0
+    for key, title, reports in REPORT_CATALOGUE:
+        rows = []
+        for rkey, rtitle, rdesc, route, admin_only in reports:
+            if admin_only and not is_admin:
+                continue
+            m = metrics.get(rkey) or {"label": "", "value": "—", "tone": "neutral"}
+            if m["tone"] == "warn":
+                attention += 1
+            rows.append({"key": rkey, "title": rtitle, "description": rdesc,
+                         "route": route, "metric": m})
+        if rows:
+            sections.append({"key": key, "title": title, "reports": rows})
+
+    return {"sections": sections, "needs_attention": attention, "as_of": today}
+
+
 # NOTE: this static path MUST stay above /mail-runs/{run_id} or FastAPI matches
 # "gap-report" as a run_id and this endpoint is never reached.
 @router.get("/mail-runs/gap-report")
