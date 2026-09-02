@@ -513,6 +513,99 @@ async def cancel_enrollment(enrollment_id: str, request: Request):
     return {"ok": True}
 
 
+# ── Sequence deliveries drill-down ─────────────────────────────────────────────
+
+_CHANNEL_OF = {"whatsapp": "whatsapp", "email": "email",
+               "physical_material": "mail", "call_task": "call"}
+
+
+@router.get("/drip/sequences/{sequence_id}/deliveries")
+async def sequence_deliveries(sequence_id: str, request: Request):
+    """One row per (enrolment x step) — fired or not. The unfired rows are the point:
+    without them, 'planned but not done' is invisible."""
+    user = await get_current_user(request)
+    require_module(user, "leads", "read")
+    seq = await db.drip_sequences.find_one({"sequence_id": sequence_id}, {"_id": 0})
+    if not seq:
+        raise HTTPException(404, "Sequence not found")
+    steps = {s["step_number"]: s for s in sorted(seq.get("steps", []),
+                                                 key=lambda s: s["step_number"])}
+
+    enrolments = await db.drip_enrollments.find({"sequence_id": sequence_id},
+                                                {"_id": 0}).to_list(2000)
+    lead_ids = [e["lead_id"] for e in enrolments]
+    leads = {l["lead_id"]: l for l in await db.leads.find(
+        {"lead_id": {"$in": lead_ids}}, {"_id": 0}).to_list(None)}
+    schools = {s["school_id"]: s for s in await db.schools.find(
+        {}, {"_id": 0, "school_id": 1, "school_name": 1}).to_list(None)}
+    logs = {}
+    for lg in await db.drip_step_logs.find({"sequence_id": sequence_id}, {"_id": 0}).to_list(5000):
+        logs[(lg["enrollment_id"], lg["step_number"])] = lg
+    touches = {}
+    for t in await db.mail_touches.find({"sequence_id": sequence_id}, {"_id": 0}).to_list(5000):
+        touches[(t.get("enrollment_id", ""), t.get("step_number", 0))] = t
+
+    def _plus_days(enrolled_at, days):
+        raw = str(enrolled_at or "")
+        if raw.endswith("Z"):
+            raw = raw[:-1] + "+00:00"
+        try:
+            return (datetime.fromisoformat(raw) + timedelta(days=days)).strftime("%Y-%m-%d")
+        except ValueError:
+            return ""
+
+    rows = []
+    for enr in enrolments:
+        lead = leads.get(enr["lead_id"], {})
+        sid = lead.get("school_id", "")
+        school_name = schools.get(sid, {}).get("school_name") or lead.get("company_name", "")
+        for n, step in steps.items():
+            log = logs.get((enr["enrollment_id"], n))
+            touch = touches.get((enr["enrollment_id"], n))
+            planned = _plus_days(enr.get("enrolled_at"), step.get("delay_days", 0))
+            if touch:
+                # A physical step's truth is the VERIFIED posting, not the fire time:
+                # the drip queued it, but a person still had to take it to the post.
+                status = {"sent": "sent", "not_sent": "not_sent", "skipped": "skipped"}.get(
+                    touch.get("verify_status"),
+                    "printed" if touch.get("printed_at") else "queued")
+                actual = str(touch.get("posted_at") or "")[:10]
+                planned = touch.get("planned_date") or planned
+            elif log:
+                status = "sent" if log.get("status") == "sent" else "failed"
+                actual = str(log.get("fired_at") or "")[:10]
+            else:
+                status = "planned" if enr.get("status") == "active" else "cancelled"
+                actual = ""
+            rows.append({
+                "enrollment_id": enr["enrollment_id"], "lead_id": enr["lead_id"],
+                "school_id": sid, "school_name": school_name or "(no school)",
+                "owner": lead.get("assigned_to", ""), "step_number": n,
+                "channel": _CHANNEL_OF.get(step.get("message_type", ""), step.get("message_type", "")),
+                "item": step.get("material_name") or step.get("material_type") or "",
+                "planned_date": planned, "actual_date": actual, "status": status,
+                "run_id": (touch or {}).get("run_id", ""),
+                "touch_id": (touch or {}).get("touch_id", ""),
+            })
+
+    qp = request.query_params
+    if qp.get("status"):
+        rows = [r for r in rows if r["status"] == qp["status"]]
+    if qp.get("channel"):
+        rows = [r for r in rows if r["channel"] == qp["channel"]]
+    if qp.get("step"):
+        rows = [r for r in rows if str(r["step_number"]) == str(qp["step"])]
+    rows.sort(key=lambda r: (r["school_name"], r["step_number"]))
+
+    totals = {}
+    for r in rows:
+        totals[r["status"]] = totals.get(r["status"], 0) + 1
+    totals.setdefault("sent", 0)
+    totals.setdefault("planned", 0)
+    return {"sequence_id": sequence_id, "sequence_name": seq.get("name", ""),
+            "rows": rows, "totals": totals}
+
+
 # ── Admin test trigger for physical dispatch helper ────────────────────────────
 
 @router.post("/drip/_test-fire-physical")
