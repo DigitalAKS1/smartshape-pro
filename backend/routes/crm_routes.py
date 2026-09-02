@@ -1050,6 +1050,15 @@ _STICKER_SIZES = {
 }
 
 
+def _clamp_scale(v):
+    """Sticker text scale — user-controlled, but bounded so a label can never be
+    scaled into unreadability or off its own edges."""
+    try:
+        return max(0.8, min(1.3, float(v)))
+    except (TypeError, ValueError):
+        return 1.0
+
+
 def _parse_sticker_size(size):
     s = (size or "100x150").lower().strip()
     if s in _STICKER_SIZES:
@@ -1118,9 +1127,15 @@ def _load_company_logo(company, base_url):
     return None
 
 
-def _render_label(c, x, y, w, h, sch, token, company, base_url, logo=None, frame=True):
+def _render_label(c, x, y, w, h, sch, token, company, base_url, logo=None, frame=True,
+                  endorsement="", endorsement_pt=0, text_scale=1.0):
     """One address label inside rect (x,y,w,h): TO on top (bold school name),
-    FROM below (bold company name), QR bottom-right. Fonts + wrap scale to width."""
+    FROM below (bold company name), QR bottom-right. Fonts + wrap scale to width.
+
+    `endorsement` is the postal tariff note ("Book Post" / "Open Post") that used to
+    be written on by hand; it prints right-aligned above the To block, where the
+    counter clerk looks and clear of the address. `text_scale` (0.8–1.3) sizes the
+    whole label up or down."""
     from reportlab.lib.units import mm
     from reportlab.graphics.barcode import qr
     from reportlab.graphics.shapes import Drawing
@@ -1128,14 +1143,23 @@ def _render_label(c, x, y, w, h, sch, token, company, base_url, logo=None, frame
 
     m = max(2 * mm, 0.05 * min(w, h))
     ix, iw = x + m, w - 2 * m
+    ts = _clamp_scale(text_scale)
+    endorsement = str(endorsement or "").strip()
 
     # Compact layout for small labels (can't fit full address + FROM + big QR).
     if h < 45 * mm:
-        f_name = max(6, min(9.5, (h / mm) * 0.30))
+        f_name = max(6, min(9.5, (h / mm) * 0.30)) * ts
         f_body = max(5, f_name * 0.8)
         qsz = max(9 * mm, min(h - 2 * m, w * 0.30))
         tw = w - qsz - 3 * m
         cy = y + h - m - f_name
+        if endorsement:
+            # Only if it fits one line — a small label must not lose the address.
+            e_sz = float(endorsement_pt) if endorsement_pt else f_name * 0.8
+            if c.stringWidth(endorsement, "Helvetica-Bold", e_sz) <= tw:
+                c.setFont("Helvetica-Bold", e_sz)
+                c.drawString(ix, cy, endorsement)
+                cy -= e_sz * 1.15
         c.setFont("Helvetica-Bold", f_name)
         for ln in _wrap_to_width(c, sch.get("school_name", ""), "Helvetica-Bold", f_name, tw)[:2]:
             c.drawString(ix, cy, ln); cy -= f_name * 1.12
@@ -1157,10 +1181,10 @@ def _render_label(c, x, y, w, h, sch, token, company, base_url, logo=None, frame
         return
 
     scale = w / (100 * mm)
-    f_lbl  = max(5.5, min(9, 8 * scale))
-    f_body = max(6.5, min(11, 11 * scale))
-    f_name = max(8, min(15, 14 * scale))
-    f_pin  = max(7, min(13, 12 * scale))
+    f_lbl  = max(5.5, min(9, 8 * scale)) * ts
+    f_body = max(6.5, min(11, 11 * scale)) * ts
+    f_name = max(8, min(15, 14 * scale)) * ts
+    f_pin  = max(7, min(13, 12 * scale)) * ts
     LH = 1.22
 
     bottom_h = max(24 * mm, h * 0.46)          # From section gets ~half the label
@@ -1192,8 +1216,25 @@ def _render_label(c, x, y, w, h, sch, token, company, base_url, logo=None, frame
     def _lh(sz):
         return sz * 1.18
     block_h = sum(_lh(sz) for _, _, sz in to_lines)
-    free = (y + h - m) - dv - block_h
-    cy = (y + h - m) - max(0.0, free) * 0.30     # 30% of slack above → gentle balance
+
+    top = y + h - m
+    if endorsement:
+        # Right-aligned above "To," — the TO block wraps to the full inner width, so
+        # an overlay in the right margin would collide; this never can.
+        e_sz = float(endorsement_pt) if endorsement_pt else f_name * 0.8
+        c.setFont("Helvetica-Bold", e_sz)
+        c.drawRightString(x + w - m, top - e_sz, endorsement[:40])
+        top -= e_sz * 1.25
+
+    # A larger text scale must never push the address down into the From block: if
+    # the lines no longer fit the top zone, shrink them proportionally to fit.
+    top_h = top - dv
+    if block_h > top_h > 0:
+        shrink = top_h / block_h
+        to_lines = [(t, f, sz * shrink) for t, f, sz in to_lines]
+        block_h = top_h
+
+    cy = top - max(0.0, top_h - block_h) * 0.30     # 30% of slack above → gentle balance
     for text, font, sz in to_lines:
         c.setFont(font, sz); c.drawString(ix, cy - sz, text); cy -= _lh(sz)
 
@@ -1260,7 +1301,8 @@ def _render_label(c, x, y, w, h, sch, token, company, base_url, logo=None, frame
 
 def _build_stickers_pdf(touches, schools_by_id, company, base_url, *,
                         orientation="portrait", size="100x150", layout="label",
-                        from_override=None, show_logo=True):
+                        from_override=None, show_logo=True,
+                        endorsement="", endorsement_pt=0, text_scale=1.0):
     """Address labels — Godex thermal (one per page) or A4 4-up for a normal
     printer. TO on top, FROM below (company bold), QR, auto-wrapped to the size.
       orientation: portrait | landscape (thermal only)
@@ -1297,7 +1339,9 @@ def _build_stickers_pdf(touches, schools_by_id, company, base_url, *,
             c.setDash(2, 2); c.setLineWidth(0.4); c.setStrokeGray(0.7)
             c.rect(cx, cyy, cw, ch); c.setDash(); c.setStrokeGray(0)
             _render_label(c, cx, cyy, cw, ch, schools_by_id.get(t.get("school_id"), {}),
-                          t.get("qr_token", ""), company, base_url, logo=logo, frame=False)
+                          t.get("qr_token", ""), company, base_url, logo=logo, frame=False,
+                          endorsement=endorsement, endorsement_pt=endorsement_pt,
+                          text_scale=text_scale)
         c.save()
         return buf.getvalue()
 
@@ -1311,7 +1355,9 @@ def _build_stickers_pdf(touches, schools_by_id, company, base_url, *,
         c.showPage()
     for t in touches:
         _render_label(c, 0, 0, W, H, schools_by_id.get(t.get("school_id"), {}),
-                      t.get("qr_token", ""), company, base_url, logo=logo)
+                      t.get("qr_token", ""), company, base_url, logo=logo,
+                      endorsement=endorsement, endorsement_pt=endorsement_pt,
+                      text_scale=text_scale)
         c.showPage()
     c.save()
     return buf.getvalue()
