@@ -3540,6 +3540,40 @@ async def create_school(request: Request):
     return await db.schools.find_one({"school_id": school_id}, {"_id": 0})
 
 
+@router.post("/schools/wa-consent")
+async def record_wa_consent(request: Request):
+    """Record WhatsApp opt-in for many schools at once.
+
+    Consent is almost never collected one school at a time — it arrives as a stack
+    of exhibition forms, a webinar sign-up list, or a rep confirming on a call. The
+    `source` is stored with every row because that sentence ("Signed at the Delhi
+    expo, 12 Aug") is the evidence if Meta ever asks why a number was messaged.
+
+    Passing consent=false withdraws it, which is the opt-out path: the drip's
+    WhatsApp steps stop for that school immediately while post and calls continue.
+    """
+    user = await get_current_user(request)
+    require_module(user, "leads", "read_write")
+    body = await _parse_json_body(request)
+    ids = body.get("school_ids") or []
+    if not ids:
+        raise HTTPException(status_code=400, detail="school_ids is required")
+    grant = bool(body.get("consent", True))
+    source = (body.get("source") or "").strip()
+    if grant and not source:
+        raise HTTPException(status_code=400,
+            detail="Say where the consent came from — it is the evidence if the opt-in is ever questioned.")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    res = await db.schools.update_many({"school_id": {"$in": ids}}, {"$set": {
+        "wa_consent": grant,
+        "wa_consent_at": now_iso if grant else None,
+        "wa_consent_by": user["email"] if grant else "",
+        "wa_consent_source": source,
+    }})
+    return {"ok": True, "updated": res.modified_count, "consent": grant,
+            "source": source, "at": now_iso}
+
+
 @router.put("/schools/{school_id}")
 async def update_school(school_id: str, request: Request):
     user = await get_current_user(request)
@@ -3554,9 +3588,14 @@ async def update_school(school_id: str, request: Request):
               "city", "state", "pincode", "address", "primary_contact_name", "designation",
               "alternate_contact", "school_strength", "number_of_branches",
               "annual_budget_range", "existing_vendor", "gstin", "social_profiles",
-              "linkedin_url", "instagram_url", "anniversary"):
+              "linkedin_url", "instagram_url", "anniversary",
+              "wa_consent", "wa_consent_source"):
         if k in body:
             allowed[k] = body[k]
+    if "wa_consent" in allowed:
+        allowed["wa_consent"] = bool(allowed["wa_consent"])
+        allowed["wa_consent_at"] = datetime.now(timezone.utc).isoformat() if allowed["wa_consent"] else None
+        allowed["wa_consent_by"] = user["email"] if allowed["wa_consent"] else ""
     if "school_strength" in allowed:
         allowed["school_strength"] = _coerce_int(allowed["school_strength"], 0)
     if "number_of_branches" in allowed:
@@ -4997,9 +5036,15 @@ async def update_lead(lead_id: str, request: Request):
               "assignment_type", "likely_closure_date",
               "expected_value", "lost_reason", "lost_reason_note",
               "demo_format", "demo_date", "demo_time", "demo_link", "demo_visit_plan_id",
-              "referred_by_contact_id", "referral_reward_status"):
+              "referred_by_contact_id", "referral_reward_status",
+              "wa_consent"):
         if k in body:
             allowed[k] = body[k]
+    if "wa_consent" in allowed:
+        # Meta wants evidence, not a checkbox: stamp who recorded it and when.
+        allowed["wa_consent"] = bool(allowed["wa_consent"])
+        allowed["wa_consent_at"] = datetime.now(timezone.utc).isoformat() if allowed["wa_consent"] else None
+        allowed["wa_consent_by"] = user["email"] if allowed["wa_consent"] else ""
     if "expected_value" in allowed:
         allowed["expected_value"] = float(allowed["expected_value"] or 0)
     if "tags" in body:
