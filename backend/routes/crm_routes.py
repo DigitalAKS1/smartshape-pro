@@ -813,6 +813,86 @@ async def get_mail_runs(request: Request):
     return await db.mail_runs.find({}, {"_id": 0}).sort("created_at", -1).to_list(500)
 
 
+async def _queued_touches(date_str: str):
+    """Every piece that should already be in the post: due today or overdue."""
+    return await db.mail_touches.find(
+        {"verify_status": "pending", "planned_date": {"$lte": date_str, "$ne": ""}},
+        {"_id": 0}).to_list(None)
+
+
+# NOTE: static path — MUST stay above /mail-runs/{run_id} (see the analytics note).
+@router.get("/mail-runs/today-queue")
+async def mail_today_queue(request: Request):
+    """The posting job for today, across every run — a drip mailer and a manual run
+    are one task to whoever carries the bundle to the counter."""
+    await get_current_user(request)
+    today = request.query_params.get("date") or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    touches = await _queued_touches(today)
+    runs = {r["run_id"]: r for r in await db.mail_runs.find({}, {"_id": 0}).to_list(None)}
+
+    groups = {}
+    for t in touches:
+        rid = t.get("run_id", "")
+        run = runs.get(rid, {})
+        g = groups.setdefault(rid, {
+            "run_id": rid, "run_name": run.get("name", "(deleted run)"),
+            "sequence_name": run.get("sequence_name", ""),
+            "is_drip_run": bool(run.get("is_drip_run")),
+            "piece_type": run.get("piece_type", t.get("piece_type", "")),
+            "count": 0, "overdue": 0, "touch_ids": []})
+        g["count"] += 1
+        g["touch_ids"].append(t["touch_id"])
+        if t.get("planned_date", "") < today:
+            g["overdue"] += 1
+
+    rows = sorted(groups.values(), key=lambda g: (-g["overdue"], -g["count"]))
+    return {"date": today, "total": len(touches),
+            "overdue": sum(g["overdue"] for g in rows), "groups": rows}
+
+
+# NOTE: static path — MUST stay above /mail-runs/{run_id} (see the analytics note).
+@router.get("/mail-runs/queue-stickers.pdf")
+async def mail_queue_stickers(request: Request):
+    """One combined sticker PDF for the whole day's queue — the printer gets loaded
+    once, not once per run."""
+    await get_current_user(request)
+    qp = request.query_params
+    today = qp.get("date") or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    touches = await _queued_touches(today)
+    ids = [t["school_id"] for t in touches]
+    schools = await db.schools.find({"school_id": {"$in": ids}}, {"_id": 0}).to_list(None)
+    schools_by_id = {s["school_id"]: s for s in schools}
+    if qp.get("skip_incomplete") in ("1", "true", "yes"):
+        touches = _complete_touches(touches, schools_by_id)
+    company = await db.settings.find_one({"type": "company"}, {"_id": 0}) or {}
+    base = (_os.environ.get("FRONTEND_URL") or "https://app.smartshape.in").rstrip("/")
+
+    endorsement = qp.get("endorsement")
+    if endorsement is None:
+        endorsement = company.get("sticker_endorsement", "")
+    try:
+        endorsement_pt = float(qp.get("endorsement_pt") or company.get("sticker_endorsement_pt") or 0)
+    except (TypeError, ValueError):
+        endorsement_pt = 0
+    text_scale = _clamp_scale(qp.get("text_scale") or company.get("sticker_text_scale") or 1.0)
+
+    if touches:
+        await db.mail_touches.update_many(
+            {"touch_id": {"$in": [t["touch_id"] for t in touches]}},
+            {"$set": {"printed_at": datetime.now(timezone.utc).isoformat(),
+                      "print_batch_id": f"pb_{uuid.uuid4().hex[:12]}"}})
+
+    pdf = _build_stickers_pdf(
+        touches, schools_by_id, company, base,
+        orientation=("landscape" if qp.get("orientation") == "landscape" else "portrait"),
+        size=(qp.get("size") or "100x150"),
+        layout=("a4" if qp.get("layout") == "a4" else "label"),
+        show_logo=(qp.get("no_logo") not in ("1", "true", "yes")),
+        endorsement=endorsement, endorsement_pt=endorsement_pt, text_scale=text_scale)
+    return StreamingResponse(io.BytesIO(pdf), media_type="application/pdf",
+                             headers={"Content-Disposition": f'attachment; filename="post-{today}.pdf"'})
+
+
 def _days_late(planned: str, posted_at: str):
     """Whole days between the planned date and the actual posting, or None when
     either is missing — a touch with no plan is excluded rather than scored on time."""
