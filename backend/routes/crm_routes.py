@@ -1418,6 +1418,14 @@ async def mail_run_stickers(run_id: str, request: Request):
     except (TypeError, ValueError):
         endorsement_pt = 0
     text_scale = _clamp_scale(qp.get("text_scale") or company.get("sticker_text_scale") or 1.0)
+    # Printing IS the event: stamp the batch so "printed but never posted" is
+    # answerable later. Only the labels actually rendered get marked — a touch
+    # skipped for an incomplete address was never printed.
+    if touches:
+        await db.mail_touches.update_many(
+            {"touch_id": {"$in": [t["touch_id"] for t in touches if t.get("touch_id")]}},
+            {"$set": {"printed_at": datetime.now(timezone.utc).isoformat(),
+                      "print_batch_id": f"pb_{uuid.uuid4().hex[:12]}"}})
     # Optional per-batch FROM override (else falls back to Settings → Company)
     show_logo = qp.get("no_logo") not in ("1", "true", "yes")
     from_override = None
