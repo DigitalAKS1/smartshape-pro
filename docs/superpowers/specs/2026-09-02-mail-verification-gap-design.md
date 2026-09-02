@@ -32,7 +32,9 @@ posting.
 - **P1 — Postal endorsement + font size** on the address sticker.
 - **P2 — Real drip↔mail linking:** drip physical steps produce per-sequence,
   per-piece mail runs whose touches back-link to the enrolment and step.
-- **P3 — Verification, re-plan, gap report, sequence drill-down.** The core.
+- **P3 — Verification, re-plan, gap report, sequence drill-down.** The core, built on
+  a three-state touch lifecycle (planned → printed → posted) plus a cross-run
+  "Today's Post" queue, an overdue nudge, and undo.
 - **P4 — Filter ↔ drip ↔ tagging alignment.**
 
 **Out of scope:** courier API integration / real delivery scans; changing the QR
@@ -67,6 +69,8 @@ piece type of a given day collapses into one run keyed only on
 | `verified_by` | user email |
 | `verified_at` | ISO timestamp |
 | `reason` | free text — why not sent (e.g. "address missing", "out of stock") |
+| `printed_at` | ISO timestamp — stamped by the sticker endpoint itself (7.5) |
+| `print_batch_id` | groups one print job; a re-print starts a new batch |
 | `replan_count` | int, default 0 |
 | `sequence_id` | set when the touch came from a drip step |
 | `enrollment_id` | set when the touch came from a drip step |
@@ -214,6 +218,80 @@ When a physical touch slips, **only the mail touch moves**. The enrolment's
 stalls the WhatsApp and call cadence behind it. No per-sequence toggle — one
 predictable rule.
 
+### 7.5 The lifecycle is three states, not two
+
+A touch does not go from *planned* to *posted*. Somebody prints a sticker, somebody
+sticks it on a packet, and somebody else carries the bundle to the post office —
+and that last hop is exactly where pieces are lost, because nobody owns it. A
+two-state model cannot see the loss; a three-state one can:
+
+```
+planned ──print──▶ printed ──verify──▶ sent
+   │                  │                 └─▶ not_sent (+ reason)
+   └──────────────────┴──replan──▶ planned (new date, replan_count += 1)
+```
+
+So `mail_touches` also carries `printed_at` and `print_batch_id`, both written by the
+sticker endpoint itself — printing *is* the event, so no extra click is needed to
+record it. This gives the owner the question that actually matters at 6pm: **"37
+stickers were printed today and only 29 were posted — where are the other 8?"** That
+is a `printed_at IS NOT NULL AND verify_status = 'pending'` query, surfaced as its own
+line in the gap report and as an alert (7.7).
+
+`print_batch_id` also makes a re-print honest: reprinting a run starts a new batch
+rather than silently overwriting when the first print happened.
+
+### 7.6 "Today's Post" — one queue across every run
+
+The single highest-value screen in this whole design, and the one that turns the
+feature from a report into a workflow. Today the owner must remember which runs are
+outstanding and open each one. Instead:
+
+**`GET /mail-runs/today-queue?date=`** returns every touch whose `planned_date <=
+date` and whose `verify_status` is `pending`, grouped by run, with a total. Drip
+mailers and manual runs sit in one list, because to the person doing the posting they
+are the same job.
+
+The Offline Mail page opens on it: *"12 pieces to post today — 7 brochures (Principal
+Machine Pitch), 5 samples (Rohini area)"*, with **Print all stickers** producing one
+combined PDF across runs (reusing `_build_stickers_pdf` with a merged touch list, so
+the printer is loaded once, not four times) and **Verify all posted** as the end-of-day
+action. Overdue pieces from earlier dates surface at the top in red — this is where
+slipped work becomes impossible to ignore.
+
+### 7.7 Nudge the owner instead of waiting to be asked
+
+A scheduler job (`JOB14`, alongside the existing keep-in-touch job in `scheduler.py`)
+runs each evening and, when anything is overdue — `planned_date` in the past and still
+`pending` — writes a `crm_notifications` row for the run's owner and, when the
+existing WhatsApp digest is configured, adds a line to it. Two thresholds, both
+deliberately quiet: printed-but-not-posted for over 1 day, and planned-but-not-printed
+for over 3 days. Opt-in via the same App Settings → Notifications toggle the daily
+digest already uses, so this cannot start messaging anyone unasked.
+
+### 7.8 The gap report answers "why", not just "how much"
+
+Counts alone tell the owner work slipped, not what to fix. So the report also returns:
+
+- a **reason Pareto** — `not_sent` grouped by `reason`, biggest first. If 60% is
+  "address missing", the fix is a data-cleanup afternoon, and each reason row links
+  straight to the affected schools in the address sheet.
+- **postage exposure** — `courier_cost / planned` × `not_sent`, i.e. the budgeted
+  postage attached to pieces that never went out.
+- **print-to-post leakage** — printed but never posted, the 7.5 number, with the
+  stickers effectively wasted.
+- **`on_time_pct` trend** by week, so the owner can see whether discipline is
+  improving or drifting rather than reading one static number.
+
+### 7.9 Undo
+
+Verification is a fast, repetitive, batch action, which means it will be mis-clicked.
+`POST /mail-runs/{run_id}/verify` supports `undo: true` on a set of `touch_ids`,
+restoring `verify_status: "pending"`, clearing `posted_at` / `verified_by` /
+`verified_at` / `reason`, and removing the mirrored ledger event by its `dedup_key`.
+Without this, one stray "Select all → Mark sent" would permanently corrupt the very
+numbers the feature exists to protect.
+
 ## 8. P4 — Filter ↔ drip ↔ tagging alignment
 
 1. **"Enrol in sequence"** as a bulk action on any CRM filter selection, twin to the
@@ -260,6 +338,16 @@ Backend (pytest + mongomock — the suite is committed on `main`):
 - Drip run grouping: two sequences × two piece types in one day → four runs, one
   touch each; plus the legacy-key fallback path.
 - Backfill: legacy touches on a `posted` run come out `sent`, not `pending`.
+- `printed_at` / `print_batch_id` are stamped by a sticker download, a re-print opens
+  a new batch, and `skip_incomplete` does **not** mark skipped touches as printed.
+- Today's queue: overdue touches from earlier dates are included and sort first; a
+  combined multi-run print yields one PDF with the right total page count.
+- Undo: restores `pending`, clears the actual date, removes the ledger event, and a
+  re-verify afterwards writes the ledger event again exactly once.
+- Nudge job: fires only when overdue work exists, respects the opt-in setting, and
+  does not re-notify the same run twice in one day.
+- Gap report: reason Pareto ordering, postage exposure arithmetic, and print-to-post
+  leakage on a run with a mix of printed/posted/pending touches.
 
 Frontend: the verify sheet's select-all / partial-selection state, and the
 endorsement + text-size params reaching the sticker URL.
