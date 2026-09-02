@@ -13,8 +13,8 @@ router = APIRouter()
 # ── SmartShape sales cycle sequences for the SMARTS-SHAPES cutting machine ────
 _DEFAULT_SEQUENCES = [
     {
-        "name": "Principal Machine Pitch (7-step)",
-        "description": "Full nurture journey for Principals — from awareness to demo booking",
+        "name": "Principal Machine Pitch",
+        "description": "Full nurture journey for Principals — WhatsApp, a posted brochure, calls and a sample kit over 45 days",
         "trigger": "lead_created",
         "filter_designation": "Principal",
         "steps": [
@@ -28,168 +28,168 @@ _DEFAULT_SEQUENCES = [
                 ),
             },
             {
-                "step_number": 2, "delay_days": 3, "message_type": "whatsapp",
+                "step_number": 2, "delay_days": 2, "message_type": "physical_material",
+                "material_type": "brochure", "material_name": "2026 Die Catalogue + savings sheet",
                 "message_template": (
-                    "Hello {name} ji! 💰 Schools using SMARTS-SHAPES save ₹2–5 Lakhs annually on craft "
-                    "teachers, activity materials, and preparation hours. The machine creates 100+ custom "
-                    "shapes per hour — bulletin boards, teaching aids, event decorations, all in minutes. "
-                    "Would you like a customised savings estimate for your school? — SmartShape"
+                    "Post the 2026 Die Catalogue with the savings sheet to the Principal. The mailer "
+                    "carries a QR — a scan tells us the school is warm, so watch Offline Mail."
                 ),
             },
             {
-                "step_number": 3, "delay_days": 7, "message_type": "whatsapp",
+                "step_number": 3, "delay_days": 5, "message_type": "call_task",
                 "message_template": (
-                    "Hello {name} ji! 📹 I'd love to show you the SMARTS-SHAPES machine live! A 15-minute "
-                    "demo at your school will show exactly how it creates teaching aids, activity kits and "
-                    "30+ unique experiential learning materials. It's completely free — no obligation. "
-                    "Can I schedule a visit? — SmartShape Team"
+                    "Call the Principal — did the catalogue reach you? Ask which activity the school "
+                    "spends the most teacher-hours on. Do not pitch; listen and note the answer."
                 ),
             },
             {
-                "step_number": 4, "delay_days": 14, "message_type": "whatsapp",
+                "step_number": 4, "delay_days": 9, "message_type": "whatsapp",
                 "message_template": (
-                    "Hello {name} ji! ✂️ SmartShape just launched 200+ new die designs for 2026! "
-                    "Math manipulatives, Science models, Art & Craft patterns, festive decorations — "
-                    "your school can create any teaching aid in seconds. Would you like to see the "
-                    "full 2026 design library? — SmartShape"
+                    "Hello {name} ji! 📹 A 40-second clip of SMARTS-SHAPES actually cutting — 100+ shapes "
+                    "an hour, bulletin boards and teaching aids in minutes. Schools using it save ₹2–5 "
+                    "lakh a year on craft teachers, materials and prep hours. Shall I send a savings "
+                    "estimate for {school_name}? — SmartShape"
                 ),
             },
             {
-                "step_number": 5, "delay_days": 21, "message_type": "whatsapp",
+                "step_number": 5, "delay_days": 14, "message_type": "email",
                 "message_template": (
-                    "Hello {name} ji! 🎒 Start the new academic year with a game-changer! Schools that "
-                    "invest in SMARTS-SHAPES before June 15 get priority installation + free teacher "
-                    "training worth ₹25,000 + the 2026 Premium Die Library. Limited slots available. "
-                    "Shall I block one for your school? — SmartShape Team"
+                    "Dear {name},<br><br>Attached is a short case study from a school of similar size to "
+                    "{school_name}, along with our 2026 die library.<br><br>Most Principals forward this "
+                    "to their management committee, so it is written to be read without me in the "
+                    "room.<br><br>Happy to arrange a free demo at your school whenever it suits.<br><br>"
+                    "Warm regards,<br>SmartShape Team"
                 ),
             },
             {
-                "step_number": 6, "delay_days": 28, "message_type": "whatsapp",
+                "step_number": 6, "delay_days": 21, "message_type": "call_task",
                 "message_template": (
-                    "Hello {name} ji! 👋 A lot has happened at SmartShape — upgraded machine, 200+ new "
-                    "die designs, and 100+ new schools onboarded this year. I'd love just 10 minutes to "
-                    "show you what your school can achieve. Shall I arrange a visit? — SmartShape"
+                    "Call to offer a free 15-minute demo at the school. Five touches of value have gone "
+                    "out — this is the ask. Offer two specific slots rather than 'sometime next week'."
                 ),
             },
             {
-                "step_number": 7, "delay_days": 35, "message_type": "whatsapp",
+                "step_number": 7, "delay_days": 30, "message_type": "physical_material",
+                "material_type": "sample", "material_name": "Physical cut samples (5 designs)",
                 "message_template": (
-                    "Hello {name} ji! 🙏 This is our final follow-up from SmartShape. If the timing isn't "
-                    "right today, no worries at all — just reply LATER and I'll reconnect next session. "
-                    "We wish your school a wonderful year ahead and are here whenever you're ready! "
-                    "— SmartShape Team"
+                    "Post the 5-design sample pack. Highest-cost touch in the sequence — send only if "
+                    "the school is still responding. Mark it Not sent with a reason if it has gone cold."
+                ),
+            },
+            {
+                "step_number": 8, "delay_days": 45, "message_type": "whatsapp",
+                "message_template": (
+                    "Hello {name} ji! 🎒 Schools that install before the session starts get priority "
+                    "installation, free teacher training worth ₹25,000 and the 2026 Premium Die Library. "
+                    "Slots are limited and go in order of confirmation. Shall I hold one for "
+                    "{school_name}? — SmartShape Team"
                 ),
             },
         ],
         "is_active": True,
     },
     {
-        "name": "Teacher Awareness Series (5-step)",
-        "description": "Teacher-focused nurture — show how SMARTS-SHAPES saves hours of craft prep",
+        "name": "Teacher Awareness Series",
+        "description": "Teacher-focused nurture — show how SMARTS-SHAPES removes hours of craft prep",
         "trigger": "lead_created",
         "filter_designation": "Teacher",
         "steps": [
             {
                 "step_number": 1, "delay_days": 0, "message_type": "whatsapp",
                 "message_template": (
-                    "Hello {name}! 👋 I'm from SmartShape — we make the SMARTS-SHAPES automated cutting "
-                    "machine used by 1,500+ teachers across India. Create beautiful bulletin boards, "
-                    "teaching aids, and activity kits in minutes — no scissors, no hours of prep work. "
-                    "Interested in seeing how it works? — SmartShape Team"
+                    "Hello {name}! 👋 I'm from SmartShape — we make the SMARTS-SHAPES cutting machine "
+                    "used by 1,500+ teachers across India. Bulletin boards, teaching aids and activity "
+                    "kits in minutes — no scissors, no hours of prep. Would you like to see how it "
+                    "works? — SmartShape Team"
                 ),
             },
             {
                 "step_number": 2, "delay_days": 3, "message_type": "whatsapp",
                 "message_template": (
-                    "Hello {name}! ✂️ Imagine making 100 perfect butterfly shapes for a Science lesson "
-                    "in under 5 minutes, or creating an entire festive bulletin board in one hour. That's "
-                    "what SMARTS-SHAPES does for teachers every single day. Your prep time cuts to nearly "
-                    "zero. Would you like to see a quick demo? — SmartShape"
+                    "Hello {name}! ✂️ 100 perfect butterfly shapes for a Science lesson in under 5 "
+                    "minutes. An entire festive bulletin board in an hour. That is what SMARTS-SHAPES "
+                    "does for teachers every day — your prep time drops to almost nothing. Shall I show "
+                    "you? — SmartShape"
                 ),
             },
             {
-                "step_number": 3, "delay_days": 7, "message_type": "whatsapp",
+                "step_number": 3, "delay_days": 7, "message_type": "email",
                 "message_template": (
-                    "Hello {name}! 📹 We'd love to demonstrate SMARTS-SHAPES at your school! It takes just "
-                    "15 minutes and we can show you how to create any teaching aid — Math manipulatives, "
-                    "Science models, craft patterns, festive decor — all in minutes. Can I arrange a "
-                    "free demo visit? — SmartShape Team"
+                    "Dear {name},<br><br>Here is our Activity Ideas pack — 30 ready-to-cut classroom "
+                    "projects across Maths, Science and Art, with the die list for each.<br><br>Teachers "
+                    "tell us this is the part that makes the machine click, so do share it in your "
+                    "staff room.<br><br>Warm regards,<br>SmartShape Team"
                 ),
             },
             {
-                "step_number": 4, "delay_days": 14, "message_type": "whatsapp",
+                "step_number": 4, "delay_days": 12, "message_type": "call_task",
                 "message_template": (
-                    "Hello {name}! 🙏 Many teachers who love SMARTS-SHAPES told us their Principal became "
-                    "an instant fan once they saw the machine in action. Has your school management had a "
-                    "chance to learn about it? I can arrange a dedicated principal briefing too. "
-                    "— SmartShape"
+                    "Call the teacher and offer a free 15-minute demo in the school. Ask who else should "
+                    "be in the room — the Principal or the activity head usually signs off."
                 ),
             },
             {
-                "step_number": 5, "delay_days": 21, "message_type": "whatsapp",
+                "step_number": 5, "delay_days": 20, "message_type": "physical_material",
+                "material_type": "sample", "material_name": "Teacher sample pack + activity cards",
                 "message_template": (
-                    "Hello {name}! Final message from SmartShape — we genuinely believe SMARTS-SHAPES will "
-                    "transform your classroom experience. If you're ever ready to explore, just reply and "
-                    "we'll take it from there. Wishing you a wonderful teaching year! 🍎 — SmartShape Team"
+                    "Post the teacher sample pack with the activity cards. Something they can hold in "
+                    "the staff room does more than any message."
                 ),
             },
         ],
         "is_active": True,
     },
     {
-        "name": "Post-Demo / Quotation Follow-up (5-step)",
-        "description": "Close the deal after a demo or quotation — 5 steps over 14 days",
+        "name": "Post-Demo / Quotation Follow-up",
+        "description": "After a demo or quotation — close the loop over 18 days without nagging",
         "trigger": "quotation_sent",
         "filter_designation": None,
         "steps": [
             {
                 "step_number": 1, "delay_days": 0, "message_type": "whatsapp",
                 "message_template": (
-                    "Hello {name}! 😊 Thank you for your time at the SMARTS-SHAPES demo! I've shared the "
-                    "product brochure, die catalogue, and a customised quotation for your school. Please "
-                    "do let me know if you have any questions — I'm here to help! — SmartShape Team"
+                    "Thank you for your time today, {name} ji! 🙏 Your quotation for {school_name} is on "
+                    "its way. Any question at all — price, installation, training — just reply here and "
+                    "I'll answer straight away. — SmartShape Team"
                 ),
             },
             {
-                "step_number": 2, "delay_days": 3, "message_type": "whatsapp",
+                "step_number": 2, "delay_days": 2, "message_type": "call_task",
                 "message_template": (
-                    "Hello {name}! 📋 Just checking in on the SMARTS-SHAPES quotation. We can fully "
-                    "customise the die library and teacher training schedule to match your school's "
-                    "curriculum and calendar. Would you like to discuss any adjustments? — SmartShape"
+                    "Call to walk through the quotation line by line. Most objections at this stage are "
+                    "about installation and training, not price — ask directly which one is on their mind."
                 ),
             },
             {
-                "step_number": 3, "delay_days": 7, "message_type": "whatsapp",
+                "step_number": 3, "delay_days": 5, "message_type": "email",
                 "message_template": (
-                    "Hello {name}! 🎒 Schools that placed their order this month got priority pre-session "
-                    "delivery, free installation, and the 2026 Premium Die Library included. We have "
-                    "limited installation slots before June — shall I hold one for your school? "
-                    "— SmartShape Team"
+                    "Dear {name},<br><br>Attaching the written proposal for {school_name}, along with "
+                    "references from two schools nearby who are happy to take your call.<br><br>"
+                    "Everything you need to put this in front of your committee is in one place here."
+                    "<br><br>Warm regards,<br>SmartShape Team"
                 ),
             },
             {
                 "step_number": 4, "delay_days": 10, "message_type": "whatsapp",
                 "message_template": (
-                    "Hello {name}! 💳 SmartShape offers a flexible payment plan that many schools find "
-                    "very convenient — spread over the academic year with zero additional cost. Happy to "
-                    "share the full details. — SmartShape"
+                    "Hello {name} ji! 📋 Just checking whether the committee has had a chance to look at "
+                    "the proposal. If anything needs changing — configuration, payment terms, delivery "
+                    "date — tell me and I'll revise it today. — SmartShape"
                 ),
             },
             {
-                "step_number": 5, "delay_days": 14, "message_type": "whatsapp",
+                "step_number": 5, "delay_days": 18, "message_type": "call_task",
                 "message_template": (
-                    "Hello {name}! 🙏 This is our last follow-up on the quotation. We're truly committed "
-                    "to making SMARTS-SHAPES work perfectly for your school. Just reply and I'll arrange "
-                    "a quick call with our School Success team to address any remaining questions. "
-                    "— SmartShape Team"
+                    "Decision call. Ask for a yes or a no, not a maybe — and if it is no, ask what would "
+                    "have made it a yes. Record the answer as the lost reason; it feeds the funnel report."
                 ),
             },
         ],
         "is_active": True,
     },
     {
-        "name": "Re-engagement: Cold Leads (3-step)",
-        "description": "Revive leads that went silent — 3 touches over 21 days",
+        "name": "Re-engagement: Cold Leads",
+        "description": "Revive leads that went silent — a message, a posted catalogue and one honest call",
         "trigger": "manual",
         "filter_designation": None,
         "steps": [
@@ -198,25 +198,31 @@ _DEFAULT_SEQUENCES = [
                 "message_template": (
                     "Hello {name}! 👋 It's been a while since we last connected — a lot has happened at "
                     "SmartShape! We've upgraded the machine, launched 200+ new die designs, and onboarded "
-                    "100+ new schools this year. I'd love to show you what your school can now achieve. "
+                    "100+ new schools this year. I'd love to show you what {school_name} can now achieve. "
                     "Just 10 minutes? — SmartShape Team"
                 ),
             },
             {
-                "step_number": 2, "delay_days": 7, "message_type": "whatsapp",
+                "step_number": 2, "delay_days": 4, "message_type": "physical_material",
+                "material_type": "brochure", "material_name": "2026 Die Catalogue (what's new)",
                 "message_template": (
-                    "Hello {name}! 🏫 We'd love to arrange a visit to a nearby SmartShape school so you "
-                    "can see the machine in real action and speak directly with the teachers using it. "
-                    "It's the most powerful thing we can show you — and it's completely free. "
-                    "Interested? — SmartShape"
+                    "Post the new catalogue to a lead that stopped replying online. A cover on the desk "
+                    "gets opened when a message does not — and the QR tells us the moment it works."
                 ),
             },
             {
-                "step_number": 3, "delay_days": 21, "message_type": "whatsapp",
+                "step_number": 3, "delay_days": 10, "message_type": "call_task",
+                "message_template": (
+                    "Call once, warmly. Reference the catalogue you posted. If the timing is genuinely "
+                    "wrong, ask when to come back and set that date — do not keep the lead open by default."
+                ),
+            },
+            {
+                "step_number": 4, "delay_days": 20, "message_type": "whatsapp",
                 "message_template": (
                     "Hello {name}! 🙏 One final message from SmartShape. We've genuinely helped 750+ "
                     "schools save lakhs and transform their activity programmes. Whenever you're ready "
-                    "to explore, we'll be right here. Wishing your school a wonderful year ahead! "
+                    "to explore, we'll be right here. Wishing {school_name} a wonderful year ahead! "
                     "— SmartShape Team"
                 ),
             },
@@ -224,6 +230,17 @@ _DEFAULT_SEQUENCES = [
         "is_active": False,
     },
 ]
+
+
+# Stock sequences used to carry their step count in the name ("(7-step)"), which went
+# stale the moment the cadence changed. Old name -> current name, migrated in place so
+# the live enrolments on the original are kept instead of orphaned beside a copy.
+_RENAMED_DEFAULTS = {
+    "Principal Machine Pitch (7-step)":       "Principal Machine Pitch",
+    "Teacher Awareness Series (5-step)":      "Teacher Awareness Series",
+    "Post-Demo / Quotation Follow-up (5-step)": "Post-Demo / Quotation Follow-up",
+    "Re-engagement: Cold Leads (3-step)":     "Re-engagement: Cold Leads",
+}
 
 
 async def _seed_defaults():
@@ -239,10 +256,25 @@ async def _seed_defaults():
     now_iso = datetime.now(timezone.utc).isoformat()
     current_names = [s["name"] for s in _DEFAULT_SEQUENCES]
 
+    # Migrate the old counted names before seeding, so we rename rather than duplicate.
+    # A sequence the owner customised keeps whatever name they gave it.
+    for old_name, new_name in _RENAMED_DEFAULTS.items():
+        # `is not None`, never truthiness: a projection that excludes _id returns an
+        # EMPTY DICT for a document missing the projected field, and {} is falsy.
+        if await db.drip_sequences.find_one({"name": new_name}) is not None:
+            continue                       # already migrated
+        await db.drip_sequences.update_one(
+            {"name": old_name, "created_by": "system", "customised": {"$ne": True}},
+            {"$set": {"name": new_name, "updated_at": now_iso}})
+
     for seq in _DEFAULT_SEQUENCES:
+        # Fetch the whole document and test `is not None`. Projecting to
+        # {"_id": 0, "customised": 1} returns {} for the pre-existing production
+        # documents that have no `customised` field yet — and {} is falsy, which sent
+        # this branch to the insert and duplicated every stock sequence on every load.
         existing = await db.drip_sequences.find_one(
-            {"name": seq["name"], "created_by": "system"}, {"_id": 0, "customised": 1})
-        if existing:
+            {"name": seq["name"], "created_by": "system"}, {"_id": 0})
+        if existing is not None:
             if existing.get("customised"):
                 continue                      # the owner owns this one now — hands off
             await db.drip_sequences.update_one(
