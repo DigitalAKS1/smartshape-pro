@@ -373,6 +373,11 @@ async def process_wa_queue():
 # JOB 3 — Drip Step Executor
 # ══════════════════════════════════════════════════════════════════════════════
 
+# Consecutive send failures on one step before the enrolment pauses and the owner
+# is told. Retries happen on the loop's own 1-hour cadence.
+DRIP_MAX_STEP_FAILURES = 3
+
+
 async def run_drip_executor():
     now = datetime.now(timezone.utc)
     now_iso = now.isoformat()
@@ -537,6 +542,47 @@ async def run_drip_executor():
                 "fired_at": now_iso,
             })
 
+            # A step that could not send must NOT advance the sequence. Before this
+            # guard, an unconfigured provider burned every step and closed the
+            # enrolment, so the school was marked "completed" having received
+            # nothing — and could never be enrolled again.
+            if not sent:
+                fails = int(enr.get("step_fail_count", 0) or 0) + 1
+                if fails >= DRIP_MAX_STEP_FAILURES:
+                    await db.drip_enrollments.update_one(
+                        {"enrollment_id": enr["enrollment_id"]},
+                        {"$set": {"status": "paused", "step_fail_count": fails,
+                                  "paused_at": now_iso,
+                                  "paused_reason": err_detail or
+                                  f"step {step['step_number']} ({msg_type}) could not be sent"}})
+                    owner = lead.get("assigned_to", "")
+                    if owner:
+                        await db.crm_notifications.insert_one({
+                            "notif_id": f"crmn_{uuid.uuid4().hex[:10]}",
+                            "email": owner, "type": "drip_stalled",
+                            "dedup_key": f"dripstall:{enr['enrollment_id']}",
+                            "title": "⚠️ A drip sequence has stalled",
+                            "body": (f"\"{seq.get('name', 'A sequence')}\" could not send step "
+                                     f"{step['step_number']} to {lead.get('company_name', 'a school')} "
+                                     f"after {fails} tries, so it is paused. "
+                                     + (f"Reason: {err_detail}. " if err_detail else
+                                        f"The {msg_type} channel looks unconfigured. ")
+                                     + "Nothing further will be sent until this is fixed."),
+                            "ref_type": "lead", "ref_id": enr["lead_id"],
+                            "from_name": "Drip sequence", "is_read": False,
+                            "created_at": now_iso})
+                    log.warning(f"[drip] {enr['enrollment_id']} PAUSED after {fails} failed "
+                                f"attempts on step {step['step_number']} ({msg_type})")
+                else:
+                    # Retry on the next pass rather than skipping the school.
+                    await db.drip_enrollments.update_one(
+                        {"enrollment_id": enr["enrollment_id"]},
+                        {"$set": {"step_fail_count": fails,
+                                  "next_step_at": (now + timedelta(hours=1)).isoformat()}})
+                    log.info(f"[drip] {enr['enrollment_id']} step {step['step_number']} "
+                             f"failed ({fails}/{DRIP_MAX_STEP_FAILURES}) — will retry")
+                continue
+
             new_idx = fire_idx + 1
             if new_idx >= len(steps):
                 await db.drip_enrollments.update_one(
@@ -547,6 +593,7 @@ async def run_drip_executor():
                         "last_step_at": now_iso,
                         "next_step_at": None,
                         "completed_at": now_iso,
+                        "step_fail_count": 0,
                     }},
                 )
                 log.info(f"[drip] {enr['enrollment_id']} completed sequence")
@@ -559,6 +606,7 @@ async def run_drip_executor():
                         "current_step": new_idx,
                         "last_step_at": now_iso,
                         "next_step_at": nxt_due.isoformat(),
+                        "step_fail_count": 0,
                     }},
                 )
                 log.info(f"[drip] {enr['enrollment_id']} → step {new_idx + 1} (due {nxt_due.date()})")
