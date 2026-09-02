@@ -522,6 +522,7 @@ export const dripSequences = {
   enrollSchools: (data) => API.post('/drip/enroll-schools', data),
   enrollments: (params) => API.get('/drip/enrollments', { params }),
   cancelEnrollment: (id) => API.put(`/drip/enrollments/${id}/cancel`),
+  resumeEnrollment: (id) => API.put(`/drip/enrollments/${id}/resume`),
   deliveries: (id, params = {}) => API.get(`/drip/sequences/${id}/deliveries`, { params }),
 };
 

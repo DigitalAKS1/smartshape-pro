@@ -534,6 +534,28 @@ async def cancel_enrollment(enrollment_id: str, request: Request):
     return {"ok": True}
 
 
+@router.put("/drip/enrollments/{enrollment_id}/resume")
+async def resume_enrollment(enrollment_id: str, request: Request):
+    """Restart an enrolment the executor paused after repeated send failures.
+
+    Clears the failure count and makes the step due now, so the very next run
+    retries it — use this once the channel that was failing is configured.
+    """
+    user = await get_current_user(request)
+    require_module(user, "leads", "read_write")
+    enr = await db.drip_enrollments.find_one({"enrollment_id": enrollment_id}, {"_id": 0})
+    if not enr:
+        raise HTTPException(404, "Enrollment not found")
+    if enr.get("status") not in ("paused", "cancelled"):
+        raise HTTPException(400, f"Enrollment is {enr.get('status')}, not paused")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    await db.drip_enrollments.update_one(
+        {"enrollment_id": enrollment_id},
+        {"$set": {"status": "active", "step_fail_count": 0, "next_step_at": now_iso,
+                  "paused_reason": "", "completed_at": None}})
+    return await db.drip_enrollments.find_one({"enrollment_id": enrollment_id}, {"_id": 0})
+
+
 # ── Sequence deliveries drill-down ─────────────────────────────────────────────
 
 _CHANNEL_OF = {"whatsapp": "whatsapp", "email": "email",
