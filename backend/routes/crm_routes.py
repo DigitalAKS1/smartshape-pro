@@ -157,12 +157,18 @@ async def log_activity(user_email: str, action: str, entity_type: str, entity_id
 
 
 async def create_physical_from_drip(lead: dict, material_type: str, seq_name: str,
-                                    material_name: str = "") -> str:
+                                    material_name: str = "", sequence_id: str = "",
+                                    enrollment_id: str = "", step_number: int = 0,
+                                    planned_date: str = "") -> str:
     """A drip physical step → physically send to the school. Queues a dispatch +
     a rep task, AND (if the lead has a school) drops a printable, QR-tracked
-    mailer into Offline Mail under today's "Drip Mailers" run — so it's a real,
-    trackable posting, not just a ship-it note. `material_name` is what you're
-    actually sending (free text); it shows on the task + the mailer."""
+    mailer into Offline Mail under the run for this sequence + piece + day — so
+    it's a real, trackable posting, not just a ship-it note. `material_name` is
+    what you're actually sending (free text); it shows on the task + the mailer.
+
+    The sequence/enrolment/step ids are carried onto the touch so the sequence
+    drill-down can show what went to which school, and so the gap report can tell
+    a slipped brochure apart from a slipped sample."""
     now = datetime.now(timezone.utc)
     now_iso = now.isoformat()
     item = (material_name or "").strip() or (material_type or "brochure")
@@ -194,14 +200,30 @@ async def create_physical_from_drip(lead: dict, material_type: str, seq_name: st
     if sid:
         try:
             today = now.strftime("%Y-%m-%d")
-            run = await db.mail_runs.find_one({"is_drip_run": True, "send_date": today}, {"_id": 0, "run_id": 1})
+            piece = material_type or "brochure"
+            planned = planned_date or today
+            # One run per (sequence, piece, day), so a brochure step and a sample step
+            # from two sequences don't collapse into one unprintable pile.
+            run = await db.mail_runs.find_one(
+                {"is_drip_run": True, "send_date": today,
+                 "sequence_id": sequence_id, "piece_type": piece},
+                {"_id": 0, "run_id": 1})
+            if not run:
+                # Mid-day deploy safety: reuse a run made by the older, coarser key
+                # rather than creating a second run and posting a school twice.
+                run = await db.mail_runs.find_one(
+                    {"is_drip_run": True, "send_date": today, "piece_type": piece,
+                     "sequence_id": {"$exists": False}},
+                    {"_id": 0, "run_id": 1})
             if not run:
                 run_id = f"run_{uuid.uuid4().hex[:10]}"
+                label = f"{seq_name} · {piece} — {today}" if seq_name else f"Drip Mailers — {today}"
                 await db.mail_runs.insert_one({
-                    "run_id": run_id, "name": f"Drip Mailers — {today}", "area_id": "",
-                    "piece_type": material_type or "brochure", "deal_type_target": "", "school_ids": [],
+                    "run_id": run_id, "name": label, "area_id": "",
+                    "piece_type": piece, "deal_type_target": "", "school_ids": [],
                     "send_date": today, "courier": "", "tracking_no": "", "courier_cost": 0,
                     "status": "planned", "is_drip_run": True,
+                    "sequence_id": sequence_id, "sequence_name": seq_name,
                     "created_by": "system", "created_at": now_iso,
                     "counts": {"sent": 0, "delivered": 0, "responded": 0, "appointments": 0}})
             else:
@@ -210,12 +232,17 @@ async def create_physical_from_drip(lead: dict, material_type: str, seq_name: st
             if not await db.mail_touches.find_one({"run_id": run_id, "school_id": sid}, {"_id": 0, "touch_id": 1}):
                 await db.mail_touches.insert_one({
                     "touch_id": f"mt_{uuid.uuid4().hex[:10]}", "run_id": run_id, "school_id": sid,
-                    "lead_id": lead.get("lead_id", ""), "piece_type": material_type or "brochure",
+                    "lead_id": lead.get("lead_id", ""), "piece_type": piece,
                     "item_name": item, "posted_at": None,
                     "qr_token": uuid.uuid4().hex[:16], "delivery_status": "pending",
                     "responded": False, "responded_at": None, "response_channel": "",
                     "appointment": False, "next_action_date": "", "outcome_note": "",
-                    "owner": lead.get("assigned_to", "") or "system", "created_at": now_iso})
+                    "owner": lead.get("assigned_to", "") or "system", "created_at": now_iso,
+                    # lifecycle + drip back-links
+                    "planned_date": planned, "verify_status": "pending",
+                    "printed_at": None, "print_batch_id": "", "replan_count": 0,
+                    "source": "drip", "sequence_id": sequence_id,
+                    "enrollment_id": enrollment_id, "step_number": step_number})
                 await db.mail_runs.update_one(
                     {"run_id": run_id}, {"$addToSet": {"school_ids": sid}, "$inc": {"counts.sent": 1}})
         except Exception:
