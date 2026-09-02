@@ -1381,6 +1381,16 @@ async def mail_run_stickers(run_id: str, request: Request):
     orientation = "landscape" if qp.get("orientation") == "landscape" else "portrait"
     layout = "a4" if qp.get("layout") == "a4" else "label"
     size = qp.get("size") or "100x150"
+    # Endorsement ("Book Post" / "Open Post") + text size: a per-batch query param
+    # wins, else the saved Settings → Company defaults.
+    endorsement = qp.get("endorsement")
+    if endorsement is None:
+        endorsement = company.get("sticker_endorsement", "")
+    try:
+        endorsement_pt = float(qp.get("endorsement_pt") or company.get("sticker_endorsement_pt") or 0)
+    except (TypeError, ValueError):
+        endorsement_pt = 0
+    text_scale = _clamp_scale(qp.get("text_scale") or company.get("sticker_text_scale") or 1.0)
     # Optional per-batch FROM override (else falls back to Settings → Company)
     show_logo = qp.get("no_logo") not in ("1", "true", "yes")
     from_override = None
@@ -1392,7 +1402,9 @@ async def mail_run_stickers(run_id: str, request: Request):
             "sticker_contact": qp.get("from_contact", ""),
         }
     pdf = _build_stickers_pdf(touches, schools_by_id, company, base, orientation=orientation,
-                              size=size, layout=layout, from_override=from_override, show_logo=show_logo)
+                              size=size, layout=layout, from_override=from_override,
+                              show_logo=show_logo, endorsement=endorsement,
+                              endorsement_pt=endorsement_pt, text_scale=text_scale)
     return StreamingResponse(io.BytesIO(pdf), media_type="application/pdf",
                              headers={"Content-Disposition": f'attachment; filename="stickers-{run_id}.pdf"'})
 
