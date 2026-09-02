@@ -813,6 +813,110 @@ async def get_mail_runs(request: Request):
     return await db.mail_runs.find({}, {"_id": 0}).sort("created_at", -1).to_list(500)
 
 
+def _days_late(planned: str, posted_at: str):
+    """Whole days between the planned date and the actual posting, or None when
+    either is missing — a touch with no plan is excluded rather than scored on time."""
+    if not planned or not posted_at:
+        return None
+    try:
+        p = datetime.fromisoformat(planned).date()
+        a = datetime.fromisoformat(str(posted_at).replace("Z", "+00:00")).date()
+    except ValueError:
+        return None
+    return (a - p).days
+
+
+# NOTE: this static path MUST stay above /mail-runs/{run_id} or FastAPI matches
+# "gap-report" as a run_id and this endpoint is never reached.
+@router.get("/mail-runs/gap-report")
+async def mail_gap_report(request: Request):
+    """Planned vs actual across every mail touch, grouped, with the reasons behind
+    the gap — counts alone say work slipped, not what to fix."""
+    await get_current_user(request)
+    qp = request.query_params
+    group_by = qp.get("group_by") or "run"
+    filt = {}
+    d_from, d_to = qp.get("from"), qp.get("to")
+    if d_from or d_to:
+        rng = {}
+        if d_from:
+            rng["$gte"] = d_from
+        if d_to:
+            rng["$lte"] = d_to
+        filt["planned_date"] = rng
+
+    touches = await db.mail_touches.find(filt, {"_id": 0}).to_list(None)
+    runs = {r["run_id"]: r for r in await db.mail_runs.find({}, {"_id": 0}).to_list(None)}
+    schools = {s["school_id"]: s for s in await db.schools.find(
+        {}, {"_id": 0, "school_id": 1, "school_name": 1}).to_list(None)}
+
+    def _key_label(t):
+        run = runs.get(t.get("run_id"), {})
+        if group_by == "sequence":
+            return run.get("sequence_id") or "_none", run.get("sequence_name") or "Not from a sequence"
+        if group_by == "owner":
+            o = t.get("owner") or "unassigned"
+            return o, o
+        if group_by == "school":
+            sid = t.get("school_id", "")
+            return sid, schools.get(sid, {}).get("school_name", "(deleted school)")
+        return t.get("run_id", ""), run.get("name", "(deleted run)")
+
+    groups, reasons = {}, {}
+    for t in touches:
+        key, label = _key_label(t)
+        g = groups.setdefault(key, {"key": key, "label": label, "planned": 0, "sent": 0,
+                                    "not_sent": 0, "pending": 0, "printed_not_posted": 0,
+                                    "replans": 0, "_late": [], "postage_exposure": 0.0})
+        st = t.get("verify_status", "pending")
+        g["planned"] += 1
+        g["replans"] += int(t.get("replan_count", 0) or 0)
+        if st == "sent":
+            g["sent"] += 1
+            dl = _days_late(t.get("planned_date", ""), t.get("posted_at"))
+            if dl is not None:
+                g["_late"].append(dl)
+        elif st == "not_sent":
+            g["not_sent"] += 1
+            r = (t.get("reason") or "").strip() or "no reason given"
+            reasons[r] = reasons.get(r, 0) + 1
+        elif st == "pending":
+            g["pending"] += 1
+        if st != "sent" and t.get("printed_at"):
+            g["printed_not_posted"] += 1        # a sticker printed for nothing
+        # Budgeted postage riding on a piece that never went out.
+        if st == "not_sent":
+            run = runs.get(t.get("run_id"), {})
+            n = len(run.get("school_ids") or []) or 1
+            g["postage_exposure"] += float(run.get("courier_cost") or 0) / n
+
+    rows = []
+    for g in groups.values():
+        late = g.pop("_late")
+        g["avg_days_late"] = round(sum(late) / len(late), 2) if late else None
+        g["on_time_pct"] = round(100.0 * sum(1 for d in late if d <= 0) / len(late), 2) if late else None
+        g["postage_exposure"] = round(g["postage_exposure"], 2)
+        rows.append(g)
+    rows.sort(key=lambda r: (-(r["pending"] + r["not_sent"]), -r["planned"]))
+
+    all_late = [d for t in touches if t.get("verify_status") == "sent"
+                for d in [_days_late(t.get("planned_date", ""), t.get("posted_at"))] if d is not None]
+    totals = {
+        "planned": sum(r["planned"] for r in rows),
+        "sent": sum(r["sent"] for r in rows),
+        "not_sent": sum(r["not_sent"] for r in rows),
+        "pending": sum(r["pending"] for r in rows),
+        "printed_not_posted": sum(r["printed_not_posted"] for r in rows),
+        "replans": sum(r["replans"] for r in rows),
+        "postage_exposure": round(sum(r["postage_exposure"] for r in rows), 2),
+        "avg_days_late": round(sum(all_late) / len(all_late), 2) if all_late else None,
+        "on_time_pct": round(100.0 * sum(1 for d in all_late if d <= 0) / len(all_late), 2) if all_late else None,
+    }
+    return {"group_by": group_by, "rows": rows, "totals": totals,
+            "reasons": sorted([{"reason": k, "count": v} for k, v in reasons.items()],
+                              key=lambda x: -x["count"])}
+
+
 # NOTE: this static path MUST stay above /mail-runs/{run_id} or FastAPI matches
 # "analytics" as a run_id and this endpoint is never reached.
 @router.get("/mail-runs/analytics")
