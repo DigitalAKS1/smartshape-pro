@@ -185,6 +185,7 @@ async def create_form(request: Request):
         "owner_email": (user.get("email") or "").lower(),
         "collaborators": [],
         "public_token": str(uuid.uuid4()),
+        "wa_consent_text": (body.get("wa_consent_text") or "").strip(),
         "status": "open",
         "banner_url": str(body.get("banner_url") or "")[:500],
         "fields": fields,
@@ -225,6 +226,10 @@ async def update_form(form_id: str, request: Request):
         updates["description"] = str(body.get("description") or "")[:2000]
     if "banner_url" in body:
         updates["banner_url"] = str(body.get("banner_url") or "")[:500]
+    if "wa_consent_text" in body:
+        # The opt-in question. Blank removes the box, and with it this form's ability
+        # to record consent at all.
+        updates["wa_consent_text"] = str(body.get("wa_consent_text") or "").strip()[:300]
     if "fields" in body:
         updates["fields"] = _clean_fields(body.get("fields"))
     if "collaborators" in body:
@@ -419,6 +424,9 @@ async def public_form(token: str):
         "banner_url": form.get("banner_url", ""),
         "logo_url": logo_url,
         "fields": form.get("fields", []),
+        # Opt-in question, when the form asks one. Empty string = do not show a box;
+        # consent can then never be recorded from this form (see public_submit).
+        "wa_consent_text": form.get("wa_consent_text", ""),
         # meeting_link deliberately withheld — revealed only after registering
         "event": {k: ev.get(k, "") for k in ("theme", "date", "time", "platform", "duration_min")},
     }
@@ -469,6 +477,18 @@ async def public_submit(token: str, request: Request):
     from services.form_crm import upsert_contact
     contact_id, school_id = await upsert_contact(db, mapped, form["form_id"])
     updates["contact_id"], updates["school_id"] = contact_id, school_id
+
+    # WhatsApp opt-in, if this form asked for it and the box was ticked. Both halves
+    # are required: a tick on a form that never asked is not consent, and an untouched
+    # box records nothing rather than writing a false over an earlier real opt-in.
+    if school_id and form.get("wa_consent_text") and bool(body.get("wa_consent")):
+        await db.schools.update_one({"school_id": school_id}, {"$set": {
+            "wa_consent": True,
+            "wa_consent_at": _now(),
+            "wa_consent_by": "public form",
+            "wa_consent_source": (f"Form: {form.get('title', '')} · "
+                                  f"response {response['response_id']}"),
+        }})
     if form.get("type") == "event" and (form.get("event") or {}).get("session_id"):
         session = await db.training_sessions.find_one(
             {"session_id": form["event"]["session_id"]}, {"_id": 0})

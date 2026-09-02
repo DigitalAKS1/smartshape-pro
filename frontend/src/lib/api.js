@@ -396,6 +396,8 @@ export const mailRuns = {
   undoVerify: (id, touch_ids) => API.post(`/mail-runs/${id}/verify`, { undo: true, touch_ids }),
   replan: (id, payload) => API.post(`/mail-runs/${id}/replan`, payload),
   gapReport: (params = {}) => API.get('/mail-runs/gap-report', { params }),
+  bulkTagSchools: (data) => API.post('/schools/bulk-tag', data),
+  recordWaConsent: (data) => API.post('/schools/wa-consent', data),
   todayQueue: (date) => API.get('/mail-runs/today-queue', { params: date ? { date } : {} }),
   queueStickers: (params = {}) => API.get('/mail-runs/queue-stickers.pdf', { params: { ...params, _ts: Date.now() }, responseType: 'blob' }),
   import: (file, { name = '', piece_type = 'brochure', send_date = '' } = {}) => {
@@ -524,6 +526,7 @@ export const dripSequences = {
   cancelEnrollment: (id) => API.put(`/drip/enrollments/${id}/cancel`),
   resumeEnrollment: (id) => API.put(`/drip/enrollments/${id}/resume`),
   deliveries: (id, params = {}) => API.get(`/drip/sequences/${id}/deliveries`, { params }),
+  forSchool: (schoolId) => API.get(`/schools/${schoolId}/drips`),
 };
 
 // Tags
