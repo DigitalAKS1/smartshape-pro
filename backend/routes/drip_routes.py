@@ -227,15 +227,26 @@ _DEFAULT_SEQUENCES = [
 
 
 async def _seed_defaults():
-    """Upsert system sequences — updates messages if already seeded, adds new ones."""
+    """Upsert system sequences — updates default copy, adds new ones.
+
+    NEVER touches a sequence the user has edited. This function runs on every
+    GET /drip/sequences (i.e. every time the Drip tab is opened), so without the
+    `customised` guard it force-wrote the seeded sequences back to their hardcoded
+    steps — the owner's save worked and the next page load silently undid it — and
+    it DELETED any system sequence that had been renamed, because the new name was
+    no longer in the defaults list.
+    """
     now_iso = datetime.now(timezone.utc).isoformat()
     current_names = [s["name"] for s in _DEFAULT_SEQUENCES]
 
     for seq in _DEFAULT_SEQUENCES:
-        existing = await db.drip_sequences.find_one({"name": seq["name"], "created_by": "system"})
+        existing = await db.drip_sequences.find_one(
+            {"name": seq["name"], "created_by": "system"}, {"_id": 0, "customised": 1})
         if existing:
+            if existing.get("customised"):
+                continue                      # the owner owns this one now — hands off
             await db.drip_sequences.update_one(
-                {"name": seq["name"], "created_by": "system"},
+                {"name": seq["name"], "created_by": "system", "customised": {"$ne": True}},
                 {"$set": {
                     "description": seq["description"],
                     "steps": seq["steps"],
@@ -249,15 +260,20 @@ async def _seed_defaults():
                 "sequence_id": f"drip_{uuid.uuid4().hex[:10]}",
                 **seq,
                 "created_by": "system",
+                "customised": False,
                 "created_at": now_iso,
                 "updated_at": now_iso,
             })
 
-    # Remove obsolete system sequences
-    await db.drip_sequences.delete_many({
-        "created_by": "system",
-        "name": {"$nin": current_names},
-    })
+    # Retire obsolete stock sequences — but never one the owner edited or renamed,
+    # and never one that still has people enrolled in it.
+    stale = await db.drip_sequences.find(
+        {"created_by": "system", "customised": {"$ne": True},
+         "name": {"$nin": current_names}}, {"_id": 0, "sequence_id": 1}).to_list(100)
+    for s in stale:
+        if await db.drip_enrollments.count_documents({"sequence_id": s["sequence_id"]}):
+            continue                          # keep history joinable
+        await db.drip_sequences.delete_one({"sequence_id": s["sequence_id"]})
 
 
 def _normalise_steps(raw_steps: list) -> list:
@@ -335,6 +351,11 @@ async def update_sequence(sequence_id: str, request: Request):
             updates[field] = body[field]
     if "steps" in body:
         updates["steps"] = _normalise_steps(body["steps"])
+    # Editing the CONTENT makes this sequence the owner's, so the default seed stops
+    # rewriting it on the next page load. Pausing/resuming is not a content edit —
+    # a paused stock sequence should still receive improved default copy.
+    if any(f in body for f in ("name", "description", "trigger", "filter_designation", "steps")):
+        updates["customised"] = True
     await db.drip_sequences.update_one({"sequence_id": sequence_id}, {"$set": updates})
     doc = await db.drip_sequences.find_one({"sequence_id": sequence_id}, {"_id": 0})
     return await _enrich(doc)
