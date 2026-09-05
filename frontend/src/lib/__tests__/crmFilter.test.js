@@ -204,3 +204,50 @@ test('has: participates in hasActiveFilters/countActive', () => {
   expect(hasActiveFilters({ has: ['phone'] })).toBe(true);
   expect(countActive({ has: ['phone', 'email'] })).toBe(1);
 });
+
+// ── lead_types facet (Hot/Warm/Cold), so the page's All Types dropdown can
+//    filter schools and contacts the same way it filters leads ───────────────
+describe('matchesCrmFilter — lead_types', () => {
+  const leadCtx = buildCrmContext('lead', {});
+  const schoolCtx = buildCrmContext('school', {
+    schools: [{ school_id: 's1' }, { school_id: 's2' }],
+    leads: [{ lead_id: 'l1', school_id: 's1', lead_type: 'hot' },
+            { lead_id: 'l2', school_id: 's2', lead_type: 'cold' }],
+  });
+
+  test('a lead row matches on its own lead_type', () => {
+    expect(matchesCrmFilter({ lead_type: 'hot' }, { lead_types: ['hot'] }, leadCtx)).toBe(true);
+    expect(matchesCrmFilter({ lead_type: 'cold' }, { lead_types: ['hot'] }, leadCtx)).toBe(false);
+  });
+
+  test('a school row rolls up through its leads, exactly like lead_stages', () => {
+    expect(matchesCrmFilter({ school_id: 's1' }, { lead_types: ['hot'] }, schoolCtx)).toBe(true);
+    expect(matchesCrmFilter({ school_id: 's2' }, { lead_types: ['hot'] }, schoolCtx)).toBe(false);
+  });
+
+  test('a school with no leads at all cannot match a lead_type', () => {
+    expect(matchesCrmFilter({ school_id: 'sX' }, { lead_types: ['hot'] }, schoolCtx)).toBe(false);
+  });
+
+  test('lead_types counts as an active filter and toward countActive', () => {
+    expect(hasActiveFilters({ lead_types: ['hot'] })).toBe(true);
+    expect(countActive({ lead_types: ['hot'], cities: ['Delhi'] })).toBe(2);
+  });
+});
+
+describe('matchesCrmFilter — school_types uses the row\'s own value when it has one', () => {
+  // Leads denormalize school_type onto the row. Before, the Type facet only ever
+  // looked the school up by id, so a lead whose school row was out of the loaded
+  // page (or whose school_id was blank) vanished from a Type filter.
+  const ctx = buildCrmContext('lead', { schools: [{ school_id: 's1', school_type: 'ICSE' }] });
+
+  test('a lead with its own school_type matches without needing the school row', () => {
+    expect(matchesCrmFilter({ school_id: 'gone', school_type: 'CBSE' }, { school_types: ['CBSE'] }, ctx)).toBe(true);
+    expect(matchesCrmFilter({ school_id: '', school_type: 'CBSE' }, { school_types: ['ICSE'] }, ctx)).toBe(false);
+  });
+
+  test('a row with no school_type of its own still rolls up to its school', () => {
+    expect(matchesCrmFilter({ school_id: 's1' }, { school_types: ['ICSE'] }, ctx)).toBe(true);
+    expect(matchesCrmFilter({ school_id: 's1' }, { school_types: ['CBSE'] }, ctx)).toBe(false);
+  });
+});

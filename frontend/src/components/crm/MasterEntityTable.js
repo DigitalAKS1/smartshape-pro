@@ -15,8 +15,8 @@ const textSec   = 'text-[var(--text-secondary)]';
  *               render: (row) => ReactNode  — custom cell renderer
  *   data      — array of row objects
  *   rowKey    — string, the unique id field name (e.g. 'source_id')
- *   onEdit    — (row) => void
- *   onDelete  — (row) => void
+ *   onEdit    — (row) => void   (omit to hide the Edit button)
+ *   onDelete  — (row) => void   (omit to hide the Delete button)
  *   emptyMsg  — string, shown when data is empty
  *   testIdPrefix — optional string prefix for data-testid attrs
  */
@@ -66,23 +66,29 @@ export default function MasterEntityTable({
                   {col.render ? col.render(row) : (row[col.key] ?? '—')}
                 </td>
               ))}
+              {/* Omitting a handler hides its button — callers use that to keep
+                  admin-only actions off a screen the user can't act on. */}
               <td className="py-2.5 px-3 text-right whitespace-nowrap">
-                <Button
-                  size="sm" variant="ghost"
-                  onClick={() => onEdit(row)}
-                  className={`${textSec} h-7 px-1.5`}
-                  data-testid={testIdPrefix ? `edit-${testIdPrefix.replace('-', '')}-${row[rowKey]}` : undefined}
-                >
-                  <Edit2 className="h-3 w-3" />
-                </Button>
-                <Button
-                  size="sm" variant="ghost"
-                  onClick={() => onDelete(row)}
-                  className="text-red-400 h-7 px-1.5"
-                  data-testid={testIdPrefix ? `delete-${testIdPrefix.replace('-', '')}-${row[rowKey]}` : undefined}
-                >
-                  <Trash2 className="h-3 w-3" />
-                </Button>
+                {onEdit && (
+                  <Button
+                    size="sm" variant="ghost"
+                    onClick={() => onEdit(row)}
+                    className={`${textSec} h-7 px-1.5`}
+                    data-testid={testIdPrefix ? `edit-${testIdPrefix.replace('-', '')}-${row[rowKey]}` : undefined}
+                  >
+                    <Edit2 className="h-3 w-3" />
+                  </Button>
+                )}
+                {onDelete && (
+                  <Button
+                    size="sm" variant="ghost"
+                    onClick={() => onDelete(row)}
+                    className="text-red-400 h-7 px-1.5"
+                    data-testid={testIdPrefix ? `delete-${testIdPrefix.replace('-', '')}-${row[rowKey]}` : undefined}
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </Button>
+                )}
               </td>
             </tr>
           ))}

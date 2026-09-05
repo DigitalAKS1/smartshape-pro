@@ -212,3 +212,41 @@ describe('describeParsedFilter', () => {
     expect(describeParsedFilter({}, qOptions)).toEqual([]);
   });
 });
+
+// ── Partial operator values (the placeholder's own example must work) ────────
+describe('parseSearchQuery — partial operator values', () => {
+  test('owner:parul resolves the way the search placeholder promises', () => {
+    const out = parseSearchQuery('owner:parul', qOptions);
+    expect(out.filter.owners).toEqual(['parul@ss.in']);
+    expect(out.text).toBe('');
+  });
+
+  test('a partial owner also matches on the email local-part', () => {
+    expect(parseSearchQuery('owner:kanchan', qOptions).filter.owners).toEqual(['parul@ss.in']);
+  });
+
+  test('partial city / source / type / stage / tag values resolve too', () => {
+    expect(parseSearchQuery('city:rohin', qOptions).filter.cities).toEqual(['Rohini']);
+    expect(parseSearchQuery('source:refer', qOptions).filter.sources).toEqual(['Referral']);
+    expect(parseSearchQuery('type:cbs', qOptions).filter.school_types).toEqual(['CBSE']);
+    expect(parseSearchQuery('stage:dem', qOptions).filter.lead_stages).toEqual(['demo']);
+    expect(parseSearchQuery('tag:hot', qOptions).filter.tags).toEqual(['t_hot']);
+  });
+
+  test('an ambiguous partial keeps EVERY match (OR-within the facet), never one arbitrary winner', () => {
+    const opts = { ...qOptions, cities: ['Rohini', 'Rohini Extension', 'Dwarka'] };
+    expect(parseSearchQuery('city:rohin', opts).filter.cities).toEqual(['Rohini', 'Rohini Extension']);
+  });
+
+  test('an exact match wins outright over longer values that merely contain it', () => {
+    expect(parseSearchQuery('city:Delhi', qOptions).filter.cities).toEqual(['New Delhi']);
+    const opts = { ...qOptions, cities: ['Delhi', 'New Delhi'] };
+    expect(parseSearchQuery('city:Delhi', opts).filter.cities).toEqual(['Delhi']);
+  });
+
+  test('a genuine typo still falls back to free text, never to an empty result set', () => {
+    const out = parseSearchQuery('owner:zzzz', qOptions);
+    expect(out.filter).toEqual({});
+    expect(out.text).toBe('owner:zzzz');
+  });
+});

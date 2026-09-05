@@ -261,38 +261,55 @@ async def import_template(
 # Master-data export (round-trips back through preview/execute)
 # ---------------------------------------------------------------------------
 
+# Characters Excel refuses inside a cell. openpyxl raises IllegalCharacterError
+# on any of them, which would 500 the whole export over one bad row — and school
+# data imported from other people's spreadsheets carries them routinely. Tab,
+# newline and carriage return are legal and kept.
+_ILLEGAL_XLSX = {c: None for c in range(0x20) if c not in (0x09, 0x0A, 0x0D)}
+_ILLEGAL_XLSX[0x7F] = None
+
+
 def _cell(value) -> str:
-    """Coerce a field value to a plain string for export cells."""
+    """Coerce a field value to a plain string that Excel will accept."""
     if value is None:
         return ""
-    if isinstance(value, str):
-        return value
-    return str(value)
+    if not isinstance(value, str):
+        value = str(value)
+    return value.translate(_ILLEGAL_XLSX)
 
 
 async def _build_export(db) -> dict:
     """Build {headers, rows} for ALL schools, in the same column shape the
     importer accepts, so the exported file can be re-imported cleanly.
 
+    One row per CONTACT (and a single blank-contact row for a school that has
+    none), because a school routinely has a Principal, a Director and a
+    coordinator — exporting only the first silently dropped the rest, and
+    re-uploading that file could not put them back.
+
+    Both id columns are written so a re-upload updates in place: without
+    "Contact ID" the importer can only re-match a contact by name/phone, so
+    correcting a spelling in Excel created a second contact instead of fixing
+    the first.
+
     The owner ("Assign To") cell is exported as the human NAME, not the email,
     so an admin can hand-edit it; the importer resolves the name back to an email.
     """
     fields = await fr.list_fields(db)
-    headers = ["School ID"] + [f["label"] for f in fields]
+    headers = ["School ID", "Contact ID"] + [f["label"] for f in fields]
 
-    primary_contact_by_school: dict = {}
+    contacts_by_school: dict = {}
     async for c in db.contacts.find({"is_deleted": {"$ne": True}}):
         sid = c.get("school_id")
-        if sid and sid not in primary_contact_by_school:
-            primary_contact_by_school[sid] = c
+        if sid:
+            contacts_by_school.setdefault(sid, []).append(c)
 
-    rows = []
-    async for school in db.schools.find({"is_deleted": {"$ne": True}}):
-        ms = fr.merge_fields(school)
-        contact = primary_contact_by_school.get(school.get("school_id"), {})
-        mc = fr.merge_fields(contact)
-
-        row = {"School ID": school.get("school_id", "")}
+    def _row(school, ms, contact):
+        mc = fr.merge_fields(contact) if contact else {}
+        row = {
+            "School ID": school.get("school_id", ""),
+            "Contact ID": (contact or {}).get("contact_id", ""),
+        }
         for f in fields:
             if f.get("maps_to") == "assigned_to":
                 value = school.get("assigned_name") or school.get("assigned_to", "")
@@ -300,7 +317,14 @@ async def _build_export(db) -> dict:
                 src = mc if f.get("entity") == "contact" else ms
                 value = src.get(f.get("maps_to") or f["key"], "")
             row[f["label"]] = _cell(value)
-        rows.append(row)
+        return row
+
+    rows = []
+    async for school in db.schools.find({"is_deleted": {"$ne": True}}):
+        ms = fr.merge_fields(school)
+        school_contacts = contacts_by_school.get(school.get("school_id")) or [None]
+        for contact in school_contacts:
+            rows.append(_row(school, ms, contact))
 
     return {"headers": headers, "rows": rows}
 

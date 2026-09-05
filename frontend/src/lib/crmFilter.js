@@ -65,14 +65,15 @@ export function hasActiveFilters(f) {
   if (!f) return false;
   return nonEmpty(f.sources) || nonEmpty(f.lead_stages) || nonEmpty(f.roles) ||
     nonEmpty(f.school_types) || nonEmpty(f.cities) || nonEmpty(f.tags) ||
-    nonEmpty(f.owners) || nonEmpty(f.has) || nonEmpty(f.deal_types) || f.min_strength != null || f.max_strength != null ||
+    nonEmpty(f.owners) || nonEmpty(f.has) || nonEmpty(f.deal_types) || nonEmpty(f.lead_types) ||
+    f.min_strength != null || f.max_strength != null ||
     hasDateRange(f, 'import_date') || hasDateRange(f, 'assigned_date');
 }
 
 export function countActive(f) {
   if (!f) return 0;
   let n = 0;
-  ['sources', 'lead_stages', 'roles', 'school_types', 'cities', 'tags', 'owners', 'has', 'deal_types'].forEach(k => { if (nonEmpty(f[k])) n++; });
+  ['sources', 'lead_stages', 'roles', 'school_types', 'cities', 'tags', 'owners', 'has', 'deal_types', 'lead_types'].forEach(k => { if (nonEmpty(f[k])) n++; });
   if (f.min_strength != null || f.max_strength != null) n++;
   if (hasDateRange(f, 'import_date')) n++;
   if (hasDateRange(f, 'assigned_date')) n++;
@@ -157,6 +158,18 @@ export function matchesCrmFilter(row, filter, ctx) {
     }
   }
 
+  // Lead temperature (Hot/Warm/Cold) lives on leads. A school/contact row rolls
+  // up through its leads exactly like lead_stages, so the page's "All Types"
+  // dropdown means the same thing on every tab instead of only on Leads.
+  if (nonEmpty(f.lead_types)) {
+    if (kind === 'lead') {
+      if (!f.lead_types.includes((row.lead_type || '').trim())) return false;
+    } else {
+      const sl = leadsBySchoolId[row.school_id] || [];
+      if (!sl.some(l => f.lead_types.includes((l.lead_type || '').trim()))) return false;
+    }
+  }
+
   // Deal type lives on leads. For a school row, match if ANY lead under it has a
   // wanted deal type ("schools we sent a Sample / Reorder / New-Machine deal").
   if (nonEmpty(f.deal_types)) {
@@ -168,11 +181,24 @@ export function matchesCrmFilter(row, filter, ctx) {
     }
   }
 
-  const needsSchool = nonEmpty(f.school_types) || nonEmpty(f.cities) || f.min_strength != null || f.max_strength != null;
+  // School type: leads denormalize `school_type` onto the row itself, so match
+  // the row's own value when it has one and only roll up to the school record
+  // when it doesn't (same rule as `sources` above). Looking it up by id alone
+  // dropped every lead whose school row wasn't loaded.
+  if (nonEmpty(f.school_types)) {
+    const own = (row.school_type || '').trim();
+    if (own) {
+      if (!f.school_types.includes(own)) return false;
+    } else {
+      const s = schoolsById[row.school_id];
+      if (!s || !f.school_types.includes(s.school_type)) return false;
+    }
+  }
+
+  const needsSchool = nonEmpty(f.cities) || f.min_strength != null || f.max_strength != null;
   if (needsSchool) {
     const school = schoolsById[row.school_id];
     if (!school) return false;
-    if (nonEmpty(f.school_types) && !f.school_types.includes(school.school_type)) return false;
     if (nonEmpty(f.cities) && !f.cities.includes(school.city)) return false;
     const strength = Number(school.school_strength) || 0;
     if (f.min_strength != null && strength < f.min_strength) return false;
@@ -186,7 +212,7 @@ export function matchesCrmFilter(row, filter, ctx) {
 export const FACET_LABELS = {
   owners: 'Owner', cities: 'City', sources: 'Source',
   school_types: 'Type', roles: 'Role', lead_stages: 'Stage', tags: 'Tag',
-  deal_types: 'Deal Type',
+  deal_types: 'Deal Type', lead_types: 'Lead Type',
 };
 
 // Turn a free-text term into ranked "add this filter" suggestions. Pure: pass

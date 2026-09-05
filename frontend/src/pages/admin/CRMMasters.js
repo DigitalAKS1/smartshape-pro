@@ -10,6 +10,7 @@ import { useCRMMasters } from '../../hooks/useCRMMasters';
 import { pipelineSettings, schoolTypes as schoolTypesApi, interestedProducts as interestedProductsApi } from '../../lib/api';
 import { STAGES } from '../../lib/crmConstants';
 import MasterEntityTable from '../../components/crm/MasterEntityTable';
+import { useAuth } from '../../contexts/AuthContext';
 
 const TABS = [
   { id: 'groups',       label: 'Group Master',        icon: Building2, desc: 'Trusts / parent organisations that own multiple schools' },
@@ -55,6 +56,12 @@ export default function CRMMasters() {
   const m = useCRMMasters();
 
   // Pipeline settings (Phase 1)
+  // Renaming or deleting a shared master list is admin-only on the server
+  // (_require_master_admin). Offering the buttons to everyone meant a rep hit
+  // Update, got a 403 toast, and reasonably concluded the app was broken.
+  const { user } = useAuth();
+  const canEditMasters = user?.role === 'admin' || user?.team === 'admin';
+
   const [pipe, setPipe] = useState(null);
   const [pipeSaving, setPipeSaving] = useState(false);
   useEffect(() => { pipelineSettings.get().then(r => setPipe(r.data)).catch(() => {}); }, []);
@@ -258,8 +265,10 @@ export default function CRMMasters() {
                 <div key={a.activity_type_id} className={chipCls} data-testid={`activity-type-row-${a.activity_type_id}`}>
                   <span className={`${textPri} text-sm`}>{a.name}</span>
                   <div className="flex">
-                    <Button size="sm" variant="ghost" onClick={() => m.openEditAt(a)} className={`${textSec} h-7 px-1.5`}><Edit2 className="h-3 w-3" /></Button>
-                    <Button size="sm" variant="ghost" onClick={() => m.deleteAt(a)} className="text-red-400 h-7 px-1.5"><Trash2 className="h-3 w-3" /></Button>
+                    {canEditMasters && <>
+                      <Button size="sm" variant="ghost" onClick={() => m.openEditAt(a)} className={`${textSec} h-7 px-1.5`}><Edit2 className="h-3 w-3" /></Button>
+                      <Button size="sm" variant="ghost" onClick={() => m.deleteAt(a)} className="text-red-400 h-7 px-1.5"><Trash2 className="h-3 w-3" /></Button>
+                    </>}
                   </div>
                 </div>
               ))}
@@ -308,8 +317,8 @@ export default function CRMMasters() {
               columns={desColumns}
               data={m.designationsList}
               rowKey="designation_id"
-              onEdit={m.openEditDes}
-              onDelete={m.deleteDes}
+              onEdit={canEditMasters ? m.openEditDes : undefined}
+              onDelete={canEditMasters ? m.deleteDes : undefined}
               emptyMsg="No designations yet — click Add Designation to create the first one."
             />
           </div>
@@ -333,8 +342,10 @@ export default function CRMMasters() {
                       <span className={`${textPri} text-sm`}>{t.name}</span>
                     </div>
                     <div className="flex">
-                      <Button size="sm" variant="ghost" onClick={() => m.openEditTag(t)} className={`${textSec} h-7 px-1.5`}><Edit2 className="h-3 w-3" /></Button>
-                      <Button size="sm" variant="ghost" onClick={() => m.deleteTag(t)} className="text-red-400 h-7 px-1.5"><Trash2 className="h-3 w-3" /></Button>
+                      {canEditMasters && <>
+                        <Button size="sm" variant="ghost" onClick={() => m.openEditTag(t)} className={`${textSec} h-7 px-1.5`} data-testid={`edit-tag-${t.tag_id}`}><Edit2 className="h-3 w-3" /></Button>
+                        <Button size="sm" variant="ghost" onClick={() => m.deleteTag(t)} className="text-red-400 h-7 px-1.5" data-testid={`delete-tag-${t.tag_id}`}><Trash2 className="h-3 w-3" /></Button>
+                      </>}
                     </div>
                   </div>
                 ))}
@@ -458,9 +469,11 @@ export default function CRMMasters() {
               {stList.map(t => (
                 <div key={t.type_id} className={chipCls} data-testid={`school-type-row-${t.type_id}`}>
                   <span className={`${textPri} text-sm`}>{t.name}</span>
-                  <Button size="sm" variant="ghost" onClick={() => deleteType(t)} className="text-red-400 h-7 px-1.5" data-testid={`delete-school-type-${t.type_id}`}>
-                    <Trash2 className="h-3 w-3" />
-                  </Button>
+                  {canEditMasters && (
+                    <Button size="sm" variant="ghost" onClick={() => deleteType(t)} className="text-red-400 h-7 px-1.5" data-testid={`delete-school-type-${t.type_id}`}>
+                      <Trash2 className="h-3 w-3" />
+                    </Button>
+                  )}
                 </div>
               ))}
               {stList.length === 0 && <MasterEmpty icon={Building2} title="No school types yet" sub="Add a board or type above (e.g. Cambridge) — it'll appear in every school form's dropdown." />}

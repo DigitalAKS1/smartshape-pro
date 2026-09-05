@@ -61,6 +61,7 @@ SEED_FIELDS = [
     ("state",              "State",                              "school",  "text",   "state",                "School",  ["state"]),
     ("pincode",            "Pin Code",                           "school",  "text",   "pincode",              "School",  ["pin code", "pincode", "pin"]),
     ("board",              "Affiliated Board",                   "school",  "text",   "board",                "School",  ["affiliated to which board", "board", "affiliated board"]),
+    ("school_type",        "School Type",                        "school",  "text",   "school_type",          "School",  ["school type", "type", "category", "institute type"]),
     ("std_classes",        "STD (Classes)",                      "school",  "text",   None,                   "School",  ["std", "classes", "standard"]),
     ("school_phone",       "School's Phone Number",              "school",  "phone",  "phone",                "School",  ["schools phone number", "school phone"]),
     ("school_email",       "School's Mail",                      "school",  "email",  "email",                "School",  ["schools mail", "school email", "school mail"]),

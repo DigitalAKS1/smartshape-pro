@@ -336,6 +336,31 @@ _CORE = {key: (entity, maps_to) for (key, _l, entity, _t, maps_to, _g, _a) in SE
 _FIELD_TYPE = {key: _t for (key, _l, _e, _t, _m, _g, _a) in SEED_FIELDS}
 
 
+def coerce_number(v):
+    """Return *v* as an int/float when it reads as one, else leave it alone.
+
+    A spreadsheet round-trip turns every cell into text. Without this, exporting
+    and re-uploading rewrites school_strength 1200 as the string "1200" — and it
+    stays a string forever after, so numeric range filters stop seeing the row.
+    Blank stays blank; genuinely non-numeric text is passed through untouched
+    rather than silently zeroed.
+    """
+    if isinstance(v, bool) or isinstance(v, (int, float)):
+        return v
+    s = str(v or "").strip().replace(",", "")
+    if not s:
+        return v
+    try:
+        return int(s)
+    except ValueError:
+        pass
+    try:
+        f = float(s)
+    except ValueError:
+        return v
+    return int(f) if f.is_integer() else f
+
+
 def split_values(row_keyed: dict) -> dict:
     """Split a mapped row dict into native and custom-field buckets per entity.
 
@@ -360,8 +385,11 @@ def split_values(row_keyed: dict) -> dict:
     for key, val in row_keyed.items():
         if key in CONTROL_KEYS:         # control keys — not stored as fields
             continue
-        if _FIELD_TYPE.get(key) == "email":   # collapse 'a@x / b@y' -> first addr
+        ftype = _FIELD_TYPE.get(key)
+        if ftype == "email":            # collapse 'a@x / b@y' -> first addr
             val = first_email(val)
+        elif ftype == "number":         # keep numbers numeric across a round-trip
+            val = coerce_number(val)
         meta = _CORE.get(key)
         if meta and meta[1]:            # known key with a native column mapping
             entity, native = meta

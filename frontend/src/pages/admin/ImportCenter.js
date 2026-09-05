@@ -154,7 +154,19 @@ export default function ImportCenter() {
         window.URL.revokeObjectURL(url);
       }
       toast.success('Export ready');
-    } catch { toast.error('Export failed'); }
+    } catch (e) {
+      // "Export failed" on its own told the owner nothing — surface the real
+      // reason (403 from a missing Settings grant, or a server detail). The
+      // .xlsx call is responseType:'blob', so its error body arrives as a Blob.
+      let msg = e?.message || 'unknown error';
+      const d = e?.response?.data;
+      if (d instanceof Blob) {
+        try { msg = JSON.parse(await d.text())?.detail || msg; } catch { /* not JSON */ }
+      } else if (typeof d === 'string') { msg = d; }
+      else if (d?.detail) { msg = d.detail; }
+      if (e?.response?.status === 403) msg = "you need 'Settings' write access — ask an admin";
+      toast.error(`Export failed: ${msg}`);
+    }
     setExporting(false);
   };
 

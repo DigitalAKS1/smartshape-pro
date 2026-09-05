@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { STAGES, SCHOOL_TYPES } from '../lib/crmConstants';
+import { STAGES } from '../lib/crmConstants';
 import { deriveFilterOptions } from '../lib/crmFilter';
 import { buildMasterContexts, computeMasterFiltered, makeCountFor, tabKind, parseSearchQuery, mergeFilters } from '../lib/crmMasterFilter';
 import {
@@ -739,7 +739,26 @@ export default function useLeadsCRM() {
   // word from the search box can't accidentally un-toggle a rail selection
   // (and vice versa). `effectiveFilter` is what every match/count actually uses.
   const parsedQuery = useMemo(() => parseSearchQuery(searchTerm, filterOptions), [searchTerm, filterOptions]);
-  const effectiveFilter = useMemo(() => mergeFilters(masterFilter, parsedQuery.filter), [masterFilter, parsedQuery.filter]);
+
+  // The "All Types" / "All Tags" dropdowns sit next to the global search box, so
+  // they have to mean the same thing on every tab. Expressing them as ordinary
+  // facets — lead_types/school_types and tags — is what makes that true: they
+  // now narrow Schools and Contacts (and the tab counts) exactly as they narrow
+  // Leads. Previously they were applied only to `filteredLeads`, so on any other
+  // tab picking one appeared to do nothing at all.
+  const dropdownFilter = useMemo(() => {
+    const f = {};
+    if (filterType !== 'all') {
+      if (['hot', 'warm', 'cold'].includes(filterType)) f.lead_types = [filterType];
+      else f.school_types = [filterType];
+    }
+    if (filterTag) f.tags = [filterTag];
+    return f;
+  }, [filterType, filterTag]);
+
+  const effectiveFilter = useMemo(
+    () => mergeFilters(mergeFilters(masterFilter, parsedQuery.filter), dropdownFilter),
+    [masterFilter, parsedQuery.filter, dropdownFilter]);
 
   const masterFiltered = useMemo(() => computeMasterFiltered({
     schoolsList, contactsList, leadsList, contexts: masterContexts, searchTerm: parsedQuery.text, masterFilter: effectiveFilter,
@@ -754,17 +773,11 @@ export default function useLeadsCRM() {
     kind: activeTabKind, list: activeTabList, ctx: masterContexts[activeTabKind], searchTerm: parsedQuery.text, masterFilter: effectiveFilter,
   }), [activeTabKind, activeTabList, masterContexts, parsedQuery.text, effectiveFilter]);
 
-  // Filtered leads (for list / pipeline / kanban / table views) — starts from
-  // the master-filtered lead pool, then layers the existing per-tab detail
-  // filters (lead-type / school-type quick-select + tag) on top.
-  const filteredLeads = masterFiltered.leads.filter(l => {
-    if (filterType !== 'all') {
-      if (['hot', 'warm', 'cold'].includes(filterType) && l.lead_type !== filterType) return false;
-      if (SCHOOL_TYPES.includes(filterType) && l.school_type !== filterType) return false;
-    }
-    if (filterTag && !(l.tags || []).includes(filterTag)) return false;
-    return true;
-  });
+  // Leads for the list / pipeline / kanban / table views. The type + tag
+  // dropdowns are already part of `effectiveFilter` (see dropdownFilter above),
+  // so this is just the master-filtered pool — no second, leads-only copy of the
+  // same rules that the other tabs never got.
+  const filteredLeads = masterFiltered.leads;
 
   return {
     // State — data

@@ -89,26 +89,41 @@ const OPERATOR_FACET = {
   stage: 'lead_stages', tag: 'tags',
 };
 
-function resolveOperatorValue(key, rawVal, options) {
+// Pick the option ids an operator value refers to. An EXACT (case-insensitive)
+// hit wins outright and alone; failing that, every option CONTAINING the typed
+// text matches, so `owner:parul` finds "Parul Kanchan" and `city:rohini` finds
+// both "Rohini" and "Rohini Extension" — the search box's own placeholder
+// promises partial values, and returning all of them is the honest reading
+// (a facet's array is already OR-within in the engine). `[]` means "no such
+// option", which the caller turns back into plain free text.
+function pickOptions(list, value, textOf, idOf) {
+  const v = value.trim().toLowerCase();
+  if (!v) return [];
+  const exact = list.filter((o) => textOf(o).some((t) => t.toLowerCase() === v));
+  if (exact.length) return exact.map(idOf);
+  return list.filter((o) => textOf(o).some((t) => t.toLowerCase().includes(v))).map(idOf);
+}
+
+const ident = (x) => x;
+
+function resolveOperatorValues(key, rawVal, options) {
   const v = rawVal.toLowerCase();
   if (key === 'owner') {
-    const hit = (options.owners || []).find((o) => o.name.toLowerCase() === v || o.id.toLowerCase() === v);
-    return hit ? hit.id : null;
+    return pickOptions(options.owners || [], rawVal, (o) => [o.name, o.id], (o) => o.id);
   }
-  if (key === 'city') return (options.cities || []).find((c) => c.toLowerCase() === v) ?? null;
-  if (key === 'source') return (options.sources || []).find((s) => s.toLowerCase() === v) ?? null;
-  if (key === 'type') return (options.school_types || []).find((t) => t.toLowerCase() === v) ?? null;
+  if (key === 'city') return pickOptions(options.cities || [], rawVal, (c) => [c], ident);
+  if (key === 'source') return pickOptions(options.sources || [], rawVal, (s) => [s], ident);
+  if (key === 'type') return pickOptions(options.school_types || [], rawVal, (t) => [t], ident);
   if (key === 'stage') {
-    const hit = (options.stages || []).find((s) => s.id.toLowerCase() === v || s.label.toLowerCase() === v);
-    return hit ? hit.id : null;
+    return pickOptions(options.stages || [], rawVal, (s) => [s.id, s.label], (s) => s.id);
   }
   if (key === 'tag') {
-    const hit = (options.tags || []).find((t) => t.name.toLowerCase() === v);
-    return hit ? hit.id : null;
+    return pickOptions(options.tags || [], rawVal, (t) => [t.name], (t) => t.id);
   }
-  if (key === 'has') return ['phone', 'email'].includes(v) ? v : null;
-  if (key === 'is') return v === 'unassigned' ? UNASSIGNED : null;
-  return null; // unrecognized operator key
+  // Fixed vocabularies — no partial matching, the whole word or nothing.
+  if (key === 'has') return ['phone', 'email'].includes(v) ? [v] : [];
+  if (key === 'is') return v === 'unassigned' ? [UNASSIGNED] : [];
+  return []; // unrecognized operator key
 }
 
 // key:"quoted value" | key:bareValue | "quoted phrase" | bareWord
@@ -117,10 +132,11 @@ const TOKEN_RE = /([a-zA-Z]+):"([^"]*)"|([a-zA-Z]+):(\S+)|"([^"]*)"|(\S+)/g;
 /**
  * Parse a raw search-box string into structured facets + residual free text.
  * Supported operators: owner: city: source: type: stage: tag: has: is:
- * Quote multi-word values: `owner:"Parul Kanchan"`. An unrecognized operator
- * key, or a recognized one whose value doesn't resolve to a real option
- * (typos), falls back to free text — a typo returns "no matches on this
- * word" instead of silently zeroing the whole result set forever.
+ * Values may be partial (`owner:parul` -> "Parul Kanchan"); quote them to keep
+ * spaces: `owner:"Parul Kanchan"`. An unrecognized operator key, or a
+ * recognized one whose value matches no option at all (typos), falls back to
+ * free text — a typo returns "no matches on this word" instead of silently
+ * zeroing the whole result set forever.
  * @returns {{filter: object, text: string}}
  */
 export function parseSearchQuery(term, options = {}) {
@@ -142,11 +158,11 @@ export function parseSearchQuery(term, options = {}) {
     if (quotedPhrase !== undefined) { if (quotedPhrase.trim()) words.push(quotedPhrase); continue; }
     if (bareWord !== undefined) { words.push(bareWord); continue; }
 
-    const resolved = resolveOperatorValue(key, val, options);
-    if (resolved == null) { words.push(`${key}:${val}`); continue; } // unresolved -> free text
+    const resolved = resolveOperatorValues(key, val, options);
+    if (!resolved.length) { words.push(`${key}:${val}`); continue; } // unresolved -> free text
 
     const facetKey = key === 'has' || key === 'is' ? (key === 'is' ? 'owners' : 'has') : OPERATOR_FACET[key];
-    pushFacet(facetKey, resolved);
+    resolved.forEach((id) => pushFacet(facetKey, id));
   }
 
   return { filter, text: words.join(' ').trim() };

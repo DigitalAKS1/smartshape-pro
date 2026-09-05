@@ -414,7 +414,12 @@ export default function LeadsCRM() {
             setFilterRole={crm.setFilterRole}
             filterContactTag={crm.filterContactTag}
             setFilterContactTag={crm.setFilterContactTag}
-            searchTerm={crm.searchTerm}
+            /* Residual free text only — the operators (owner:/city:/...) are
+               already applied via masterFiltered. Passing the raw box here made
+               ContactsTab search for the literal string "owner:parul", which
+               matches nothing, so the tab showed 0 rows while its own badge
+               counted N. */
+            searchTerm={crm.parsedQuery.text}
             tagsList={crm.tagsList}
             rolesList={crm.rolesList}
             sortConfig={crm.sortConfig}
