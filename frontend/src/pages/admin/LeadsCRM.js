@@ -42,6 +42,7 @@ import AssignToPicker from '../../components/crm/AssignToPicker';
 import { useIsOwner, usePermission } from '../../hooks/usePermission';
 import { deriveFilterOptions, buildCrmContext, matchesCrmFilter, hasActiveFilters } from '../../lib/crmFilter';
 import ActiveFilterBar from '../../components/crm/ActiveFilterBar';
+import SegmentPerformance from '../../components/crm/SegmentPerformance';
 
 // Plain typing is the whole promise of the box; the operators are a shortcut for
 // people who want one, so they live in the tooltip and in the Tips popover
@@ -1017,6 +1018,7 @@ export default function LeadsCRM() {
         })()}
 
         {/* ── REPORTS TAB ───────────────────────────────────────────── */}
+        {crm.activeTab === 'reports' && <SegmentPerformance />}
         {crm.activeTab === 'reports' && (() => {
           const totalContacts = crm.contactsList.length;
           const convertedContacts = crm.contactsList.filter(c => c.converted_to_lead).length;

@@ -26,6 +26,7 @@ import httpx
 from database import db
 from notify import notify_user
 import services.account_lifecycle as al
+import services.fit as fit
 from services.evolution_client import evolution
 from routes.fms_routes import get_fms_settings, render_template, pct_remaining
 from routes.crm_routes import (
@@ -1784,6 +1785,11 @@ async def account_lifecycle_loop():
             days = int(settings.get("dormant_after_days") or al.DEFAULT_DORMANT_AFTER_DAYS)
             out = await al.backfill_all(db, dormant_after_days=days)
             log.info(f"[lifecycle] {out['scanned']} schools — {out['by_status']}")
+            # Fit follows lifecycle: who converted is what the rates are
+            # measured from, so it must be recomputed after, never before.
+            min_sample = int(settings.get("segment_min_sample") or fit.DEFAULT_MIN_SAMPLE)
+            f = await fit.refresh_all(db, min_sample=min_sample)
+            log.info(f"[fit] {f['scored']} of {f['schools']} schools scored")
         except Exception as exc:
             log.error(f"[lifecycle loop] {exc}")
         await asyncio.sleep(24 * 3600)

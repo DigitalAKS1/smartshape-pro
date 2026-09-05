@@ -22,6 +22,7 @@ import crm_contact_calls as cc
 from notify import notify_user
 import services.account_lifecycle as al
 import services.reorder as ro
+import services.fit as fit
 
 router = APIRouter()
 
@@ -390,6 +391,9 @@ DEFAULT_PIPELINE_SETTINGS = {
     # Assumed gap between orders for a school that has only ordered once, where
     # there is no rhythm to measure yet.
     "reorder_interval_days": 180,
+    # Below this many schools a segment's conversion rate is noise, not
+    # evidence, so it is marked unreliable and takes no part in a fit score.
+    "segment_min_sample": 8,
 }
 
 
@@ -3669,6 +3673,28 @@ async def get_schools(request: Request):
     query["is_deleted"] = {"$ne": True}
     schools = await db.schools.find(query, {"_id": 0}).sort("school_name", 1).to_list(10000)
     return schools
+
+
+@router.get("/crm/segment-performance")
+async def crm_segment_performance(request: Request):
+    """Conversion by segment — board, type, size band or city.
+
+    Turns "we do well with big CBSE schools" from an opinion into a number, and,
+    just as usefully, shows where that belief rests on four data points. Every
+    row carries its sample size and whether it is large enough to trust.
+    """
+    user = await get_current_user(request)
+    if not _crm_read(user):
+        return {"attribute": "", "rows": []}
+    attribute = (request.query_params.get("attribute") or "board").strip()
+    if attribute not in fit.ATTRIBUTES:
+        raise HTTPException(status_code=400,
+                            detail=f"attribute must be one of {', '.join(fit.ATTRIBUTES)}")
+    settings = await get_crm_settings()
+    min_sample = int(settings.get("segment_min_sample") or fit.DEFAULT_MIN_SAMPLE)
+    rows = await fit.segment_performance(db, attribute, min_sample=min_sample)
+    return {"attribute": attribute, "min_sample": min_sample,
+            "attributes": list(fit.ATTRIBUTES), "rows": rows}
 
 
 @router.get("/crm/reorder-due")

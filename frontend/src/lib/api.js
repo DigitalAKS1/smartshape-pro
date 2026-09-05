@@ -930,6 +930,12 @@ export const masterImport = {
   exportXlsx: () => API.get('/master-import/export.xlsx', { responseType: 'blob' }),
 };
 
+// CRM reports derived from order history — conversion by segment.
+export const crmReports = {
+  segmentPerformance: (attribute) =>
+    API.get('/crm/segment-performance', { params: { attribute } }),
+};
+
 // Dynamic field definitions (used by master-data import)
 export const fields = {
   list:   (entity) => API.get(`/fields${entity ? `?entity=${entity}` : ''}`),
