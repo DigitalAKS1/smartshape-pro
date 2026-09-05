@@ -1,6 +1,6 @@
 import React from 'react';
 import AdminLayout from '../../components/layouts/AdminLayout';
-import { Building2, Mail, MessageSquare, Clock, MapPin, Shield, Sparkles, Video, Cloud, FileSpreadsheet, Bell, Lock, GraduationCap, LayoutGrid, Phone } from 'lucide-react';
+import { Building2, Mail, MessageSquare, Clock, MapPin, Shield, Sparkles, Video, Cloud, FileSpreadsheet, Bell, Lock, GraduationCap, LayoutGrid, Phone, RotateCcw } from 'lucide-react';
 import useAppSettings from '../../hooks/useAppSettings';
 import CompanySettingsSection from '../../components/settings/CompanySettingsSection';
 import SecuritySection from '../../components/settings/SecuritySection';
@@ -20,6 +20,8 @@ import WhatsAppConnectionSection from '../../components/settings/WhatsAppConnect
 import CallingSection from '../../components/settings/CallingSection';
 import SecurityTab from '../../components/settings/SecurityTab';
 import IntegrationsOverview from '../../components/settings/IntegrationsOverview';
+import RecentlyDeleted from '../../components/settings/RecentlyDeleted';
+import { useIsOwner } from '../../hooks/usePermission';
 
 // Grouped navigation. `statusKey` (when present) shows a live connection dot and
 // matches the keys from GET /settings/integrations/status.
@@ -44,6 +46,9 @@ const GROUPS = [
     { id: 'devices',       label: 'Devices',          icon: Shield },
     { id: 'notifications', label: 'Notifications',    icon: Bell },
     { id: 'security',      label: 'Security',         icon: Lock },
+    // Owner-only, like the cascade deletes it reverses. Filtered out below for
+    // every other account rather than shown and then refused.
+    { id: 'deleted',       label: 'Recently deleted', icon: RotateCcw, ownerOnly: true },
   ]},
 ];
 
@@ -53,6 +58,12 @@ const titleFor = (id) => (ALL_ITEMS.find(i => i.id === id) || {}).label || 'Sett
 export default function AppSettings() {
   const s = useAppSettings();
   const status = s.integrationStatus || {};
+  const isOwner = useIsOwner();
+
+  // Drop owner-only entries for everyone else, and drop a group that empties out.
+  const groups = GROUPS
+    .map(g => ({ ...g, items: g.items.filter(i => !i.ownerOnly || isOwner) }))
+    .filter(g => g.items.length > 0);
 
   const textPri = 'text-[var(--text-primary)]';
   const textSec = 'text-[var(--text-secondary)]';
@@ -82,7 +93,7 @@ export default function AppSettings() {
           <select value={s.activeTab} onChange={e => s.setActiveTab(e.target.value)}
             className="w-full h-10 px-3 rounded-md text-sm bg-[var(--bg-card)] border border-[var(--border-color)] text-[var(--text-primary)]"
             data-testid="settings-tab-select">
-            {GROUPS.map(g => (
+            {groups.map(g => (
               <optgroup key={g.label} label={g.label}>
                 {g.items.map(i => <option key={i.id} value={i.id}>{i.label}</option>)}
               </optgroup>
@@ -93,7 +104,7 @@ export default function AppSettings() {
         <div className="lg:grid lg:grid-cols-[224px_1fr] lg:gap-6 lg:items-start">
           {/* Desktop: grouped left rail */}
           <nav className="hidden lg:block bg-[var(--bg-card)] border border-[var(--border-color)] rounded-xl p-2 sticky top-4 space-y-3">
-            {GROUPS.map(group => (
+            {groups.map(group => (
               <div key={group.label}>
                 <p className="px-3 pt-2 pb-1 text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">{group.label}</p>
                 {group.items.map(item => {
@@ -244,6 +255,8 @@ export default function AppSettings() {
             )}
 
             {s.activeTab === 'security' && <SecurityTab />}
+
+            {s.activeTab === 'deleted' && isOwner && <RecentlyDeleted />}
           </div>
         </div>
       </div>

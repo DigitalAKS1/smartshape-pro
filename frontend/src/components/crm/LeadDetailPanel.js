@@ -420,11 +420,18 @@ export default function LeadDetailPanel({
                           <span className={`${textPri} font-medium truncate`}>{seq?.name || enr.sequence_id}</span>
                           <span className={`${textMuted} flex-shrink-0`}>Step {(enr.current_step || 0) + 1}</span>
                           {enr.next_step_at && <span className={`${textMuted} flex-shrink-0`}>· Next: {formatDate(enr.next_step_at)}</span>}
+                          {enr.status === 'paused' && enr.paused_reason && (
+                            <span className="text-yellow-500 truncate" title={enr.paused_reason}>· {enr.paused_reason}</span>
+                          )}
                         </div>
                         <div className="flex items-center gap-1 flex-shrink-0 ml-2">
+                          {/* Paused is its own state, not a shade of stopped: the
+                              executor halted this school after repeated send
+                              failures, and it will never move again on its own. */}
                           <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
                             enr.status === 'active' ? 'bg-green-500/20 text-green-400'
                             : enr.status === 'completed' ? 'bg-blue-500/20 text-blue-400'
+                            : enr.status === 'paused' ? 'bg-yellow-500/20 text-yellow-400'
                             : 'bg-gray-500/20 text-gray-400'
                           }`}>{enr.status}</span>
                           {enr.status === 'active' && (
@@ -436,8 +443,28 @@ export default function LeadDetailPanel({
                                   toast.success('Enrollment cancelled');
                                 } catch { toast.error('Failed to cancel'); }
                               }}
+                              title="Stop this sequence for this lead"
                               className="text-red-400 h-6 w-6 p-0">
                               <X className="h-3 w-3" />
+                            </Button>
+                          )}
+                          {/* Putting a school back into a sequence was a
+                              server-only capability with no button, so a pause or
+                              a mis-click was permanent. */}
+                          {(enr.status === 'paused' || enr.status === 'cancelled') && (
+                            <Button size="sm" variant="ghost"
+                              onClick={async () => {
+                                try {
+                                  await dripSequencesApi.resumeEnrollment(enr.enrollment_id);
+                                  setLeadEnrollments(prev => prev.map(e => e.enrollment_id === enr.enrollment_id
+                                    ? { ...e, status: 'active', paused_reason: '' } : e));
+                                  toast.success('Back in the sequence — the next step runs shortly');
+                                } catch (e) { toast.error(e?.response?.data?.detail || 'Could not resume'); }
+                              }}
+                              title="Put this lead back into the sequence, starting from the step it stopped on"
+                              data-testid={`resume-enrollment-${enr.enrollment_id}`}
+                              className="text-green-400 h-6 px-1.5 text-[10px]">
+                              Resume
                             </Button>
                           )}
                         </div>
