@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Request
 
 from database import db
+from notify import notify_user
 from auth_utils import get_current_user
 from rbac import get_team, has_team
 from services import telephony_service
@@ -140,13 +141,10 @@ async def forward_telephony_call(event_id: str, request: Request):
     phone = row.get("target_phone") or ""
     body_txt = (f"{user.get('name', 'A colleague')} forwarded a call ({phone}) to you."
                 + (f" Note: {note}" if note else ""))
-    await db.crm_notifications.insert_one({
-        "notif_id": f"crmn_{uuid.uuid4().hex[:10]}",
-        "email": to_email, "type": "call_forward",
-        "title": "Call forwarded to you", "body": body_txt,
-        "ref_type": ref_type, "ref_id": ref_id, "from_name": user.get("name", ""),
-        "is_read": False, "created_at": _now(),
-    })
+    await notify_user(
+        to_email, type="call_forward",
+        title="Call forwarded to you", body=body_txt,
+        ref_type=ref_type, ref_id=ref_id, from_name=user.get("name", ""))
     await db.telephony_calls.update_one({"event_id": event_id},
         {"$set": {"forwarded_to": to_email, "forwarded_by": user["email"],
                   "forwarded_at": _now()}})

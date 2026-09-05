@@ -19,6 +19,7 @@ from audit_backup import snapshot_and_delete, preview_counts
 from cascade_delete import build_school_plan, build_contact_plan
 from services.engagement import normalize_timeline, fetch_events, log_engagement_event
 import crm_contact_calls as cc
+from notify import notify_user
 
 router = APIRouter()
 
@@ -2066,13 +2067,12 @@ async def mail_qr_interest(qr_token: str, request: Request):
 
         # ping the owner instantly (bell + WhatsApp) so a hot lead doesn't wait in a list
         if owner:
-            await db.crm_notifications.insert_one({
-                "notif_id": f"crmn_{uuid.uuid4().hex[:10]}",
-                "email": owner, "type": "qr_interest",
-                "title": "📩 Hot lead from a mailer",
-                "body": f"{school_name} scanned your mailer — {detail}",
-                "ref_type": "school", "ref_id": t.get("school_id", ""),
-                "from_name": name or "Direct-mail QR", "is_read": False, "created_at": now_iso})
+            await notify_user(
+                owner, type="qr_interest",
+                title="📩 Hot lead from a mailer",
+                body=f"{school_name} scanned your mailer — {detail}",
+                ref_type="school", ref_id=t.get("school_id", ""),
+                from_name=name or "Direct-mail QR")
             # reps live on their phones — also WhatsApp them the hot lead
             urep = await db.users.find_one({"email": owner},
                                            {"_id": 0, "phone": 1, "calling_number": 1}) or {}
@@ -3515,6 +3515,48 @@ async def _assign_school_cascade(school_id: str, assigned_to: str, assigned_name
     return {"contacts": cres.modified_count, "leads": moved}
 
 
+# ── Cross-owner courtesy ────────────────────────────────────────────────────
+
+async def notify_school_owner(school_id: str, actor: dict, what: str,
+                              ref_type: str = "school", tail: str = "It is still assigned to you."):
+    """Tell a school's owner when somebody else creates work against it.
+
+    Reps can now find schools they don't own when starting a lead or a
+    quotation (that is what stops them creating a second copy of the school).
+    Using one must never be silent: the owner learns from their bell, not from
+    stumbling over a quotation on their own account weeks later.
+
+    Nothing is transferred and nothing is blocked — this is a courtesy, so it
+    never raises. Skipped when the school has no owner, when the actor IS the
+    owner, or when that owner has turned Auto Sync off.
+    """
+    try:
+        sid = (school_id or "").strip()
+        if not sid:
+            return
+        school = await db.schools.find_one(
+            {"school_id": sid}, {"_id": 0, "assigned_to": 1, "school_name": 1})
+        owner = ((school or {}).get("assigned_to") or "").strip()
+        if not owner or owner == (actor.get("email") or "").strip():
+            return
+        # Auto Sync: absent means on, so nobody silently stops being told.
+        prefs = await db.users.find_one(
+            {"email": owner}, {"_id": 0, "notify_on_cross_owner": 1}) or {}
+        if prefs.get("notify_on_cross_owner") is False:
+            return
+        actor_name = actor.get("name") or actor.get("email") or "A colleague"
+        name = (school or {}).get("school_name") or "one of your schools"
+        await notify_user(
+            owner,
+            type="cross_owner_work",
+            title="Someone is working on your school",
+            body=f"{actor_name} created {what} on {name}. {tail}",
+            ref_type=ref_type, ref_id=sid, from_name=actor_name,
+        )
+    except Exception:
+        pass   # never let a courtesy ping fail the thing the user actually did
+
+
 @router.get("/schools")
 async def get_schools(request: Request):
     user = await get_current_user(request)
@@ -3523,9 +3565,16 @@ async def get_schools(request: Request):
         return []
     if sees_all(user, "leads"):
         query = {}
-    else:  # own-scoped — owned schools + created + schools holding their leads
+    else:  # own-scoped — owned + created + schools holding their leads OR quotations
         own_leads = await db.leads.find({"assigned_to": user["email"]}, {"_id": 0, "school_id": 1}).to_list(10000)
-        linked_school_ids = [l.get("school_id") for l in own_leads if l.get("school_id")]
+        # A quotation links a school exactly as a lead does. Without this, a rep
+        # who quoted another rep's school could not see it again afterwards —
+        # so her own quotation would vanish from her CRM the moment she saved it.
+        own_quotes = await db.quotations.find(
+            {"$or": [{"assigned_to": user["email"]}, {"created_by": user["email"]}],
+             "is_deleted": {"$ne": True}},
+            {"_id": 0, "school_id": 1}).to_list(10000)
+        linked_school_ids = [r.get("school_id") for r in (own_leads + own_quotes) if r.get("school_id")]
         query = {"$or": [
             *_owner_clause(user["email"])["$or"],
             {"school_id": {"$in": linked_school_ids}} if linked_school_ids else {"school_id": "__none__"},
@@ -3533,6 +3582,42 @@ async def get_schools(request: Request):
     query["is_deleted"] = {"$ne": True}
     schools = await db.schools.find(query, {"_id": 0}).sort("school_name", 1).to_list(10000)
     return schools
+
+
+@router.get("/schools/lookup")
+async def school_lookup(request: Request):
+    """Find a school by name or city across EVERY owner, thinly.
+
+    GET /schools hides other reps' schools, which is right for the CRM list and
+    wrong at the two moments a rep starts new work: the lead form and the
+    quotation builder. There, an invisible school isn't protected — it's
+    duplicated, because "Add New" is the only door left open.
+
+    So this searches all owners but returns only what identifies the school and
+    says who to talk to. Phone, email, address, strength and contacts stay with
+    the owner; ownership still protects the account, just not its existence.
+    A two-character minimum and a hard cap keep it a lookup, not an export.
+    """
+    user = await get_current_user(request)
+    require_module(user, "leads", "read_write")
+    q = (request.query_params.get("q") or "").strip()
+    if len(q) < 2:
+        return []
+    rx = {"$regex": re.escape(q), "$options": "i"}
+    rows = await db.schools.find(
+        {"is_deleted": {"$ne": True}, "$or": [{"school_name": rx}, {"city": rx}]},
+        {"_id": 0, "school_id": 1, "school_name": 1, "city": 1,
+         "assigned_to": 1, "assigned_name": 1},
+    ).sort("school_name", 1).to_list(20)
+    me = user["email"]
+    return [{
+        "school_id": r.get("school_id", ""),
+        "school_name": r.get("school_name", ""),
+        "city": r.get("city", ""),
+        "assigned_to": r.get("assigned_to", ""),
+        "assigned_name": r.get("assigned_name", ""),
+        "is_mine": (r.get("assigned_to") or "") == me,
+    } for r in rows]
 
 
 @router.post("/schools")
@@ -5085,6 +5170,13 @@ async def create_lead(request: Request):
     asyncio.create_task(_auto_enroll_lead(lead_doc))
     if school_id:
         await touch_last_activity("school", school_id)
+        # Leads inherit the SCHOOL's owner (see _apply_owner), so a lead Parul
+        # starts on Amit's school is assigned to Amit. That is the territory
+        # model working, but it means work silently appears on his plate —
+        # which is precisely why he has to be told.
+        await notify_school_owner(
+            school_id, user, "a lead", ref_type="lead",
+            tail="It has been assigned to you.")
     return await db.leads.find_one({"lead_id": lead_id}, {"_id": 0})
 
 

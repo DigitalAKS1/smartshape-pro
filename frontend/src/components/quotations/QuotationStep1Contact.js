@@ -229,6 +229,14 @@ export default function QuotationStep1Contact({
                           <div className="min-w-0">
                             <p className={`text-sm font-medium ${tPri} truncate`}>{s.school_name}</p>
                             <p className={`text-xs ${tMut} truncate`}>{[s.school_type, s.city].filter(Boolean).join(' · ')}</p>
+                            {/* A cross-owner row must say whose it is, or she
+                                cannot tell she is about to quote someone else's
+                                account — and cannot tell who to talk to. */}
+                            {s.is_mine === false && (
+                              <p className="text-[11px] text-yellow-500 truncate" data-testid={`school-owner-${s.school_id}`}>
+                                {s.assigned_name || s.assigned_to} — they'll be notified
+                              </p>
+                            )}
                           </div>
                         </button>
                       ))}

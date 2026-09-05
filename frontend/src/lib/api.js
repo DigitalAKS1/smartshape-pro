@@ -397,6 +397,10 @@ export const mailRuns = {
   replan: (id, payload) => API.post(`/mail-runs/${id}/replan`, payload),
   gapReport: (params = {}) => API.get('/mail-runs/gap-report', { params }),
   bulkTagSchools: (data) => API.post('/schools/bulk-tag', data),
+  // Thin cross-owner search for the lead and quotation pickers: name, city and
+  // owner only. getAll() is own-scoped, which is right for the CRM list and is
+  // what made reps create a duplicate rather than find the school.
+  lookup: (q) => API.get('/schools/lookup', { params: { q } }),
   recordWaConsent: (data) => API.post('/schools/wa-consent', data),
   todayQueue: (date) => API.get('/mail-runs/today-queue', { params: date ? { date } : {} }),
   queueStickers: (params = {}) => API.get('/mail-runs/queue-stickers.pdf', { params: { ...params, _ts: Date.now() }, responseType: 'blob' }),

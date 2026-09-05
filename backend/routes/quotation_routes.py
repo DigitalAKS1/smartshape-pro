@@ -573,7 +573,18 @@ async def create_quotation(request: Request):
         await _crm_hook_quotation(quot_doc)
     except Exception as _e:
         logging.warning(f"CRM hook for quotation failed: {_e}")
-    return await db.quotations.find_one({"quotation_id": quotation_id}, {"_id": 0})
+    saved = await db.quotations.find_one({"quotation_id": quotation_id}, {"_id": 0})
+    # A rep can now find and quote a school she doesn't own, which is what stops
+    # her creating a second copy of it. The owner hears about it from their bell
+    # rather than discovering the quotation on their own account later.
+    #
+    # Read the SAVED doc for the school id: _auto_register_from_quotation
+    # resolves a typed school name to an id after the insert, so quot_doc's own
+    # copy is still blank whenever the rep typed rather than picked.
+    from routes.crm_routes import notify_school_owner   # lazy: avoid import cycle
+    await notify_school_owner(
+        (saved or {}).get("school_id", ""), user, "a quotation", ref_type="quotation")
+    return saved
 
 
 @router.put("/quotations/{quotation_id}")

@@ -229,7 +229,8 @@ async def admin_update_user(user_id: str, request: Request):
 
     body = await request.json()
     allowed_fields = {}
-    for key in ("name", "role", "roles", "phone", "calling_number", "designation", "sales_role", "assigned_modules", "is_active", "module_permissions"):
+    for key in ("name", "role", "roles", "phone", "calling_number", "designation", "sales_role",
+                "assigned_modules", "is_active", "module_permissions", "notify_on_cross_owner"):
         if key in body:
             allowed_fields[key] = body[key]
 
@@ -973,6 +974,25 @@ def _notif_scope_query(user):
         {"assigned_to": user["email"]},
         {"target_roles": user.get("role")},
     ]}
+
+
+@router.put("/me/preferences")
+async def update_my_preferences(request: Request):
+    """A user's own notification preferences. No admin needed.
+
+    Currently one switch: notify_on_cross_owner ("Auto Sync") — whether to be
+    told when a colleague starts a lead or a quotation on a school assigned to
+    you. Absent means on, so nobody silently stops being told.
+    """
+    user = await get_current_user(request)
+    body = await request.json()
+    allowed = {}
+    if "notify_on_cross_owner" in body:
+        allowed["notify_on_cross_owner"] = bool(body["notify_on_cross_owner"])
+    if not allowed:
+        raise HTTPException(status_code=400, detail="No known preference in the request")
+    await db.users.update_one({"email": user["email"]}, {"$set": allowed})
+    return {"ok": True, **allowed}
 
 
 @router.get("/notifications")

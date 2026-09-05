@@ -24,6 +24,7 @@ from email.mime.text import MIMEText
 import httpx
 
 from database import db
+from notify import notify_user
 from services.evolution_client import evolution
 from routes.fms_routes import get_fms_settings, render_template, pct_remaining
 from routes.crm_routes import (
@@ -587,20 +588,18 @@ async def run_drip_executor():
                                   f"step {step['step_number']} ({msg_type}) could not be sent"}})
                     owner = lead.get("assigned_to", "")
                     if owner:
-                        await db.crm_notifications.insert_one({
-                            "notif_id": f"crmn_{uuid.uuid4().hex[:10]}",
-                            "email": owner, "type": "drip_stalled",
-                            "dedup_key": f"dripstall:{enr['enrollment_id']}",
-                            "title": "⚠️ A drip sequence has stalled",
-                            "body": (f"\"{seq.get('name', 'A sequence')}\" could not send step "
-                                     f"{step['step_number']} to {lead.get('company_name', 'a school')} "
-                                     f"after {fails} tries, so it is paused. "
-                                     + (f"Reason: {err_detail}. " if err_detail else
-                                        f"The {msg_type} channel looks unconfigured. ")
-                                     + "Nothing further will be sent until this is fixed."),
-                            "ref_type": "lead", "ref_id": enr["lead_id"],
-                            "from_name": "Drip sequence", "is_read": False,
-                            "created_at": now_iso})
+                        await notify_user(
+                            owner, type="drip_stalled",
+                            dedup_key=f"dripstall:{enr['enrollment_id']}",
+                            title="⚠️ A drip sequence has stalled",
+                            body=(f"\"{seq.get('name', 'A sequence')}\" could not send step "
+                                  f"{step['step_number']} to {lead.get('company_name', 'a school')} "
+                                  f"after {fails} tries, so it is paused. "
+                                  + (f"Reason: {err_detail}. " if err_detail else
+                                     f"The {msg_type} channel looks unconfigured. ")
+                                  + "Nothing further will be sent until this is fixed."),
+                            ref_type="lead", ref_id=enr["lead_id"],
+                            from_name="Drip sequence")
                     log.warning(f"[drip] {enr['enrollment_id']} PAUSED after {fails} failed "
                                 f"attempts on step {step['step_number']} ({msg_type})")
                 else:
@@ -1798,24 +1797,20 @@ async def run_mail_overdue_nudge():
         by_run.setdefault(t.get("run_id", ""), []).append(t)
 
     for run_id, touches in by_run.items():
-        dedup = f"mailnudge:{run_id}:{today}"
-        if await db.crm_notifications.find_one({"dedup_key": dedup}, {"_id": 0, "notif_id": 1}):
-            continue
         run = await db.mail_runs.find_one({"run_id": run_id}, {"_id": 0}) or {}
         owner = touches[0].get("owner") or run.get("created_by") or ""
         if not owner:
             continue
         n = len(touches)
-        await db.crm_notifications.insert_one({
-            "notif_id": f"crmn_{uuid.uuid4().hex[:10]}",
-            "email": owner, "type": "mail_overdue", "dedup_key": dedup,
-            "title": "📮 Post still waiting to go out",
-            "body": (f"{n} piece{'s' if n != 1 else ''} from \"{run.get('name', 'a mail run')}\" "
-                     f"{'were' if n != 1 else 'was'} planned earlier and "
-                     f"{'have' if n != 1 else 'has'} not been posted yet."),
-            "ref_type": "mail_run", "ref_id": run_id,
-            "from_name": "Offline Mail", "is_read": False,
-            "created_at": now.isoformat()})
+        # notify_user does the de-duplication (per recipient, while unread), so
+        # the nudge doesn't repeat every hour until the post actually goes out.
+        await notify_user(
+            owner, type="mail_overdue", dedup_key=f"mailnudge:{run_id}:{today}",
+            title="📮 Post still waiting to go out",
+            body=(f"{n} piece{'s' if n != 1 else ''} from \"{run.get('name', 'a mail run')}\" "
+                  f"{'were' if n != 1 else 'was'} planned earlier and "
+                  f"{'have' if n != 1 else 'has'} not been posted yet."),
+            ref_type="mail_run", ref_id=run_id, from_name="Offline Mail")
         log.info(f"[mail] overdue nudge → {owner}: {n} piece(s) on run {run_id}")
 
 

@@ -243,12 +243,35 @@ export default function useCreateQuotation() {
   };
 
   // ── School autocomplete helpers ──────────────────────────────────────────
-  const filteredSchools = schoolQuery.trim()
+  //
+  // schoolsList is own-scoped, so a school belonging to another rep never
+  // appeared here — and the only door left was "add a new school", which is how
+  // a second copy of it gets created. The cross-owner lookup adds those schools
+  // back, thinly: name, city and owner, nothing else.
+  const [crossOwnerSchools, setCrossOwnerSchools] = useState([]);
+  useEffect(() => {
+    const q = schoolQuery.trim();
+    if (q.length < 2) { setCrossOwnerSchools([]); return; }
+    const id = setTimeout(async () => {
+      try {
+        const r = await schoolsApi.lookup(q);
+        setCrossOwnerSchools((Array.isArray(r.data) ? r.data : []).filter(x => !x.is_mine));
+      } catch { setCrossOwnerSchools([]); }
+    }, 250);
+    return () => clearTimeout(id);
+  }, [schoolQuery]);
+
+  const ownMatches = schoolQuery.trim()
     ? schoolsList.filter(s =>
         s.school_name?.toLowerCase().includes(schoolQuery.toLowerCase()) ||
         s.city?.toLowerCase().includes(schoolQuery.toLowerCase())
       ).slice(0, 8)
     : [];
+  const ownIds = new Set(ownMatches.map(s => s.school_id));
+  const filteredSchools = [
+    ...ownMatches,
+    ...crossOwnerSchools.filter(s => !ownIds.has(s.school_id)).slice(0, 6),
+  ];
 
   const pickSchool = (school) => {
     const name = school.school_name;

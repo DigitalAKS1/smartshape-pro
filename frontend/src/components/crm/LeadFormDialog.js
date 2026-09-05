@@ -9,6 +9,7 @@ import { tags as tagsApi, dealTypes } from '../../lib/api';
 import InterestedProductField from './InterestedProductField';
 import AddressFields from './AddressFields';
 import AssignToPicker from './AssignToPicker';
+import SchoolPicker from './SchoolPicker';
 
 export default function LeadFormDialog({
   open, onOpenChange,
@@ -64,10 +65,16 @@ export default function LeadFormDialog({
                   <Input type="number" value={newSchool.school_strength} onChange={e => setNewSchool({...newSchool, school_strength: parseInt(e.target.value) || 0})} placeholder="Strength (students)" className={`${inputCls} text-sm`} />
                 </div>
               ) : (
-                <select value={leadForm.school_id} onChange={e => setLeadForm({...leadForm, school_id: e.target.value, contact_id: '', contact_name: '', contact_phone: '', contact_email: '', contact_role_id: '', designation: ''})} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`} data-testid="school-select">
-                  <option value="">Select school</option>
-                  {schoolsList.map(s => <option key={s.school_id} value={s.school_id}>{s.school_name} ({s.city})</option>)}
-                </select>
+                /* A dropdown can only offer what this rep already owns, and
+                   cannot say "this one is Amit's" — so a school she doesn't own
+                   was simply absent, and Add New was the only door left. */
+                <SchoolPicker
+                  value={leadForm.school_id}
+                  schoolsList={schoolsList}
+                  inputCls={inputCls}
+                  onChange={(school_id) => setLeadForm({ ...leadForm, school_id, contact_id: '', contact_name: '', contact_phone: '', contact_email: '', contact_role_id: '', designation: '' })}
+                  testId="school-select"
+                />
               )}
             </div>
           )}
