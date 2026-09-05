@@ -29,7 +29,6 @@ export default function ImportCenter() {
   const textSec = 'text-[var(--text-secondary)]';
   const textMuted = 'text-[var(--text-muted)]';
 
-  const SCHOOL_COLS = 'school_name, email, phone, school_type, city, state, contact_name, password';
 
   // Load all field definitions on mount
   useEffect(() => {
@@ -115,6 +114,23 @@ export default function ImportCenter() {
     });
   }, [preview, mapping]);
 
+  // Says what changed in the CRM, not how many spreadsheet rows went by. The
+  // export writes one row per contact, so 20 schools is ~47 rows; "47 updated"
+  // read as if the import had duplicated everything.
+  const summarize = (r) => {
+    const n = (count, one, many) => `${count} ${count === 1 ? one : many}`;
+    const parts = [];
+    if (r.counts?.create) parts.push(`${n(r.counts.create, 'school', 'schools')} added`);
+    if (r.counts?.update) parts.push(`${n(r.counts.update, 'school', 'schools')} updated`);
+    if (r.contacts) parts.push(n(r.contacts, 'contact', 'contacts'));
+    if (r.leads) parts.push(n(r.leads, 'lead', 'leads'));
+    if (r.reassigned) parts.push(`${n(r.reassigned, 'school', 'schools')} reassigned`);
+    if (r.counts?.needs_review) parts.push(`${n(r.counts.needs_review, 'row', 'rows')} need review`);
+    if (r.counts?.error) parts.push(`${n(r.counts.error, 'row', 'rows')} failed`);
+    if (parts.length === 0) return 'Nothing changed';
+    return parts.join(' · ');
+  };
+
   const runExecute = async () => {
     if (!preview) return;
     setImporting(true);
@@ -123,9 +139,7 @@ export default function ImportCenter() {
       const confirm_reassign_school_ids = Object.keys(confirmReassign).filter(id => confirmReassign[id]);
       const res = await masterImport.execute({ rows_keyed, mapping, create_leads: createLeads, confirm_reassign_school_ids });
       setResult(res.data);
-      const errCount = (res.data.errors || res.data.counts?.error) ? (res.data.errors?.length ?? res.data.counts?.error ?? 0) : 0;
-      const reMsg = res.data.reassigned ? `, ${res.data.reassigned} reassigned` : '';
-      toast.success(`Import complete: ${res.data.counts?.create || 0} created, ${res.data.counts?.update || 0} updated${reMsg}${errCount ? `, ${errCount} error(s)` : ''}`);
+      toast.success(`Imported — ${summarize(res.data)}`);
       setPreview(null); setMapping([]); setConfirmReassign({});
     } catch { toast.error('Import failed'); }
     setImporting(false);
@@ -224,7 +238,11 @@ export default function ImportCenter() {
               <div className={`inline-flex items-center gap-2 px-4 py-2 rounded-md border text-sm font-medium bg-[#e94560] text-white border-[#e94560]`} data-testid="entity-type-school">
                 Importing: School master data (School + Contact + Lead)
               </div>
-              <p className={`text-xs ${textMuted}`}>Expected columns: <code className="bg-[var(--bg-primary)] px-1.5 py-0.5 rounded text-[11px]">{SCHOOL_COLS}</code></p>
+              <p className={`text-xs ${textMuted}`}>
+                Every column is matched by its heading, so column order doesn't matter and
+                spellings like “Mobile” or “Contact Phone” are understood. Start from
+                <strong className={textSec}> Export all</strong> below to get the exact headings this CRM uses.
+              </p>
             </div>
 
             {/* Step 2: Upload */}
@@ -246,6 +264,21 @@ export default function ImportCenter() {
                     <Download className="h-3.5 w-3.5" /> Template (with IDs)
                   </Button>
                 </div>
+              </div>
+              {/* Three rules decide whether a re-upload does what the reader
+                  expected. None of them were written down anywhere, so the only
+                  way to learn them was to overwrite something. */}
+              <div className="rounded-md border border-[var(--border-color)] bg-[var(--bg-primary)] p-3 text-xs leading-relaxed" data-testid="roundtrip-help">
+                <p className={textSec}>
+                  <strong className={textPri}>Editing your data in Excel:</strong> export, change what you need, upload the same file back.
+                </p>
+                <ul className={`mt-1.5 space-y-1 ${textMuted}`}>
+                  <li>· <strong className={textSec}>Leave School ID and Contact ID alone.</strong> They're how a row finds the record it belongs to. Clear them and you'll get a new record instead of an edit.</li>
+                  <li>· <strong className={textSec}>Delete a column you don't want to touch.</strong> Anything not in the file is left exactly as it is.</li>
+                  <li>· <strong className={textSec}>An empty cell empties the field.</strong> That's how you clear a value — so don't blank a cell you only meant to skip.</li>
+                  <li>· A school with several contacts exports one row per contact, repeating the school's own columns on each.</li>
+                  <li>· Add a row with no School ID to create a new school.</li>
+                </ul>
               </div>
               <div className="bg-[var(--bg-primary)] border-2 border-dashed border-[var(--border-color)] rounded-md p-8 text-center cursor-pointer hover:border-[#e94560]/40 transition-all"
                 onClick={() => fileRef.current?.click()} data-testid="import-upload-area">
@@ -481,9 +514,10 @@ export default function ImportCenter() {
               <div className={`${card} border rounded-md p-5 text-center`}>
                 <CheckCircle className="h-12 w-12 text-green-400 mx-auto mb-3" />
                 <p className={`text-lg font-medium ${textPri}`}>Import Complete</p>
-                <p className={`text-sm ${textSec} mt-1`}>
-                  {result.counts?.create ?? 0} created, {result.counts?.update ?? 0} updated, {result.counts?.error ?? 0} failed
-                </p>
+                <p className={`text-sm ${textSec} mt-1`} data-testid="import-summary">{summarize(result)}</p>
+                {result.rows != null && (
+                  <p className={`text-xs ${textMuted} mt-0.5`}>from {result.rows} row{result.rows === 1 ? '' : 's'} in the file</p>
+                )}
                 {Array.isArray(result.warnings) && result.warnings.length > 0 && (
                   <div className="mt-3 text-left text-xs text-yellow-400 max-h-40 overflow-auto" data-testid="import-warnings">
                     {result.warnings.slice(0, 50).map((w, i) => (

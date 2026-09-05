@@ -123,12 +123,23 @@ async def import_preview(
     # Reassign-on-import: which EXISTING schools would change owner. Bounded scan
     # (owner reassignment is typically a small, targeted import); the UI renders
     # these as a confirm-before-commit review panel.
+    # Deduped by school: the export writes one row per CONTACT, so a school with
+    # a Principal, a Director and a coordinator produces three identical owner
+    # changes. Listing the same school three times in a confirm-before-commit
+    # panel makes the admin think three different things are about to happen.
     reassignments = []
+    seen_plans = set()
     for kr in keyed[:2000]:
         try:
             plan = await _reassign_plan_for_row(kr)
-            if plan and plan["status"] in ("reassign", "owner_unmatched"):
-                reassignments.append(plan)
+            if not plan or plan["status"] not in ("reassign", "owner_unmatched"):
+                continue
+            fingerprint = (plan["status"], plan.get("school_id"),
+                           plan.get("school_name"), plan.get("raw_owner"))
+            if fingerprint in seen_plans:
+                continue
+            seen_plans.add(fingerprint)
+            reassignments.append(plan)
         except Exception:
             pass
 
@@ -181,6 +192,13 @@ async def import_execute(payload: dict, user: dict = Depends(get_current_user)):
                 {"$addToSet": {"aliases": fr.normalize_header(m["source"])}},
             )
 
+    # Counted by ENTITY, not by row. The export writes one row per contact, so a
+    # 20-school file is 47 rows; reporting "47 updated" for 20 schools reads like
+    # the import duplicated everything, with no way to tell that it hadn't.
+    created_schools: set = set()
+    updated_schools: set = set()
+    touched_contacts: set = set()
+    touched_leads: set = set()
     counts = {"create": 0, "update": 0, "needs_review": 0, "error": 0}
     errors: list = []      # {row, entity, error} — no longer swallowed to a count
     warnings: list = []    # {row, entity, field, message} — e.g. lossy phones
@@ -188,7 +206,17 @@ async def import_execute(payload: dict, user: dict = Depends(get_current_user)):
     for idx, kr in enumerate(rows):
         try:
             result = await ie.commit_row(db, kr, user, create_leads)
-            counts[result["action"]] += 1
+            action, sid = result["action"], result.get("school_id")
+            if action == "create" and sid:
+                created_schools.add(sid)
+            elif action == "update" and sid and sid not in created_schools:
+                updated_schools.add(sid)
+            elif not sid:
+                counts[action] += 1          # needs_review — no school to count
+            if result.get("contact_id"):
+                touched_contacts.add(result["contact_id"])
+            if result.get("lead_id"):
+                touched_leads.add(result["lead_id"])
             for w in (result.get("warnings") or []):
                 warnings.append({"row": idx, **w})
             # Cascade-reassign an EXISTING school's owner when the admin confirmed
@@ -210,9 +238,17 @@ async def import_execute(payload: dict, user: dict = Depends(get_current_user)):
             counts["error"] += 1
             errors.append({"row": idx, "entity": "row", "error": str(exc)})
 
+    counts["create"] = len(created_schools)
+    counts["update"] = len(updated_schools)
+
     log = {
         "by": user.get("email"),
         "counts": counts,
+        # Rows read vs. entities written — the two differ by design now, so both
+        # are reported rather than leaving the reader to guess which they saw.
+        "rows": len(rows),
+        "contacts": len(touched_contacts),
+        "leads": len(touched_leads),
         "errors": errors,
         "warnings": warnings,
         "reassigned": reassigned,
