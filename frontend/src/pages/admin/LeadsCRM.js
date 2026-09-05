@@ -334,7 +334,8 @@ export default function LeadsCRM() {
           <div className="flex-1 min-w-0 space-y-5">
 
         {/* ── Forecast + needs-attention summary ─────────────────────── */}
-        <ForecastBar leads={crm.masterFiltered.leads} filterActive={anyFilterActive} />
+        <ForecastBar leads={crm.masterFiltered.leads} filterActive={anyFilterActive}
+          onPickLead={(row) => { const l = crm.leadsList.find(x => x.lead_id === row.lead_id); if (l) crm.openDetail(l); }} />
 
         {/* ── View Toggle + Bulk Actions ─────────────────────────────── */}
         {crm.activeTab === 'pipeline' && (

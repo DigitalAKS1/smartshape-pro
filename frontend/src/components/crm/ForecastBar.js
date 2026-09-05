@@ -2,23 +2,27 @@ import React, { useEffect, useState } from 'react';
 import { leads as leadsApi } from '../../lib/api';
 import { TrendingUp, AlertTriangle, Layers } from 'lucide-react';
 import { STAGES } from '../../lib/crmConstants';
+import NeedsAttentionPanel from './NeedsAttentionPanel';
 
 const inr = (n) => `₹${Math.round(n || 0).toLocaleString('en-IN')}`;
 
-function Stat({ label, value, sub, icon: Icon, tone }) {
+function Stat({ label, value, sub, icon: Icon, tone, onClick }) {
   const toneCls = {
     accent: 'text-[#e94560]',
     warn: 'text-orange-400',
     ok: 'text-green-400',
   }[tone] || 'text-[var(--text-primary)]';
+  const Tag = onClick ? 'button' : 'div';
   return (
-    <div className="bg-[var(--bg-card)] border border-[var(--border-color)] rounded-lg px-3 py-2">
+    <Tag
+      {...(onClick ? { type: 'button', onClick } : {})}
+      className={`bg-[var(--bg-card)] border border-[var(--border-color)] rounded-lg px-3 py-2 text-left w-full ${onClick ? 'hover:border-[#e94560] focus:outline-none focus-visible:border-[#e94560]' : ''}`}>
       <div className="flex items-center gap-1.5 text-[var(--text-muted)] text-[11px]">
         {Icon && <Icon className="h-3 w-3" />} {label}
       </div>
       <div className={`text-lg font-semibold leading-tight ${toneCls}`}>{value}</div>
       {sub && <div className="text-[10px] text-[var(--text-muted)] mt-0.5">{sub}</div>}
-    </div>
+    </Tag>
   );
 }
 
@@ -29,9 +33,12 @@ function Stat({ label, value, sub, icon: Icon, tone }) {
 // is filtered exactly by intersecting with `leads`, since that's just row
 // membership. `filterActive` shows a small note so the distinction is honest,
 // not silently inconsistent.
-export default function ForecastBar({ leads, filterActive = false }) {
+export default function ForecastBar({ leads, filterActive = false, onPickLead }) {
   const [fc, setFc] = useState(null);
   const [attn, setAttn] = useState([]);
+  // The count was a dead end: the list behind it was fetched only to be
+  // counted, so the one number that could say where to start said how many.
+  const [attnOpen, setAttnOpen] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -89,6 +96,7 @@ export default function ForecastBar({ leads, filterActive = false }) {
         value={String(scopedAttn.length)}
         tone={scopedAttn.length ? 'warn' : 'ok'}
         icon={AlertTriangle}
+        onClick={() => setAttnOpen(true)}
         sub={`${reasonCount('overdue')} overdue · ${reasonCount('stuck')} stuck · ${reasonCount('no_next_action')} no next step${filterActive ? ' · filtered' : ''}`}
       />
       <Stat
@@ -96,6 +104,12 @@ export default function ForecastBar({ leads, filterActive = false }) {
         value={topStage ? topStage.label : '—'}
         icon={Layers}
         sub={topStage ? `${topStage.count} leads · ${inr(topStage.weighted)}` : 'No open leads'}
+      />
+      <NeedsAttentionPanel
+        open={attnOpen}
+        onOpenChange={setAttnOpen}
+        rows={scopedAttn}
+        onPick={(row) => { setAttnOpen(false); onPickLead && onPickLead(row); }}
       />
     </div>
   );

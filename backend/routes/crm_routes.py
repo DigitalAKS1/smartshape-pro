@@ -5599,12 +5599,33 @@ async def leads_needs_attention(request: Request):
         open_tasks.add(t["lead_id"])
 
     quote_map = await _build_quote_map(leads)
+
+    # A rep works down this list, so its order is the order of their morning.
+    # Ranking on raw deal value alone puts the loudest number on top even when
+    # that kind of school almost never buys. Expected value — what the deal is
+    # worth times how often comparable schools convert — is a real quantity, and
+    # the fit rate behind it was measured rather than invented (services/fit.py).
+    fit_by_school = {}
+    school_ids = [l.get("school_id") for l in leads if l.get("school_id")]
+    if school_ids:
+        async for sc in db.schools.find(
+            {"school_id": {"$in": school_ids}}, {"_id": 0, "school_id": 1, "fit_rate": 1}):
+            if sc.get("fit_rate") is not None:
+                fit_by_school[sc["school_id"]] = float(sc["fit_rate"])
+
+    today_str = now.date().isoformat()
     out = []
     for lead in leads:
         reasons = compute_attention(
             lead, now, settings,
             lead["lead_id"] in upcoming, lead["lead_id"] in open_tasks)
         if reasons:
+            value = resolve_lead_value(lead, quote_map)
+            fit = fit_by_school.get(lead.get("school_id"))
+            # No fit score means no evidence about this kind of school, which is
+            # not the same as no worth — discounting it to zero would bury every
+            # deal the segment data cannot yet speak to.
+            expected = round(value * fit / 100, 2) if fit is not None else value
             out.append({
                 "lead_id": lead["lead_id"],
                 "company_name": lead.get("company_name", ""),
@@ -5612,10 +5633,16 @@ async def leads_needs_attention(request: Request):
                 "stage": lead.get("stage", ""),
                 "assigned_to": lead.get("assigned_to", ""),
                 "assigned_name": lead.get("assigned_name", ""),
-                "deal_value": resolve_lead_value(lead, quote_map),
+                # deal_value stays the real money; the discount is for ordering.
+                "deal_value": value,
+                "fit_rate": fit,
+                "expected_value": expected,
+                "days_silent": _age_days(lead.get("last_activity_date"), today_str),
                 "reasons": reasons,
             })
-    out.sort(key=lambda x: x["deal_value"], reverse=True)
+    # Longest-silent breaks a tie: between two equally promising deals, the one
+    # nobody has touched is the one at risk.
+    out.sort(key=lambda x: (x["expected_value"], x["days_silent"]), reverse=True)
     return out
 
 

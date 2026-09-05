@@ -215,3 +215,76 @@ def test_the_per_stage_breakdown_is_unchanged(db):
         assert out["by_stage"]["new"]["count"] == 1
         assert out["by_stage"]["new"]["value"] == 10
     _run(go())
+
+
+# ── Whose day is it: the biggest deal, or the best one? ─────────────────────
+
+def test_needs_attention_ranks_by_value_discounted_by_fit(db):
+    """A rep works down this list. Sorting by raw deal value alone puts the
+    loudest number on top even when that kind of school almost never buys.
+
+    Expected value — what it is worth times how often schools like it convert —
+    is a real quantity, and it is the one a rep should spend the morning on.
+    """
+    async def go():
+        # A small deal at a school type that converts, and a big one that doesn't.
+        await db.schools.insert_one({"school_id": "s_good", "fit_rate": 60.0, "is_deleted": False})
+        await db.schools.insert_one({"school_id": "s_bad", "fit_rate": 2.0, "is_deleted": False})
+        await db.leads.insert_many([
+            {"lead_id": "l_good", "school_id": "s_good", "stage": "negotiation",
+             "expected_value": 100000, "last_activity_date": "2020-01-01", "is_deleted": False},
+            {"lead_id": "l_bad", "school_id": "s_bad", "stage": "negotiation",
+             "expected_value": 900000, "last_activity_date": "2020-01-01", "is_deleted": False},
+        ])
+        rows = await crm.leads_needs_attention(FakeRequest())
+        assert [r["lead_id"] for r in rows] == ["l_good", "l_bad"], \
+            "the loud deal outranked the likely one"
+        assert rows[0]["expected_value"] == 60000      # 100,000 x 60%
+        assert rows[0]["fit_rate"] == 60.0
+    _run(go())
+
+
+def test_a_deal_with_no_fit_score_is_ranked_on_its_value_not_buried(db):
+    # "We have no evidence about this kind of school" must not read as "worthless".
+    async def go():
+        await db.schools.insert_one({"school_id": "s_known", "fit_rate": 10.0, "is_deleted": False})
+        await db.schools.insert_one({"school_id": "s_unknown", "is_deleted": False})
+        await db.leads.insert_many([
+            {"lead_id": "l_known", "school_id": "s_known", "stage": "demo",
+             "expected_value": 100000, "last_activity_date": "2020-01-01", "is_deleted": False},
+            {"lead_id": "l_unknown", "school_id": "s_unknown", "stage": "demo",
+             "expected_value": 50000, "last_activity_date": "2020-01-01", "is_deleted": False},
+        ])
+        rows = await crm.leads_needs_attention(FakeRequest())
+        by = {r["lead_id"]: r for r in rows}
+        assert by["l_unknown"]["fit_rate"] is None
+        assert by["l_unknown"]["expected_value"] == 50000   # its own value, undiscounted
+        assert [r["lead_id"] for r in rows] == ["l_unknown", "l_known"]  # 50,000 > 10,000
+    _run(go())
+
+
+def test_two_equal_deals_are_broken_by_which_has_been_silent_longest(db):
+    async def go():
+        await db.schools.insert_one({"school_id": "s1", "fit_rate": 50.0, "is_deleted": False})
+        await db.leads.insert_many([
+            {"lead_id": "l_fresh", "school_id": "s1", "stage": "demo", "expected_value": 100000,
+             "last_activity_date": "2026-09-01", "is_deleted": False},
+            {"lead_id": "l_stale", "school_id": "s1", "stage": "demo", "expected_value": 100000,
+             "last_activity_date": "2020-01-01", "is_deleted": False},
+        ])
+        rows = await crm.leads_needs_attention(FakeRequest())
+        assert [r["lead_id"] for r in rows] == ["l_stale", "l_fresh"]
+    _run(go())
+
+
+def test_the_row_still_carries_the_real_deal_value(db):
+    # Discounting is for ordering. The money on screen must stay the money.
+    async def go():
+        await db.schools.insert_one({"school_id": "s1", "fit_rate": 25.0, "is_deleted": False})
+        await db.leads.insert_one({"lead_id": "l1", "school_id": "s1", "stage": "demo",
+                                   "expected_value": 80000, "last_activity_date": "2020-01-01",
+                                   "is_deleted": False})
+        row = (await crm.leads_needs_attention(FakeRequest()))[0]
+        assert row["deal_value"] == 80000
+        assert row["expected_value"] == 20000
+    _run(go())
