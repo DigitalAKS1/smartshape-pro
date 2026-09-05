@@ -39,7 +39,7 @@ import DataCleanupPanel from '../../components/crm/DataCleanupPanel';
 import DataHealthPanel from '../../components/crm/DataHealthPanel';
 import BulkDeleteSchoolsDialog from '../../components/crm/BulkDeleteSchoolsDialog';
 import AssignToPicker from '../../components/crm/AssignToPicker';
-import { useIsOwner } from '../../hooks/usePermission';
+import { useIsOwner, usePermission } from '../../hooks/usePermission';
 import { deriveFilterOptions, buildCrmContext, matchesCrmFilter, hasActiveFilters } from '../../lib/crmFilter';
 import ActiveFilterBar from '../../components/crm/ActiveFilterBar';
 
@@ -58,6 +58,14 @@ export default function LeadsCRM() {
   const { isDark } = useTheme();
   const crm = useLeadsCRM();
   const isOwner = useIsOwner();
+  // Selecting schools was admin-only, so a rep could not reach the bulk bar at
+  // all — including Add tag, which the server has always allowed her to do
+  // (/schools/bulk-tag asks for leads:read_write, not for admin). The gate now
+  // matches the server: anyone who may write leads can select and tag schools;
+  // assigning owners, mail runs, sequences and deletes stay admin-only.
+  const leadsPerm = usePermission('leads');   // called unconditionally — Rules of Hooks
+  const isAdmin = crm.user?.role === 'admin';
+  const canTagSchools = isAdmin || leadsPerm.canWrite;
   const [leadsFilter, setLeadsFilter] = React.useState({});
   // Bulk delete on the current Schools-tab selection (O20) — superadmin only;
   // shares BulkDeleteSchoolsDialog with DataCleanupPanel's "childless" flow.
@@ -820,27 +828,31 @@ export default function LeadsCRM() {
                   </div>
                 );
               })()}
-              {crm.user?.role === 'admin' && selectedSchoolIds.size > 0 && (
+              {canTagSchools && selectedSchoolIds.size > 0 && (
                 <div className={`${card} border rounded-md p-2.5 flex items-center gap-2 flex-wrap`} data-testid="school-bulk-bar">
                   <span className={`text-xs font-medium ${textPri}`}>{selectedSchoolIds.size} school(s) selected</span>
-                  <AssignToPicker
-                    value={bulkAssignPick.email}
-                    valueName={bulkAssignPick.name}
-                    users={crm.spList}
-                    onChange={(email, name) => { setBulkAssignPick({ email, name }); if (email) bulkAssignSchools(email, name); }}
-                    placeholder="Assign owner to…"
-                    className="w-48"
-                  />
+                  {isAdmin && (
+                    <AssignToPicker
+                      value={bulkAssignPick.email}
+                      valueName={bulkAssignPick.name}
+                      users={crm.spList}
+                      onChange={(email, name) => { setBulkAssignPick({ email, name }); if (email) bulkAssignSchools(email, name); }}
+                      placeholder="Assign owner to…"
+                      className="w-48"
+                    />
+                  )}
                   <select defaultValue="" className={`h-8 px-2 rounded text-xs ${inputCls} cursor-pointer`} data-testid="school-bulk-tag"
                     onChange={async e => { const v = e.target.value; e.target.value = ''; await bulkTagSchools(v); }}>
                     <option value="">Add tag…</option>
                     {crm.tagsList.map(t => <option key={t.tag_id} value={t.tag_id}>{t.name}</option>)}
                   </select>
-                  <Button size="sm" onClick={() => setPlanActivityOpen(true)} className="bg-[#e94560] hover:bg-[#f05c75] text-white h-8" data-testid="plan-activity-btn">Plan Activity</Button>
-                  <Button size="sm" onClick={() => setSeqEnrollOpen(true)} className="bg-[#6d4ad8] hover:bg-[#7d5ae0] text-white h-8" data-testid="start-sequence-btn">Start Sequence</Button>
-                  <Button size="sm" variant="outline" onClick={createMailRunFromSelection} disabled={mailRunBusy} className={`border-[var(--border-color)] ${textSec} h-8`} data-testid="mail-run-btn">
-                    <Printer className="mr-1 h-3 w-3" /> {mailRunBusy ? 'Creating…' : 'Mail Run'}
-                  </Button>
+                  {isAdmin && <>
+                    <Button size="sm" onClick={() => setPlanActivityOpen(true)} className="bg-[#e94560] hover:bg-[#f05c75] text-white h-8" data-testid="plan-activity-btn">Plan Activity</Button>
+                    <Button size="sm" onClick={() => setSeqEnrollOpen(true)} className="bg-[#6d4ad8] hover:bg-[#7d5ae0] text-white h-8" data-testid="start-sequence-btn">Start Sequence</Button>
+                    <Button size="sm" variant="outline" onClick={createMailRunFromSelection} disabled={mailRunBusy} className={`border-[var(--border-color)] ${textSec} h-8`} data-testid="mail-run-btn">
+                      <Printer className="mr-1 h-3 w-3" /> {mailRunBusy ? 'Creating…' : 'Mail Run'}
+                    </Button>
+                  </>}
                   <Button size="sm" variant="outline" onClick={() => setSelectedSchoolIds(new Set())} className={`border-[var(--border-color)] ${textSec} h-8`}>Clear</Button>
                   {/* Superadmin-only (O20): guarded bulk delete of the current selection,
                       same dry-run-preview -> confirm -> delete flow as Data Cleanup. */}
@@ -858,7 +870,7 @@ export default function LeadsCRM() {
                   const schLeads = crm.leadsList.filter(l => l.school_id === sch.school_id);
                   return (
                     <div key={sch.school_id} className={`${card} border rounded-md p-3 flex items-start justify-between gap-2`} data-testid={`school-card-${sch.school_id}`}>
-                      {crm.user?.role === 'admin' && <input type="checkbox" className="accent-[#e94560] mt-1 flex-shrink-0" checked={selectedSchoolIds.has(sch.school_id)} onChange={() => toggleSchoolSelect(sch.school_id)} />}
+                      {canTagSchools && <input type="checkbox" className="accent-[#e94560] mt-1 flex-shrink-0" checked={selectedSchoolIds.has(sch.school_id)} onChange={() => toggleSchoolSelect(sch.school_id)} />}
                       <div className="flex-1 min-w-0">
                         <p className={`${textPri} font-medium text-sm truncate`}>{sch.school_name}</p>
                         <p className={`text-xs ${textMuted}`}>{sch.school_type}{sch.city ? ` • ${sch.city}` : ''}</p>
@@ -895,7 +907,7 @@ export default function LeadsCRM() {
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm" data-testid="schools-table">
                     <thead><tr className="bg-[var(--bg-primary)]">
-                      {crm.user?.role === 'admin' && <th className="py-3 px-3 w-8"><input type="checkbox" className="accent-[#e94560]" onChange={e => setSelectedSchoolIds(e.target.checked ? new Set(schFiltered.map(s => s.school_id)) : new Set())} checked={schFiltered.length > 0 && schFiltered.every(s => selectedSchoolIds.has(s.school_id))} data-testid="school-select-all" /></th>}
+                      {canTagSchools && <th className="py-3 px-3 w-8"><input type="checkbox" className="accent-[#e94560]" onChange={e => setSelectedSchoolIds(e.target.checked ? new Set(schFiltered.map(s => s.school_id)) : new Set())} checked={schFiltered.length > 0 && schFiltered.every(s => selectedSchoolIds.has(s.school_id))} data-testid="school-select-all" /></th>}
                       <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} cursor-pointer select-none`} onClick={() => crm.toggleSort('school_name')}>School{crm.sortIndicator('school_name')}</th>
                       <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden sm:table-cell cursor-pointer select-none`} onClick={() => crm.toggleSort('school_type')}>Type{crm.sortIndicator('school_type')}</th>
                       <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden md:table-cell cursor-pointer select-none`} onClick={() => crm.toggleSort('city')}>City{crm.sortIndicator('city')}</th>
@@ -912,7 +924,7 @@ export default function LeadsCRM() {
                         const schLeads = crm.leadsList.filter(l => l.school_id === sch.school_id);
                         return (
                           <tr key={sch.school_id} className="border-t border-[var(--border-color)] hover:bg-[var(--bg-hover)] cursor-pointer" onClick={() => navigate(`/school-profile/${sch.school_id}`)} data-testid={`school-row-${sch.school_id}`}>
-                            {crm.user?.role === 'admin' && <td className="py-2.5 px-3" onClick={e => e.stopPropagation()}><input type="checkbox" className="accent-[#e94560]" checked={selectedSchoolIds.has(sch.school_id)} onChange={() => toggleSchoolSelect(sch.school_id)} data-testid={`select-school-${sch.school_id}`} /></td>}
+                            {canTagSchools && <td className="py-2.5 px-3" onClick={e => e.stopPropagation()}><input type="checkbox" className="accent-[#e94560]" checked={selectedSchoolIds.has(sch.school_id)} onChange={() => toggleSchoolSelect(sch.school_id)} data-testid={`select-school-${sch.school_id}`} /></td>}
                             <td className="py-2.5 px-3">
                               <p className={`${textPri} font-medium hover:text-[#e94560] transition-colors`}>{sch.school_name}</p>
                               <div className="flex items-center gap-2 mt-0.5 flex-wrap">
