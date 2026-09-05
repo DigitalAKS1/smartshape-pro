@@ -68,6 +68,13 @@ export default function SequenceEnrollDialog({ open, onClose, schoolIds = [], on
     toast.success(`Enrolled ${d.enrolled} school${d.enrolled === 1 ? '' : 's'} in "${d.sequence_name}"`
       + (d.skipped ? ` · ${d.skipped} already in it` : '')
       + (d.leads_created ? ` · ${d.leads_created} new lead(s)` : ''));
+    // Step 1 goes out in the background. Say where to look for it — otherwise
+    // Offline Mail just sits there empty and the plan looks like it did nothing.
+    if (d.starting_now) {
+      toast('Step 1 is going out now', {
+        description: "Anything to be posted appears in Offline Mail → Today's Post in a moment.",
+      });
+    }
     onClose();
     onDone && onDone();
   };

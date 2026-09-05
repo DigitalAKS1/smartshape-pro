@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException, Request
 from datetime import datetime, timezone, timedelta
+import asyncio
 import uuid
 
 from database import db
@@ -551,9 +552,25 @@ async def enroll_schools(request: Request):
         })
         enrolled += 1
 
+    # The executor loops hourly. Without this, enrolling schools into a sequence
+    # whose first step is due TODAY left Offline Mail empty for up to an hour
+    # with nothing on screen to say a thing was pending — indistinguishable from
+    # the feature being broken. Kick it now (as a task, so a 400-school enrolment
+    # doesn't block the response) and tell the caller, so the UI can say where
+    # the mailers are about to show up.
+    starting_now = False
+    if enrolled and first_delay == 0:
+        try:
+            import scheduler as _sched          # lazy: avoid an import cycle
+            asyncio.create_task(_sched.run_drip_executor())
+            starting_now = True
+        except Exception:
+            starting_now = False   # the hourly tick still picks it up
+
     return {"sequence_id": sequence_id, "sequence_name": seq.get("name", ""),
             "enrolled": enrolled, "skipped": skipped, "leads_created": leads_created,
-            "matched_by_tag": matched_by_tag, "total": len(school_ids)}
+            "matched_by_tag": matched_by_tag, "total": len(school_ids),
+            "starting_now": starting_now}
 
 
 @router.get("/drip/enrollments")
