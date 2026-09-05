@@ -21,6 +21,7 @@ from services.engagement import normalize_timeline, fetch_events, log_engagement
 import crm_contact_calls as cc
 from notify import notify_user
 import services.account_lifecycle as al
+import services.reorder as ro
 
 router = APIRouter()
 
@@ -386,6 +387,9 @@ DEFAULT_PIPELINE_SETTINGS = {
     # How long a customer can go without ordering before they count as dormant
     # and land on the win-back list. Two school terms, give or take.
     "dormant_after_days": 180,
+    # Assumed gap between orders for a school that has only ordered once, where
+    # there is no rhythm to measure yet.
+    "reorder_interval_days": 180,
 }
 
 
@@ -755,13 +759,25 @@ async def get_mail_area_schools(area_id: str, request: Request):
 
 # ── Mail Runs (Territory & Offline-Mail engine, sub-project A2) ───────────────
 async def _upsert_direct_mail_lead(school_id, deal_type, owner, now_iso):
-    """Tag a mailed school as a Direct-Mail lead — reuse its open lead if present,
-    else create one — so mailed schools become filterable pipeline."""
+    """Tag a mailed school as a Direct-Mail lead — reuse its open deal OF THE SAME
+    DEAL TYPE if present, else create one — so mailed schools become filterable
+    pipeline.
+
+    Keyed on deal type because this business runs two motions at once: a school
+    can be evaluating a machine AND due to reorder dies. Matching on "any open
+    lead" meant the reorder attached itself to the machine deal and overwrote its
+    type, so the annuity had nowhere of its own to live. An untyped touch still
+    matches an untyped deal, which is how everything behaved before deal types
+    existed.
+    """
     sch = await db.schools.find_one({"school_id": school_id}, {"_id": 0})
     if not sch:
         return None
+    dt = (deal_type or "").strip()
     existing = await db.leads.find_one(
-        {"school_id": school_id, "stage": {"$nin": ["won", "lost"]}, "is_deleted": {"$ne": True}},
+        {"school_id": school_id, "stage": {"$nin": ["won", "lost"]},
+         "is_deleted": {"$ne": True},
+         "deal_type": dt if dt else {"$in": ["", None]}},
         {"_id": 0, "lead_id": 1})
     if existing:
         _set = {"last_activity_date": now_iso, "source": "Direct Mail"}
@@ -3653,6 +3669,24 @@ async def get_schools(request: Request):
     query["is_deleted"] = {"$ne": True}
     schools = await db.schools.find(query, {"_id": 0}).sort("school_name", 1).to_list(10000)
     return schools
+
+
+@router.get("/crm/reorder-due")
+async def reorder_due(request: Request):
+    """Schools whose usual gap between orders has elapsed again.
+
+    Derived from order history on every read rather than stored: nothing to go
+    stale, nothing to de-duplicate, and correct the moment an order lands.
+    Scoped to the caller's own accounts unless they see everything.
+    """
+    user = await get_current_user(request)
+    if not _crm_read(user):
+        return []
+    settings = await get_crm_settings()
+    default_days = int(settings.get("reorder_interval_days") or ro.DEFAULT_INTERVAL_DAYS)
+    owner = None if sees_all(user, "leads") else user["email"]
+    return await ro.reorder_candidates(db, owner_email=owner,
+                                       default_interval_days=default_days)
 
 
 @router.post("/schools/backfill-lifecycle")

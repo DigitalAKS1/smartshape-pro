@@ -404,6 +404,9 @@ export const mailRuns = {
   // Classify every school prospect/customer/dormant from its orders. Kept
   // current on each order event; this fills in the history that predates that.
   backfillLifecycle: () => API.post('/schools/backfill-lifecycle'),
+  // Schools whose usual gap between orders has elapsed again. Derived on read
+  // from order history, so it is never stale and creates nothing.
+  reorderDue: () => API.get('/crm/reorder-due'),
   recordWaConsent: (data) => API.post('/schools/wa-consent', data),
   todayQueue: (date) => API.get('/mail-runs/today-queue', { params: date ? { date } : {} }),
   queueStickers: (params = {}) => API.get('/mail-runs/queue-stickers.pdf', { params: { ...params, _ts: Date.now() }, responseType: 'blob' }),

@@ -521,14 +521,18 @@ async def enroll_schools(request: Request):
     first_delay = seq["steps"][0].get("delay_days", 0)
     enrolled, skipped, leads_created = 0, 0, 0
 
+    seq_deal_type = (seq.get("deal_type") or "").strip()
     for sid in school_ids:
-        # Prefer an active lead for this school; else any lead; else create one.
+        # Prefer an open deal of the SEQUENCE's deal type. A termly die-reorder
+        # campaign must not enrol against the school's open machine deal — that
+        # is one motion hijacking the other, and it is how the annuity ended up
+        # with nowhere to live. A sequence with no deal type behaves as before.
+        base = {"school_id": sid, "is_deleted": {"$ne": True}}
+        type_q = {"deal_type": seq_deal_type} if seq_deal_type else {}
         lead = await db.leads.find_one(
-            {"school_id": sid, "stage": {"$in": list(OPEN_STAGES)}, "is_deleted": {"$ne": True}},
-            {"_id": 0, "lead_id": 1})
-        if not lead:
-            lead = await db.leads.find_one(
-                {"school_id": sid, "is_deleted": {"$ne": True}}, {"_id": 0, "lead_id": 1})
+            {**base, **type_q, "stage": {"$in": list(OPEN_STAGES)}}, {"_id": 0, "lead_id": 1})
+        if not lead and not seq_deal_type:
+            lead = await db.leads.find_one(base, {"_id": 0, "lead_id": 1})
         if not lead:
             sch = await db.schools.find_one({"school_id": sid}, {"_id": 0, "assigned_to": 1})
             owner_email = (sch or {}).get("assigned_to") or user["email"]  # the school's sales agent

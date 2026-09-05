@@ -153,6 +153,21 @@ export default function LeadsCRM() {
 
   // Bulk school assignment (admin): select many schools, assign all to one Sales Exec.
   const [selectedSchoolIds, setSelectedSchoolIds] = React.useState(new Set());
+  // Schools whose usual gap between orders has elapsed again — the repeat
+  // business that previously only got chased if a rep happened to remember.
+  // Derived server-side from order history, so there is nothing to keep in sync.
+  const [reorderDue, setReorderDue] = React.useState([]);
+  const [reorderOnly, setReorderOnly] = React.useState(false);
+  React.useEffect(() => {
+    if (crm.activeTab !== 'schools') return;
+    let live = true;
+    schoolsApiObj.reorderDue()
+      .then(r => { if (live) setReorderDue(Array.isArray(r.data) ? r.data : []); })
+      .catch(() => { if (live) setReorderDue([]); });
+    return () => { live = false; };
+  }, [crm.activeTab]);
+  const reorderById = React.useMemo(
+    () => new Map(reorderDue.map(r => [r.school_id, r])), [reorderDue]);
   const [planActivityOpen, setPlanActivityOpen] = React.useState(false);
   const [seqEnrollOpen, setSeqEnrollOpen] = React.useState(false);
   const [unassignedOnly, setUnassignedOnly] = React.useState(false);
@@ -804,9 +819,26 @@ export default function LeadsCRM() {
           // how leads/contacts get filtered; `unassignedOnly` layers on top.
           let schFiltered = crm.masterFiltered.schools;
           if (unassignedOnly) schFiltered = schFiltered.filter(sc => !(sc.assigned_to || '').trim());
+          if (reorderOnly) schFiltered = schFiltered.filter(sc => reorderById.has(sc.school_id));
           schFiltered = crm.sortData(schFiltered, crm.sortConfig.key, crm.sortConfig.dir);
           return (
             <div className="space-y-3">
+              {/* Reps see this too: chasing a repeat order is their work, and
+                  the old Unassigned row was admin-only. */}
+              {reorderDue.length > 0 && (
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button onClick={() => setReorderOnly(v => !v)}
+                    className={`text-xs px-3 py-1 rounded-full font-semibold border transition-all ${reorderOnly ? 'bg-[#e94560] text-white border-[#e94560]' : `border-[var(--border-color)] ${textSec} hover:border-[#e94560] hover:text-[#e94560]`}`}
+                    data-testid="filter-reorder-due">
+                    Due to reorder · {reorderDue.length}
+                  </button>
+                  {reorderOnly && (
+                    <span className={`text-xs ${textMuted}`}>
+                      Bought before and past their usual gap — most overdue first. Select and start a sequence, or tag them for a mail run.
+                    </span>
+                  )}
+                </div>
+              )}
               {crm.user?.role === 'admin' && (() => {
                 const unassignedCount = crm.schoolsList.filter(s => !(s.assigned_to || '').trim()).length;
                 return (
@@ -874,6 +906,19 @@ export default function LeadsCRM() {
                       <div className="flex-1 min-w-0">
                         <p className={`${textPri} font-medium text-sm truncate`}>{sch.school_name}</p>
                         <p className={`text-xs ${textMuted}`}>{sch.school_type}{sch.city ? ` • ${sch.city}` : ''}</p>
+                        {/* A list of names is not actionable. The reason a
+                            school is on it — how overdue, and what they spent
+                            last time — is what decides who to call first. */}
+                        {reorderById.has(sch.school_id) && (() => {
+                          const r = reorderById.get(sch.school_id);
+                          return (
+                            <p className="text-[11px] text-orange-400 mt-0.5" data-testid={`reorder-why-${sch.school_id}`}>
+                              {r.days_overdue} day{r.days_overdue === 1 ? '' : 's'} past their usual {r.cadence_days}-day gap
+                              {r.confidence === 'assumed' ? ' (assumed — only one order so far)' : ''}
+                              {r.last_order_value ? ` · last order ₹${Math.round(r.last_order_value).toLocaleString('en-IN')}` : ''}
+                            </p>
+                          );
+                        })()}
                         <p className="text-xs mt-0.5">
                           {sch.primary_contact_name
                             ? <span className={textSec}>{sch.primary_contact_name}{sch.designation ? ` (${sch.designation})` : ''}</span>
