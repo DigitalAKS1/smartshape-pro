@@ -14,7 +14,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import WhatsAppSendDialog from '../../components/WhatsAppSendDialog';
 import KanbanBoard, { ageColor, AgeBadge } from '../../components/KanbanBoard';
 import ReassignLeadDialog from '../../components/ReassignLeadDialog';
-import { STAGES, SCHOOL_TYPES } from '../../lib/crmConstants';
+import { STAGES, SCHOOL_TYPES, settableStages } from '../../lib/crmConstants';
 import LeadMobileCard from '../../components/crm/LeadMobileCard';
 import { FieldTooltip } from '../../components/ui/Tooltip';
 import EmptyState, { EMPTY_STATES } from '../../components/ui/EmptyState';
@@ -388,7 +388,10 @@ export default function LeadsCRM() {
                     e.target.value = '';
                   }}>
                   <option value="">Move to Stage</option>
-                  {STAGES.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
+                  {/* Live stages only — a bulk move has no single current stage
+                      to make an exception for, and nothing should be moved INTO
+                      a retired one. */}
+                  {settableStages().map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
                 </select>
                 <Button size="sm" variant="outline" onClick={() => crm.setSelectedLeadIds(new Set())} className={`border-[var(--border-color)] ${textSec} h-8`}>Clear</Button>
               </div>

@@ -9,7 +9,7 @@ import {
   AlertTriangle, User, UserCog, Edit2, MapPin, Target,
   ChevronRight, UserPlus, Package, Lock, FileText, Zap, X,
 } from 'lucide-react';
-import { STAGES, LOST_REASONS } from '../../lib/crmConstants';
+import { settableStages, STAGES, LOST_REASONS } from '../../lib/crmConstants';
 import { formatDate } from '../../lib/utils';
 import { dripSequences as dripSequencesApi } from '../../lib/api';
 import EmptyState, { EMPTY_STATES } from '../ui/EmptyState';
@@ -154,8 +154,10 @@ export default function LeadDetailPanel({
             </div>
 
             {/* Stage selector */}
+            {/* Retired stages are offered only when the deal is already in one,
+                so nothing new lands there but this deal can still move out. */}
             <div className="flex gap-1 flex-wrap">
-              {STAGES.map(s => (
+              {settableStages(detailLead.stage).map(s => (
                 <button key={s.id} onClick={() => handleStageClick(s.id)}
                   className={`px-2 py-1 rounded text-xs font-medium border transition-all ${detailLead.stage === s.id ? s.color + ' ring-1' : `${isDark ? 'border-[var(--border-color)] text-[var(--text-muted)]' : 'border-[var(--border-color)] text-[#888]'} ${hoverBg}`}`}>
                   {s.label}

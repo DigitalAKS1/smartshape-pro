@@ -288,3 +288,37 @@ def test_the_row_still_carries_the_real_deal_value(db):
         assert row["deal_value"] == 80000
         assert row["expected_value"] == 20000
     _run(go())
+
+
+# ── Retiring a stage must not abandon what is in it ─────────────────────────
+
+def test_leads_stranded_in_a_retired_stage_can_be_found(db):
+    async def go():
+        await db.leads.insert_many([
+            {"lead_id": "l1", "stage": "retention", "company_name": "DPS",
+             "last_activity_date": "2025-01-01", "is_deleted": False},
+            {"lead_id": "l2", "stage": "resell", "company_name": "Lotus",
+             "last_activity_date": "2025-06-01", "is_deleted": False},
+            {"lead_id": "l3", "stage": "demo", "company_name": "Ryan",
+             "last_activity_date": "2026-01-01", "is_deleted": False},
+        ])
+        out = await crm.retired_stage_leads(FakeRequest())
+        assert out["total"] == 2
+        assert out["by_stage"] == {"retention": 1, "resell": 1}
+        assert {l["lead_id"] for l in out["leads"]} == {"l1", "l2"}
+    _run(go())
+
+
+def test_nothing_stranded_reports_cleanly(db):
+    async def go():
+        await db.leads.insert_one({"lead_id": "l1", "stage": "demo", "is_deleted": False})
+        out = await crm.retired_stage_leads(FakeRequest())
+        assert out == {"total": 0, "by_stage": {}, "leads": []}
+    _run(go())
+
+
+def test_a_deleted_lead_is_not_reported_as_stranded(db):
+    async def go():
+        await db.leads.insert_one({"lead_id": "l1", "stage": "retention", "is_deleted": True})
+        assert (await crm.retired_stage_leads(FakeRequest()))["total"] == 0
+    _run(go())

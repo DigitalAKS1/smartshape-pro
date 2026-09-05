@@ -3675,6 +3675,38 @@ async def get_schools(request: Request):
     return schools
 
 
+# Stages that describe what an ACCOUNT is between sales rather than what a deal
+# is doing. Retired in favour of the school's account_status and the reorder
+# motion; kept alive only so leads already in one still render truthfully.
+RETIRED_STAGES = ("retention", "resell")
+
+
+@router.get("/crm/retired-stage-leads")
+async def retired_stage_leads(request: Request):
+    """Deals stranded in a stage that no longer means anything.
+
+    Nothing new can enter these stages, but whatever is already there stays
+    invisible to the forecast and to needs-attention (both scope to open
+    stages), which is exactly how a deal quietly stops being worked. Listing
+    them is the difference between retiring a stage and abandoning its
+    contents.
+    """
+    user = await get_current_user(request)
+    if not _crm_read(user):
+        return {"total": 0, "by_stage": {}, "leads": []}
+    q = {"stage": {"$in": list(RETIRED_STAGES)}, "is_deleted": {"$ne": True}}
+    if not sees_all(user, "leads"):
+        q["$or"] = await _sales_lead_scope(user["email"])
+    leads = await db.leads.find(
+        q, {"_id": 0, "lead_id": 1, "school_id": 1, "company_name": 1, "stage": 1,
+            "assigned_name": 1, "assigned_to": 1, "last_activity_date": 1},
+    ).sort("last_activity_date", -1).to_list(500)
+    by_stage: dict = {}
+    for l in leads:
+        by_stage[l["stage"]] = by_stage.get(l["stage"], 0) + 1
+    return {"total": len(leads), "by_stage": by_stage, "leads": leads}
+
+
 @router.get("/crm/segment-performance")
 async def crm_segment_performance(request: Request):
     """Conversion by segment — board, type, size band or city.

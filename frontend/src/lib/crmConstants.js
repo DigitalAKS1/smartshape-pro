@@ -7,10 +7,31 @@ export const STAGES = [
   { id: 'quoted',      label: 'Quoted',      color: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30' },
   { id: 'negotiation', label: 'Negotiation', color: 'bg-orange-500/20 text-orange-400 border-orange-500/30' },
   { id: 'won',         label: 'Won',         color: 'bg-green-500/20 text-green-400 border-green-500/30' },
-  { id: 'retention',   label: 'Retention',   color: 'bg-teal-500/20 text-teal-400 border-teal-500/30' },
-  { id: 'resell',      label: 'Resell',      color: 'bg-indigo-500/20 text-indigo-400 border-indigo-500/30' },
+  // Retired. These describe what an ACCOUNT is between sales, not what a deal is
+  // doing, and they sat in a pipeline whose terminal state is `won` — so moving
+  // a loyal repeat customer here scored them zero in the forecast. That job now
+  // belongs to the school's account_status (prospect / customer / dormant), and
+  // repeat business to the reorder motion.
+  //
+  // Kept in this list, and only kept, so leads already sitting in one still
+  // render with their own name and colour. Deleting the entries would make those
+  // leads display as "New", which is a lie rather than a tidy-up.
+  { id: 'retention',   label: 'Retention',   color: 'bg-teal-500/20 text-teal-400 border-teal-500/30', deprecated: true },
+  { id: 'resell',      label: 'Resell',      color: 'bg-indigo-500/20 text-indigo-400 border-indigo-500/30', deprecated: true },
   { id: 'lost',        label: 'Lost',        color: 'bg-red-500/20 text-red-400 border-red-500/30' },
 ];
+
+/**
+ * The stages a user may MOVE a deal INTO.
+ *
+ * Display and grouping keep every stage; only the pickers narrow, so nothing new
+ * enters a retired stage while everything already there stays visible and
+ * movable. A deal currently in a retired stage keeps that option so its dropdown
+ * does not render blank — you can move out of Retention, just not back in.
+ */
+export function settableStages(currentStage = '') {
+  return STAGES.filter(s => !s.deprecated || s.id === currentStage);
+}
 
 export const ACTIVE_STAGES = ['new', 'contacted', 'demo', 'quoted', 'negotiation'];
 
