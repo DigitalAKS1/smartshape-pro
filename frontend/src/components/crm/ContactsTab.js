@@ -17,7 +17,6 @@ export default function ContactsTab({
   contactsList, leadsList,
   schoolsList = [], sourcesList = [],
   filterRole, setFilterRole,
-  filterContactTag, setFilterContactTag,
   searchTerm,
   tagsList, rolesList,
   sortConfig, toggleSort, sortIndicator, sortData,
@@ -87,7 +86,6 @@ export default function ContactsTab({
 
   let cFiltered = contactsList.filter(c => {
     if (filterRole && getRoleName(c) !== filterRole) return false;
-    if (filterContactTag && !(c.tag_ids || []).includes(filterContactTag)) return false;
     if (!matchesCrmFilter(c, crmFilter, crmCtx)) return false;
     if (searchTerm) {
       const s = searchTerm.toLowerCase();
@@ -134,27 +132,9 @@ export default function ContactsTab({
         </div>
       )}
 
-      {/* Tag filter chips */}
-      {tagsList.length > 0 && (
-        <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
-          <span className={`text-[10px] uppercase tracking-wider font-semibold ${textMuted} whitespace-nowrap`}>Tags:</span>
-          <button
-            onClick={() => { setFilterContactTag(''); setContactPage(1); }}
-            className={`text-xs px-2.5 py-1 rounded-full whitespace-nowrap border transition-all ${
-              filterContactTag === '' ? 'bg-[var(--accent)] border-[var(--accent)] text-white' : 'border-[var(--border-color)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]'
-            }`}>All</button>
-          {tagsList.map(t => (
-            <button key={t.tag_id}
-              onClick={() => { setFilterContactTag(t.tag_id); setContactPage(1); }}
-              className={`text-xs px-2.5 py-1 rounded-full whitespace-nowrap border transition-all ${
-                filterContactTag === t.tag_id ? 'text-white border-transparent' : 'border-[var(--border-color)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]'
-              }`}
-              style={filterContactTag === t.tag_id ? { backgroundColor: t.color } : {}}>
-              <span className="inline-block w-2 h-2 rounded-full mr-1 align-middle" style={{ backgroundColor: t.color }} />{t.name}
-            </button>
-          ))}
-        </div>
-      )}
+      {/* The page-level "Tags" dropdown now filters contacts too, so this second
+          tag control has gone: two controls for one thing meant they could
+          disagree, and neither told you the other was on. */}
 
       {/* Action bar */}
       <div className="flex flex-wrap items-center gap-2">

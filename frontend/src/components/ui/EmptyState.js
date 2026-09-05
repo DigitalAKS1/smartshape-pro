@@ -58,5 +58,8 @@ export const EMPTY_STATES = {
   employees:    { icon: '🧑‍💼', title: 'No employees', desc: 'Add team members to manage payroll and attendance.' },
   payroll:      { icon: '💰', title: 'No payroll records', desc: 'Run payroll to generate salary slips for your team.' },
   searchResult: { icon: '🔍', title: 'No results', desc: 'Try different keywords or clear the search.' },
+  // Empty because of filters, not because there is nothing to show. Says which
+  // is which, so the reader isn't left wondering whether the data is gone.
+  filtered:     { icon: '🔍', title: 'Nothing matches these filters', desc: 'Remove a filter chip above, or clear them all to see everything again.' },
   analytics:    { icon: '📊', title: 'No data yet', desc: 'Data will appear here once activity is recorded.' },
 };

@@ -1,6 +1,6 @@
 import {
   matchesGlobalSearch, buildMasterContexts, computeMasterFiltered, makeCountFor, tabKind,
-  parseSearchQuery, mergeFilters, describeParsedFilter,
+  parseSearchQuery, mergeFilters, describeParsedFilter, describeQueryTokens, removeQueryToken,
 } from '../crmMasterFilter';
 import { UNASSIGNED } from '../crmFilter';
 
@@ -248,5 +248,31 @@ describe('parseSearchQuery — partial operator values', () => {
     const out = parseSearchQuery('owner:zzzz', qOptions);
     expect(out.filter).toEqual({});
     expect(out.text).toBe('owner:zzzz');
+  });
+});
+
+describe('search tokens as removable chips', () => {
+  test('one chip per typed operator token, labelled with what was typed', () => {
+    expect(describeQueryTokens('owner:parul city:rohin hot', qOptions)).toEqual([
+      { token: 'owner:parul', facet: 'owners', label: 'Owner: parul' },
+      { token: 'city:rohin', facet: 'cities', label: 'City: rohin' },
+    ]);
+  });
+
+  test('a partial that expands to several options is still ONE chip', () => {
+    const opts = { ...qOptions, cities: ['Rohini', 'Rohini Extension'] };
+    const chips = describeQueryTokens('city:rohin', opts);
+    expect(chips).toHaveLength(1);
+    expect(parseSearchQuery('city:rohin', opts).filter.cities).toHaveLength(2);
+  });
+
+  test('unresolved tokens and free words get no chip', () => {
+    expect(describeQueryTokens('owner:nobody just some words', qOptions)).toEqual([]);
+  });
+
+  test('removing a chip strips only its token and keeps the rest verbatim', () => {
+    expect(removeQueryToken('owner:parul city:rohin hot', 'city:rohin')).toBe('owner:parul hot');
+    expect(removeQueryToken('owner:"Parul Kanchan" hot', 'owner:"Parul Kanchan"')).toBe('hot');
+    expect(removeQueryToken('hot', 'city:rohin')).toBe('hot');
   });
 });

@@ -41,7 +41,17 @@ import BulkDeleteSchoolsDialog from '../../components/crm/BulkDeleteSchoolsDialo
 import AssignToPicker from '../../components/crm/AssignToPicker';
 import { useIsOwner } from '../../hooks/usePermission';
 import { deriveFilterOptions, buildCrmContext, matchesCrmFilter, hasActiveFilters } from '../../lib/crmFilter';
-import { describeParsedFilter } from '../../lib/crmMasterFilter';
+import ActiveFilterBar from '../../components/crm/ActiveFilterBar';
+
+// Plain typing is the whole promise of the box; the operators are a shortcut for
+// people who want one, so they live in the tooltip and in the Tips popover
+// rather than in the placeholder, where they read as a syntax you must learn.
+const SEARCH_HELP = [
+  'Type a name, phone, email or city.',
+  '',
+  'Shortcuts: owner:parul  city:rohini  type:CBSE  stage:demo  tag:hot  has:phone  is:unassigned',
+  'Values can be partial. Use quotes around spaces: owner:"Parul Kanchan"',
+].join(String.fromCharCode(10));
 
 export default function LeadsCRM() {
   const navigate = useNavigate();
@@ -56,6 +66,16 @@ export default function LeadsCRM() {
   // Honest N-of-M for the FilterRail header + the current tab's badge (O5),
   // per entity kind — schools/contacts/leads all read crm.masterFiltered.
   const activeContacts = (list) => list.filter(c => !c.converted_to_lead).length;
+  // "Empty" means two different things and the screen must not confuse them:
+  // nothing exists yet, or everything is filtered out.
+  const anyFilterActive = hasActiveFilters(crm.effectiveFilter) || !!crm.parsedQuery.text.trim();
+  const clearAllFilters = () => {
+    crm.setMasterFilter({});
+    crm.setSearchTerm('');
+    crm.setFilterType('all');
+    crm.setFilterTag('');
+  };
+
   const railTotals = {
     schools: { result: crm.masterFiltered.schools.length, total: crm.schoolsList.length },
     contacts: { result: activeContacts(crm.masterFiltered.contacts), total: activeContacts(crm.contactsList) },
@@ -75,7 +95,6 @@ export default function LeadsCRM() {
 
   // O21 — human-readable feedback for whatever the search box's owner:/city:/...
   // operators resolved into (crm.parsedQuery.filter), shown next to the search box.
-  const queryChips = describeParsedFilter(crm.parsedQuery.filter, crm.filterOptions);
 
   // Theme shorthand
   const card = isDark ? 'bg-[var(--bg-card)] border-[var(--border-color)]' : 'bg-white border-[var(--border-color)]';
@@ -145,6 +164,20 @@ export default function LeadsCRM() {
       setSelectedSchoolIds(new Set());
       crm.fetchData();
     } catch (err) { toast.error(err?.response?.data?.detail || 'Bulk assign failed'); }
+  };
+
+  // Tagging is how the owner segments anything — a mailing, a drip audience, a
+  // "CBSE, 1000+ students" list. The endpoint has always existed for schools;
+  // only the Leads bulk bar ever offered it, so tagging a set of schools was
+  // impossible from the UI and the Tags filter looked broken on that tab.
+  const bulkTagSchools = async (tagId) => {
+    if (!tagId || selectedSchoolIds.size === 0) return;
+    const tagName = crm.tagsList.find(t => t.tag_id === tagId)?.name || 'tag';
+    try {
+      await schoolsApiObj.bulkTagSchools({ school_ids: Array.from(selectedSchoolIds), tag_id: tagId, action: 'add' });
+      toast.success(`Tagged ${selectedSchoolIds.size} school(s) as “${tagName}”`);
+      crm.fetchData();
+    } catch (err) { toast.error(err?.response?.data?.detail || 'Could not add the tag'); }
   };
 
   // Turn the current filtered school selection into a physical mail run (brochure
@@ -277,7 +310,7 @@ export default function LeadsCRM() {
           <div className="flex-1 min-w-0 space-y-5">
 
         {/* ── Forecast + needs-attention summary ─────────────────────── */}
-        <ForecastBar leads={crm.masterFiltered.leads} filterActive={hasActiveFilters(crm.effectiveFilter) || !!crm.parsedQuery.text.trim()} />
+        <ForecastBar leads={crm.masterFiltered.leads} filterActive={anyFilterActive} />
 
         {/* ── View Toggle + Bulk Actions ─────────────────────────────── */}
         {crm.activeTab === 'pipeline' && (
@@ -313,7 +346,7 @@ export default function LeadsCRM() {
                     } catch { toast.error('Bulk tag failed'); }
                     e.target.value = '';
                   }}>
-                  <option value="">+ Add Tag</option>
+                  <option value="">Add tag…</option>
                   {crm.tagsList.map(t => <option key={t.tag_id} value={t.tag_id}>{t.name}</option>)}
                 </select>
                 <select defaultValue="" className={`h-8 px-2 rounded text-xs ${inputCls} cursor-pointer`}
@@ -343,7 +376,8 @@ export default function LeadsCRM() {
           <div className="relative flex-1">
             <Search className={`absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 ${textMuted}`} />
             <Input value={crm.searchTerm} onChange={e => crm.setSearchTerm(e.target.value)}
-              placeholder='Search, or owner:parul city:rohini has:phone is:unassigned...' className={`pl-10 ${inputCls}`} data-testid="search-input" />
+              placeholder='Search schools, contacts and leads…' className={`pl-10 ${inputCls}`} data-testid="search-input"
+              title={SEARCH_HELP} />
             {/* O21 — Gmail-style query language: owner:/city:/source:/type:/stage:/tag:/
                 has:/is: parse live into real filters (crm.parsedQuery), applied ON TOP of
                 the rail's own selections for matching (crm.effectiveFilter) without ever
@@ -370,22 +404,24 @@ export default function LeadsCRM() {
           </select>
         </div>
 
-        {/* Active search-query operator chips (O21) — visible feedback for what
-            owner:/city:/... parsed out of the search box, so it's never a silent
-            filter. Sits in normal flow (not overlapping the suggestions dropdown). */}
-        {queryChips.length > 0 && (
-          <div className="flex flex-wrap items-center gap-1.5 -mt-2" data-testid="query-chips">
-            <span className={`text-[11px] ${textMuted}`}>Search applied:</span>
-            {queryChips.map(qc => (
-              <span key={`${qc.facet}:${qc.id}`} className="text-[10px] px-2 py-0.5 rounded-full bg-[var(--accent)] text-white font-medium">
-                {qc.label}
-              </span>
-            ))}
-            <button type="button" onClick={() => crm.setSearchTerm('')} className="text-[10px] px-2 py-0.5 rounded-full border border-[var(--border-color)] text-[var(--text-muted)] hover:text-[var(--accent)]">
-              Clear search
-            </button>
-          </div>
-        )}
+        {/* One filter surface. Every active filter — rail, search box or
+            dropdown — is a removable chip here, directly above the tab counts
+            it explains, with a single way out. Before this, a screen showing
+            0 results gave no clue which of four controls had caused it. */}
+        <ActiveFilterBar
+          masterFilter={crm.masterFilter}
+          setMasterFilter={crm.setMasterFilter}
+          searchTerm={crm.searchTerm}
+          setSearchTerm={crm.setSearchTerm}
+          filterType={crm.filterType}
+          setFilterType={crm.setFilterType}
+          filterTag={crm.filterTag}
+          setFilterTag={crm.setFilterTag}
+          options={crm.filterOptions}
+          result={railTotals.result}
+          total={railTotals.total}
+          noun={crm.activeTab === 'schools' ? 'school' : crm.activeTab === 'contacts' ? 'contact' : 'lead'}
+        />
 
         {/* ── Tabs ──────────────────────────────────────────────────── */}
         <div className={`flex gap-1 ${card} border rounded-md p-1 overflow-x-auto`}>
@@ -412,8 +448,6 @@ export default function LeadsCRM() {
             sourcesList={crm.sourcesList}
             filterRole={crm.filterRole}
             setFilterRole={crm.setFilterRole}
-            filterContactTag={crm.filterContactTag}
-            setFilterContactTag={crm.setFilterContactTag}
             /* Residual free text only — the operators (owner:/city:/...) are
                already applied via masterFiltered. Passing the raw box here made
                ContactsTab search for the literal string "owner:parul", which
@@ -518,7 +552,7 @@ export default function LeadsCRM() {
                         </tr>
                       );
                     })}
-                    {sortedLeads.length === 0 && <tr><td colSpan="9"><EmptyState {...(crm.searchTerm ? EMPTY_STATES.searchResult : EMPTY_STATES.leads)} compact /></td></tr>}
+                    {sortedLeads.length === 0 && <tr><td colSpan="9"><EmptyState {...(anyFilterActive ? EMPTY_STATES.filtered : EMPTY_STATES.leads)} compact /></td></tr>}
                   </tbody>
                 </table>
               </div>
@@ -549,7 +583,9 @@ export default function LeadsCRM() {
                   </div>
                 );
               })}
-              {crm.filteredLeads.length === 0 && <EmptyState {...(crm.searchTerm || crm.filterType !== 'all' ? EMPTY_STATES.searchResult : EMPTY_STATES.leads)} action={{ label: '+ Add Lead', onClick: crm.openCreateLead }} />}
+              {crm.filteredLeads.length === 0 && (anyFilterActive
+                ? <EmptyState {...EMPTY_STATES.filtered} action={{ label: 'Clear all filters', onClick: clearAllFilters }} />
+                : <EmptyState {...EMPTY_STATES.leads} action={{ label: '+ Add Lead', onClick: crm.openCreateLead }} />)}
             </div>
             {/* Desktop: horizontal pipeline */}
             <div className="hidden sm:flex gap-2 overflow-x-auto pb-4" data-testid="pipeline-board">
@@ -731,7 +767,7 @@ export default function LeadsCRM() {
                         </tr>
                       );
                     })}
-                    {sortedLeads.length === 0 && <tr><td colSpan="8"><EmptyState {...(crm.searchTerm ? EMPTY_STATES.searchResult : EMPTY_STATES.leads)} compact /></td></tr>}
+                    {sortedLeads.length === 0 && <tr><td colSpan="8"><EmptyState {...(anyFilterActive ? EMPTY_STATES.filtered : EMPTY_STATES.leads)} compact /></td></tr>}
                   </tbody>
                 </table>
               </div>
@@ -795,6 +831,11 @@ export default function LeadsCRM() {
                     placeholder="Assign owner to…"
                     className="w-48"
                   />
+                  <select defaultValue="" className={`h-8 px-2 rounded text-xs ${inputCls} cursor-pointer`} data-testid="school-bulk-tag"
+                    onChange={async e => { const v = e.target.value; e.target.value = ''; await bulkTagSchools(v); }}>
+                    <option value="">Add tag…</option>
+                    {crm.tagsList.map(t => <option key={t.tag_id} value={t.tag_id}>{t.name}</option>)}
+                  </select>
                   <Button size="sm" onClick={() => setPlanActivityOpen(true)} className="bg-[#e94560] hover:bg-[#f05c75] text-white h-8" data-testid="plan-activity-btn">Plan Activity</Button>
                   <Button size="sm" onClick={() => setSeqEnrollOpen(true)} className="bg-[#6d4ad8] hover:bg-[#7d5ae0] text-white h-8" data-testid="start-sequence-btn">Start Sequence</Button>
                   <Button size="sm" variant="outline" onClick={createMailRunFromSelection} disabled={mailRunBusy} className={`border-[var(--border-color)] ${textSec} h-8`} data-testid="mail-run-btn">

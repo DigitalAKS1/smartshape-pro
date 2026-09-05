@@ -205,3 +205,52 @@ export function describeParsedFilter(filter = {}, options = {}) {
   });
   return chips;
 }
+
+// ── Search-box tokens as removable chips ────────────────────────────────────
+//
+// The chips stand for what the user TYPED (`city:rohin`), not for each id the
+// token expanded to. A partial value can resolve to several options, and a chip
+// per option would mean clicking one × made two chips vanish. One token, one
+// chip, one ×.
+
+function tokenFacet(key) {
+  if (key === 'is') return 'owners';
+  if (key === 'has') return 'has';
+  return OPERATOR_FACET[key];
+}
+
+/**
+ * The operator tokens in *term* that resolved to a real filter.
+ * @returns {Array<{token: string, facet: string, label: string}>}
+ */
+export function describeQueryTokens(term, options = {}) {
+  const raw = String(term || '');
+  const out = [];
+  TOKEN_RE.lastIndex = 0;
+  let m;
+  while ((m = TOKEN_RE.exec(raw)) !== null) {
+    const [full, qKey, qVal, bKey, bVal, quotedPhrase, bareWord] = m;
+    if (quotedPhrase !== undefined || bareWord !== undefined) continue;
+    const key = (qKey || bKey || '').toLowerCase();
+    const val = qVal !== undefined ? qVal : bVal;
+    if (!resolveOperatorValues(key, val, options).length) continue;
+    const facet = tokenFacet(key);
+    const name = QUERY_FACET_LABELS[facet] || key;
+    out.push({ token: full, facet, label: `${name}: ${val}` });
+  }
+  return out;
+}
+
+/** Drop one operator token from a raw search string, leaving the rest verbatim. */
+export function removeQueryToken(term, token) {
+  const raw = String(term || '');
+  const kept = [];
+  let removed = false;
+  TOKEN_RE.lastIndex = 0;
+  let m;
+  while ((m = TOKEN_RE.exec(raw)) !== null) {
+    if (!removed && m[0] === token) { removed = true; continue; }
+    kept.push(m[0]);
+  }
+  return kept.join(' ').trim();
+}

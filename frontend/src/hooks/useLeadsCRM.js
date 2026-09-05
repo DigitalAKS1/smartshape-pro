@@ -50,7 +50,6 @@ export default function useLeadsCRM() {
   const [filterType, setFilterType] = useState('all');
   const [filterTag, setFilterTag] = useState('');
   const [filterRole, setFilterRole] = useState('');
-  const [filterContactTag, setFilterContactTag] = useState('');
   // Master filter (left FilterRail, O4): applies to schools/contacts/leads alike,
   // across every tab. Detail filters (filterType/filterTag/filterRole/MultiFilterBar
   // above) stay as per-tab refinements layered on top of this.
@@ -793,7 +792,6 @@ export default function useLeadsCRM() {
     filterType, setFilterType,
     filterTag, setFilterTag,
     filterRole, setFilterRole,
-    filterContactTag, setFilterContactTag,
     masterFilter, setMasterFilter, masterFiltered, filterOptions, masterCountFor, activeTabKind,
     parsedQuery, effectiveFilter,
     sortConfig, toggleSort, sortIndicator, sortData,
