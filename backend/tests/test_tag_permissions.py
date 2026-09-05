@@ -161,3 +161,75 @@ def test_an_admin_can_rename_and_delete(db, monkeypatch):
         await crm.delete_tag("tag_hot", FakeRequest())
         assert await db.tags.count_documents({}) == 0
     _run(go())
+
+
+# ── The seeder must not undo an admin's edits ───────────────────────────────
+#
+# _seed_marketing_tags() ran on EVERY GET /tags and re-inserted any default tag
+# whose NAME was missing. So renaming "Hot Lead" to "Very Hot" and refetching
+# put a brand-new "Hot Lead" straight back, and the admin — who had just been
+# told "Tag updated" — saw the old tag still sitting in the list.
+
+def test_renaming_a_default_tag_survives_the_next_list(db, monkeypatch):
+    _as(ADMIN, monkeypatch)
+
+    async def go():
+        await crm.get_tags(FakeRequest())                 # seed the defaults
+        hot = await db.tags.find_one({"name": "Hot Lead"})
+        await crm.update_tag(hot["tag_id"], FakeRequest({"name": "Very Hot"}))
+
+        tags = await crm.get_tags(FakeRequest())          # what the page reloads
+        names = [t["name"] for t in tags]
+        assert "Very Hot" in names
+        assert "Hot Lead" not in names, "the seeder resurrected the old name"
+        assert len(names) == len(set(names)), f"duplicate tags after a rename: {names}"
+    _run(go())
+
+
+def test_recolouring_a_default_tag_sticks(db, monkeypatch):
+    _as(ADMIN, monkeypatch)
+
+    async def go():
+        await crm.get_tags(FakeRequest())
+        hot = await db.tags.find_one({"name": "Hot Lead"})
+        await crm.update_tag(hot["tag_id"], FakeRequest({"color": "#000000"}))
+        await crm.get_tags(FakeRequest())
+        assert (await db.tags.find_one({"tag_id": hot["tag_id"]}))["color"] == "#000000"
+        assert await db.tags.count_documents({"name": "Hot Lead"}) == 1
+    _run(go())
+
+
+def test_a_deleted_default_tag_stays_deleted(db, monkeypatch):
+    _as(ADMIN, monkeypatch)
+
+    async def go():
+        await crm.get_tags(FakeRequest())
+        hot = await db.tags.find_one({"name": "Hot Lead"})
+        await crm.delete_tag(hot["tag_id"], FakeRequest())
+        tags = await crm.get_tags(FakeRequest())
+        assert "Hot Lead" not in [t["name"] for t in tags], "a default tag cannot be deleted"
+    _run(go())
+
+
+def test_listing_tags_does_not_write_on_every_read(db, monkeypatch):
+    # A write on every list is also a needless round trip on a 1-vCPU box.
+    _as(ADMIN, monkeypatch)
+
+    async def go():
+        await crm.get_tags(FakeRequest())
+        before = await db.tags.count_documents({})
+        for _ in range(5):
+            await crm.get_tags(FakeRequest())
+        assert await db.tags.count_documents({}) == before
+    _run(go())
+
+
+def test_a_fresh_install_still_gets_the_default_tags(db, monkeypatch):
+    _as(ADMIN, monkeypatch)
+
+    async def go():
+        assert await db.tags.count_documents({}) == 0
+        tags = await crm.get_tags(FakeRequest())
+        assert len(tags) == len(crm._DEFAULT_MARKETING_TAGS)
+        assert "Hot Lead" in [t["name"] for t in tags]
+    _run(go())

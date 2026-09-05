@@ -3169,6 +3169,20 @@ _DEFAULT_MARKETING_TAGS = [
 
 
 async def _seed_marketing_tags():
+    """Populate the default marketing tags once, on a database that has none.
+
+    This used to run on EVERY GET /tags and re-insert any default whose NAME was
+    missing. So renaming "Hot Lead" to "Very Hot" put a brand-new "Hot Lead"
+    straight back on the very next list — the admin was told "Tag updated" and
+    then watched the old tag reappear — and deleting a default was impossible.
+
+    A seeder's job is to furnish an empty install, not to keep reinstating
+    choices the admin has since changed. The guard is a flag rather than a
+    per-name check for exactly that reason: absence is now a decision, not a
+    gap to be filled. It also stops a write firing on every read of the list.
+    """
+    if await db.app_meta.find_one({"_id": "marketing_tags_seeded"}):
+        return
     existing_names = {
         t["name"] async for t in db.tags.find({}, {"name": 1, "_id": 0})
     }
@@ -3183,6 +3197,11 @@ async def _seed_marketing_tags():
                 "created_by": "system",
                 "created_at": now_iso,
             })
+    await db.app_meta.update_one(
+        {"_id": "marketing_tags_seeded"},
+        {"$setOnInsert": {"value": True, "at": now_iso}},
+        upsert=True,
+    )
 
 
 @router.get("/tags")
