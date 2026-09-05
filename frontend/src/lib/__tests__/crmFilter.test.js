@@ -251,3 +251,42 @@ describe('matchesCrmFilter — school_types uses the row\'s own value when it ha
     expect(matchesCrmFilter({ school_id: 's1' }, { school_types: ['CBSE'] }, ctx)).toBe(false);
   });
 });
+
+// ── account_status facet: what a school IS, not what its deals are doing ────
+describe('matchesCrmFilter — account_status', () => {
+  const schools = [
+    { school_id: 's_new', account_status: 'prospect' },
+    { school_id: 's_live', account_status: 'customer' },
+    { school_id: 's_quiet', account_status: 'dormant' },
+  ];
+  const schoolCtx = buildCrmContext('school', { schools });
+  const leadCtx = buildCrmContext('lead', { schools });
+
+  test('a school matches on its own derived status', () => {
+    expect(matchesCrmFilter(schools[2], { account_status: ['dormant'] }, schoolCtx)).toBe(true);
+    expect(matchesCrmFilter(schools[1], { account_status: ['dormant'] }, schoolCtx)).toBe(false);
+  });
+
+  test('two statuses are ORed, so "has ever bought" is one filter', () => {
+    const f = { account_status: ['customer', 'dormant'] };
+    expect(matchesCrmFilter(schools[1], f, schoolCtx)).toBe(true);
+    expect(matchesCrmFilter(schools[2], f, schoolCtx)).toBe(true);
+    expect(matchesCrmFilter(schools[0], f, schoolCtx)).toBe(false);
+  });
+
+  test('a lead or contact takes the status of the school it belongs to', () => {
+    expect(matchesCrmFilter({ school_id: 's_quiet' }, { account_status: ['dormant'] }, leadCtx)).toBe(true);
+    expect(matchesCrmFilter({ school_id: 's_live' }, { account_status: ['dormant'] }, leadCtx)).toBe(false);
+  });
+
+  test('a school with no status yet reads as a prospect, not as missing', () => {
+    // Nothing has been backfilled for this row; it has never ordered either way.
+    expect(matchesCrmFilter({ school_id: 'sX' }, { account_status: ['prospect'] }, schoolCtx)).toBe(true);
+    expect(matchesCrmFilter({ school_id: 'sX' }, { account_status: ['customer'] }, schoolCtx)).toBe(false);
+  });
+
+  test('account_status counts as an active filter', () => {
+    expect(hasActiveFilters({ account_status: ['dormant'] })).toBe(true);
+    expect(countActive({ account_status: ['dormant'], cities: ['Delhi'] })).toBe(2);
+  });
+});

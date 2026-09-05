@@ -25,6 +25,7 @@ import httpx
 
 from database import db
 from notify import notify_user
+import services.account_lifecycle as al
 from services.evolution_client import evolution
 from routes.fms_routes import get_fms_settings, render_template, pct_remaining
 from routes.crm_routes import (
@@ -1762,6 +1763,33 @@ async def keepintouch_loop():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# JOB 16 — Account lifecycle refresh (prospect / customer / dormant)
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def account_lifecycle_loop():
+    """Reclassify every school daily.
+
+    Order events already recompute the school they touch, but that is not
+    enough on its own: a customer becomes DORMANT through the passage of time,
+    and no order arrives to notice it. Without this pass, the win-back list
+    would only ever grow when somebody happened to place an order elsewhere.
+
+    Also fills in any school that predates the feature, so no separate backfill
+    has to be remembered.
+    """
+    log.info("[lifecycle] account status refresh started (daily)")
+    while True:
+        try:
+            settings = await db.settings.find_one({"type": "crm_pipeline"}, {"_id": 0}) or {}
+            days = int(settings.get("dormant_after_days") or al.DEFAULT_DORMANT_AFTER_DAYS)
+            out = await al.backfill_all(db, dormant_after_days=days)
+            log.info(f"[lifecycle] {out['scanned']} schools — {out['by_status']}")
+        except Exception as exc:
+            log.error(f"[lifecycle loop] {exc}")
+        await asyncio.sleep(24 * 3600)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # JOB 15 — Overdue post: pieces that were planned but never actually went out
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -1917,5 +1945,6 @@ async def start_scheduler():
     asyncio.create_task(keepintouch_loop())
     asyncio.create_task(balance_reminder_loop())
     asyncio.create_task(mail_overdue_loop())
+    asyncio.create_task(account_lifecycle_loop())
     log.info("[scheduler] cert loop running")
     log.info("[scheduler] all 14 background jobs running")

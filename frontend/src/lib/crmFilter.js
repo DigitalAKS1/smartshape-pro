@@ -66,6 +66,7 @@ export function hasActiveFilters(f) {
   return nonEmpty(f.sources) || nonEmpty(f.lead_stages) || nonEmpty(f.roles) ||
     nonEmpty(f.school_types) || nonEmpty(f.cities) || nonEmpty(f.tags) ||
     nonEmpty(f.owners) || nonEmpty(f.has) || nonEmpty(f.deal_types) || nonEmpty(f.lead_types) ||
+    nonEmpty(f.account_status) ||
     f.min_strength != null || f.max_strength != null ||
     hasDateRange(f, 'import_date') || hasDateRange(f, 'assigned_date');
 }
@@ -73,7 +74,8 @@ export function hasActiveFilters(f) {
 export function countActive(f) {
   if (!f) return 0;
   let n = 0;
-  ['sources', 'lead_stages', 'roles', 'school_types', 'cities', 'tags', 'owners', 'has', 'deal_types', 'lead_types'].forEach(k => { if (nonEmpty(f[k])) n++; });
+  ['sources', 'lead_stages', 'roles', 'school_types', 'cities', 'tags', 'owners', 'has',
+    'deal_types', 'lead_types', 'account_status'].forEach(k => { if (nonEmpty(f[k])) n++; });
   if (f.min_strength != null || f.max_strength != null) n++;
   if (hasDateRange(f, 'import_date')) n++;
   if (hasDateRange(f, 'assigned_date')) n++;
@@ -158,6 +160,17 @@ export function matchesCrmFilter(row, filter, ctx) {
     }
   }
 
+  // What the ACCOUNT is — prospect / customer / dormant — derived from its
+  // order history, not from any deal's stage. A school row carries it directly;
+  // a lead or contact inherits it from the school it belongs to, so "dormant
+  // customers" works on every tab. An unclassified row reads as a prospect,
+  // because never having ordered is exactly what that means.
+  if (nonEmpty(f.account_status)) {
+    const own = (row.account_status || '').trim();
+    const status = own || (schoolsById[row.school_id] || {}).account_status || 'prospect';
+    if (!f.account_status.includes(status)) return false;
+  }
+
   // Lead temperature (Hot/Warm/Cold) lives on leads. A school/contact row rolls
   // up through its leads exactly like lead_stages, so the page's "All Types"
   // dropdown means the same thing on every tab instead of only on Leads.
@@ -212,7 +225,7 @@ export function matchesCrmFilter(row, filter, ctx) {
 export const FACET_LABELS = {
   owners: 'Owner', cities: 'City', sources: 'Source',
   school_types: 'Type', roles: 'Role', lead_stages: 'Stage', tags: 'Tag',
-  deal_types: 'Deal Type', lead_types: 'Lead Type',
+  deal_types: 'Deal Type', lead_types: 'Lead Type', account_status: 'Account',
 };
 
 // Turn a free-text term into ranked "add this filter" suggestions. Pure: pass

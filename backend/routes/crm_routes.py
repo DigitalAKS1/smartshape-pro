@@ -13,13 +13,14 @@ import requests as http_requests
 
 from database import db
 from auth_utils import get_current_user
-from rbac import (get_team, require_superadmin, require_module, has_module, has_team,
-                  sees_all, can_read_crm)
+from rbac import (get_team, require_admin, require_superadmin, require_module, has_module,
+                  has_team, sees_all, can_read_crm)
 from audit_backup import snapshot_and_delete, preview_counts
 from cascade_delete import build_school_plan, build_contact_plan
 from services.engagement import normalize_timeline, fetch_events, log_engagement_event
 import crm_contact_calls as cc
 from notify import notify_user
+import services.account_lifecycle as al
 
 router = APIRouter()
 
@@ -382,6 +383,9 @@ DEFAULT_PIPELINE_SETTINGS = {
     "lost_reasons": ["Price", "Competitor", "No budget", "No response", "Timing", "Other"],
     "digest_time": "08:00",
     "digest_enabled": False,
+    # How long a customer can go without ordering before they count as dormant
+    # and land on the win-back list. Two school terms, give or take.
+    "dormant_after_days": 180,
 }
 
 
@@ -3649,6 +3653,24 @@ async def get_schools(request: Request):
     query["is_deleted"] = {"$ne": True}
     schools = await db.schools.find(query, {"_id": 0}).sort("school_name", 1).to_list(10000)
     return schools
+
+
+@router.post("/schools/backfill-lifecycle")
+async def schools_backfill_lifecycle(request: Request):
+    """Classify every school as prospect / customer / dormant from its orders.
+
+    Account status is maintained on every order event from now on; this fills in
+    the history that predates it. Idempotent — safe to run whenever, and worth
+    re-running after changing how long counts as dormant.
+    """
+    user = await get_current_user(request)
+    require_admin(user)
+    settings = await get_crm_settings()
+    days = int(settings.get("dormant_after_days") or al.DEFAULT_DORMANT_AFTER_DAYS)
+    out = await al.backfill_all(db, dormant_after_days=days)
+    await log_activity(user["email"], "backfill", "school", "-",
+                       f"account lifecycle: {out['scanned']} schools — {out['by_status']}")
+    return {"ok": True, "dormant_after_days": days, **out}
 
 
 @router.get("/schools/lookup")

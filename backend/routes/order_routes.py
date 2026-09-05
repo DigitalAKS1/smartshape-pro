@@ -9,6 +9,7 @@ import json
 import logging
 
 from database import db
+from services.account_lifecycle import recompute_school_lifecycle
 from auth_utils import get_current_user
 from rbac import get_team, require_teams, require_superadmin, require_module, sees_all
 from audit_backup import snapshot_and_delete
@@ -190,6 +191,7 @@ async def delete_order(order_id: str, request: Request, reason: str = ""):
             "$unset": {"order_id": ""},
         })
 
+    await recompute_school_lifecycle(db, order.get("school_id", ""))
     await log_activity(user["email"], "delete", "order", order_id,
                        f"Order {order.get('order_number', order_id)} permanently deleted "
                        f"(backup {result['backup_id']}, {result['total']} docs)")
@@ -253,6 +255,7 @@ async def cancel_order(order_id: str, request: Request):
     if order.get("lead_id"):
         await db.leads.update_one({"lead_id": order["lead_id"]}, {
             "$set": {"is_locked": False, "stage": "negotiation", "updated_at": now_iso}})
+    await recompute_school_lifecycle(db, order.get("school_id", ""))
     await log_activity(user["email"], "cancel", "order", order_id,
                        f"Order {order.get('order_number', order_id)} cancelled. {reason}".strip())
     return await db.orders.find_one({"order_id": order_id}, {"_id": 0})
@@ -397,6 +400,10 @@ async def create_order_for_quotation(quotation_id: str, *, created_by: str,
         "updated_at": now_iso,
     }
     await db.orders.insert_one(order_doc)
+    # A first order turns a prospect into a customer, and every later one keeps
+    # the school out of the win-back list. Derived from order history rather
+    # than typed, so it cannot drift.
+    await recompute_school_lifecycle(db, order_doc.get("school_id", ""))
 
     # Journal any at-creation advance into the payments ledger and set the
     # collected-amount caches, so total_paid / payment_received are complete and

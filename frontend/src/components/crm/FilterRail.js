@@ -1,9 +1,18 @@
 import React, { useMemo, useState } from 'react';
 import {
   SlidersHorizontal, X, ChevronDown, ChevronRight, ChevronLeft,
-  Search, User, MapPin, Building2, Radio, GitBranch, Tag as TagIcon, CalendarRange, Briefcase,
+  Search, User, MapPin, Building2, Radio, GitBranch, Tag as TagIcon, CalendarRange, Briefcase, Repeat,
 } from 'lucide-react';
 import { UNASSIGNED, FACET_LABELS, countActive } from '../../lib/crmFilter';
+
+// Fixed, because these are the only three states order history can produce.
+// Worded for a reader rather than a database: "Gone quiet" is what a dormant
+// customer means to whoever has to win them back.
+const ACCOUNT_STATUS_OPTS = [
+  { id: 'prospect', label: 'Never ordered' },
+  { id: 'customer', label: 'Active customer' },
+  { id: 'dormant', label: 'Gone quiet' },
+];
 
 // ── Zoho-Bigin-style left filter rail ───────────────────────────────────────
 // Visually distinct from the top search bar on purpose (O10/O15): a bordered
@@ -270,6 +279,11 @@ export default function FilterRail({ options = {}, value, onChange, resultCount,
           opts={(options.stages || []).map((s) => ({ id: s.id, label: s.label }))} values={filt.lead_stages || []} onToggle={toggle} countFor={countFor} />
         <FacetSection facetKey="deal_types" label="Deal Type" Icon={Briefcase}
           opts={(options.deal_types || []).map((d) => ({ id: d, label: d }))} values={filt.deal_types || []} onToggle={toggle} countFor={countFor} />
+        {/* What the account IS, derived from its order history — as opposed to
+            Stage, which is what one of its deals is doing. "Gone quiet" is the
+            win-back list, and it was previously not a question you could ask. */}
+        <FacetSection facetKey="account_status" label="Account" Icon={Repeat}
+          opts={ACCOUNT_STATUS_OPTS} values={filt.account_status || []} onToggle={toggle} countFor={countFor} />
         <FacetSection facetKey="tags" label="Tag" Icon={TagIcon}
           opts={(options.tags || []).map((t) => ({ id: t.id, label: t.name, color: t.color }))} values={filt.tags || []} onToggle={toggle} countFor={countFor} />
         <DatesSection filt={filt} onSetRange={setRange} />

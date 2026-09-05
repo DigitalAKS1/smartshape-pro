@@ -401,6 +401,9 @@ export const mailRuns = {
   // owner only. getAll() is own-scoped, which is right for the CRM list and is
   // what made reps create a duplicate rather than find the school.
   lookup: (q) => API.get('/schools/lookup', { params: { q } }),
+  // Classify every school prospect/customer/dormant from its orders. Kept
+  // current on each order event; this fills in the history that predates that.
+  backfillLifecycle: () => API.post('/schools/backfill-lifecycle'),
   recordWaConsent: (data) => API.post('/schools/wa-consent', data),
   todayQueue: (date) => API.get('/mail-runs/today-queue', { params: date ? { date } : {} }),
   queueStickers: (params = {}) => API.get('/mail-runs/queue-stickers.pdf', { params: { ...params, _ts: Date.now() }, responseType: 'blob' }),
