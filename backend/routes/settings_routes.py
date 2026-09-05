@@ -959,45 +959,13 @@ async def whatsapp_broadcast_by_tag(request: Request):
 
 # ==================== EMAIL BROADCAST BY TAG ====================
 
-@router.post("/email/broadcast-by-tag")
-async def email_broadcast_by_tag(request: Request):
-    user = await get_current_user(request)
-    if get_team(user) != "admin":
-        raise HTTPException(status_code=403, detail="Admin only")
-    body = await request.json()
-    tag_id = body.get("tag_id", "")
-    subject = body.get("subject", "")
-    html_body = body.get("body", "")
-    if not tag_id or not subject or not html_body:
-        raise HTTPException(status_code=400, detail="tag_id, subject, and body are required")
-
-    email_settings = await db.settings.find_one({"type": "email"}, {"_id": 0})
-    if not email_settings or not email_settings.get("sender_email"):
-        raise HTTPException(status_code=400, detail="Email not configured")
-
-    leads = await db.leads.find({"tags": tag_id}, {"_id": 0}).to_list(5000)
-    sent, failed, skipped = 0, 0, 0
-    sender_email = email_settings["sender_email"]
-
-    for lead in leads:
-        to_email = lead.get("contact_email", "").strip()
-        if not to_email:
-            skipped += 1
-            continue
-        personalized_body = html_body.replace("{contact_name}", lead.get("contact_name", "")).replace("{school_name}", lead.get("company_name", ""))
-        try:
-            msg = MIMEMultipart()
-            msg["From"] = f"{email_settings.get('sender_name', 'SmartShape Pro')} <{sender_email}>"
-            msg["To"] = to_email
-            msg["Subject"] = subject
-            msg.attach(MIMEText(personalized_body, "html"))
-            with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-                server.login(sender_email, email_settings["gmail_app_password"])
-                server.sendmail(sender_email, [to_email], msg.as_string())
-            sent += 1
-        except Exception:
-            failed += 1
-    return {"sent": sent, "failed": failed, "skipped": skipped, "total": len(leads)}
+# NOTE: POST /email/broadcast-by-tag was removed. It opened a fresh SMTP
+# connection per recipient inside the send loop (Gmail throttles that hard), ran
+# synchronously with no queue so any real list would time out the request, sent
+# no List-Unsubscribe header, and reached leads only. Mass email by tag is
+# Marketing -> Email campaign: the audience builder already filters by tag, the
+# send is queued, and the scheduler adds the unsubscribe headers. It had no UI
+# and no caller, so nothing depended on it.
 
 
 # ==================== EMAIL SEND ====================

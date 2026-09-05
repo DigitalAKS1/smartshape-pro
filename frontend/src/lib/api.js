@@ -1264,10 +1264,13 @@ export const physicalDispatches = {
   delete: (id) => API.delete(`/physical-dispatches/${id}`),
 };
 
-// Broadcast Campaigns
+// Broadcast Campaigns.
+// WhatsApp-by-tag only. Mass EMAIL goes through Marketing -> Email campaign,
+// which already targets tags (and source, stage, city, ...) via the audience
+// builder, queues its sends, and attaches List-Unsubscribe headers. A second
+// path would be a worse one.
 export const broadcastApi = {
   byTag: (data) => API.post('/whatsapp/broadcast-by-tag', data),
-  emailByTag: (data) => API.post('/email/broadcast-by-tag', data),
 };
 
 // Admin — Security & System
