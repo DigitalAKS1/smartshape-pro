@@ -52,6 +52,11 @@ export default function ForecastBar({ leads, filterActive = false }) {
   const scopedAttn = filteredIds ? attn.filter((x) => filteredIds.has(x.lead_id)) : attn;
   const reasonCount = (code) => scopedAttn.filter((x) => (x.reasons || []).includes(code)).length;
   const byStage = fc.by_stage || {};
+  // Fall back to the all-in totals if the backend predates the split, so the
+  // bar never renders a blank figure mid-deploy.
+  const qualified = fc.qualified_value ?? fc.total_value;
+  const weighted = fc.qualified_weighted ?? fc.total_weighted;
+  const unqualified = fc.unqualified_count || 0;
   const topStage = STAGES
     .filter((s) => byStage[s.id])
     .map((s) => ({ ...s, ...byStage[s.id] }))
@@ -59,8 +64,26 @@ export default function ForecastBar({ leads, filterActive = false }) {
 
   return (
     <div className="grid grid-cols-2 lg:grid-cols-4 gap-2" data-testid="crm-forecast-bar">
-      <Stat label="Open pipeline value" value={inr(fc.total_value)} icon={TrendingUp} sub={filterActive ? 'Whole pipeline (unaffected by filter)' : undefined} />
-      <Stat label="Weighted forecast" value={inr(fc.total_weighted)} icon={TrendingUp} tone="accent" sub={filterActive ? 'Whole pipeline (unaffected by filter)' : undefined} />
+      {/* Money here is deals somebody has actually engaged with. New enquiries —
+          QR scans, form fills, imported rows — are real work but no evidence of
+          revenue, so they are a count beside the figure rather than part of it.
+          Counting them made the headline grow every time a mailer went out. */}
+      <Stat
+        label="Qualified pipeline"
+        value={inr(qualified)}
+        icon={TrendingUp}
+        sub={[
+          unqualified ? `+ ${unqualified} new enquir${unqualified === 1 ? 'y' : 'ies'}` : null,
+          filterActive ? 'whole pipeline' : null,
+        ].filter(Boolean).join(' · ') || undefined}
+      />
+      <Stat
+        label="Weighted forecast"
+        value={inr(weighted)}
+        icon={TrendingUp}
+        tone="accent"
+        sub={filterActive ? 'Whole pipeline (unaffected by filter)' : undefined}
+      />
       <Stat
         label="Needs attention"
         value={String(scopedAttn.length)}

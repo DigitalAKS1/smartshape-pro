@@ -105,7 +105,15 @@ export default function EngagementDashboardTab() {
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <Kpi icon={TrendingUp} label="Active leads" value={data.totals.active_leads} color="#0ea5e9"
           onClick={() => openDrill('active')} />
-        <Kpi icon={Trophy} label="Won" value={data.totals.won_count} sub={money(data.totals.won_value)} color="#10b981"
+        {/* Won value is invoiced money now, so it reconciles with the books.
+            A deal marked won with no order behind it is worth nothing yet —
+            said out loud, because the alternative is a revenue figure quietly
+            short by however many orders were never raised. */}
+        <Kpi icon={Trophy} label="Won" value={data.totals.won_count}
+          sub={data.totals.won_unreconciled
+            ? `${money(data.totals.won_value)} · ${data.totals.won_unreconciled} without an order`
+            : money(data.totals.won_value)}
+          color="#10b981"
           onClick={() => openDrill('stage', 'won')} />
         <Kpi icon={Send} label={`Touches · ${days}d`} value={data.touches_total} color="#6366f1" />
         <Kpi icon={Flame} label="Hot signals" value={data.hot_signals} sub="brochure opens" color="#f97316"

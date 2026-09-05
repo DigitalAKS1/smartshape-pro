@@ -363,6 +363,12 @@ def compute_visit_required(lead: dict, now: datetime = None) -> bool:
 
 OPEN_STAGES = ["new", "contacted", "demo", "quoted", "negotiation"]
 
+# Open, but not yet a forecast. A lead sits in `new` until somebody has actually
+# made contact — it may be a QR scan, a form fill or an imported row, and none of
+# those are evidence that money is coming. Kept in the pipeline (they are real
+# work to be done) but reported as a count, not as rupees.
+UNQUALIFIED_STAGES = {"new"}
+
 DEFAULT_PIPELINE_SETTINGS = {
     "type": "crm_pipeline",
     "stage_probabilities": {
@@ -399,6 +405,54 @@ def resolve_lead_value(lead: dict, quote_map: dict) -> float:
         latest = max(linked, key=lambda q: q.get("created_at", "") or "")
         return float(latest.get("grand_total", 0) or 0)
     return float(lead.get("expected_value", 0) or 0)
+
+
+# ── Won value: the money, not the estimate ──────────────────────────────────
+#
+# `expected_value` is what a rep typed while the deal was still a guess, and
+# reporting it as won value meant the CRM's revenue figure never reconciled with
+# what was invoiced — so "what is a demo actually worth?" had no answer. Once a
+# deal is won, the order is the truth.
+
+# An order that was cancelled never became revenue; every other status is money
+# that has been committed, whether or not it has shipped yet.
+NON_REVENUE_ORDER_STATUSES = {"cancelled"}
+
+
+async def _build_order_map(lead_ids: list) -> dict:
+    """lead_id -> [orders], excluding cancelled and deleted ones."""
+    out: dict = {}
+    ids = [i for i in (lead_ids or []) if i]
+    if not ids:
+        return out
+    async for o in db.orders.find(
+        {"lead_id": {"$in": ids}, "is_deleted": {"$ne": True}},
+        {"_id": 0, "lead_id": 1, "grand_total": 1, "status": 1},
+    ):
+        if (o.get("status") or "") in NON_REVENUE_ORDER_STATUSES:
+            continue
+        out.setdefault(o["lead_id"], []).append(o)
+    return out
+
+
+def resolve_won_value(lead: dict, order_map: dict) -> float:
+    """Invoiced total for a won deal. Zero when nothing was ordered.
+
+    Deliberately does NOT fall back to expected_value: silently substituting the
+    guess is exactly what stopped the number reconciling. A win with no order is
+    worth nothing until an order exists, and is surfaced separately so it can be
+    chased rather than quietly counted.
+    """
+    return round(sum(float(o.get("grand_total", 0) or 0)
+                     for o in order_map.get(lead.get("lead_id"), [])), 2)
+
+
+def is_unreconciled_win(lead: dict, order_map: dict) -> bool:
+    """A deal marked won that has no order behind it — either the order was
+    never raised, or the deal was not really won."""
+    if lead.get("stage") != "won":
+        return False
+    return not order_map.get(lead.get("lead_id"))
 
 
 def stage_probability(stage: str, settings: dict) -> int:
@@ -2369,6 +2423,18 @@ async def engagement_dashboard(request: Request):
 
     won = next((f for f in funnel if f["stage"] == "won"), {"count": 0, "value": 0})
     active_total = sum(f["count"] for f in funnel if f["stage"] in OPEN_STAGES)
+
+    # Won value is invoiced money, not the estimate a rep typed while the deal
+    # was still a guess — otherwise this figure can never be reconciled against
+    # the books, and nobody can say what a demo is worth. Wins with no order
+    # behind them are counted separately so they can be chased rather than
+    # quietly reported as zero.
+    won_q = {**lead_q, "stage": "won"}
+    won_leads = await db.leads.find(
+        won_q, {"_id": 0, "lead_id": 1, "stage": 1}).to_list(5000)
+    order_map = await _build_order_map([l["lead_id"] for l in won_leads])
+    won_value = round(sum(resolve_won_value(l, order_map) for l in won_leads), 2)
+    won_unreconciled = sum(1 for l in won_leads if is_unreconciled_win(l, order_map))
     return {
         "days": days,
         "funnel": funnel,
@@ -2378,7 +2444,8 @@ async def engagement_dashboard(request: Request):
         "sequences_active": sequences_active,
         "hot_signals": hot_signals,
         "stuck": stuck,
-        "totals": {"won_count": won["count"], "won_value": won["value"], "active_leads": active_total},
+        "totals": {"won_count": won["count"], "won_value": won_value,
+                   "won_unreconciled": won_unreconciled, "active_leads": active_total},
     }
 
 
@@ -5326,12 +5393,25 @@ async def leads_forecast(request: Request):
     by_stage = {s: {"count": 0, "value": 0.0, "weighted": 0.0} for s in OPEN_STAGES}
     by_rep = {}
     total_value = total_weighted = 0.0
+    # An enquiry nobody has spoken to yet is not a forecast. `new` holds QR
+    # scans, form fills and imported rows; counting their rupee value as
+    # pipeline made the headline number grow every time a mailer went out.
+    # They stay visible as a count, separately from money being forecast.
+    qualified_value = qualified_weighted = 0.0
+    unqualified_count = 0
+    unqualified_value = 0.0
     for lead in leads:
         stage = lead.get("stage", "")
         if stage not in by_stage:
             continue
         value = resolve_lead_value(lead, quote_map)
         weighted = round(value * stage_probability(stage, settings) / 100, 2)
+        if stage in UNQUALIFIED_STAGES:
+            unqualified_count += 1
+            unqualified_value += value
+        else:
+            qualified_value += value
+            qualified_weighted += weighted
         by_stage[stage]["count"] += 1
         by_stage[stage]["value"] = round(by_stage[stage]["value"] + value, 2)
         by_stage[stage]["weighted"] = round(by_stage[stage]["weighted"] + weighted, 2)
@@ -5343,8 +5423,14 @@ async def leads_forecast(request: Request):
         total_value += value
         total_weighted += weighted
     return {
+        # total_* keep every open lead, for anyone who wants the all-in number.
         "total_value": round(total_value, 2),
         "total_weighted": round(total_weighted, 2),
+        # qualified_* are the forecast: deals someone has actually engaged with.
+        "qualified_value": round(qualified_value, 2),
+        "qualified_weighted": round(qualified_weighted, 2),
+        "unqualified_count": unqualified_count,
+        "unqualified_value": round(unqualified_value, 2),
         "by_stage": by_stage,
         "by_rep": by_rep,
     }
