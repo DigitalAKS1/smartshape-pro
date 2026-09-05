@@ -1,8 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { STAGES } from '../lib/crmConstants';
-import { deriveFilterOptions } from '../lib/crmFilter';
-import { buildMasterContexts, computeMasterFiltered, makeCountFor, tabKind, parseSearchQuery, mergeFilters } from '../lib/crmMasterFilter';
 import {
   schools as schoolsApi,
   leads as leadsApi,
@@ -21,6 +19,8 @@ import {
   dealTypes as dealTypesApi,
 } from '../lib/api';
 import { useDataSync, useAutoRefresh } from '../lib/dataSync';
+import useCrmData from './useCrmData';
+import useCrmFilters from './useCrmFilters';
 import { useAuth } from '../contexts/AuthContext';
 import { toast } from 'sonner';
 
@@ -28,32 +28,26 @@ export default function useLeadsCRM() {
   const { user } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
 
-  // ── Data lists ──────────────────────────────────────────────────────────────
-  const [leadsList, setLeadsList] = useState([]);
-  const [schoolsList, setSchoolsList] = useState([]);
-  const [tasksList, setTasksList] = useState([]);
-  const [contactsList, setContactsList] = useState([]);
-  const [spList, setSpList] = useState([]);
-  const [groupsList, setGroupsList] = useState([]);
-  const [sourcesList, setSourcesList] = useState([]);
-  const [rolesList, setRolesList] = useState([]);
-  const [dealTypesList, setDealTypesList] = useState([]);
-  const [tagsList, setTagsList] = useState([]);
-  const [dripSequencesList, setDripSequencesList] = useState([]);
-  const [allQuotations, setAllQuotations] = useState([]);
-  const [designationsList, setDesignationsList] = useState([]);
+  // ── Data ────────────────────────────────────────────────────────────────────
+  // Thirteen lists, their loading flag and the refetch wiring live in
+  // useCrmData; "where does this come from" is now one short file instead of a
+  // section buried in form state.
+  const data = useCrmData();
+  const {
+    leadsList, setLeadsList, schoolsList, setSchoolsList, tasksList, setTasksList,
+    contactsList, setContactsList, spList, groupsList, setGroupsList,
+    sourcesList, setSourcesList, rolesList, setRolesList, dealTypesList,
+    tagsList, setTagsList, dripSequencesList, allQuotations, designationsList,
+    loading, setLoading, fetchData,
+  } = data;
+
 
   // ── UI state ─────────────────────────────────────────────────────────────────
-  const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('schools');
-  const [searchTerm, setSearchTerm] = useState('');
-  const [filterType, setFilterType] = useState('all');
-  const [filterTag, setFilterTag] = useState('');
   const [filterRole, setFilterRole] = useState('');
   // Master filter (left FilterRail, O4): applies to schools/contacts/leads alike,
   // across every tab. Detail filters (filterType/filterTag/filterRole/MultiFilterBar
   // above) stay as per-tab refinements layered on top of this.
-  const [masterFilter, setMasterFilter] = useState({});
   const [sortConfig, setSortConfig] = useState({ key: '', dir: 'asc' });
   const [contactPage, setContactPage] = useState(1);
   const contactsPerPage = 10;
@@ -147,44 +141,6 @@ export default function useLeadsCRM() {
     _setDetailContact(val);
   }, []);
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  // DATA FETCH
-  // ─────────────────────────────────────────────────────────────────────────────
-  const fetchData = async () => {
-    try {
-      const [lr, sr, tr, spr, cr, gr, srcR, rlR, tgR, dripR, qR, desR, dtR] = await Promise.all([
-        leadsApi.getAll(), schoolsApi.getAll(), tasksApi.getAll(), salesPersons.getAll(), contactsApi.getAll(),
-        groupsApi.getAll().catch(() => ({ data: [] })),
-        sourcesApi.getAll().catch(() => ({ data: [] })),
-        contactRolesApi.getAll().catch(() => ({ data: [] })),
-        tagsApi.getAll().catch(() => ({ data: [] })),
-        dripSequencesApi.getAll().catch(() => ({ data: [] })),
-        quotationsApi.getAll().catch(() => ({ data: [] })),
-        designationsApi.getAll().catch(() => ({ data: [] })),
-        dealTypesApi.getAll().catch(() => ({ data: [] })),
-      ]);
-      const arr = (x) => Array.isArray(x) ? x : [];
-      setLeadsList(arr(lr.data));
-      setSchoolsList(arr(sr.data));
-      setTasksList(arr(tr.data));
-      setSpList(arr(spr.data));
-      setContactsList(arr(cr.data));
-      setGroupsList(arr(gr.data));
-      setSourcesList(arr(srcR.data));
-      setRolesList(arr(rlR.data));
-      setTagsList(arr(tgR.data));
-      setDripSequencesList(arr(dripR.data));
-      setAllQuotations(arr(qR.data));
-      setDesignationsList(arr(desR.data));
-      setDealTypesList(arr(dtR.data));
-    } catch { toast.error('Failed to load'); }
-    finally { setLoading(false); }
-  };
-
-  const stableFetch = useCallback(() => { fetchData(); }, []); // eslint-disable-line
-  useEffect(() => { stableFetch(); }, [stableFetch]);
-  useDataSync('crm', stableFetch);
-  useAutoRefresh(stableFetch, 90000);
 
   // Open lead detail or switch tab from URL params
   useEffect(() => {
@@ -716,67 +672,22 @@ export default function useLeadsCRM() {
   };
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // MASTER FILTER (left FilterRail — O1,O4,O5,O16,O17) — applies search + the
-  // rail's facets to schools/contacts/leads identically, so every tab and badge
-  // can read the same honest counts. Built on the already-shipped crmFilter.js
-  // engine via the thin crmMasterFilter.js glue (kept out of crmFilter.js itself).
+  // MASTER FILTER — search box + left rail + the two dropdowns, applied to
+  // schools/contacts/leads identically so every tab and badge reads the same
+  // honest counts. Lives in useCrmFilters: it is pure derivation over the lists
+  // above, and is the part of this hook with real test cover behind it.
   // ─────────────────────────────────────────────────────────────────────────────
-  const filterOptions = useMemo(() => deriveFilterOptions({
-    contacts: contactsList, leads: leadsList, schools: schoolsList,
-    sources: sourcesList, roles: rolesList, tags: tagsList, salespersons: spList,
-    dealTypes: dealTypesList,
-  }), [contactsList, leadsList, schoolsList, sourcesList, rolesList, tagsList, spList, dealTypesList]);
+  const filters = useCrmFilters({
+    schoolsList, contactsList, leadsList,
+    sourcesList, rolesList, tagsList, spList, dealTypesList,
+    activeTab,
+  });
+  const {
+    searchTerm, setSearchTerm, filterType, setFilterType, filterTag, setFilterTag,
+    masterFilter, setMasterFilter, filterOptions, parsedQuery, effectiveFilter,
+    masterFiltered, filteredLeads, masterCountFor, activeTabKind,
+  } = filters;
 
-  const masterContexts = useMemo(() => buildMasterContexts({
-    schoolsList, leadsList, contactsList, rolesList,
-  }), [schoolsList, leadsList, contactsList, rolesList]);
-
-  // O21 — Gmail-style search: `owner:parul city:rohini hot` parses into real
-  // facet ids + residual free text. The parsed operators are merged with the
-  // rail's own `masterFilter` ONLY for matching/counting (read-time) — the
-  // rail's clickable checkbox state is never mutated by typing, so removing a
-  // word from the search box can't accidentally un-toggle a rail selection
-  // (and vice versa). `effectiveFilter` is what every match/count actually uses.
-  const parsedQuery = useMemo(() => parseSearchQuery(searchTerm, filterOptions), [searchTerm, filterOptions]);
-
-  // The "All Types" / "All Tags" dropdowns sit next to the global search box, so
-  // they have to mean the same thing on every tab. Expressing them as ordinary
-  // facets — lead_types/school_types and tags — is what makes that true: they
-  // now narrow Schools and Contacts (and the tab counts) exactly as they narrow
-  // Leads. Previously they were applied only to `filteredLeads`, so on any other
-  // tab picking one appeared to do nothing at all.
-  const dropdownFilter = useMemo(() => {
-    const f = {};
-    if (filterType !== 'all') {
-      if (['hot', 'warm', 'cold'].includes(filterType)) f.lead_types = [filterType];
-      else f.school_types = [filterType];
-    }
-    if (filterTag) f.tags = [filterTag];
-    return f;
-  }, [filterType, filterTag]);
-
-  const effectiveFilter = useMemo(
-    () => mergeFilters(mergeFilters(masterFilter, parsedQuery.filter), dropdownFilter),
-    [masterFilter, parsedQuery.filter, dropdownFilter]);
-
-  const masterFiltered = useMemo(() => computeMasterFiltered({
-    schoolsList, contactsList, leadsList, contexts: masterContexts, searchTerm: parsedQuery.text, masterFilter: effectiveFilter,
-  }), [schoolsList, contactsList, leadsList, masterContexts, parsedQuery.text, effectiveFilter]);
-
-  // Live "if this facet value were added, how many rows remain" for the
-  // *current tab's* entity type — feeds FilterRail's per-option counts and the
-  // search-suggestion trailing count.
-  const activeTabKind = tabKind(activeTab);
-  const activeTabList = activeTabKind === 'school' ? schoolsList : activeTabKind === 'contact' ? contactsList : leadsList;
-  const masterCountFor = useMemo(() => makeCountFor({
-    kind: activeTabKind, list: activeTabList, ctx: masterContexts[activeTabKind], searchTerm: parsedQuery.text, masterFilter: effectiveFilter,
-  }), [activeTabKind, activeTabList, masterContexts, parsedQuery.text, effectiveFilter]);
-
-  // Leads for the list / pipeline / kanban / table views. The type + tag
-  // dropdowns are already part of `effectiveFilter` (see dropdownFilter above),
-  // so this is just the master-filtered pool — no second, leads-only copy of the
-  // same rules that the other tabs never got.
-  const filteredLeads = masterFiltered.leads;
 
   return {
     // State — data
