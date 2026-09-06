@@ -162,7 +162,7 @@ export default function LeadsCRM() {
   React.useEffect(() => {
     if (crm.activeTab !== 'schools') return;
     let live = true;
-    schoolsApiObj.reorderDue()
+    mailRunsApi.reorderDue()
       .then(r => { if (live) setReorderDue(Array.isArray(r.data) ? r.data : []); })
       .catch(() => { if (live) setReorderDue([]); });
     return () => { live = false; };
