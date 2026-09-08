@@ -25,7 +25,7 @@ except Exception as _cache_exc:   # redis lib/env missing — never take the app
 
 from rbac import (get_team, require_admin, require_teams, require_superadmin, require_module,
                   VALID_ROLES, PRIMARY_ROLE_ORDER, default_permissions_for_roles,
-                  can_read_crm)
+                  can_read_crm, sees_all)
 from audit_backup import list_backups, restore_bundle
 
 # Lazy import to avoid circular dependency — push_routes imports from database only
@@ -1505,6 +1505,135 @@ async def export_contacts(request: Request):
     output.seek(0)
     return StreamingResponse(iter([output.getvalue()]), media_type="text/csv",
                              headers={"Content-Disposition": "attachment; filename=contacts_export.csv"})
+
+
+# ---------------------------------------------------------------------------
+# Streaming schools export
+# ---------------------------------------------------------------------------
+
+SCHOOL_EXPORT_FIELDS = ["school_id", "school_name", "email", "phone",
+                        "city", "state", "owner", "tags"]
+
+# Control characters have no place in a CSV cell. A newline inside a quoted
+# field is legal RFC-4180, but it turns one school into two lines for every
+# reader that splits on "\n" (Google Sheets' importer, `wc -l`, our own
+# round-trip checks), so it is flattened to a space instead. Tabs go too —
+# they survive a paste into Excel as a column break.
+_CSV_SAFE = {c: " " for c in range(0x20)}
+_CSV_SAFE[0x7F] = " "
+
+
+def _csv_cell(value) -> str:
+    """Coerce one field to a single-line string. Quoting is csv.writer's job."""
+    if value is None:
+        return ""
+    if isinstance(value, (list, tuple)):
+        value = "|".join("" if v is None else str(v) for v in value)
+    elif not isinstance(value, str):
+        value = str(value)
+    # CRLF first, so a Windows-entered address does not become a double space.
+    return value.replace("\r\n", "\n").translate(_CSV_SAFE)
+
+
+async def _school_export_query(user: dict) -> dict:
+    """Which schools this user may export — the same visibility GET /schools
+    grants (crm_routes.py get_schools), so the CSV can never contain a row the
+    caller could not already open in the CRM. Ownership itself is decided by
+    crm_routes._owner_clause, never re-implemented here.
+
+    Imported lazily: main.py loads both routers, and a module-level import
+    would couple two large route modules for one helper.
+    """
+    from routes.crm_routes import _owner_clause  # lazy: avoids route-module coupling
+
+    if sees_all(user, "leads"):
+        query = {}
+    else:
+        email = user["email"]
+        # A school is also visible when it holds one of my leads or quotations —
+        # without this a rep loses the school the moment it is owned elsewhere,
+        # even though her own deal still sits on it.
+        own_leads = await db.leads.find(
+            {"assigned_to": email}, {"_id": 0, "school_id": 1}).to_list(10000)
+        own_quotes = await db.quotations.find(
+            {"$or": [{"assigned_to": email}, {"created_by": email}],
+             "is_deleted": {"$ne": True}},
+            {"_id": 0, "school_id": 1}).to_list(10000)
+        linked = [r.get("school_id") for r in (own_leads + own_quotes) if r.get("school_id")]
+        query = {"$or": [
+            *_owner_clause(email)["$or"],
+            {"school_id": {"$in": linked}} if linked else {"school_id": "__none__"},
+        ]}
+    query["is_deleted"] = {"$ne": True}
+    return query
+
+
+@router.get("/export/schools")
+async def export_schools(request: Request, format: str = "csv"):
+    """Schools as CSV, streamed row by row.
+
+    The other exports on this router call `.to_list(5000)` and build the whole
+    file in a StringIO first, which caps the export and spikes memory on a
+    1-vCPU box. This one holds only the tag-name map (small, fetched once) and
+    a 100-document cursor batch at a time, so the response starts flowing
+    before the last school has been read and the size of the collection stops
+    mattering.
+
+    Everything that can fail — auth, scope, the tag map — is resolved BEFORE
+    the response starts. Once StreamingResponse has yielded its first chunk the
+    status line is already 200, and a later error would show up as a silently
+    truncated file rather than an error.
+    """
+    user = await get_current_user(request)
+    if not can_read_crm(user):
+        raise HTTPException(status_code=403, detail="CRM access required")
+    if (format or "csv").lower() != "csv":
+        raise HTTPException(status_code=400, detail="Only format=csv is supported")
+
+    query = await _school_export_query(user)
+
+    # One query for every tag name, reused for every row. A per-row lookup here
+    # would be a 1000-school N+1 — the exact cost this redesign is removing.
+    tag_names = {}
+    async for t in db.tags.find({}, {"_id": 0, "tag_id": 1, "name": 1}):
+        tag_names[t.get("tag_id")] = t.get("name") or t.get("tag_id")
+
+    # One reused buffer + writer: csv.writer does RFC-4180 quoting (commas,
+    # quotes, doubled internal quotes) that hand-rolled escaping gets wrong.
+    buf = io.StringIO()
+    writer = csv.writer(buf, lineterminator="\n")
+
+    def _line(values) -> str:
+        buf.seek(0)
+        buf.truncate(0)
+        writer.writerow(values)
+        return buf.getvalue()
+
+    projection = {"_id": 0, "tag_ids": 1, "assigned_to": 1, "owner": 1,
+                  **{f: 1 for f in SCHOOL_EXPORT_FIELDS if f not in ("owner", "tags")}}
+
+    async def csv_generator():
+        yield _line(SCHOOL_EXPORT_FIELDS)
+        cursor = db.schools.find(query, projection).sort("school_name", 1).batch_size(100)
+        async for doc in cursor:
+            row = []
+            for field in SCHOOL_EXPORT_FIELDS:
+                if field == "tags":
+                    ids = doc.get("tag_ids") or []
+                    row.append(_csv_cell([tag_names.get(t, t) for t in ids]))
+                elif field == "owner":
+                    # `assigned_to` is the CRM's owner field; `owner` is what the
+                    # legacy CSV importer wrote (see execute_import above).
+                    row.append(_csv_cell(doc.get("assigned_to") or doc.get("owner")))
+                else:
+                    row.append(_csv_cell(doc.get(field)))
+            yield _line(row)
+
+    return StreamingResponse(
+        csv_generator(),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=schools_export.csv"},
+    )
 
 
 # ==================== AI INSIGHTS ====================
