@@ -1087,8 +1087,26 @@ async def execute_import(request: Request):
                 if existing:
                     failed += 1
                     continue
+                contact_id = f"con_{uuid.uuid4().hex[:12]}"
+                tag_ids = []
+                tags_str = data.get("tags", "").strip()
+                if tags_str:
+                    tag_names = [t.strip() for t in tags_str.replace(",", " ").split() if t.strip()]
+                    for tag_name in tag_names:
+                        existing_tag = await db.tags.find_one({"name": tag_name})
+                        if not existing_tag:
+                            tag_id = f"tag_{uuid.uuid4().hex[:12]}"
+                            await db.tags.insert_one({
+                                "tag_id": tag_id,
+                                "name": tag_name,
+                                "created_by": user["email"],
+                                "created_at": datetime.now(timezone.utc).isoformat(),
+                            })
+                        else:
+                            tag_id = existing_tag["tag_id"]
+                        tag_ids.append(tag_id)
                 await db.contacts.insert_one({
-                    "contact_id": f"con_{uuid.uuid4().hex[:12]}",
+                    "contact_id": contact_id,
                     "name": data.get("name", "").strip(),
                     "phone": data.get("phone", "").strip(),
                     "email": data.get("email", "").strip(),
@@ -1096,6 +1114,7 @@ async def execute_import(request: Request):
                     "designation": data.get("designation", "").strip(),
                     "source": data.get("source", "").strip(),
                     "notes": data.get("notes", "").strip(),
+                    "tag_ids": tag_ids,
                     "status": "active",
                     "converted_to_lead": False,
                     "lead_id": None,
@@ -1126,8 +1145,30 @@ async def execute_import(request: Request):
                 if pwd:
                     doc["password_hash"] = hash_password(pwd)
                 await db.schools.insert_one(doc)
+
+                # Link tags from CSV (comma/space-separated tag names)
+                tags_str = data.get("tags", "").strip()
+                if tags_str:
+                    tag_names = [t.strip() for t in tags_str.replace(",", " ").split() if t.strip()]
+                    for tag_name in tag_names:
+                        existing_tag = await db.tags.find_one({"name": tag_name})
+                        if not existing_tag:
+                            await db.tags.insert_one({
+                                "tag_id": f"tag_{uuid.uuid4().hex[:12]}",
+                                "name": tag_name,
+                                "created_by": user["email"],
+                                "created_at": datetime.now(timezone.utc).isoformat(),
+                            })
+                        # Link tag to school
+                        tag_doc = await db.tags.find_one({"name": tag_name})
+                        if tag_doc and tag_doc["tag_id"] not in doc.get("tag_ids", []):
+                            await db.schools.update_one(
+                                {"school_id": school_id},
+                                {"$addToSet": {"tag_ids": tag_doc["tag_id"]}}
+                            )
+
                 created += 1
-        except Exception:
+        except Exception as e:
             failed += 1
 
     log_id = f"imp_{uuid.uuid4().hex[:8]}"
