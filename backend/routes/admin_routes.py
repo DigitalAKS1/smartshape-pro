@@ -9,6 +9,20 @@ import asyncio
 
 from database import db
 from auth_utils import get_current_user, hash_password
+from pymongo.errors import BulkWriteError
+
+try:
+    from cache import set_cached, invalidate
+except Exception as _cache_exc:   # redis lib/env missing — never take the app down
+    import logging as _logging
+    _logging.warning("cache module unavailable (%s); imports run without progress tracking", _cache_exc)
+
+    async def set_cached(key, value, ttl=600):
+        return False
+
+    async def invalidate(pattern):
+        return 0
+
 from rbac import (get_team, require_admin, require_teams, require_superadmin, require_module,
                   VALID_ROLES, PRIMARY_ROLE_ORDER, default_permissions_for_roles,
                   can_read_crm)
@@ -1065,115 +1079,248 @@ async def preview_import(file=None, entity_type: str = "contacts", request: Requ
     }
 
 
+# Same default the CRM's own POST /tags uses, so a tag born in an import looks
+# no different from one an admin typed.
+_IMPORT_TAG_COLOR = "#6366f1"
+
+# A 5,000-row paste of garbage must not return a 5,000-entry error array; the
+# counts stay honest, only the itemised list is capped.
+_MAX_REPORTED_ERRORS = 200
+
+
+def _parse_tag_names(raw) -> list:
+    """Split one CSV tag cell on commas only, preserving order and de-duping.
+
+    The previous importer split on commas AND whitespace, which shattered every
+    real multi-word tag — "EU Chandigarh 2026" became three tags named EU,
+    Chandigarh and 2026. Commas are the only separator a spreadsheet user can
+    actually type inside a single cell.
+    """
+    if not raw:
+        return []
+    seen, names = set(), []
+    for part in str(raw).split(","):
+        name = part.strip()
+        if name and name not in seen:
+            seen.add(name)
+            names.append(name)
+    return names
+
+
+async def _resolve_tag_ids(names, created_by: str) -> dict:
+    """Map every tag name in a file to a tag_id in two round trips, not 2N.
+
+    Existing tags are read in ONE find(); the names nobody has yet are minted in
+    ONE insert_many. Crucially the same name resolves to the SAME id for every
+    row of the import — minting a fresh tag per row (which is what a naive batch
+    rewrite does) would leave 500 different tags all called "Care" and break tag
+    filtering outright.
+    """
+    names = list(dict.fromkeys(n for n in names if n))
+    if not names:
+        return {}
+    by_name = {}
+    async for t in db.tags.find({"name": {"$in": names}}, {"_id": 0, "tag_id": 1, "name": 1}):
+        by_name.setdefault(t.get("name"), t.get("tag_id"))
+    missing = [n for n in names if n not in by_name]
+    if not missing:
+        return by_name
+    now_iso = datetime.now(timezone.utc).isoformat()
+    new_docs = [{
+        "tag_id": f"tag_{uuid.uuid4().hex[:12]}",
+        "name": name,
+        "color": _IMPORT_TAG_COLOR,
+        "created_by": created_by,
+        "created_at": now_iso,
+    } for name in missing]
+    try:
+        await db.tags.insert_many(new_docs, ordered=False)
+        for doc in new_docs:
+            by_name[doc["name"]] = doc["tag_id"]
+    except Exception:
+        # A concurrent import may have minted the same names first. Re-read and
+        # let whatever is actually in the database win — never invent an id that
+        # no tag document carries.
+        async for t in db.tags.find({"name": {"$in": missing}}, {"_id": 0, "tag_id": 1, "name": 1}):
+            by_name.setdefault(t.get("name"), t.get("tag_id"))
+    return by_name
+
+
 @router.post("/import/execute")
 async def execute_import(request: Request):
+    """Commit a previewed CSV import using batched writes.
+
+    The previous version issued two to four round trips PER ROW — a duplicate
+    check, a tag lookup and a tag insert per tag, then the entity insert — which
+    is why a 500-school file took two to three minutes. This version resolves
+    duplicates and tags for the WHOLE file in a handful of queries and then
+    writes every document in a single insert_many, so the round-trip cost is
+    O(1) in the number of rows rather than O(rows).
+
+    Deliberately kept from the old behaviour, because dropping any of it would
+    be a data regression rather than a speed-up:
+      * duplicate suppression (school by email, contact by phone+name) — this
+        app already has a duplicate-schools problem; a blind insert_many would
+        feed it,
+      * the contacts entity type (this endpoint's default),
+      * the optional school password hash,
+      * the db.import_logs row that GET /import/logs renders.
+    """
     user = await get_current_user(request)
     body = await request.json()
     entity_type = body.get("entity_type", "contacts")
     rows = body.get("rows", [])
+    import_id = f"imp_{uuid.uuid4().hex[:8]}"
+    now_iso = datetime.now(timezone.utc).isoformat()
+
     created = 0
     failed = 0
-    for row_data in rows:
+    errors = []
+    progress = {"total": len(rows), "processed": 0, "created": 0, "failed": 0}
+    progress_live = await set_cached(f"import:{import_id}:progress", progress, ttl=3600)
+
+    def _fail(row_num, message):
+        nonlocal failed
+        failed += 1
+        if len(errors) < _MAX_REPORTED_ERRORS:
+            errors.append({"row": row_num, "error": message})
+
+    async def _publish(processed):
+        """Progress is best-effort. cache.py's redis client is synchronous, so a
+        Redis that is down blocks the event loop on every call — after the first
+        refusal we stop asking rather than pay that toll 5 times a file."""
+        nonlocal progress_live
+        if not progress_live:
+            return
+        progress.update({"processed": processed, "created": created, "failed": failed})
+        progress_live = await set_cached(f"import:{import_id}:progress", progress, ttl=3600)
+
+    # --- Pass 1: split the rows the preview already judged -------------------
+    ok_rows = []
+    for i, row_data in enumerate(rows):
+        row_num = row_data.get("row_num") or (i + 1)
         if row_data.get("status") != "ok":
-            failed += 1
-            continue
-        data = row_data.get("data", {})
-        try:
-            if entity_type == "contacts":
-                existing = await db.contacts.find_one({
-                    "phone": data.get("phone", "").strip(),
-                    "name": data.get("name", "").strip(),
-                })
-                if existing:
-                    failed += 1
-                    continue
-                contact_id = f"con_{uuid.uuid4().hex[:12]}"
-                tag_ids = []
-                tags_str = data.get("tags", "").strip()
-                if tags_str:
-                    tag_names = [t.strip() for t in tags_str.replace(",", " ").split() if t.strip()]
-                    for tag_name in tag_names:
-                        existing_tag = await db.tags.find_one({"name": tag_name})
-                        if not existing_tag:
-                            tag_id = f"tag_{uuid.uuid4().hex[:12]}"
-                            await db.tags.insert_one({
-                                "tag_id": tag_id,
-                                "name": tag_name,
-                                "created_by": user["email"],
-                                "created_at": datetime.now(timezone.utc).isoformat(),
-                            })
-                        else:
-                            tag_id = existing_tag["tag_id"]
-                        tag_ids.append(tag_id)
-                await db.contacts.insert_one({
-                    "contact_id": contact_id,
-                    "name": data.get("name", "").strip(),
-                    "phone": data.get("phone", "").strip(),
-                    "email": data.get("email", "").strip(),
-                    "company": data.get("company", "").strip(),
-                    "designation": data.get("designation", "").strip(),
-                    "source": data.get("source", "").strip(),
-                    "notes": data.get("notes", "").strip(),
-                    "tag_ids": tag_ids,
-                    "status": "active",
-                    "converted_to_lead": False,
-                    "lead_id": None,
-                    "created_by": user["email"],
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                })
-                created += 1
-            elif entity_type == "schools":
-                existing = await db.schools.find_one({"email": data.get("email", "").strip()})
-                if existing:
-                    failed += 1
-                    continue
-                school_id = f"sch_{uuid.uuid4().hex[:12]}"
+            _fail(row_num, row_data.get("error") or "Row rejected at preview")
+        else:
+            ok_rows.append((row_num, row_data.get("data") or {}))
+        if (i + 1) % 100 == 0:
+            await _publish(i + 1)
 
-                # Build tag_ids list BEFORE inserting school (same as contacts)
-                tag_ids = []
-                tags_str = data.get("tags", "").strip()
-                if tags_str:
-                    tag_names = [t.strip() for t in tags_str.replace(",", " ").split() if t.strip()]
-                    for tag_name in tag_names:
-                        existing_tag = await db.tags.find_one({"name": tag_name})
-                        if not existing_tag:
-                            tag_id = f"tag_{uuid.uuid4().hex[:12]}"
-                            await db.tags.insert_one({
-                                "tag_id": tag_id,
-                                "name": tag_name,
-                                "created_by": user["email"],
-                                "created_at": datetime.now(timezone.utc).isoformat(),
-                            })
-                        else:
-                            tag_id = existing_tag["tag_id"]
-                        tag_ids.append(tag_id)
+    if entity_type not in ("contacts", "schools"):
+        # Previously this fell through the loop and reported a silent success of
+        # zero rows. Say so instead.
+        for row_num, _ in ok_rows:
+            _fail(row_num, f"Unsupported entity_type '{entity_type}'")
+        ok_rows = []
 
-                # Insert school WITH tag_ids already linked
+    # --- Pass 2: resolve every tag in the file, once -------------------------
+    tag_names_per_row = [_parse_tag_names(data.get("tags")) for _, data in ok_rows]
+    tag_map = await _resolve_tag_ids(
+        [name for names in tag_names_per_row for name in names], user["email"])
+
+    # --- Pass 3: one duplicate query for the whole file, then build docs -----
+    docs = []
+    if entity_type == "schools":
+        emails = list({(d.get("email") or "").strip() for _, d in ok_rows})
+        taken = set()
+        async for s in db.schools.find({"email": {"$in": emails}}, {"_id": 0, "email": 1}):
+            taken.add((s.get("email") or "").strip())
+        seen = set()
+        for (row_num, data), tag_names in zip(ok_rows, tag_names_per_row):
+            email = (data.get("email") or "").strip()
+            if email in taken:
+                _fail(row_num, f"School with email '{email}' already exists")
+                continue
+            if email in seen:
+                _fail(row_num, f"Duplicate email '{email}' earlier in this file")
+                continue
+            seen.add(email)
+            try:
                 doc = {
-                    "school_id": school_id,
-                    "school_name": data.get("school_name", "").strip(),
-                    "email": data.get("email", "").strip(),
-                    "phone": data.get("phone", "").strip(),
-                    "school_type": data.get("school_type", "CBSE").strip(),
-                    "city": data.get("city", "").strip(),
-                    "state": data.get("state", "").strip(),
-                    "primary_contact_name": data.get("contact_name", "").strip(),
-                    "school_strength": int(data.get("school_strength", 0) or 0),
-                    "tag_ids": tag_ids,
-                    "owner": data.get("owner", "").strip() or user["email"],  # Auto-assign to uploader if blank
+                    "school_id": f"sch_{uuid.uuid4().hex[:12]}",
+                    "school_name": (data.get("school_name") or "").strip(),
+                    "email": email,
+                    "phone": (data.get("phone") or "").strip(),
+                    "school_type": (data.get("school_type") or "CBSE").strip(),
+                    "city": (data.get("city") or "").strip(),
+                    "state": (data.get("state") or "").strip(),
+                    "primary_contact_name": (data.get("contact_name") or "").strip(),
+                    "school_strength": int(data.get("school_strength") or 0),
+                    "tag_ids": [tag_map[n] for n in tag_names if n in tag_map],
+                    # Auto-assign to the uploader when the sheet leaves it blank,
+                    # so an import can never land as unowned data.
+                    "owner": (data.get("owner") or "").strip() or user["email"],
                     "created_by": user["email"],
-                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "created_at": now_iso,
                 }
-                pwd = data.get("password", "").strip()
+                pwd = (data.get("password") or "").strip()
                 if pwd:
                     doc["password_hash"] = hash_password(pwd)
-                await db.schools.insert_one(doc)
+            except Exception as e:
+                _fail(row_num, str(e))
+                continue
+            docs.append(doc)
 
-                created += 1
+    elif entity_type == "contacts":
+        phones = list({(d.get("phone") or "").strip() for _, d in ok_rows})
+        # Matched on phone+name like before; the query narrows on phone alone
+        # (indexed, selective) and the pair is checked in memory.
+        taken = set()
+        async for c in db.contacts.find({"phone": {"$in": phones}}, {"_id": 0, "phone": 1, "name": 1}):
+            taken.add(((c.get("phone") or "").strip(), (c.get("name") or "").strip()))
+        seen = set()
+        for (row_num, data), tag_names in zip(ok_rows, tag_names_per_row):
+            key = ((data.get("phone") or "").strip(), (data.get("name") or "").strip())
+            if key in taken:
+                _fail(row_num, f"Contact '{key[1]}' on {key[0]} already exists")
+                continue
+            if key in seen:
+                _fail(row_num, f"Duplicate contact '{key[1]}' earlier in this file")
+                continue
+            seen.add(key)
+            docs.append({
+                "contact_id": f"con_{uuid.uuid4().hex[:12]}",
+                "name": key[1],
+                "phone": key[0],
+                "email": (data.get("email") or "").strip(),
+                "company": (data.get("company") or "").strip(),
+                "designation": (data.get("designation") or "").strip(),
+                "source": (data.get("source") or "").strip(),
+                "notes": (data.get("notes") or "").strip(),
+                "tag_ids": [tag_map[n] for n in tag_names if n in tag_map],
+                "status": "active",
+                "converted_to_lead": False,
+                "lead_id": None,
+                "created_by": user["email"],
+                "created_at": now_iso,
+            })
+
+    # --- Pass 4: ONE write for the whole file --------------------------------
+    if docs:
+        collection = db.schools if entity_type == "schools" else db.contacts
+        try:
+            result = await collection.insert_many(docs, ordered=False)
+            created = len(result.inserted_ids)
+        except BulkWriteError as e:
+            # ordered=False means the good documents ARE written; report what
+            # actually landed instead of zeroing the count.
+            details = getattr(e, "details", None) or {}
+            created = details.get("nInserted", 0)
+            failed += len(docs) - created
+            errors.append({"error": f"Batch insert wrote {created} of {len(docs)} rows: {e}"})
         except Exception as e:
-            failed += 1
+            failed += len(docs)
+            errors.append({"error": f"Batch insert failed: {e}"})
 
-    log_id = f"imp_{uuid.uuid4().hex[:8]}"
+    # --- The CRM reads schools, tags and facet counts from Redis -------------
+    # (crm_routes.py `schools:batch:{...}`, `tags:by_id`, `crm:facets:{...}`).
+    # A fresh import that is not invalidated stays invisible for the TTL.
+    for pattern in ("crm:facets:*", "schools:batch:*", "tags:*"):
+        await invalidate(pattern)
+
+    # log_id is what GET /import/logs and every old caller read; import_id is the
+    # new name for the same value, so both contracts hold with one identifier.
+    log_id = import_id
     await db.import_logs.insert_one({
         "log_id": log_id,
         "entity_type": entity_type,
@@ -1181,9 +1328,22 @@ async def execute_import(request: Request):
         "success_count": created,
         "failed_count": failed,
         "uploaded_by": user["email"],
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": now_iso,
     })
-    return {"created": created, "failed": failed, "log_id": log_id}
+
+    result_doc = {
+        "created": created,
+        "failed": failed,
+        "errors": errors,
+        "import_id": import_id,
+        "log_id": log_id,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    if progress_live:
+        progress.update({"processed": len(rows), "created": created, "failed": failed})
+        await set_cached(f"import:{import_id}:progress", progress, ttl=3600)
+        await set_cached(f"import:{import_id}:result", result_doc, ttl=3600)
+    return result_doc
 
 
 @router.get("/import/logs")
