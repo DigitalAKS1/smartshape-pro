@@ -1160,6 +1160,7 @@ async def execute_import(request: Request):
                     "primary_contact_name": data.get("contact_name", "").strip(),
                     "school_strength": int(data.get("school_strength", 0) or 0),
                     "tag_ids": tag_ids,
+                    "owner": data.get("owner", "").strip() or user["email"],  # Auto-assign to uploader if blank
                     "created_by": user["email"],
                     "created_at": datetime.now(timezone.utc).isoformat(),
                 }
