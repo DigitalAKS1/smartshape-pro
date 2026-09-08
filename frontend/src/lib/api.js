@@ -550,6 +550,12 @@ export const tags = {
 // Leads / CRM
 export const leads = {
   getAll: () => API.get('/leads'),
+  // Paginated envelope — pass page/limit (+ stage/owner/tag/search/sort) to get
+  // {leads, total, page, pages, limit, facets} back from GET /leads. Omitting
+  // page/limit entirely hits the legacy bare-array branch on the backend; this
+  // client method always sends at least one of them, so callers always get the
+  // envelope shape. See routes/crm_routes.py get_leads() for the contract.
+  list: (params = {}) => API.get('/leads', { params: { page: 1, limit: 50, ...params } }),
   search: (params) => API.get('/leads/search', { params }),
   create: (data) => API.post('/leads', data),
   update: (id, data) => API.put(`/leads/${id}`, data),
