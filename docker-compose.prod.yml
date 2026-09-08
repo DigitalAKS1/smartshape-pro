@@ -1,5 +1,5 @@
-# Production compose — MongoDB on Atlas (cloud)
-# No local database container needed.
+# Production compose — MongoDB on Atlas (cloud), Redis local
+# Database on Atlas, cache on local Redis, uploads persisted
 
 services:
   backend:
@@ -12,6 +12,9 @@ services:
       - PORT=8000
     ports:
       - "8000:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
     restart: unless-stopped
     volumes:
       - backend_uploads:/app/uploads
@@ -27,5 +30,23 @@ services:
       - "3000:80"
     restart: unless-stopped
 
+  redis:
+    image: redis:7-alpine
+    container_name: smartshape-redis
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    environment:
+      - REDIS_LOGLEVEL=notice
+
 volumes:
   backend_uploads:
+  redis_data:

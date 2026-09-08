@@ -2,18 +2,18 @@
 Redis cache wrapper for CRM performance optimization.
 Handles all caching operations with automatic TTL and fallback to no-cache on error.
 """
-import redis
+import redis.asyncio as redis
 import json
 import os
 from typing import Any, Optional
 
-# Initialize Redis client
+# Initialize Redis client (async)
 redis_client = redis.Redis(
     host=os.environ.get("REDIS_HOST", "localhost"),
     port=int(os.environ.get("REDIS_PORT", 6379)),
     db=0,
     decode_responses=True,
-    socket_connect_timeout=5,
+    socket_connect_timeout=1,
     socket_keepalive=True,
 )
 
@@ -23,7 +23,7 @@ async def get_cached(key: str, default: Any = None) -> Any:
     Returns default if key not found or Redis fails.
     """
     try:
-        value = redis_client.get(key)
+        value = await redis_client.get(key)
         if value is None:
             return default
         return json.loads(value)
@@ -41,7 +41,7 @@ async def set_cached(key: str, value: Any, ttl: int = 600) -> bool:
     Returns True if successful, False if Redis fails.
     """
     try:
-        redis_client.setex(key, ttl, json.dumps(value))
+        await redis_client.setex(key, ttl, json.dumps(value))
         return True
     except (redis.ConnectionError, redis.TimeoutError, json.JSONDecodeError) as e:
         # Fail silently - cache write failures should not break the API
@@ -59,10 +59,10 @@ async def invalidate(pattern: str) -> int:
     Returns count of keys deleted.
     """
     try:
-        keys = redis_client.keys(pattern)
+        keys = await redis_client.keys(pattern)
         if not keys:
             return 0
-        deleted = redis_client.delete(*keys)
+        deleted = await redis_client.delete(*keys)
         return deleted
     except (redis.ConnectionError, redis.TimeoutError):
         # Fail silently
@@ -74,6 +74,6 @@ async def invalidate(pattern: str) -> int:
 async def health_check() -> bool:
     """Check Redis connectivity."""
     try:
-        return redis_client.ping()
+        return await redis_client.ping()
     except Exception:
         return False
