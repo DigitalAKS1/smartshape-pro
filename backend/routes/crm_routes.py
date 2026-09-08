@@ -6,6 +6,8 @@ import uuid
 import csv
 import io
 import re
+import json
+import hashlib
 import logging
 import html as _html
 import asyncio
@@ -23,6 +25,17 @@ from notify import notify_user
 import services.account_lifecycle as al
 import services.reorder as ro
 import services.fit as fit
+
+try:
+    from cache import get_cached, set_cached
+except Exception as _cache_exc:   # redis lib/env missing — never take the app down
+    logging.warning("cache module unavailable (%s); running without Redis", _cache_exc)
+
+    async def get_cached(key, default=None):
+        return default
+
+    async def set_cached(key, value, ttl=600):
+        return False
 
 router = APIRouter()
 
@@ -5008,24 +5021,98 @@ async def backfill_contact_owners(request: Request):
 
 # ==================== LEADS ====================
 
-@router.get("/leads")
-async def get_leads(request: Request):
-    user = await get_current_user(request)
-    if not _crm_read(user):
-        return []
-    if sees_all(user, "leads"):
-        query = {}
-    else:  # own-scoped — assigned + everything under owned schools
-        owned = await _owned_school_ids(user["email"])
-        query = {"$or": [
-            {"assigned_to": user["email"]},
-            {"school_id": {"$in": owned}} if owned else {"lead_id": "__none__"},
-        ]}
-    leads = await db.leads.find(query, {"_id": 0}).sort("created_at", -1).to_list(10000)
-    school_cache = {}
+# Cache TTLs (seconds). Schools/tags are near-static reference data; facets are
+# counts, so they get the shortest life of the three.
+_SCHOOLS_CACHE_TTL = 600
+_TAGS_CACHE_TTL = 1800
+_FACETS_CACHE_TTL = 300
+
+# Only these may be sorted on. An arbitrary `?sort=` is a free index scan (and a
+# way to sort on a field with no index, i.e. a collection scan) — whitelist it.
+_LEAD_SORTABLE = {
+    "created_at", "updated_at", "last_activity_date", "next_followup_date",
+    "stage", "company_name", "contact_name", "school_name", "assigned_to",
+    "expected_value", "priority", "likely_closure_date",
+}
+
+
+def _stable_key(*parts) -> str:
+    """Process-stable cache key fragment.
+
+    NOT `hash()`: Python randomises str hashing per process (PYTHONHASHSEED), so
+    a hash()-based key would never be shared between workers or survive a
+    restart — the cache would look like it worked and never hit.
+    """
+    blob = json.dumps(parts, sort_keys=True, default=str)
+    return hashlib.md5(blob.encode("utf-8")).hexdigest()
+
+
+def _lead_scope_clauses(user: dict, owned: list) -> list:
+    """The own-scope $or for leads: assigned to me, or under a school I own."""
+    return [
+        {"assigned_to": user["email"]},
+        {"school_id": {"$in": owned}} if owned else {"lead_id": "__none__"},
+    ]
+
+
+async def _fetch_schools_map(school_ids: list) -> dict:
+    """school_id -> school doc, in ONE query, cached.
+
+    This is the fix for the N+1 that made the CRM list take 10-30s: the old code
+    ran a find_one per lead.
+    """
+    ids = sorted({s for s in (school_ids or []) if s})
+    if not ids:
+        return {}
+    key = f"schools:batch:{_stable_key(ids)}"
+    schools = await get_cached(key)
+    if schools is None:
+        schools = await db.schools.find(
+            {"school_id": {"$in": ids}},
+            {"_id": 0, "school_id": 1, "school_name": 1, "city": 1,
+             "school_type": 1, "school_strength": 1},
+        ).to_list(length=len(ids))
+        await set_cached(key, schools, ttl=_SCHOOLS_CACHE_TTL)
+    return {s["school_id"]: s for s in schools if s.get("school_id")}
+
+
+async def _fetch_tag_names() -> dict:
+    """tag_id -> name for EVERY tag, cached under one key.
+
+    Deliberately not scoped to the current page's tag ids: a page-scoped fetch
+    stored under a global key would poison the next page's lookups for the whole
+    TTL. The tag master is small, so fetching all of it is cheaper than being
+    clever.
+    """
+    cached = await get_cached("tags:by_id")
+    if cached is None:
+        cached = {}
+        async for t in db.tags.find({}, {"_id": 0, "tag_id": 1, "name": 1}):
+            if t.get("tag_id"):
+                cached[t["tag_id"]] = t.get("name") or t["tag_id"]
+        await set_cached("tags:by_id", cached, ttl=_TAGS_CACHE_TTL)
+    return cached
+
+
+async def _enrich_leads(leads: list) -> list:
+    """Attach school / value / score / contact fields to a page of leads.
+
+    Every lookup is batched. Shape is byte-for-byte what the old per-lead loop
+    produced (the list UI, exports and the mobile app all read these keys), plus
+    `tag_names`. `tags` itself is left as tag IDs on purpose — crmFilter.js
+    filters on the IDs, so replacing them with labels would silently break tag
+    filtering.
+    """
+    if not leads:
+        return leads
     now = datetime.now(timezone.utc)
     settings = await get_crm_settings()
     quote_map = await _build_quote_map(leads)
+    school_map = await _fetch_schools_map([l.get("school_id") for l in leads])
+
+    tag_map = {}
+    if any(l.get("tags") for l in leads):
+        tag_map = await _fetch_tag_names()
 
     # Batch-fetch linked contact names (P1-B). Resolve via EITHER link style so
     # both create/import leads (contact_id) and convert-flow leads
@@ -5041,11 +5128,7 @@ async def get_leads(request: Request):
             linked_map[c["contact_id"]] = c["name"]
 
     for lead in leads:
-        sid = lead.get("school_id")
-        if sid and sid not in school_cache:
-            sch = await db.schools.find_one({"school_id": sid}, {"_id": 0})
-            school_cache[sid] = sch
-        school = school_cache.get(sid)
+        school = school_map.get(lead.get("school_id"))
         lead["school_name"] = school["school_name"] if school else lead.get("school_name", "")
         lead["school_type"] = school.get("school_type", "") if school else ""
         lead["school_city"] = school.get("city", "") if school else ""
@@ -5056,7 +5139,131 @@ async def get_leads(request: Request):
         lead["probability"] = stage_probability(lead.get("stage", ""), settings)
         lead["weighted_value"] = round(lead["deal_value"] * lead["probability"] / 100, 2)
         lead["linked_contact_name"] = linked_map.get(_linked_cid(lead))
+        lead["tag_names"] = [tag_map.get(t, t) for t in (lead.get("tags") or [])]
     return leads
+
+
+async def _calculate_facets(query_filter: dict) -> dict:
+    """Stage + tag counts for the CURRENT filter, as two aggregations.
+
+    Counts reflect the filter that is applied, so selecting a stage collapses the
+    stage facet to that stage. Never raises: a filter rail is decoration, and it
+    must not be able to fail the list it decorates.
+    """
+    key = f"crm:facets:{_stable_key(query_filter)}"
+    cached = await get_cached(key)
+    if cached is not None:
+        return cached
+    try:
+        stages = await db.leads.aggregate([
+            {"$match": query_filter},
+            {"$group": {"_id": "$stage", "count": {"$sum": 1}}},
+            {"$sort": {"count": -1}},
+        ]).to_list(length=100)
+        stage_facets = {s["_id"]: s["count"] for s in stages if s.get("_id")}
+
+        tags = await db.leads.aggregate([
+            {"$match": query_filter},
+            {"$unwind": "$tags"},
+            {"$group": {"_id": "$tags", "count": {"$sum": 1}}},
+            {"$sort": {"count": -1}},
+            {"$limit": 20},
+        ]).to_list(length=20)
+        tag_facets = {t["_id"]: t["count"] for t in tags if t.get("_id")}
+
+        facets = {"stages": stage_facets, "tags": tag_facets}
+        await set_cached(key, facets, ttl=_FACETS_CACHE_TTL)
+        return facets
+    except Exception:
+        logging.exception("facet calculation failed")
+        return {"stages": {}, "tags": {}}
+
+
+@router.get("/leads")
+async def get_leads(request: Request,
+                    page: Optional[int] = None,
+                    limit: Optional[int] = None,
+                    stage: Optional[str] = None,
+                    owner: Optional[str] = None,
+                    tag: Optional[str] = None,
+                    search: Optional[str] = None,
+                    sort: str = "-created_at"):
+    """Leads for the current user, filtered and (opt-in) paginated.
+
+    Pass `page` and/or `limit` to get the paginated envelope:
+        {leads, total, page, pages, limit, facets}
+
+    Pass neither and you get the legacy bare array. Five live screens still
+    expect that array (useCrmData, useSalesHome, useSalesLeads, useVisitPlanning,
+    VisitFormDialog); only LeadsCRM is being migrated in this branch, so
+    switching the shape unconditionally would break the other four. The legacy
+    path is still fixed — it uses the same batched enrichment, so the per-lead
+    school query is gone either way. Delete this branch once every caller sends
+    `page`.
+    """
+    user = await get_current_user(request)
+    paginated = page is not None or limit is not None
+    if not _crm_read(user):
+        return {"leads": [], "total": 0, "page": 1, "pages": 0,
+                "limit": limit or 50, "facets": {"stages": {}, "tags": {}}} if paginated else []
+
+    page = max(1, min(int(page or 1), 1000))
+    limit = max(1, min(int(limit or 50), 100))
+
+    # ── Build the filter. Every clause ANDs; nothing overwrites anything else.
+    clauses = []
+    if stage:
+        clauses.append({"stage": stage})
+    if owner:
+        clauses.append({"assigned_to": owner})
+    if tag:
+        clauses.append({"tags": tag})
+    if search and search.strip():
+        rx = {"$regex": re.escape(search.strip()), "$options": "i"}
+        clauses.append({"$or": [
+            {"company_name": rx},
+            {"school_name": rx},
+            {"contact_name": rx},
+            {"contact_phone": rx},
+        ]})
+
+    # Scope. MUST be its own AND'd clause — assigning to query["$or"] (as the
+    # search clause also does) would clobber one of the two and leak every rep's
+    # pipeline to every rep.
+    if not sees_all(user, "leads"):
+        owned = await _owned_school_ids(user["email"])
+        clauses.append({"$or": _lead_scope_clauses(user, owned)})
+
+    if not clauses:
+        query = {}
+    elif len(clauses) == 1:
+        query = clauses[0]
+    else:
+        query = {"$and": clauses}
+
+    sort = (sort or "").strip() or "-created_at"
+    field = sort.lstrip("-").split(",")[0].strip()
+    if field not in _LEAD_SORTABLE:
+        field = "created_at"
+    sort_spec = [(field, -1 if sort.startswith("-") else 1)]
+
+    if not paginated:
+        leads = await db.leads.find(query, {"_id": 0}).sort(sort_spec).to_list(10000)
+        return await _enrich_leads(leads)
+
+    total = await db.leads.count_documents(query)
+    leads = await db.leads.find(query, {"_id": 0}).sort(sort_spec) \
+        .skip((page - 1) * limit).limit(limit).to_list(length=limit)
+    await _enrich_leads(leads)
+    facets = await _calculate_facets(query)
+    return {
+        "leads": leads,
+        "total": total,
+        "page": page,
+        "pages": (total + limit - 1) // limit,
+        "limit": limit,
+        "facets": facets,
+    }
 
 
 @router.get("/leads/search")
