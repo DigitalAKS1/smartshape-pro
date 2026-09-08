@@ -27,7 +27,7 @@ import services.reorder as ro
 import services.fit as fit
 
 try:
-    from cache import get_cached, set_cached
+    from cache import get_cached, set_cached, invalidate
 except Exception as _cache_exc:   # redis lib/env missing — never take the app down
     logging.warning("cache module unavailable (%s); running without Redis", _cache_exc)
 
@@ -36,6 +36,9 @@ except Exception as _cache_exc:   # redis lib/env missing — never take the app
 
     async def set_cached(key, value, ttl=600):
         return False
+
+    async def invalidate(pattern):
+        return 0
 
 router = APIRouter()
 
@@ -5026,6 +5029,16 @@ async def backfill_contact_owners(request: Request):
 _SCHOOLS_CACHE_TTL = 600
 _TAGS_CACHE_TTL = 1800
 _FACETS_CACHE_TTL = 300
+# A single lead's computed detail. Short, because a lead changes far more often
+# than a school does; the CRM write paths in this file also bust it explicitly.
+_LEAD_DETAILS_CACHE_TTL = 300
+
+# Above this many leads in one bulk write, drop every cached detail with a
+# single wildcard call instead of one call per id. `cache.invalidate()` is
+# KEYS-then-DEL, i.e. O(keyspace) per call even for an exact key, so busting 500
+# ids one at a time would be 500 keyspace scans on a blocking client.
+# Over-invalidation only costs a recompute (~20ms); the scans cost the loop.
+_BULK_BUST_THRESHOLD = 25
 
 # Only these may be sorted on. An arbitrary `?sort=` is a free index scan (and a
 # way to sort on a field with no index, i.e. a collection scan) — whitelist it.
@@ -5177,6 +5190,88 @@ async def _calculate_facets(query_filter: dict) -> dict:
     except Exception:
         logging.exception("facet calculation failed")
         return {"stages": {}, "tags": {}}
+
+
+def _lead_details_key(lead_id: str) -> str:
+    return f"lead:{lead_id}:details"
+
+
+async def _bust_lead_details(*lead_ids) -> None:
+    """Drop the cached detail for these leads after a write.
+
+    Without this, a rep edits a lead and the detail view keeps showing the old
+    stage/value for up to 5 minutes — which reads as "my edit didn't save".
+    Never raises: a failed cache delete must not fail the write that succeeded.
+    """
+    ids = [l for l in lead_ids if l]
+    if not ids:
+        return
+    try:
+        if len(ids) > _BULK_BUST_THRESHOLD:
+            await invalidate("lead:*:details")
+            return
+        for lid in ids:
+            await invalidate(_lead_details_key(lid))
+    except Exception:
+        logging.exception("lead detail cache bust failed for %s", ids[:5])
+
+
+async def _user_can_read_lead(user: dict, lead: dict) -> bool:
+    """Read-scope counterpart of `_user_can_mutate_lead`, and the single-doc
+    mirror of the scope clause GET /leads applies: admin/all-scope see any lead,
+    everyone else only what is assigned to them or sits under a school they own.
+    """
+    if not lead:
+        return False
+    if not _crm_read(user):
+        return False
+    if has_team(user, "admin") or sees_all(user, "leads"):
+        return True
+    email = user["email"]
+    if lead.get("assigned_to") == email:
+        return True
+    sid = lead.get("school_id")
+    if sid and sid in (await _owned_school_ids(email)):
+        return True
+    return False
+
+
+@router.get("/leads/{lead_id}/details")
+async def get_lead_details(lead_id: str, request: Request):
+    """One lead, fully enriched — school fields, score, value, probability,
+    weighted value, visit flag and the linked contact.
+
+    Scoring used to be computed for every row of the list. It is O(leads) work
+    to answer a question the user only asks about ONE lead, so it now lives
+    here and the list stays cheap. Uses the same `_enrich_leads` as the list so
+    the two can never disagree about the same lead.
+    """
+    user = await get_current_user(request)
+    if not _crm_read(user):
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    key = _lead_details_key(lead_id)
+
+    # The cache is keyed by lead id alone (the document is user-independent), so
+    # it is SHARED across users — authorisation has to be re-checked on the hit
+    # path too. Returning a cached doc before the scope check would hand every
+    # rep every rep's pipeline.
+    cached = await get_cached(key)
+    if cached is not None:
+        if not await _user_can_read_lead(user, cached):
+            raise HTTPException(status_code=403, detail="Not authorized to view this lead")
+        return cached
+
+    lead = await db.leads.find_one({"lead_id": lead_id}, {"_id": 0})
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    if not await _user_can_read_lead(user, lead):
+        raise HTTPException(status_code=403, detail="Not authorized to view this lead")
+
+    (lead,) = await _enrich_leads([lead])
+
+    await set_cached(key, lead, ttl=_LEAD_DETAILS_CACHE_TTL)
+    return lead
 
 
 @router.get("/leads")
@@ -5659,6 +5754,7 @@ async def update_lead(lead_id: str, request: Request):
             await db.leads.update_one(
                 {"lead_id": lead_id}, {"$set": {"contact_id": cid}})
 
+    await _bust_lead_details(lead_id)
     lead = await db.leads.find_one({"lead_id": lead_id}, {"_id": 0})
     if lead and lead.get("school_id"):
         await touch_last_activity("school", lead["school_id"])
@@ -5997,6 +6093,7 @@ async def reassign_lead(request: Request):
     }})
     await log_activity(user["email"], "reassign_lead", "lead", lead_id,
                        details=f"-> {new_agent_name} | {reason}")
+    await _bust_lead_details(lead_id)
     return await db.leads.find_one({"lead_id": lead_id}, {"_id": 0})
 
 
@@ -6050,6 +6147,7 @@ async def bulk_assign_leads(request: Request):
         await log_activity(user["email"], "bulk_assign_lead", "lead", lead["lead_id"],
                            details=f"-> {new_agent_name} | {reason}")
         count += 1
+    await _bust_lead_details(*[l["lead_id"] for l in leads])
     return {"assigned": count}
 
 
@@ -6069,6 +6167,7 @@ async def bulk_tag_leads(request: Request):
     result = await db.leads.update_many({"lead_id": {"$in": lead_ids}}, op)
     await log_activity(user["email"], f"bulk_tag_{action}", "lead", ",".join(lead_ids[:5]),
                        details=f"tag_id={tag_id} action={action} count={result.modified_count}")
+    await _bust_lead_details(*lead_ids)
     return {"modified": result.modified_count}
 
 
@@ -6104,6 +6203,7 @@ async def bulk_stage_leads(request: Request):
         count += 1
     await log_activity(user["email"], "bulk_stage_change", "lead", ",".join(lead_ids[:5]),
                        details=f"-> {stage} | count={count}")
+    await _bust_lead_details(*lead_ids)
     return {"modified": count}
 
 
@@ -6248,6 +6348,7 @@ async def lock_lead(lead_id: str, request: Request):
     body = await request.json() if (await request.body()) else {}
     is_locked = bool(body.get("is_locked", True))
     await db.leads.update_one({"lead_id": lead_id}, {"$set": {"is_locked": is_locked}})
+    await _bust_lead_details(lead_id)
     return await db.leads.find_one({"lead_id": lead_id}, {"_id": 0})
 
 
@@ -6284,6 +6385,9 @@ async def delete_lead(lead_id: str, request: Request, reason: str = ""):
     label = lead.get("company_name") or lead.get("contact_name") or lead_id
     await snapshot_and_delete(plan, root_type="lead", root_id=lead_id,
                               root_label=label, deleted_by=user["email"], reason=reason)
+
+    # A deleted lead must not keep answering from cache for another 5 minutes.
+    await _bust_lead_details(lead_id)
 
     # whatsapp_logs are kept (they belong to the school/contact) — just detach the
     # now-gone lead so they aren't orphaned to a dead id.
