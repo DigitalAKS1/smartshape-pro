@@ -4874,97 +4874,76 @@ async def import_contacts_csv(
     global_notes: Optional[str] = Form(None),
     request: Request = None,
 ):
+    """Upload a CSV/Excel of contacts and upsert them via the shared import engine
+    (matches by contact_id first, then name+phone/phone/name — see commit_row).
+    A blank cell never clears an existing field (D1). Contacts-only: never mints
+    a new school (allow_school_create=False); an unresolved school on the row
+    leaves the contact's school_id untouched rather than blanking it."""
+    import import_engine as ie
+    from routes.dynamic_import_routes import _key_rows
+
     if request:
         user = await get_current_user(request)
+    else:
+        user = {"email": "import", "name": "Import"}
     tag_id_list = [t.strip() for t in (tag_ids or "").split(",") if t.strip()]
     extra_note = (global_notes or "").strip()
+
     content = await file.read()
     try:
-        text = content.decode("utf-8-sig")
-    except UnicodeDecodeError:
+        headers, rows = ie.parse_table(file.filename or "upload.csv", content)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Could not read the file: {e}")
+    if not rows:
+        raise HTTPException(status_code=400, detail="The file has no data rows.")
+    mapping = await ie.propose_mapping(db, headers)
+    keyed = _key_rows(headers, rows, mapping)
+
+    created = updated = skipped = 0
+    errors: list = []
+
+    for idx, row_keyed in enumerate(keyed, start=2):   # row 1 is the header
         try:
-            text = content.decode("cp1252")
-        except UnicodeDecodeError:
-            text = content.decode("latin-1")
-    reader = csv.DictReader(io.StringIO(text))
-    created = 0
-    duplicates = 0
-    errors = []
-    for row in reader:
-        try:
-            name = row.get("name", "").strip()
-            phone = row.get("phone", "").strip()
-            if not name or not phone:
-                errors.append("Row missing name or phone")
+            if extra_note and not (row_keyed.get("notes") or "").strip():
+                row_keyed["notes"] = extra_note
+
+            if not (ie.valid_supplied_id(row_keyed.get("contact_id"))
+                    or (row_keyed.get("name") or "").strip()):
+                skipped += 1
                 continue
-            existing = await db.contacts.find_one({"phone": phone, "name": name})
-            if existing:
-                duplicates += 1
+
+            res = await ie.commit_row(db, row_keyed, user, create_leads=False,
+                                      allow_school_create=False)
+            if res["action"] == "needs_review":
+                skipped += 1
+                errors.append(f"Row {idx}: ambiguous school, needs review")
                 continue
-            contact_id = f"con_{uuid.uuid4().hex[:12]}"
-            csv_notes = row.get("notes", "").strip()
-            notes_combined = f"{csv_notes}\n{extra_note}".strip() if csv_notes and extra_note else (extra_note or csv_notes)
-            csv_company = (row.get("school", "") or row.get("company", "")).strip()
-            csv_now = datetime.now(timezone.utc).isoformat()
-            # Resolve the CSV owner (name OR email) → real (email, name). A bare name
-            # like "Parul Kanchan" maps to that salesperson's email so the contact
-            # actually syncs to their account and the UI shows the owner.
-            owner_email, owner_name = await _resolve_owner(row.get("assigned_to", ""))
-            # Auto-link company name → school_id; auto-create school if missing
-            csv_school_id = None
-            if csv_company:
-                found_sch = await db.schools.find_one(
-                    {"school_name": {"$regex": f"^{re.escape(csv_company)}$", "$options": "i"}},
-                    {"_id": 0, "school_id": 1, "assigned_to": 1}
-                )
-                if found_sch:
-                    csv_school_id = found_sch["school_id"]
-                    # Link an unowned school to this contact's owner so the rep sees it.
-                    if owner_email and not (found_sch.get("assigned_to") or ""):
-                        await db.schools.update_one(
-                            {"school_id": csv_school_id},
-                            {"$set": {"assigned_to": owner_email, "assigned_name": owner_name}})
-                else:
-                    new_sch_id = f"sch_{uuid.uuid4().hex[:12]}"
-                    await db.schools.insert_one({
-                        "school_id": new_sch_id, "school_name": csv_company,
-                        "school_type": "CBSE",
-                        "assigned_to": owner_email, "assigned_name": owner_name,
-                        "phone": phone, "email": row.get("email", "").strip(),
-                        "city": "", "state": "", "pincode": "", "address": "",
-                        "primary_contact_name": name,
-                        "designation": row.get("designation", "").strip(),
-                        "school_strength": 0, "number_of_branches": 1,
-                        "annual_budget_range": "", "existing_vendor": "",
-                        "social_profiles": {}, "linkedin_url": "", "instagram_url": "",
-                        "last_activity_date": csv_now, "created_by": "import", "created_at": csv_now,
-                    })
-                    csv_school_id = new_sch_id
-            await db.contacts.insert_one({
-                "contact_id": contact_id,
-                "name": name,
-                "phone": phone,
-                "email": row.get("email", "").strip(),
-                "company": csv_company,
-                "school_id": csv_school_id,
-                "designation": row.get("designation", "").strip(),
-                "source": row.get("source", "").strip(),
-                "notes": notes_combined,
-                "birthday": row.get("birthday", "").strip(),
-                "assigned_to": owner_email,
-                "assigned_name": owner_name,
-                "tag_ids": tag_id_list,
-                "status": "active",
-                "converted_to_lead": False,
-                "lead_id": None,
-                "created_by": user["email"] if request else "import",
-                "created_at": csv_now,
-                "last_activity_date": csv_now,
-            })
-            created += 1
+
+            cid = res.get("contact_id")
+            if cid and tag_id_list:
+                await db.contacts.update_one(
+                    {"contact_id": cid},
+                    {"$addToSet": {"tag_ids": {"$each": tag_id_list}}})
+
+            # Ruling R12: count from the CONTACT's own action, not the school
+            # resolution's action returned in res["action"] — under
+            # allow_school_create=False a brand-new contact at an existing
+            # school returns action="update" (the school's action), and a new
+            # contact with no school returns "skip_school"; both would be
+            # miscounted as UPDATED if we read res["action"] here.
+            contact_action = res.get("contact_action")
+            if contact_action == "create":
+                created += 1
+            elif contact_action == "update":
+                updated += 1
+            else:
+                skipped += 1
         except Exception as e:
-            errors.append(str(e))
-    return {"created": created, "duplicates": duplicates, "errors": errors[:10]}
+            errors.append(f"Row {idx}: {e}")
+
+    total_errors = len(errors)
+    return {"created": created, "updated": updated, "skipped": skipped,
+            "errors": errors[:50], "error_count": total_errors}
 
 
 async def _backfill_contact_owners_core() -> dict:

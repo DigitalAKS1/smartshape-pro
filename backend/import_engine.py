@@ -566,6 +566,7 @@ async def commit_row(db, row_keyed: dict, user: dict, create_leads: bool,
 
     # ---- contact upsert: id → name+phone_norm → phone_norm → phone → name ----
     cid = None
+    contact_action = None
     contact_name = parts["contact"].get("name", "")
     supplied_cid = valid_supplied_id(row_keyed.get("contact_id"))
     if contact_name or con_phone_raw or supplied_cid:
@@ -598,12 +599,14 @@ async def commit_row(db, row_keyed: dict, user: dict, create_leads: bool,
         })
         if existing:
             cid = existing["contact_id"]
+            contact_action = "update"
             upd_c = dict(cdoc)
             for k, v in _strip_blanks(parts["custom"]["contact"]).items():
                 upd_c[f"custom_fields.{k}"] = v
             await db.contacts.update_one({"contact_id": cid}, {"$set": upd_c})
         else:
             cid = supplied_cid or f"con_{_uuid.uuid4().hex[:12]}"
+            contact_action = "create"
             await db.contacts.insert_one({
                 "contact_id": cid,
                 "created_at": now,
@@ -658,4 +661,4 @@ async def commit_row(db, row_keyed: dict, user: dict, create_leads: bool,
             })
 
     return {"action": res["action"], "school_id": sid, "contact_id": cid,
-            "lead_id": lid, "warnings": warnings}
+            "lead_id": lid, "warnings": warnings, "contact_action": contact_action}

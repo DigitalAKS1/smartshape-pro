@@ -299,17 +299,21 @@ export default function ContactFormDialog({
                 </div>
                 <p className={`text-base font-semibold ${textPri}`}>Import Complete</p>
               </div>
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-4 gap-3">
                 <div className="bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-lg p-3 text-center">
                   <p className="text-2xl font-bold text-green-500">{importResult.created}</p>
                   <p className={`text-xs ${textMuted} mt-0.5`}>Created</p>
                 </div>
                 <div className="bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-lg p-3 text-center">
-                  <p className="text-2xl font-bold text-yellow-500">{importResult.duplicates}</p>
+                  <p className="text-2xl font-bold text-blue-500">{importResult.updated}</p>
+                  <p className={`text-xs ${textMuted} mt-0.5`}>Updated</p>
+                </div>
+                <div className="bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-lg p-3 text-center">
+                  <p className="text-2xl font-bold text-yellow-500">{importResult.skipped}</p>
                   <p className={`text-xs ${textMuted} mt-0.5`}>Skipped</p>
                 </div>
                 <div className="bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-lg p-3 text-center">
-                  <p className={`text-2xl font-bold ${importResult.errors?.length ? 'text-red-500' : textMuted}`}>{importResult.errors?.length || 0}</p>
+                  <p className={`text-2xl font-bold ${importResult.error_count ? 'text-red-500' : textMuted}`}>{importResult.error_count || 0}</p>
                   <p className={`text-xs ${textMuted} mt-0.5`}>Errors</p>
                 </div>
               </div>

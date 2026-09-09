@@ -50,7 +50,7 @@ def control_key_for(header: str):
 SEED_FIELDS = [
     ("title",              "Title",                              "contact", "text",   "title",                "Contact", ["title"]),
     ("name",               "Name",                               "contact", "text",   "name",                 "Contact", ["name", "contact name"]),
-    ("phone",              "Phone Number",                       "contact", "phone",  "phone",                "Contact", ["phone number", "mobile", "contact phone"]),
+    ("phone",              "Phone Number",                       "contact", "phone",  "phone",                "Contact", ["phone number", "phone", "mobile", "contact phone"]),
     ("email",              "Mail ID",                            "contact", "email",  "email",                "Contact", ["mail id", "email", "contact email"]),
     ("designation",        "Group/Designation",                  "contact", "text",   "designation",          "Contact", ["group designation", "designation", "group"]),
     ("birthday",           "Birthday (Principal/Director)",      "contact", "date",   "birthday",             "Contact", ["birthday principaldirector", "birthday", "dob"]),
