@@ -137,22 +137,59 @@ def test_migration_is_idempotent_for_both_fields_case(db):
 def test_school_owner_field_migrated_to_assigned_to(db):
     async def go():
         from migrations.canonicalise_school_owner import canonicalise_school_owner
+
+        # Seed the users directory so resolve_owner can find them
+        await db.users.insert_one({"email": "rep@x.com", "name": "Rep User"})
+        await db.users.insert_one({"email": "current@x.com", "name": "Current Owner"})
+        # One user that won't be found for unresolvable test
+
+        # Case 1: legacy owner is resolved to a known user
         await db.schools.insert_one({"school_id": "sch_o1", "owner": "rep@x.com"})
+
+        # Case 2: assigned_to already set, owner field exists (must not clobber)
         await db.schools.insert_one({
             "school_id": "sch_o2", "owner": "old@x.com",
             "assigned_to": "current@x.com",
         })
+
+        # Case 3: assigned_to exists but assigned_name is blank (should fill name)
+        await db.schools.insert_one({
+            "school_id": "sch_o3", "owner": "ignore@x.com",
+            "assigned_to": "current@x.com",
+            "assigned_name": "",  # blank name that should be filled
+        })
+
+        # Case 4: unresolvable email (unknown@x.com not in db.users)
+        await db.schools.insert_one({"school_id": "sch_o4", "owner": "unknown@x.com"})
+
         res = await canonicalise_school_owner(db)
 
+        # Case 1: legacy owner migrated + name resolved
         s1 = await db.schools.find_one({"school_id": "sch_o1"})
         assert s1["assigned_to"] == "rep@x.com"
+        assert s1["assigned_name"] == "Rep User", "should resolve email to display name"
         assert "owner" not in s1
 
+        # Case 2: assigned_to not clobbered, owner removed
         s2 = await db.schools.find_one({"school_id": "sch_o2"})
         assert s2["assigned_to"] == "current@x.com", "must not clobber a live owner"
+        assert s2["assigned_name"] == "Current Owner", "should fill blank name for existing assigned_to"
         assert "owner" not in s2
 
-        assert res["schools_migrated"] == 2
+        # Case 3: blank assigned_name filled in
+        s3 = await db.schools.find_one({"school_id": "sch_o3"})
+        assert s3["assigned_to"] == "current@x.com"
+        assert s3["assigned_name"] == "Current Owner", "should fill blank assigned_name"
+        assert "owner" not in s3
+
+        # Case 4: unresolvable email (no user found) — email stays as assigned_to, name is blank
+        s4 = await db.schools.find_one({"school_id": "sch_o4"})
+        assert s4["assigned_to"] == "unknown@x.com", "should keep unknown email as valid scoping key"
+        assert s4.get("assigned_name") == "", "should leave name blank for unresolvable email"
+        assert "owner" not in s4
+
+        assert res["schools_migrated"] == 4
+        # Second run should be idempotent (no changes)
         assert (await canonicalise_school_owner(db))["schools_migrated"] == 0
     _run(go())
 
