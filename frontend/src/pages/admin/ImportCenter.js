@@ -265,7 +265,7 @@ export default function ImportCenter() {
                   </Button>
                 </div>
               </div>
-              {/* Three rules decide whether a re-upload does what the reader
+              {/* Five rules decide whether a re-upload does what the reader
                   expected. None of them were written down anywhere, so the only
                   way to learn them was to overwrite something. */}
               <div className="rounded-md border border-[var(--border-color)] bg-[var(--bg-primary)] p-3 text-xs leading-relaxed" data-testid="roundtrip-help">
@@ -275,7 +275,7 @@ export default function ImportCenter() {
                 <ul className={`mt-1.5 space-y-1 ${textMuted}`}>
                   <li>· <strong className={textSec}>Leave School ID and Contact ID alone.</strong> They're how a row finds the record it belongs to. Clear them and you'll get a new record instead of an edit.</li>
                   <li>· <strong className={textSec}>Delete a column you don't want to touch.</strong> Anything not in the file is left exactly as it is.</li>
-                  <li>· <strong className={textSec}>An empty cell empties the field.</strong> That's how you clear a value — so don't blank a cell you only meant to skip.</li>
+                  <li>· <strong className={textSec}>An empty cell is skipped, not cleared.</strong> A re-upload never wipes a value you didn't touch — to actually clear a field, edit that record in the CRM.</li>
                   <li>· A school with several contacts exports one row per contact, repeating the school's own columns on each.</li>
                   <li>· Add a row with no School ID to create a new school.</li>
                 </ul>
