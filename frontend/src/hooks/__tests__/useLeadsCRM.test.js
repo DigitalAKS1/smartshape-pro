@@ -18,7 +18,7 @@ global.IS_REACT_ACT_ENVIRONMENT = true;
 // ── Fixture: two schools, three contacts, three leads ───────────────────────
 const SCHOOLS = [
   { school_id: 's_dps', school_name: 'Delhi Public School', city: 'Rohini',
-    school_type: 'CBSE', school_strength: 1200, assigned_to: 'parul@ss.in', tags: ['t_hot'] },
+    school_type: 'CBSE', school_strength: 1200, assigned_to: 'parul@ss.in', tag_ids: ['t_hot'] },
   { school_id: 's_lotus', school_name: 'Lotus Valley', city: 'Noida',
     school_type: 'ICSE', school_strength: 400, assigned_to: '' },
 ];
@@ -33,13 +33,13 @@ const CONTACTS = [
 const LEADS = [
   { lead_id: 'l1', school_id: 's_dps', company_name: 'Delhi Public School',
     contact_name: 'R Sharma', contact_phone: '9811111111', stage: 'demo',
-    lead_type: 'hot', school_type: 'CBSE', assigned_to: 'parul@ss.in', tags: ['t_hot'] },
+    lead_type: 'hot', school_type: 'CBSE', assigned_to: 'parul@ss.in', tag_ids: ['t_hot'] },
   { lead_id: 'l2', school_id: 's_dps', company_name: 'Delhi Public School',
     contact_name: 'K Verma', stage: 'won', lead_type: 'warm',
-    school_type: 'CBSE', assigned_to: 'parul@ss.in', tags: [] },
+    school_type: 'CBSE', assigned_to: 'parul@ss.in', tag_ids: [] },
   { lead_id: 'l3', school_id: 's_lotus', company_name: 'Lotus Valley',
     contact_name: 'A Menon', stage: 'new', lead_type: 'cold',
-    school_type: 'ICSE', assigned_to: '', tags: [] },
+    school_type: 'ICSE', assigned_to: '', tag_ids: [] },
 ];
 const SALESPEOPLE = [{ email: 'parul@ss.in', name: 'Parul Kanchan' }];
 const TAGS = [{ tag_id: 't_hot', name: 'Hot Lead', color: '#f00' }];

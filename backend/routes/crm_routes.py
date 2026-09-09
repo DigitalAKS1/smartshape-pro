@@ -5113,9 +5113,9 @@ async def _enrich_leads(leads: list) -> list:
 
     Every lookup is batched. Shape is byte-for-byte what the old per-lead loop
     produced (the list UI, exports and the mobile app all read these keys), plus
-    `tag_names`. `tags` itself is left as tag IDs on purpose — crmFilter.js
-    filters on the IDs, so replacing them with labels would silently break tag
-    filtering.
+    `tag_names`. `tag_ids` itself is left as tag IDs on purpose — crmFilter.js
+    and the frontend filter on the IDs, so replacing them with labels would
+    silently break tag filtering.
     """
     if not leads:
         return leads

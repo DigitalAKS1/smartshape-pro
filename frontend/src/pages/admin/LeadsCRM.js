@@ -639,14 +639,14 @@ export default function LeadsCRM() {
                           </div>
                           {lead.visit_required && <div className="mt-1.5"><span className="text-[10px] px-1.5 py-0.5 rounded font-medium bg-orange-500/20 text-orange-400 border border-orange-500/30 inline-flex items-center gap-1" data-testid={`visit-required-${lead.lead_id}`}><AlertTriangle className="h-2.5 w-2.5" /> Visit Required</span></div>}
                           {lead.next_followup_date && <p className={`text-[10px] ${textMuted} mt-1 flex items-center gap-1`}><Clock className="h-3 w-3" /> {lead.next_followup_date}</p>}
-                          {(lead.tags || []).length > 0 && (
+                          {(lead.tag_ids || []).length > 0 && (
                             <div className="flex flex-wrap gap-1 mt-1.5">
-                              {(lead.tags || []).slice(0, 3).map(tid => {
+                              {(lead.tag_ids || []).slice(0, 3).map(tid => {
                                 const tag = crm.tagsList.find(t => t.tag_id === tid);
                                 if (!tag) return null;
                                 return <span key={tid} className="text-[9px] px-1.5 py-0.5 rounded-full font-medium text-white" style={{ backgroundColor: tag.color }}>{tag.name}</span>;
                               })}
-                              {(lead.tags || []).length > 3 && <span className={`text-[9px] ${textMuted}`}>+{(lead.tags || []).length - 3}</span>}
+                              {(lead.tag_ids || []).length > 3 && <span className={`text-[9px] ${textMuted}`}>+{(lead.tag_ids || []).length - 3}</span>}
                             </div>
                           )}
                         </div>
@@ -724,14 +724,14 @@ export default function LeadsCRM() {
                         <p className="text-[10px] text-red-400 mt-1 flex items-center gap-1"><UserCog className="h-2.5 w-2.5" /> Reassigned {lead.reassignment_count}×</p>
                       )}
                       <AgeBadge daysSinceActivity={days} followupDate={lead.next_followup_date} />
-                      {(lead.tags || []).length > 0 && (
+                      {(lead.tag_ids || []).length > 0 && (
                         <div className="flex flex-wrap gap-1 mt-1.5">
-                          {(lead.tags || []).slice(0, 3).map(tid => {
+                          {(lead.tag_ids || []).slice(0, 3).map(tid => {
                             const tag = crm.tagsList.find(t => t.tag_id === tid);
                             if (!tag) return null;
                             return <span key={tid} className="text-[9px] px-1.5 py-0.5 rounded-full font-medium text-white" style={{ backgroundColor: tag.color }}>{tag.name}</span>;
                           })}
-                          {(lead.tags || []).length > 3 && <span className={`text-[9px] ${textMuted}`}>+{(lead.tags || []).length - 3}</span>}
+                          {(lead.tag_ids || []).length > 3 && <span className={`text-[9px] ${textMuted}`}>+{(lead.tag_ids || []).length - 3}</span>}
                         </div>
                       )}
                       <div className="flex gap-1 mt-2 pt-2 border-t border-[var(--border-color)]">

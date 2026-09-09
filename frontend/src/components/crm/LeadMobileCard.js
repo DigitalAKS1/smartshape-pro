@@ -59,17 +59,17 @@ export default function LeadMobileCard({ lead, onDetail, tagsList = [], borderCl
           </span>
         </div>
 
-        {(lead.tags || []).length > 0 && tagsList.length > 0 && (
+        {(lead.tag_ids || []).length > 0 && tagsList.length > 0 && (
           <div className="flex flex-wrap gap-1 mt-2">
-            {(lead.tags || []).slice(0, 3).map(tid => {
+            {(lead.tag_ids || []).slice(0, 3).map(tid => {
               const tag = tagsList.find(t => t.tag_id === tid);
               return tag ? (
                 <span key={tid} className="text-[9px] px-1.5 py-0.5 rounded-full text-white"
                   style={{ backgroundColor: tag.color }}>{tag.name}</span>
               ) : null;
             })}
-            {(lead.tags || []).length > 3 && (
-              <span className={`text-[9px] ${textMuted}`}>+{(lead.tags || []).length - 3}</span>
+            {(lead.tag_ids || []).length > 3 && (
+              <span className={`text-[9px] ${textMuted}`}>+{(lead.tag_ids || []).length - 3}</span>
             )}
           </div>
         )}

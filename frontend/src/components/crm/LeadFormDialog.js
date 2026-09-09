@@ -224,10 +224,10 @@ export default function LeadFormDialog({
             <Label className={`${textSec} text-xs`}>Tags</Label>
             <div className="flex flex-wrap gap-1.5 mt-1 mb-1">
               {tagsList.map(t => {
-                const sel = (leadForm.tags || []).includes(t.tag_id);
+                const sel = (leadForm.tag_ids || []).includes(t.tag_id);
                 return (
                   <button key={t.tag_id} type="button"
-                    onClick={() => setLeadForm({...leadForm, tags: sel ? (leadForm.tags||[]).filter(id => id !== t.tag_id) : [...(leadForm.tags||[]), t.tag_id]})}
+                    onClick={() => setLeadForm({...leadForm, tag_ids: sel ? (leadForm.tag_ids||[]).filter(id => id !== t.tag_id) : [...(leadForm.tag_ids||[]), t.tag_id]})}
                     className={`flex items-center gap-1 px-2 py-1 rounded-full text-xs border transition-all ${sel ? 'text-white border-transparent' : `${textMuted} border-[var(--border-color)]`}`}
                     style={sel ? { backgroundColor: t.color } : {}}>
                     <span className="w-2 h-2 rounded-full" style={{ backgroundColor: t.color }} />
@@ -244,7 +244,7 @@ export default function LeadFormDialog({
                     const res = await tagsApi.create({ name: newTagInput.trim(), color: '#6366f1' });
                     const newTag = res.data;
                     setTagsList(prev => [...prev, newTag]);
-                    setLeadForm(prev => ({...prev, tags: [...(prev.tags||[]), newTag.tag_id]}));
+                    setLeadForm(prev => ({...prev, tag_ids: [...(prev.tag_ids||[]), newTag.tag_id]}));
                     setNewTagInput('');
                   }
                 }}

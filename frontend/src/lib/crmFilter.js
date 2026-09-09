@@ -141,7 +141,7 @@ export function matchesCrmFilter(row, filter, ctx) {
   }
 
   if (nonEmpty(f.tags)) {
-    const rowTags = arr(row.tag_ids).length ? arr(row.tag_ids) : arr(row.tags);
+    const rowTags = arr(row.tag_ids);
     if (!f.tags.some(t => rowTags.includes(t))) return false;
   }
 
