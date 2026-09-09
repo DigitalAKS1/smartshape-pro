@@ -347,6 +347,20 @@ def _strip_blanks(d: dict) -> dict:
     return out
 
 
+def parse_tag_cell(raw) -> list:
+    """Split a spreadsheet tag cell into tag names.
+
+    Accepts both separators seen in the wild: exports write pipe-joined
+    ("A|B|C") while people type comma-separated ("A, B, C"). Order-preserving
+    and de-duplicated; blank segments are dropped.
+    """
+    s = str(raw or "").strip()
+    if not s:
+        return []
+    parts = [p.strip() for p in _re.split(r"[|,]", s)]
+    return list(dict.fromkeys([p for p in parts if p]))
+
+
 # Module-level map: key -> (entity, maps_to|None)
 # Built from SEED_FIELDS tuple: (key, label, entity, type, maps_to, group, aliases)
 _CORE = {key: (entity, maps_to) for (key, _l, entity, _t, maps_to, _g, _a) in SEED_FIELDS}
@@ -554,6 +568,10 @@ async def commit_row(db, row_keyed: dict, user: dict, create_leads: bool) -> dic
         if existing is None and contact_name:
             existing = await db.contacts.find_one({"school_id": sid, "name": contact_name})
 
+        # Pop BEFORE cvals/custom_fields are built so the raw tag string never
+        # lands in custom_fields.tags — resolution itself waits until cid exists.
+        tag_cell = parts["custom"]["contact"].pop("tags", "")
+
         cvals = _strip_blanks(dict(parts["contact"]))
         if con_phone_raw:
             cvals["phone"] = con_phone_raw
@@ -585,6 +603,14 @@ async def commit_row(db, row_keyed: dict, user: dict, create_leads: bool) -> dic
                 "custom_fields": parts["custom"]["contact"],
                 **cdoc,
             })
+
+        # ---- tags: a non-blank cell is authoritative; blank leaves them alone ----
+        tag_names = parse_tag_cell(tag_cell)
+        if cid and tag_names:
+            from routes.crm_routes import resolve_tags
+            resolved = await resolve_tags(db, tag_names, user_email)
+            await db.contacts.update_one(
+                {"contact_id": cid}, {"$set": {"tag_ids": resolved}})
 
     # ---- lead upsert: id → school; only if create_leads AND a real owner email ----
     lid = None

@@ -55,6 +55,8 @@ SEED_FIELDS = [
     ("designation",        "Group/Designation",                  "contact", "text",   "designation",          "Contact", ["group designation", "designation", "group"]),
     ("birthday",           "Birthday (Principal/Director)",      "contact", "date",   "birthday",             "Contact", ["birthday principaldirector", "birthday", "dob"]),
     ("anniversary",        "Anniversary (Principal/Director)",   "contact", "date",   None,                   "Contact", ["anniversary principaldirector", "anniversary"]),
+    ("notes",              "Notes",                              "contact", "text",   "notes",                "Contact", ["notes", "note", "remarks"]),
+    ("tags",               "Tags",                               "contact", "text",   None,                   "Contact", ["tags", "tag", "labels"]),
     ("school_name",        "School/Institute Name",              "school",  "text",   "school_name",          "School",  ["school institute name", "school name", "institute name", "school", "company"]),
     ("address",            "School Full Address",                "school",  "text",   "address",              "School",  ["school full address", "address"]),
     ("city",               "City",                               "school",  "text",   "city",                 "School",  ["city"]),

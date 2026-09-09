@@ -3355,8 +3355,13 @@ async def delete_tag(tag_id: str, request: Request):
     return {"message": "Tag deleted"}
 
 
-async def _resolve_tags(tag_names_or_ids: list, creator_email: str) -> list:
-    """Resolve a list of tag_ids or tag name strings → list of tag_ids. Creates tags inline if name not found."""
+async def resolve_tags(db, tag_names_or_ids: list, creator_email: str) -> list:
+    """Resolve a list of tag_ids or tag name strings → list of tag_ids. Creates
+    tags inline if name not found.
+
+    Takes the db handle explicitly so the import engine can reuse it with its
+    own (test) database; `_resolve_tags` below keeps the module-global default —
+    mirrors the resolve_owner/_resolve_owner split above."""
     resolved = []
     for item in (tag_names_or_ids or []):
         if not item:
@@ -3381,6 +3386,11 @@ async def _resolve_tags(tag_names_or_ids: list, creator_email: str) -> list:
             })
             resolved.append(new_id)
     return resolved
+
+
+async def _resolve_tags(tag_names_or_ids: list, creator_email: str) -> list:
+    """Backward-compatible wrapper: resolve against the module-global db."""
+    return await resolve_tags(db, tag_names_or_ids, creator_email)
 
 
 # ==================== SCHOOL MASTER ====================
