@@ -913,14 +913,7 @@ export const dispatches = {
 
 // Import System
 export const importSystem = {
-  preview: (file, entityType) => {
-    const fd = new FormData();
-    fd.append('file', file);
-    return API.post(`/import/preview?entity_type=${entityType}`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
-  },
-  execute: (data) => API.post('/import/execute', data),
   logs: () => API.get('/import/logs'),
-  template: (withIds) => API.get(`/import/template?with_ids=${withIds ? 'true' : 'false'}`),
 };
 
 // Dynamic master-data import (distinct paths to avoid the legacy /import shadow)

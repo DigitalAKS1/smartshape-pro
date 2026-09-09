@@ -358,7 +358,7 @@ def test_export_rejects_unsupported_format(db, monkeypatch):
 
 def test_export_falls_back_to_legacy_owner_field(db, monkeypatch):
     """Schools written by the legacy CSV importer carry `owner`, not
-    `assigned_to` (admin_routes.execute_import). Export both."""
+    `assigned_to` (the now-deleted admin_routes.execute_import). Export both."""
     _run(db.schools.insert_many([
         {"school_id": "new", "school_name": "New", "assigned_to": "parul@ss.in"},
         {"school_id": "old", "school_name": "Old", "owner": "amit@ss.in"},
