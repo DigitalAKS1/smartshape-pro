@@ -602,8 +602,15 @@ CRM reads `assigned_to`, so imported schools appear unowned in the UI.
 
 **Files:**
 - Create: `backend/migrations/canonicalise_school_owner.py`
-- Modify: `backend/routes/admin_routes.py:1326`
 - Test: `backend/tests/test_tag_canonicalisation.py` (extend)
+
+> **Ruling R3 (pre-flight scan).** An earlier draft of this task also changed the
+> `"owner":` write in `admin_routes.py`. That write lives inside `execute_import`,
+> which Task 8 deletes wholesale, so the edit would be removed in the same branch.
+> This task therefore ships the **migration only**. Verified: no other code writes
+> `schools.owner`, and `/export/schools` already reads
+> `doc.get("assigned_to") or doc.get("owner")` (`admin_routes.py:1627`), so the
+> migration causes no export regression.
 
 **Interfaces:**
 - Consumes: nothing.
@@ -673,20 +680,18 @@ async def canonicalise_school_owner(db) -> dict:
     return {"schools_migrated": n}
 ```
 
-- [ ] **Step 4: Fix the importer's school insert**
+- [ ] **Step 4: Confirm no surviving writer of `schools.owner`**
 
-In `backend/routes/admin_routes.py`, the school insert document currently at
-line 1326 reads:
+Per ruling R3 this task does not edit `admin_routes.py`. Verify the assumption
+behind that ruling instead:
 
-```python
-                    "owner": (data.get("owner") or "").strip() or user["email"],
+```bash
+cd backend && grep -rn '"owner":' routes/ --include=*.py
 ```
 
-Replace it with:
-
-```python
-                    "assigned_to": (data.get("owner") or "").strip() or user["email"],
-```
+Every hit must be inside `execute_import` (which Task 8 deletes) or be a read,
+not a write. If a writer turns up anywhere else, stop and report it — the
+ruling's premise is broken and the migration alone would not hold.
 
 - [ ] **Step 5: Run the tests**
 
@@ -700,12 +705,13 @@ Expected: all pass.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add backend/migrations/canonicalise_school_owner.py backend/routes/admin_routes.py backend/tests/test_tag_canonicalisation.py
-git commit -m "fix(schools): importer writes assigned_to, not owner
+git add backend/migrations/canonicalise_school_owner.py backend/tests/test_tag_canonicalisation.py
+git commit -m "fix(schools): migrate legacy owner field to assigned_to
 
-The CSV importer wrote schools.owner while the CRM scopes and displays from
-assigned_to, so every imported school appeared unowned. Migration fills the gap
-without ever clobbering a live assigned_to."
+The legacy CSV importer wrote schools.owner while the CRM scopes and displays
+from assigned_to, so every imported school appeared unowned. Migration fills the
+gap without ever clobbering a live assigned_to. The writer itself is removed by
+the import-endpoint deletion, so no code change is needed here."
 ```
 
 ---
@@ -1382,10 +1388,22 @@ Leaving three CSV importers in place is what caused a fix to land on the wrong
 one.
 
 **Files:**
-- Modify: `backend/routes/admin_routes.py` (delete `_normalize_csv_headers`,
-  `_parse_tag_names`, `_resolve_tag_ids`, `preview_import`, `execute_import`)
+- Modify: `backend/routes/admin_routes.py` (delete `_parse_tag_names`,
+  `_resolve_tag_ids`, `preview_import`, `execute_import`)
 - Modify: `frontend/src/lib/api.js:915-922` (delete `importSystem.preview/execute`)
 - Delete: `backend/tests/test_csv_header_normalization.py`
+
+> **Rulings R1, R2, R4 (pre-flight scan).**
+> **R1** — `_normalize_csv_headers` does **not** exist on this branch. It lived
+> only in an orphaned commit that was never merged. Do not look for it; delete
+> only what Step 1's grep actually finds.
+> **R2** — line numbers cited anywhere in this task were read on that orphaned
+> commit and are ~79 lines too high. Verified positions on this branch:
+> `preview_import` **1040**, `_parse_tag_names` **1091**, `_resolve_tag_ids`
+> **1110**, `execute_import` **1150**, and `execute_import` runs to just before
+> `/import/logs` at **1349**. Locate by symbol, not by number.
+> **R4** — `backend/tests/test_csv_header_normalization.py` is present on disk
+> but **untracked**. Use `rm`, not `git rm`, or the task fails on a git error.
 
 **Interfaces:**
 - Consumes: nothing.
@@ -1404,11 +1422,21 @@ it rather than deleting.
 
 - [ ] **Step 2: Delete the backend endpoints and helpers**
 
-Remove from `backend/routes/admin_routes.py`:
-- `_normalize_csv_headers` (lines 1040-1107)
-- `_parse_tag_names` (line 1160) and `_resolve_tag_ids` (line 1176)
-- `preview_import` (line 1111) and `execute_import` (line 1224), through to the
-  end of `execute_import`'s body
+Remove from `backend/routes/admin_routes.py`, locating each by symbol:
+- `preview_import` (~1040) and its `@router.post("/import/preview")` decorator
+- `_parse_tag_names` (~1091) and `_resolve_tag_ids` (~1110)
+- `execute_import` (~1150) and its `@router.post("/import/execute")` decorator,
+  through to the end of its body — it ends just before
+  `@router.get("/import/logs")` at ~1349
+
+Do not search for `_normalize_csv_headers`; per ruling R1 it does not exist on
+this branch.
+
+While here, fix the now-stale comment in `export_schools` (~1625) that reads
+"`owner` is what the legacy CSV importer wrote (see execute_import above)" —
+`execute_import` no longer exists. The `doc.get("assigned_to") or doc.get("owner")`
+fallback itself stays: it still serves rows not yet touched by the Task 4
+migration.
 
 Keep `importSystem.logs()`'s endpoint and everything under `/export/*` — the
 export path is still live and is what produces the round-trip file.
@@ -1421,10 +1449,13 @@ the `importSystem` object (lines 915-922), keeping `logs`.
 - [ ] **Step 4: Delete the superseded test file**
 
 ```bash
-git rm backend/tests/test_csv_header_normalization.py
+rm backend/tests/test_csv_header_normalization.py
 ```
 
-It tested `_normalize_csv_headers`, which no longer exists. The engine's
+Use plain `rm`: per ruling R4 the file is untracked on this branch, so `git rm`
+would abort with "did not match any files".
+
+It tested `_normalize_csv_headers`, which does not exist here. The engine's
 `field_registry.normalize_header` plus its alias table supersede it and are
 covered by `tests/test_import_mapping.py`.
 
