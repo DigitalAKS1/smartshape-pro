@@ -132,3 +132,114 @@ def test_migration_is_idempotent_for_both_fields_case(db):
         assert sorted(s["tag_ids"]) == ["tag_a", "tag_b", "tag_c"]
         assert "tags" not in s
     _run(go())
+
+
+# ---------------------------------------------------------------------------
+# Guard: nothing reads or writes the legacy `tags` field on schools/leads.
+# ---------------------------------------------------------------------------
+#
+# A single `re.search(r'["\']tags["\']\s*:', line)` over the whole line is too
+# broad: it also matches a perfectly legitimate response-shape key
+# (`facets = {"stages": stage_facets, "tags": tag_facets}` in
+# _calculate_facets) and an unrelated equality check
+# (`if field == "tags":` in the CSV export). Both are plain Python dict/
+# control-flow syntax that happen to contain the substring `"tags":` but never
+# touch Mongo. Flagging them would make the guard fail for reasons that have
+# nothing to do with the bug it exists to catch — exactly the kind of
+# de-fanged assertion that is worse than no test.
+#
+# Instead this guard targets the concrete SHAPES that actually reach Mongo for
+# schools/leads, each chosen because it cannot occur in ordinary
+# Python-dict/response code:
+#
+#   1. An update-operator dict keyed by $set/$addToSet/$pull/$unset/$push
+#      whose payload names "tags" — e.g. {"$addToSet": {"tags": tag_id}}.
+#      ($-prefixed keys are exclusively Mongo operator syntax in this
+#      codebase; they never appear in an API response dict.)
+#   2. An aggregation field reference to "$tags" — e.g. {"$unwind": "$tags"}
+#      or {"_id": "$tags", ...} in a $group stage. Same reasoning: a string
+#      starting with "$" is never a legitimate response value.
+#   3. A filter clause built with `<list>.append({"tags": ...})` — the
+#      pattern crm_routes.py's GET /leads uses to build `clauses` before
+#      ANDing them into a Mongo query (`clauses.append({"tag_ids": tag})`).
+#   4. A bracket-style field assignment `<dict>["tags"] = ...` — the pattern
+#      the PUT /schools/{id} and PUT /leads/{id} handlers use to build the
+#      `$set` payload (`allowed["tags"] = ...`).
+#   5. A direct Mongo call with an inline "tags" filter/document on the same
+#      line, e.g. db.schools.find({"tags": tag_id}, ...).
+#   6. A "tags": key line that falls inside an insert_one/insert_many/
+#      update_one/update_many(...) call opened earlier in the same function
+#      (multi-line document literals, e.g. crm_zoom_routes.py's Zoom-import
+#      lead insert). Scoped to the enclosing function by stopping the
+#      backward scan at the nearest `@router`/`def`/`async def` line, so it
+#      cannot reach into an unrelated handler above.
+#
+# Scoped to every file Task 3 touched — the two the brief named plus the
+# additional sites the broader grep turned up (Zoom import, drip enrol-by-tag,
+# the quotation auto-lead + demo-tag update, and the WhatsApp broadcast-by-tag
+# query) — plus the dev seed script, so a regression anywhere in that set is
+# caught, not just in the two originally-named files.
+
+def test_no_source_file_still_writes_legacy_tags_field():
+    """Guard against a reintroduced `tags` read/write on schools or leads."""
+    import pathlib
+    import re
+
+    root = pathlib.Path(__file__).resolve().parents[1]
+    files = (
+        "routes/crm_routes.py",
+        "routes/admin_routes.py",
+        "routes/crm_zoom_routes.py",
+        "routes/drip_routes.py",
+        "routes/quotation_routes.py",
+        "routes/settings_routes.py",
+        "seed_leads.py",
+    )
+
+    operator_re = re.compile(
+        r'\$(?:set|addToSet|pull|unset|push)["\']?\s*:\s*\{[^{}]*["\']tags["\']\s*:')
+    agg_field_re = re.compile(r'["\']\$tags["\']')
+    append_re = re.compile(r'\.append\(\s*\{\s*["\']tags["\']\s*:')
+    bracket_assign_re = re.compile(r'\w+\[["\']tags["\']\]\s*=')
+    inline_call_re = re.compile(
+        r'db\.\w+\.(?:find|find_one|update_one|update_many|delete_one|delete_many|'
+        r'insert_one|insert_many|aggregate)\([^)]*["\']tags["\']\s*:')
+    tags_key_re = re.compile(r'["\']tags["\']\s*:')
+    write_opener_re = re.compile(
+        r'db\.\w+\.(?:insert_one|insert_many|update_one|update_many)\(')
+    boundary_re = re.compile(r'^\s*(@router|async def |def )')
+
+    offenders = []
+    for name in files:
+        path = root / name
+        if not path.exists():
+            continue
+        lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+        for i, line in enumerate(lines):
+            lineno = i + 1
+            hit = None
+            if operator_re.search(line):
+                hit = "update-operator dict"
+            elif agg_field_re.search(line):
+                hit = "aggregation field reference ($tags)"
+            elif append_re.search(line):
+                hit = 'filter-clause .append({"tags": ...})'
+            elif bracket_assign_re.search(line):
+                hit = "bracket-style field assignment"
+            elif inline_call_re.search(line):
+                hit = "inline Mongo call filter/document"
+            elif tags_key_re.search(line):
+                # Possibly a multi-line insert/update document: look back
+                # (within this function only) for an unclosed
+                # insert_one/insert_many/update_one/update_many( opener.
+                for back in range(i - 1, max(-1, i - 40), -1):
+                    prior = lines[back]
+                    if boundary_re.match(prior):
+                        break
+                    if write_opener_re.search(prior):
+                        hit = "multi-line document inside an insert/update call"
+                        break
+            if hit:
+                offenders.append(f"{name}:{lineno} [{hit}]: {line.strip()}")
+
+    assert not offenders, "legacy `tags` field still read/written:\n" + "\n".join(offenders)

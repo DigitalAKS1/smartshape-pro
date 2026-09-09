@@ -3884,7 +3884,7 @@ async def bulk_tag_schools(request: Request):
         raise HTTPException(status_code=400, detail="action must be add or remove")
     if not await db.tags.find_one({"tag_id": tag_id}):
         raise HTTPException(status_code=404, detail="Tag not found")
-    op = {"$addToSet": {"tags": tag_id}} if action == "add" else {"$pull": {"tags": tag_id}}
+    op = {"$addToSet": {"tag_ids": tag_id}} if action == "add" else {"$pull": {"tag_ids": tag_id}}
     res = await db.schools.update_many({"school_id": {"$in": ids}}, op)
     return {"ok": True, "updated": res.modified_count, "tag_id": tag_id, "action": action}
 
@@ -3941,8 +3941,9 @@ async def update_school(school_id: str, request: Request):
               "wa_consent", "wa_consent_source"):
         if k in body:
             allowed[k] = body[k]
-    if "tags" in body:
-        allowed["tags"] = await _resolve_tags(body["tags"], user["email"])
+    incoming_tags = body.get("tag_ids", body.get("tags"))
+    if incoming_tags is not None:
+        allowed["tag_ids"] = await _resolve_tags(incoming_tags, user["email"])
     if "wa_consent" in allowed:
         allowed["wa_consent"] = bool(allowed["wa_consent"])
         allowed["wa_consent_at"] = datetime.now(timezone.utc).isoformat() if allowed["wa_consent"] else None
@@ -5124,7 +5125,7 @@ async def _enrich_leads(leads: list) -> list:
     school_map = await _fetch_schools_map([l.get("school_id") for l in leads])
 
     tag_map = {}
-    if any(l.get("tags") for l in leads):
+    if any(l.get("tag_ids") for l in leads):
         tag_map = await _fetch_tag_names()
 
     # Batch-fetch linked contact names (P1-B). Resolve via EITHER link style so
@@ -5152,7 +5153,7 @@ async def _enrich_leads(leads: list) -> list:
         lead["probability"] = stage_probability(lead.get("stage", ""), settings)
         lead["weighted_value"] = round(lead["deal_value"] * lead["probability"] / 100, 2)
         lead["linked_contact_name"] = linked_map.get(_linked_cid(lead))
-        lead["tag_names"] = [tag_map.get(t, t) for t in (lead.get("tags") or [])]
+        lead["tag_names"] = [tag_map.get(t, t) for t in (lead.get("tag_ids") or [])]
     return leads
 
 
@@ -5177,8 +5178,8 @@ async def _calculate_facets(query_filter: dict) -> dict:
 
         tags = await db.leads.aggregate([
             {"$match": query_filter},
-            {"$unwind": "$tags"},
-            {"$group": {"_id": "$tags", "count": {"$sum": 1}}},
+            {"$unwind": "$tag_ids"},
+            {"$group": {"_id": "$tag_ids", "count": {"$sum": 1}}},
             {"$sort": {"count": -1}},
             {"$limit": 20},
         ]).to_list(length=20)
@@ -5312,7 +5313,7 @@ async def get_leads(request: Request,
     if owner:
         clauses.append({"assigned_to": owner})
     if tag:
-        clauses.append({"tags": tag})
+        clauses.append({"tag_ids": tag})
     if search and search.strip():
         rx = {"$regex": re.escape(search.strip()), "$options": "i"}
         clauses.append({"$or": [
@@ -5630,7 +5631,7 @@ async def create_lead(request: Request):
         "lost_reason_note": body.get("lost_reason_note", ""),
         "referred_by_contact_id": body.get("referred_by_contact_id", ""),
         "referral_reward_status": body.get("referral_reward_status", "none"),
-        "tags": await _resolve_tags(body.get("tags", []), user["email"]),
+        "tag_ids": await _resolve_tags(body.get("tag_ids", body.get("tags", [])), user["email"]),
         "last_activity_date": now_iso,
         "created_by": user["email"],
         "created_at": now_iso,
@@ -5691,8 +5692,9 @@ async def update_lead(lead_id: str, request: Request):
         allowed["wa_consent_by"] = user["email"] if allowed["wa_consent"] else ""
     if "expected_value" in allowed:
         allowed["expected_value"] = float(allowed["expected_value"] or 0)
-    if "tags" in body:
-        allowed["tags"] = await _resolve_tags(body["tags"], user["email"])
+    incoming_tags = body.get("tag_ids", body.get("tags"))
+    if incoming_tags is not None:
+        allowed["tag_ids"] = await _resolve_tags(incoming_tags, user["email"])
     now_iso = datetime.now(timezone.utc).isoformat()
     allowed["updated_at"] = now_iso
     allowed["last_activity_date"] = now_iso
@@ -6163,7 +6165,7 @@ async def bulk_tag_leads(request: Request):
         raise HTTPException(400, "lead_ids and tag_id are required")
     if not await db.tags.find_one({"tag_id": tag_id}):
         raise HTTPException(404, "Tag not found")
-    op = {"$addToSet": {"tags": tag_id}} if action == "add" else {"$pull": {"tags": tag_id}}
+    op = {"$addToSet": {"tag_ids": tag_id}} if action == "add" else {"$pull": {"tag_ids": tag_id}}
     result = await db.leads.update_many({"lead_id": {"$in": lead_ids}}, op)
     await log_activity(user["email"], f"bulk_tag_{action}", "lead", ",".join(lead_ids[:5]),
                        details=f"tag_id={tag_id} action={action} count={result.modified_count}")

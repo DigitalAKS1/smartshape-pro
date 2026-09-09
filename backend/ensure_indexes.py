@@ -41,7 +41,7 @@ INDEXES = {
         # Compound - filter + sort in one index scan
         (("stage", 1), ("created_at", -1)),                    # stage filter, date sort
         (("assigned_to", 1), ("stage", 1)),                    # owner + stage
-        (("tags", 1), ("stage", 1)),                           # tag + stage (multikey)
+        (("tag_ids", 1), ("stage", 1)),                        # tag + stage (multikey)
         (("school_id", 1), ("created_at", -1)),                # a school's leads, newest first
         (("converted_from_contact", 1), ("created_at", -1)),   # contact-linked leads
     ],
@@ -51,7 +51,7 @@ INDEXES = {
         ("school_name", 1), ("city", 1), ("is_deleted", 1),
 
         # Compound
-        (("tags", 1), ("school_name", 1)),                     # schools by tag, name-sorted
+        (("tag_ids", 1), ("school_name", 1)),                  # schools by tag, name-sorted
         (("assigned_to", 1), ("created_at", -1)),              # a rep's schools, newest first
         (("city", 1), ("school_type", 1)),                     # city + type
     ],

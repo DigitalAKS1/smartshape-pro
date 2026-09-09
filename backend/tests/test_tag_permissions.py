@@ -85,7 +85,7 @@ def test_a_rep_can_tag_leads_in_bulk(db, monkeypatch):
         out = await crm.bulk_tag_leads(FakeRequest(
             {"lead_ids": ["l1"], "tag_id": "tag_hot", "action": "add"}))
         assert out["modified"] == 1
-        assert (await db.leads.find_one({"lead_id": "l1"}))["tags"] == ["tag_hot"]
+        assert (await db.leads.find_one({"lead_id": "l1"}))["tag_ids"] == ["tag_hot"]
     _run(go())
 
 
@@ -109,7 +109,7 @@ def test_a_rep_with_the_leads_grant_can_bulk_tag_schools(db, monkeypatch):
         out = await crm.bulk_tag_schools(FakeRequest(
             {"school_ids": ["s1"], "tag_id": "tag_hot", "action": "add"}))
         assert out["updated"] == 1
-        assert (await db.schools.find_one({"school_id": "s1"}))["tags"] == ["tag_hot"]
+        assert (await db.schools.find_one({"school_id": "s1"}))["tag_ids"] == ["tag_hot"]
     _run(go())
 
 

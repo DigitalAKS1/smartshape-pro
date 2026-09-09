@@ -155,7 +155,7 @@ async def seed():
             "visit_required": random.choice([True, False, False]),
             "last_activity_date": rand_date(60),
             "notes": "Seeded dummy record for testing." if i % 5 == 0 else None,
-            "tags": [],
+            "tag_ids": [],
             "created_at": datetime.now(timezone.utc).isoformat(),
             "is_locked": False,
             "reassignment_count": 0,

@@ -270,8 +270,8 @@ def _lead_docs(n, schools=200):
             "school_id": f"bench{RUN}_sch_{i % schools}",
             "stage": stages[i % len(stages)],
             "assigned_to": f"rep{i % 7}@smartshape.in",
-            # leads store tag ids under `tags` (see create_lead), NOT `tag_ids`
-            "tags": [f"bench{RUN}_tag_care"] if i % 5 == 0 else [],
+            # leads store tag ids under `tag_ids` (see create_lead)
+            "tag_ids": [f"bench{RUN}_tag_care"] if i % 5 == 0 else [],
             "company_name": f"Company {i}",
             "contact_name": f"Contact {i}",
             "expected_value": 10000 + (i % 50) * 1000,
@@ -350,8 +350,8 @@ def test_lead_list_page_under_500ms(monkeypatch, capsys):
 def test_tag_filter_under_200ms(monkeypatch, capsys):
     """GET /leads?page=1&limit=50&tag=... must answer in <200ms.
 
-    Tag filtering is the slowest filter in the rail because `tags` is a
-    multikey array. Task 3 added the (tags, stage) compound index for exactly
+    Tag filtering is the slowest filter in the rail because `tag_ids` is a
+    multikey array. Task 3 added the (tag_ids, stage) compound index for exactly
     this; the benchmark runs with that index present so it measures the shipped
     configuration.
     """
@@ -381,7 +381,7 @@ def test_tag_filter_under_200ms(monkeypatch, capsys):
     # The filter actually filtered: one lead in five is tagged.
     assert data["total"] == 2000
     assert len(data["leads"]) == 50
-    assert all(tag_id in lead["tags"] for lead in data["leads"])
+    assert all(tag_id in lead["tag_ids"] for lead in data["leads"])
     assert data["leads"][0]["tag_names"] == ["Care"]
 
     median = statistics.median(samples)

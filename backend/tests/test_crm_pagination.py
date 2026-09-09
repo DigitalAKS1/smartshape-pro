@@ -98,8 +98,8 @@ def test_leads_pagination_returns_page_and_total(db, monkeypatch):
             "school_id": f"sch_{i % 10}",
             "stage": "negotiation" if i % 2 == 0 else "qualified",
             "assigned_to": "john@company.com" if i % 3 == 0 else "jane@company.com",
-            # leads store tag ids under `tags` (see create_lead), not `tag_ids`
-            "tags": ["tag_care"] if i % 5 == 0 else [],
+            # leads store tag ids under `tag_ids` (see create_lead)
+            "tag_ids": ["tag_care"] if i % 5 == 0 else [],
             "created_at": f"2026-09-{(i % 28) + 1:02d}T00:00:00+00:00",
             "company_name": f"Company {i}",
             "contact_name": f"Contact {i}",
@@ -144,8 +144,8 @@ def test_leads_pagination_returns_page_and_total(db, monkeypatch):
         assert key in row, f"{key} missing from enriched lead"
     assert row["school_name"] == f"School {int(row['lead_id'].split('_')[1]) % 10}"
     # tag ids stay ids (the frontend filters on them); names ride alongside
-    tagged = next(l for l in data["leads"] if l["tags"])
-    assert tagged["tags"] == ["tag_care"]
+    tagged = next(l for l in data["leads"] if l["tag_ids"])
+    assert tagged["tag_ids"] == ["tag_care"]
     assert tagged["tag_names"] == ["Care"]
 
     # Page 2 is a different, non-overlapping slice; last page is short.

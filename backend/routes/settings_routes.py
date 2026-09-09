@@ -917,7 +917,7 @@ async def whatsapp_broadcast_by_tag(request: Request):
     if not template_body:
         raise HTTPException(status_code=400, detail="message or template_id with body is required")
 
-    leads = await db.leads.find({"tags": tag_id}, {"_id": 0}).to_list(5000)
+    leads = await db.leads.find({"tag_ids": tag_id}, {"_id": 0}).to_list(5000)
     sent, failed, skipped = 0, 0, 0
     import httpx
     now_iso = datetime.now(timezone.utc).isoformat()

@@ -172,7 +172,7 @@ async def zoom_crm_import(request: Request):
                                           "by_name": user["name"], "at": _now(), "note": "Lead created (Zoom import)"}],
                     "last_visit_date": None, "notes": f"From Zoom meeting: {theme}" if theme else "",
                     "expected_value": 0.0, "converted_from_contact": contact_id or "",
-                    "tags": [], "is_deleted": False,
+                    "tag_ids": [], "is_deleted": False,
                     "last_activity_date": _now(), "created_by": user["email"],
                     "created_at": _now(), "updated_at": _now(),
                 })

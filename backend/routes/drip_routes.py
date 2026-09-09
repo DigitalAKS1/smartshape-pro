@@ -500,7 +500,7 @@ async def enroll_schools(request: Request):
     # of a list assembled by hand every time.
     matched_by_tag = 0
     if tag_id:
-        tagged = await db.schools.find({"tags": tag_id}, {"_id": 0, "school_id": 1}).to_list(5000)
+        tagged = await db.schools.find({"tag_ids": tag_id}, {"_id": 0, "school_id": 1}).to_list(5000)
         matched_by_tag = len(tagged)
         for row in tagged:
             if row["school_id"] not in school_ids:

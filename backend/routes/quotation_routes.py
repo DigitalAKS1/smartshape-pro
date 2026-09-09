@@ -337,7 +337,7 @@ async def _auto_register_from_quotation(quot: dict, created_by_email: str):
             "assigned_to": sp_email,
             "assigned_name": sp_name,
             "notes": f"Auto-created from quotation {quot.get('quote_number', quotation_id)}",
-            "tags": [],
+            "tag_ids": [],
             "quotation_ids": [quotation_id],
             "pipeline_history": [{
                 "from_stage": None,
@@ -466,7 +466,7 @@ async def _crm_hook_quotation(quot_doc: dict):
             {
                 "$set": {"stage": "negotiation", "updated_at": now_iso, "last_activity_date": now_iso},
                 "$push": {"pipeline_history": history_entry},
-                "$addToSet": {"tags": demo_tag_id},
+                "$addToSet": {"tag_ids": demo_tag_id},
             },
         )
         lead["stage"] = "negotiation"
