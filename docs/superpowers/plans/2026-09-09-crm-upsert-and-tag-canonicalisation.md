@@ -1479,10 +1479,26 @@ covered by `tests/test_import_mapping.py`.
 
 ```bash
 cd backend && python -c "import main; print('import ok')"
-cd backend && python -m pytest tests/ -q
+cd backend && python -m pytest tests/test_import_blank_safety.py tests/test_tag_canonicalisation.py \
+    tests/test_contacts_import_upsert.py tests/test_import_safety.py tests/test_import_resolve.py \
+    tests/test_import_mapping.py tests/test_master_import_e2e.py tests/test_import_clean.py \
+    tests/test_contacts.py tests/test_csv_export.py -q
 ```
 
 Expected: `import ok`, and no collection errors or failures.
+
+**Do not run the bare `pytest tests/` here.** `backend/.env` points `MONGO_URL`
+at the production MongoDB Atlas cluster, and `database.py:5` calls
+`load_dotenv('.env')` — so as soon as any test imports `database`, that URL is
+in `os.environ` for every test that follows. `tests/test_import_entry.py:49`
+then builds a real `AsyncIOMotorClient` from it.
+
+A name guard at `test_import_entry.py:51` (`assert d.name.endswith("_test")`)
+does stop it writing to the production *database*, so this is not a
+data-corruption risk. But it still opens a connection to the production
+*cluster* and creates a scratch database there, and it is why several suites
+appear to "fail" locally when they are really just refusing to run. Keep the
+verification list explicit.
 
 - [ ] **Step 6: Commit**
 
