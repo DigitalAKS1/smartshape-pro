@@ -54,6 +54,26 @@ through that path creates one tag literally named `"A|B|C"`.
 dialog's chip selection to every row (`crm_routes.py:4862, 4868, 4945`),
 overwriting per-contact tags.
 
+### Defect 5 — The import engine overwrites live fields with blanks
+
+Found while planning, after this spec's decisions were taken. It is a live
+data-loss bug in the Admin → Import Center today, not a risk introduced by this
+work.
+
+`split_values` iterates every key present in the row and does not drop empty
+ones (`import_engine.py:385`). `commit_row` then `$set`s that dict wholesale on
+the update branch (`import_engine.py:552`), so a blank `Mail ID` column writes
+`email: ""` over the stored address. Schools are worse: line 511 reads
+`if sch_phone_raw or "phone" in upd`, so the mere presence of a phone column —
+blank or not — clears the stored number.
+
+This directly violates D1. Because the owner's export carries blank phone and
+email on the majority of its ~1,500 rows, wiring the Contacts import to the
+engine without fixing this first would destroy data on the first re-upload.
+Blank-safety is therefore the first task of sub-project A, ahead of the tag
+canonicalisation, and it makes the existing Import Center safe independently of
+anything else built here.
+
 ### Defect 4 — The table cannot work like a spreadsheet, and is slow
 
 Four separate hand-rolled `<table>` blocks with no shared component:
