@@ -678,7 +678,23 @@ async def canonicalise_school_owner(db) -> dict:
             upd["$set"] = {"assigned_to": legacy}
         await db.schools.update_one({"_id": doc["_id"]}, upd)
     return {"schools_migrated": n}
+
+
+if __name__ == "__main__":
+    import asyncio
+
+    from database import db
+
+    print(asyncio.run(canonicalise_school_owner(db)))
 ```
+
+The `__main__` block is required, not optional: it is the only committed,
+reviewed way to run this against production. Keep `from database import db`
+**inside** the guard — at module level it would make the test suite and every
+importer open a connection to the live database. Match the style of
+`backend/migrations/backfill_module_permissions.py` exactly, and confirm
+`cd backend && python -c "import migrations.canonicalise_school_owner"`
+imports silently without connecting to anything.
 
 - [ ] **Step 4: Confirm no surviving writer of `schools.owner`**
 
@@ -1494,12 +1510,16 @@ via a VPS timer, ~1-2 minutes):
    non-destructive by design, but they rewrite fields on every school and lead.
 2. Run the migrations against production, in this order:
    ```bash
-   python -c "import asyncio; from database import db; from migrations.canonicalise_tag_fields import canonicalise_tag_fields; print(asyncio.run(canonicalise_tag_fields(db)))"
-   python -c "import asyncio; from database import db; from migrations.canonicalise_school_owner import canonicalise_school_owner; print(asyncio.run(canonicalise_school_owner(db)))"
+   cd backend && python -m migrations.canonicalise_tag_fields
+   cd backend && python -m migrations.canonicalise_school_owner
    ```
-   Note: inline `python -c` mangles Mongo `$` operators on this platform for
-   more complex scripts — if either command misbehaves, write it to a temp file
-   and run the file instead.
+   Each prints its result dict. Both are idempotent — a second run reports zero
+   changes, so re-running after an interruption is safe.
+
+   Do **not** invoke these with an inline `python -c`: on this platform that
+   mangles Mongo `$` operators, which is exactly the failure you cannot afford
+   on a migration whose bad outcome is silent, permanent tag loss. Both modules
+   carry an `if __name__ == "__main__":` runner for this reason.
 3. Merge `feat/crm-grid-upsert` into `main` and push. Verify the deploy by
    bundle content, not by timestamp.
 4. Smoke test the real workflow: export contacts, edit one designation and one
