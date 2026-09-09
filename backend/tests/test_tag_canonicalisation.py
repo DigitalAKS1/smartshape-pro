@@ -69,6 +69,41 @@ def test_contacts_are_left_alone(db):
     _run(go())
 
 
+def test_school_with_empty_tags_array_no_tag_ids(db):
+    async def go():
+        await db.schools.insert_one({"school_id": "sch_empty", "tags": []})
+        await canonicalise_tag_fields(db)
+        s = await db.schools.find_one({"school_id": "sch_empty"})
+        assert s["tag_ids"] == []
+        assert "tags" not in s
+    _run(go())
+
+
+def test_school_with_empty_tags_array_and_tag_ids(db):
+    async def go():
+        await db.schools.insert_one({
+            "school_id": "sch_empty_with", "tags": [],
+            "tag_ids": ["tag_x"],
+        })
+        await canonicalise_tag_fields(db)
+        s = await db.schools.find_one({"school_id": "sch_empty_with"})
+        assert s["tag_ids"] == ["tag_x"]
+        assert "tags" not in s
+    _run(go())
+
+
+def test_school_with_tags_none(db):
+    async def go():
+        await db.schools.insert_one({"school_id": "sch_none", "tags": None})
+        await canonicalise_tag_fields(db)
+        s = await db.schools.find_one({"school_id": "sch_none"})
+        # tags: None matches {"$exists": True}, so it is migrated to tag_ids: []
+        assert s["tag_ids"] == []
+        # tags field is unset
+        assert "tags" not in s
+    _run(go())
+
+
 def test_migration_is_idempotent(db):
     async def go():
         await db.schools.insert_one({"school_id": "sch_i", "tags": ["tag_a"]})
@@ -79,4 +114,21 @@ def test_migration_is_idempotent(db):
         assert second["already_clean"] is True
         s = await db.schools.find_one({"school_id": "sch_i"})
         assert s["tag_ids"] == ["tag_a"]
+    _run(go())
+
+
+def test_migration_is_idempotent_for_both_fields_case(db):
+    async def go():
+        await db.schools.insert_one({
+            "school_id": "sch_both_i", "tags": ["tag_a", "tag_b"],
+            "tag_ids": ["tag_b", "tag_c"],
+        })
+        first = await canonicalise_tag_fields(db)
+        second = await canonicalise_tag_fields(db)
+        assert first["schools_merged"] == 1
+        assert second["schools_merged"] == 0
+        assert second["already_clean"] is True
+        s = await db.schools.find_one({"school_id": "sch_both_i"})
+        assert sorted(s["tag_ids"]) == ["tag_a", "tag_b", "tag_c"]
+        assert "tags" not in s
     _run(go())

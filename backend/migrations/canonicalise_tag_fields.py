@@ -49,3 +49,10 @@ async def _rename_leads(db) -> int:
             {"$set": {"tag_ids": merged}, "$unset": {"tags": ""}},
         )
     return n
+
+
+if __name__ == "__main__":
+    import asyncio
+    from database import db
+
+    print(asyncio.run(canonicalise_tag_fields(db)))
