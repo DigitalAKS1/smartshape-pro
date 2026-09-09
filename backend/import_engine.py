@@ -461,7 +461,8 @@ def _phone_pair(bucket: dict, entity: str, warnings: list) -> tuple[str, str]:
     return raw, normalize_phone(raw)
 
 
-async def commit_row(db, row_keyed: dict, user: dict, create_leads: bool) -> dict:
+async def commit_row(db, row_keyed: dict, user: dict, create_leads: bool,
+                     allow_school_create: bool = True) -> dict:
     """Upsert one import row into schools / contacts / leads with a pre-update audit snapshot.
 
     Safety rules:
@@ -477,6 +478,9 @@ async def commit_row(db, row_keyed: dict, user: dict, create_leads: bool) -> dic
     - create: mint sch_<12hex> only when no valid id supplied.
     - update: snapshot the prior school doc into audit_backup (kind=school_pre_import)
               BEFORE any $set.
+    - school: when allow_school_create is False and the row carries no school
+      identity at all, no school is resolved or created; the contact is upserted
+      with school_id left as-is (never overwritten with None).
 
     Returns:
         {"action", "school_id", "contact_id", "lead_id", "warnings"}
@@ -503,7 +507,16 @@ async def commit_row(db, row_keyed: dict, user: dict, create_leads: bool) -> dic
     con_phone_raw, con_phone_norm = _phone_pair(parts["contact"], "contact", warnings)
 
     # --- P2.5 school resolution (id → name+city → phone_norm) ---
-    res = await resolve_school(db, row_keyed)
+    has_school_identity = bool(
+        (row_keyed.get("school_id") or "").strip()
+        or (parts["school"].get("school_name") or "").strip()
+        or sch_phone_raw
+    )
+    if not allow_school_create and not has_school_identity:
+        res = {"action": "skip_school", "school_id": None, "candidates": 0}
+    else:
+        res = await resolve_school(db, row_keyed)
+
     if res["action"] == "needs_review":
         return {"action": "needs_review", "school_id": None, "contact_id": None,
                 "lead_id": None, "warnings": warnings}
@@ -528,7 +541,7 @@ async def commit_row(db, row_keyed: dict, user: dict, create_leads: bool) -> dic
             doc["phone_norm"] = sch_phone_norm
         doc.update(assign_set)
         await db.schools.insert_one(doc)
-    else:
+    elif res["action"] == "update":
         # Snapshot existing doc before overwriting (safety-critical — never skip)
         old = await db.schools.find_one({"school_id": sid})
         await db.audit_backup.insert_one({
@@ -549,6 +562,7 @@ async def commit_row(db, row_keyed: dict, user: dict, create_leads: bool) -> dic
             upd["phone_norm"] = sch_phone_norm
         upd.update(assign_set)
         await db.schools.update_one({"school_id": sid}, {"$set": upd})
+    # action == "skip_school": no school is resolved, created or touched
 
     # ---- contact upsert: id → name+phone_norm → phone_norm → phone → name ----
     cid = None

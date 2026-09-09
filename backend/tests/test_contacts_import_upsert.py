@@ -97,3 +97,46 @@ def test_notes_writes_to_native_column_not_custom_fields(db):
         assert c["notes"] == "Met at expo 2026"
         assert "notes" not in (c.get("custom_fields") or {})
     _run(go())
+
+
+def test_contacts_only_row_creates_no_school(db):
+    async def go():
+        row = {"contact_id": "con_solo", "name": "Solo Person",
+               "phone": "9998887776"}
+        res = await ie.commit_row(db, row, IMPORTER, create_leads=False,
+                                  allow_school_create=False)
+        assert await db.schools.count_documents({}) == 0, "no junk school"
+        assert res["school_id"] is None
+        c = await db.contacts.find_one({"contact_id": "con_solo"})
+        assert c is not None
+        assert c.get("school_id") in (None, "")
+    _run(go())
+
+
+def test_contacts_only_update_keeps_existing_school_link(db):
+    async def go():
+        await db.schools.insert_one({
+            "school_id": "sch_link", "school_name": "Linked School",
+            "is_deleted": False})
+        await db.contacts.insert_one({
+            "contact_id": "con_link", "school_id": "sch_link",
+            "name": "Linked Person", "designation": "Principal"})
+
+        row = {"contact_id": "con_link", "name": "Linked Person",
+               "designation": "Director"}
+        await ie.commit_row(db, row, IMPORTER, create_leads=False,
+                            allow_school_create=False)
+
+        c = await db.contacts.find_one({"contact_id": "con_link"})
+        assert c["school_id"] == "sch_link", "must not unlink the parent school"
+        assert c["designation"] == "Director"
+    _run(go())
+
+
+def test_default_still_creates_a_school(db):
+    async def go():
+        row = {"school_name": "Fresh School", "name": "Fresh Person"}
+        res = await ie.commit_row(db, row, IMPORTER, create_leads=False)
+        assert res["school_id"] is not None
+        assert await db.schools.count_documents({}) == 1
+    _run(go())
