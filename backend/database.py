@@ -229,8 +229,11 @@ async def connect_db():
     logging.info("Database indexes created/verified (%d collections indexed)", 32)
 
     # ── Field-definition master seed (28 importable fields) ──────────────────
-    from field_registry import seed_field_definitions as _seed_fields
-    await _seed_fields(db)
+    try:
+        from field_registry import seed_field_definitions as _seed_fields
+        await _seed_fields(db)
+    except Exception as e:            # never let a seed/reconcile break startup
+        logging.warning("field_definitions seed skipped: %s", str(e)[:180])
 
     # ── Offline-mail touch lifecycle backfill ────────────────────────────────
     try:

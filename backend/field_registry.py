@@ -106,17 +106,41 @@ def _doc(key: str, label: str, entity: str, ftype: str, maps_to, group: str, ali
 async def seed_field_definitions(db) -> None:
     """Upsert all SEED_FIELDS into field_definitions.
 
-    Idempotent: skips any key that already exists; inserts missing ones.
+    Idempotent: inserts any key that does not yet exist; for keys that do
+    exist, reconciles `aliases`/`label` on CORE fields only (see below).
     Sets the app_meta guard after the first full run, but subsequent calls
     still backfill any keys that were manually deleted.
+
+    Core-field reconciliation: `propose_mapping` (import_engine.py) reads
+    `aliases` from the STORED field_definitions document, never from
+    SEED_FIELDS directly. A document seeded long ago therefore never picks
+    up a later edit to SEED_FIELDS's alias/label list on its own — a fix
+    made in code silently never reaches a database that was seeded before
+    the fix shipped. For fields with `is_core=True`, bring the stored
+    `aliases`/`label` back in line with SEED_FIELDS whenever they differ,
+    writing only when something actually changed (idempotent — a second
+    run with nothing to reconcile writes nothing). Non-core (user-created
+    custom) fields are never touched here: a user may have edited those
+    deliberately.
     """
-    existing = {d["key"] async for d in db.field_definitions.find({}, {"key": 1})}
+    existing_docs = {d["key"]: d async for d in db.field_definitions.find(
+        {}, {"_id": 0, "key": 1, "aliases": 1, "label": 1, "is_core": 1})}
     for i, (key, label, entity, ftype, maps_to, group, aliases) in enumerate(SEED_FIELDS):
-        if key in existing:
+        doc = existing_docs.get(key)
+        if doc is None:
+            await db.field_definitions.insert_one(
+                _doc(key, label, entity, ftype, maps_to, group, aliases, i * 10)
+            )
             continue
-        await db.field_definitions.insert_one(
-            _doc(key, label, entity, ftype, maps_to, group, aliases, i * 10)
-        )
+        if not doc.get("is_core", False):
+            continue  # never touch a user's custom field
+        patch = {}
+        if doc.get("aliases") != aliases:
+            patch["aliases"] = aliases
+        if doc.get("label") != label:
+            patch["label"] = label
+        if patch:
+            await db.field_definitions.update_one({"key": key}, {"$set": patch})
     # Mark seeded (upsert so re-runs don't duplicate)
     await db.app_meta.update_one(
         {"_id": "field_definitions_seeded"},

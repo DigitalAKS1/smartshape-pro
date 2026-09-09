@@ -242,3 +242,101 @@ def test_export_headers_map_without_surprises(db):
                 "add an explicit field definition or tighten the alias table"
             )
     _run(go())
+
+
+# ---------------------------------------------------------------------------
+# Review round 1 fixes: ownership must not leak onto a school via a
+# contacts-only import, and a valid contact_id must survive an ambiguous
+# school match.
+# ---------------------------------------------------------------------------
+
+def test_contacts_import_never_reassigns_school_owner(db):
+    """A rep re-uploading their OWN contacts export must not silently steal
+    ownership of a school that already belongs to someone else — ownership
+    drives row visibility, so this previously changed who could even see it."""
+    async def go():
+        await db.schools.insert_one({
+            "school_id": "sch_owned", "school_name": "Owned School",
+            "assigned_to": "real.owner@smartshape.in", "assigned_name": "Real Owner",
+            "is_deleted": False})
+        row = {"school_id": "sch_owned", "name": "Some Contact",
+               "assign_to": "rep.reuploading@smartshape.in"}
+        res = await ie.commit_row(db, row, IMPORTER, create_leads=False,
+                                  allow_school_create=False)
+        assert res["action"] == "update", "the school row itself is still resolved"
+        sch = await db.schools.find_one({"school_id": "sch_owned"})
+        assert sch["assigned_to"] == "real.owner@smartshape.in", (
+            "contacts-only import (allow_school_create=False) must never "
+            "reassign a school's owner"
+        )
+        assert sch["assigned_name"] == "Real Owner"
+        # The contact itself is still owned by the CSV's assigned_to — only the
+        # SCHOOL's ownership is protected, not the contact's.
+        c = await db.contacts.find_one({"school_id": "sch_owned", "name": "Some Contact"})
+        assert c["assigned_to"] == "rep.reuploading@smartshape.in"
+    _run(go())
+
+
+def test_master_import_still_reassigns_school_owner(db):
+    """Guard against over-fixing: master-import (allow_school_create=True,
+    the default) must keep reassigning an existing school's owner exactly as
+    before — this task only scopes the fix to the contacts-only path."""
+    async def go():
+        await db.schools.insert_one({
+            "school_id": "sch_reassign", "school_name": "Reassign School",
+            "assigned_to": "old.owner@smartshape.in", "assigned_name": "Old Owner",
+            "is_deleted": False})
+        row = {"school_id": "sch_reassign", "school_name": "Reassign School",
+               "name": "Some Contact", "assign_to": "new.owner@smartshape.in"}
+        res = await ie.commit_row(db, row, IMPORTER, create_leads=False)  # allow_school_create=True (default)
+        assert res["action"] == "update"
+        sch = await db.schools.find_one({"school_id": "sch_reassign"})
+        assert sch["assigned_to"] == "new.owner@smartshape.in", (
+            "master-import (allow_school_create=True) behaviour must be unchanged"
+        )
+    _run(go())
+
+
+def test_valid_contact_id_survives_ambiguous_school(db):
+    """A contact carrying a well-formed contact_id must still upsert even when
+    its school_name collides with 2+ duplicate schools (needs_review) — the
+    owner has a real duplicate-school problem and this fires on real data."""
+    async def go():
+        for i in range(2):
+            await db.schools.insert_one({
+                "school_id": f"sch_dup{i}", "school_name": "Ambiguous School",
+                "is_deleted": False})
+        await db.contacts.insert_one({
+            "contact_id": "con_ambig", "school_id": "sch_dup0",
+            "name": "Ambiguous Contact", "designation": "Coordinator"})
+
+        row = {"contact_id": "con_ambig", "name": "Ambiguous Contact",
+               "school_name": "Ambiguous School", "designation": "Principal"}
+        res = await ie.commit_row(db, row, IMPORTER, create_leads=False,
+                                  allow_school_create=False)
+
+        assert res["action"] == "skip_school", (
+            "an ambiguous school match must downgrade to skip_school, not abort the row"
+        )
+        assert res["contact_action"] == "update"
+        c = await db.contacts.find_one({"contact_id": "con_ambig"})
+        assert c["designation"] == "Principal", "the contact must still be updated"
+        assert c["school_id"] == "sch_dup0", "the contact's existing school link must be left alone"
+    _run(go())
+
+
+def test_ambiguous_school_without_contact_id_still_needs_review(db):
+    """Without a supplied contact_id, an ambiguous school match must still be
+    reported as needs_review — the downgrade is scoped to rows carrying a
+    trustworthy id, not a general relaxation of the ambiguity guard."""
+    async def go():
+        for i in range(2):
+            await db.schools.insert_one({
+                "school_id": f"sch_dup2_{i}", "school_name": "Another Ambiguous School",
+                "is_deleted": False})
+        row = {"name": "No Id Contact", "school_name": "Another Ambiguous School"}
+        res = await ie.commit_row(db, row, IMPORTER, create_leads=False,
+                                  allow_school_create=False)
+        assert res["action"] == "needs_review"
+        assert await db.contacts.count_documents({}) == 0, "nothing should be written"
+    _run(go())

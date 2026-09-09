@@ -481,6 +481,13 @@ async def commit_row(db, row_keyed: dict, user: dict, create_leads: bool,
     - school: when allow_school_create is False and the row carries no school
       identity at all, no school is resolved or created; the contact is upserted
       with school_id left as-is (never overwritten with None).
+    - ownership: when allow_school_create is False, the row's resolved owner is
+      applied to the contact/lead but NEVER to the school — a contacts-only
+      import must not be able to reassign a school's owner (and therefore who
+      can see it) as a side effect of re-uploading a contacts export.
+    - a valid supplied contact_id survives an ambiguous (needs_review) school
+      match when allow_school_create is False: the school match is downgraded
+      to skip_school (no school touched) so the contact still upserts by id.
 
     Returns:
         {"action", "school_id", "contact_id", "lead_id", "warnings"}
@@ -502,6 +509,16 @@ async def commit_row(db, row_keyed: dict, user: dict, create_leads: bool,
     else:
         assign_set = {}
 
+    # A contacts-only import (allow_school_create=False) must never reassign a
+    # school's owner as a side effect — the CSV's own `assigned_to` column is
+    # about who owns the CONTACT/LEAD being imported, not a license to steal
+    # ownership of a school it happens to sit under. The old (pre-engine)
+    # /contacts/import handler enforced exactly this by only ever linking an
+    # UNOWNED school; commit_row applied assign_set to the school unconditionally,
+    # so re-uploading your own export would silently overwrite the real owner —
+    # and since ownership drives row visibility, silently change who can see it.
+    school_assign_set = assign_set if allow_school_create else {}
+
     # --- P2.1/P2.2 phone normalization + lossy flagging ---
     sch_phone_raw, sch_phone_norm = _phone_pair(parts["school"], "school", warnings)
     con_phone_raw, con_phone_norm = _phone_pair(parts["contact"], "contact", warnings)
@@ -518,8 +535,18 @@ async def commit_row(db, row_keyed: dict, user: dict, create_leads: bool,
         res = await resolve_school(db, row_keyed)
 
     if res["action"] == "needs_review":
-        return {"action": "needs_review", "school_id": None, "contact_id": None,
-                "lead_id": None, "warnings": warnings}
+        # A contacts-only row carrying a well-formed contact_id must still
+        # upsert the contact even when its school name is ambiguous (matches
+        # 2+ duplicate schools) — the owner has a real duplicate-school
+        # problem, and aborting the whole row would silently strand every
+        # contact whose school happens to collide. Downgrade to skip_school:
+        # touch no school, but let the contact/lead branches below proceed.
+        if not allow_school_create and valid_supplied_id(row_keyed.get("contact_id")):
+            res = {"action": "skip_school", "school_id": None,
+                   "candidates": res.get("candidates", 0)}
+        else:
+            return {"action": "needs_review", "school_id": None, "contact_id": None,
+                    "lead_id": None, "warnings": warnings, "contact_action": None}
 
     sid = res["school_id"]
 
@@ -539,7 +566,7 @@ async def commit_row(db, row_keyed: dict, user: dict, create_leads: bool,
         }
         if sch_phone_norm:
             doc["phone_norm"] = sch_phone_norm
-        doc.update(assign_set)
+        doc.update(school_assign_set)
         await db.schools.insert_one(doc)
     elif res["action"] == "update":
         # Snapshot existing doc before overwriting (safety-critical — never skip)
@@ -560,7 +587,7 @@ async def commit_row(db, row_keyed: dict, user: dict, create_leads: bool,
         upd["import_date"] = now
         if sch_phone_norm:
             upd["phone_norm"] = sch_phone_norm
-        upd.update(assign_set)
+        upd.update(school_assign_set)
         await db.schools.update_one({"school_id": sid}, {"$set": upd})
     # action == "skip_school": no school is resolved, created or touched
 
