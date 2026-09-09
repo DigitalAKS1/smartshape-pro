@@ -1520,9 +1520,36 @@ via a VPS timer, ~1-2 minutes):
    mangles Mongo `$` operators, which is exactly the failure you cannot afford
    on a migration whose bad outcome is silent, permanent tag loss. Both modules
    carry an `if __name__ == "__main__":` runner for this reason.
-3. Merge `feat/crm-grid-upsert` into `main` and push. Verify the deploy by
+3. **Rebuild the tag indexes, and drop the orphaned ones.** This step is
+   mandatory and easy to forget: `ensure_indexes.py` is a manual script — it is
+   invoked by nothing, not `connect_db()`, not any Dockerfile, compose file or
+   deploy script. Without it the new `tag_ids` indexes never exist in
+   production and every tag-filtered query collscans.
+
+   ```bash
+   cd backend && python ensure_indexes.py --yes-production
+   ```
+
+   Then drop the two indexes the rename orphaned. They now index a field that
+   no longer exists, costing a write on every lead and school update:
+
+   ```javascript
+   db.leads.dropIndex("tags_1_stage_1")
+   db.schools.dropIndex("tags_1_school_name_1")
+   ```
+
+   Verify with `db.leads.getIndexes()` that `tag_ids_1_stage_1` exists and
+   `tags_1_stage_1` is gone.
+
+   Deliberately NOT done: wiring index creation into application startup. That
+   is the obvious fix, but this repo has already taken a production outage from
+   a startup-time index failure (a unique index over duplicate data crashed
+   `connect_db()`), so it trades a small performance gap for an availability
+   risk. Revisit separately, not inside this plan.
+
+4. Merge `feat/crm-grid-upsert` into `main` and push. Verify the deploy by
    bundle content, not by timestamp.
-4. Smoke test the real workflow: export contacts, edit one designation and one
+5. Smoke test the real workflow: export contacts, edit one designation and one
    tag cell in Excel, re-upload, confirm the dialog reports `updated` and the
    record changed while its blank columns kept their values.
 
