@@ -62,12 +62,16 @@ def test_merge_fields_flattens_custom():
 
 
 # ---------------------------------------------------------------------------
-# Core-field alias/label reconciliation (2026-09-10 fix).
+# Core-field alias reconciliation (2026-09-10 fix).
 #
 # propose_mapping reads `aliases` from the STORED field_definitions document,
 # never from SEED_FIELDS directly, so a document seeded before a SEED_FIELDS
 # edit never picks the edit up on its own. These use mongomock_motor
 # (never a real database) rather than the `db` fixture above.
+#
+# `label` is deliberately NOT reconciled, even for core fields — see
+# test_seed_reconciles_aliases_but_never_label below, which is the test that
+# pins that half of the rule.
 # ---------------------------------------------------------------------------
 
 def test_seed_reconciles_stale_core_aliases():
@@ -137,5 +141,38 @@ def test_seed_second_run_writes_nothing_when_nothing_stale():
         await fr.seed_field_definitions(db)  # second run: nothing should be stale
         assert calls == [], (
             "a second seed run with nothing to reconcile must not write anything"
+        )
+    asyncio.run(go())
+
+
+def test_seed_reconciles_aliases_but_never_label():
+    """The whole rule in one test: reconcile what a user cannot edit (aliases),
+    never overwrite what they can (label). An admin-style rename of a core
+    field's label must survive a reseed even while a stale aliases list on
+    that SAME document still gets reconciled."""
+    async def go():
+        from mongomock_motor import AsyncMongoMockClient
+        db = AsyncMongoMockClient()["smartshape_test"]
+        await fr.seed_field_definitions(db)  # first run: inserts everything fresh
+
+        core = await db.field_definitions.find_one({"key": "phone"})
+        # Simulate an admin renaming the field via update_field, and the
+        # aliases list separately going stale (e.g. a manual edit or an old
+        # seed) — both on the SAME document, to prove the two are handled
+        # independently rather than one guard accidentally covering both.
+        await db.field_definitions.update_one(
+            {"field_id": core["field_id"]},
+            {"$set": {"label": "Mobile / Direct Line",
+                      "aliases": ["mobile", "contact phone"]}})  # stale: no "phone number"/"phone"
+
+        await fr.seed_field_definitions(db)  # second run: reconcile
+
+        doc = await db.field_definitions.find_one({"key": "phone"})
+        assert doc["label"] == "Mobile / Direct Line", (
+            "an admin's deliberate label edit must survive a reseed — "
+            "label is the one thing the registry promises an admin owns"
+        )
+        assert doc["aliases"] == ["phone number", "phone", "mobile", "contact phone"], (
+            "aliases must still be reconciled back to SEED_FIELDS on the same document"
         )
     asyncio.run(go())

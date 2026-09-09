@@ -466,7 +466,10 @@ async def commit_row(db, row_keyed: dict, user: dict, create_leads: bool,
     """Upsert one import row into schools / contacts / leads with a pre-update audit snapshot.
 
     Safety rules:
-    - If resolve_school returns needs_review → return immediately, write NOTHING.
+    - If resolve_school returns needs_review → return immediately, write NOTHING,
+      UNLESS the row carries a valid supplied contact_id and allow_school_create
+      is False, in which case the ambiguity is downgraded to skip_school so the
+      contact still upserts by id (see the ownership/contact_id rules below).
     - owner: `assigned_to` is resolved name→email (P2.3); a name is never stored
       in `assigned_to`, only in `assigned_name`.
     - phones: stored normalized in `phone_norm` (P2.2); lossy sci-notation values
