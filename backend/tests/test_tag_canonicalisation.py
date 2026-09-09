@@ -134,6 +134,29 @@ def test_migration_is_idempotent_for_both_fields_case(db):
     _run(go())
 
 
+def test_school_owner_field_migrated_to_assigned_to(db):
+    async def go():
+        from migrations.canonicalise_school_owner import canonicalise_school_owner
+        await db.schools.insert_one({"school_id": "sch_o1", "owner": "rep@x.com"})
+        await db.schools.insert_one({
+            "school_id": "sch_o2", "owner": "old@x.com",
+            "assigned_to": "current@x.com",
+        })
+        res = await canonicalise_school_owner(db)
+
+        s1 = await db.schools.find_one({"school_id": "sch_o1"})
+        assert s1["assigned_to"] == "rep@x.com"
+        assert "owner" not in s1
+
+        s2 = await db.schools.find_one({"school_id": "sch_o2"})
+        assert s2["assigned_to"] == "current@x.com", "must not clobber a live owner"
+        assert "owner" not in s2
+
+        assert res["schools_migrated"] == 2
+        assert (await canonicalise_school_owner(db))["schools_migrated"] == 0
+    _run(go())
+
+
 # ---------------------------------------------------------------------------
 # Guard: nothing reads or writes the legacy `tags` field on schools/leads.
 # ---------------------------------------------------------------------------
