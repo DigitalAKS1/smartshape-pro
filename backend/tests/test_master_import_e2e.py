@@ -250,9 +250,13 @@ def test_an_unrecognised_extra_column_is_ignored_not_fatal(db):
     _run(go())
 
 
-def test_clearing_a_cell_clears_the_field(db):
-    # The flip side of the rule above: a column that IS present and blank is an
-    # instruction to empty that field. Documented here so it can't drift.
+def test_a_blank_cell_in_a_present_column_leaves_the_field_alone(db):
+    # D1: a spreadsheet round-trip emits every column for every row, so a cell
+    # the user left empty arrives as "". That must NOT be read as "clear this
+    # field" — it must be read as "leave it alone" — or every export/reupload
+    # with any blank cell silently wipes live data. (This inverts the previous
+    # version of this test, which had documented the data-loss bug as intended
+    # behavior.)
     async def go():
         await _seed(db)
         content = await _export_workbook(db)
@@ -263,7 +267,7 @@ def test_clearing_a_cell_clears_the_field(db):
                 ws.cell(r, col).value = None
 
         await _reupload(db, _edit_workbook(content, edit))
-        assert (await db.schools.find_one({"school_id": "sch_dps"}))["website"] == ""
+        assert (await db.schools.find_one({"school_id": "sch_dps"}))["website"] == "https://dps.in"
     _run(go())
 
 

@@ -330,6 +330,23 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _strip_blanks(d: dict) -> dict:
+    """Drop keys whose value is blank, so an update never clears a live field.
+
+    A spreadsheet round-trip emits every column for every row, so a cell the
+    user left empty arrives as "". Writing that back would overwrite live data
+    with an empty string. Zero and False are real values and are preserved.
+    """
+    out = {}
+    for k, v in d.items():
+        if v is None:
+            continue
+        if isinstance(v, str) and not v.strip():
+            continue
+        out[k] = v
+    return out
+
+
 # Module-level map: key -> (entity, maps_to|None)
 # Built from SEED_FIELDS tuple: (key, label, entity, type, maps_to, group, aliases)
 _CORE = {key: (entity, maps_to) for (key, _l, entity, _t, maps_to, _g, _a) in SEED_FIELDS}
@@ -507,10 +524,10 @@ async def commit_row(db, row_keyed: dict, user: dict, create_leads: bool) -> dic
             "at": now,
             "by": user_email,
         })
-        upd: dict = dict(parts["school"])
-        if sch_phone_raw or "phone" in upd:
+        upd: dict = _strip_blanks(parts["school"])
+        if sch_phone_raw:
             upd["phone"] = sch_phone_raw
-        for k, v in parts["custom"]["school"].items():
+        for k, v in _strip_blanks(parts["custom"]["school"]).items():
             upd[f"custom_fields.{k}"] = v
         upd["last_activity_date"] = now
         upd["import_date"] = now
@@ -537,19 +554,22 @@ async def commit_row(db, row_keyed: dict, user: dict, create_leads: bool) -> dic
         if existing is None and contact_name:
             existing = await db.contacts.find_one({"school_id": sid, "name": contact_name})
 
-        cvals = dict(parts["contact"])
-        cvals["phone"] = con_phone_raw
-        cdoc = {
+        cvals = _strip_blanks(dict(parts["contact"]))
+        if con_phone_raw:
+            cvals["phone"] = con_phone_raw
+        cdoc = _strip_blanks({
             "school_id": sid,
             **cvals,
             "phone_norm": con_phone_norm,
             "import_date": now,
-            "custom_fields": parts["custom"]["contact"],
-        }
-        cdoc.update(assign_set)
+            **assign_set,
+        })
         if existing:
             cid = existing["contact_id"]
-            await db.contacts.update_one({"contact_id": cid}, {"$set": cdoc})
+            upd_c = dict(cdoc)
+            for k, v in _strip_blanks(parts["custom"]["contact"]).items():
+                upd_c[f"custom_fields.{k}"] = v
+            await db.contacts.update_one({"contact_id": cid}, {"$set": upd_c})
         else:
             cid = supplied_cid or f"con_{_uuid.uuid4().hex[:12]}"
             await db.contacts.insert_one({
@@ -562,6 +582,7 @@ async def commit_row(db, row_keyed: dict, user: dict, create_leads: bool) -> dic
                 "source": "import",
                 "converted_to_lead": False,
                 "lead_id": None,
+                "custom_fields": parts["custom"]["contact"],
                 **cdoc,
             })
 
