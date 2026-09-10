@@ -143,7 +143,7 @@ roughly every 1-2 minutes. Pushing to main *is* the deploy.
       - [ ] `GET /api/leads?page=1&limit=50` → 200, paginated envelope, and page 2 returns
             a *different* set
       - [ ] `GET /api/leads/{lead_id}/details` → 200
-      - [ ] `POST /api/import/execute` → import runs and progress is readable
+      - [ ] `POST /api/contacts/import` → import runs and progress is readable
       - [ ] `GET /api/export/schools` → streams a file, not a timeout
 - [ ] Every response body is `_id`-free (all queries project `{"_id": 0}`).
 - [ ] Tenant scoping intact — a rep sees only their own leads; an admin sees all.

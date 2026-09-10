@@ -9,6 +9,15 @@ Run with:  cd backend && python -m pytest tests/test_tag_canonicalisation.py -q
 import asyncio
 import os
 
+# These two lines look unused (nothing below reads MONGO_URL/DB_NAME directly)
+# but they are NOT dead code — do not remove them. They run at collection
+# time, before any test file is imported, and setdefault() means they only
+# take effect if the environment does not already carry real values. When the
+# full suite is collected together, some sibling test file imports a module
+# that builds a real Motor client from these env vars at import time; without
+# this setdefault landing first, that client would default to (or inherit) the
+# production Atlas MONGO_URL from backend/.env, aimed at DB_NAME=smartshape_prod.
+# This is what keeps that client pinned at localhost/smartshape_test instead.
 os.environ.setdefault("MONGO_URL", "mongodb://localhost:27017")
 os.environ.setdefault("DB_NAME", "smartshape_test")
 
