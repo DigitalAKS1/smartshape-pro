@@ -5,7 +5,9 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
 from motor.motor_asyncio import AsyncIOMotorClient
+import asyncio
 import os
+import time
 import logging
 
 # MongoDB connection.
@@ -44,6 +46,77 @@ async def _i(coro):
         logging.warning("index skipped: %s", str(e)[:180])
 
 
+# Retry bounds for _wait_for_db_ready(). Reasoning:
+#   - _WAIT_TIMEOUT_S = 20s: the client is built with serverSelectionTimeoutMS=5000,
+#     so a single failed ping can itself take up to ~5s to raise. Cold-start Atlas
+#     handshakes (SRV DNS resolution + TLS) observed in production resolved on the
+#     very next attempt after the first timeout — i.e. within roughly one 5s window.
+#     20s gives ~4x headroom over that observed worst case (a handful of attempts)
+#     while still bounding the extra boot time to a low number of seconds, not
+#     minutes, so a genuinely dead database doesn't stall the container health check.
+#   - _WAIT_INTERVAL_S = 1.0s: the delay *between* attempts, on top of whatever the
+#     attempt itself blocked for. Long enough that we aren't hammering Atlas with
+#     reconnect attempts while it's cold; short enough that a connection which
+#     becomes ready mid-wait is picked up almost immediately rather than adding
+#     noticeable extra latency.
+_WAIT_TIMEOUT_S = 20.0
+_WAIT_INTERVAL_S = 1.0
+
+
+async def _wait_for_db_ready(target_db, timeout_s: float = _WAIT_TIMEOUT_S,
+                              interval_s: float = _WAIT_INTERVAL_S) -> None:
+    """Block briefly until the Mongo connection is warm, before any startup work runs.
+
+    Atlas connections are cold at container start — SRV DNS resolution plus TLS
+    handshake routinely exceeds the 5s serverSelectionTimeoutMS the client is built
+    with (see the comment above `client = AsyncIOMotorClient(...)`). That means the
+    FIRST database operation issued after boot can raise ServerSelectionTimeoutError
+    while every later one succeeds instantly once the connection is warm.
+
+    Every step downstream of this call (index creation via _i(), the
+    field-definition seed, the mail-touch backfill) is individually wrapped in a
+    non-fatal try/except, so that first failure is SILENT — it just quietly skips
+    real work. That silently broke the field-definition seed in production: the
+    import column aliases (phone/source/notes -> internal keys) never got (re)seeded,
+    so those CSV columns were dropped on every import until someone noticed and ran
+    the seed by hand.
+
+    This waits the cold start out with a short, bounded, non-fatal retry loop
+    instead of letting the first real operation eat the failure. It must NEVER
+    raise: on genuine unreachability it logs an error and returns anyway, exactly
+    like the downstream guards it's protecting — a degraded boot (indexes/seed
+    skipped, same as today) is safer than a hung or crashed one.
+    """
+    if target_db is None:
+        return
+    start = time.monotonic()
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            await target_db.command("ping")
+        except Exception as e:
+            elapsed = time.monotonic() - start
+            if elapsed >= timeout_s:
+                logging.error(
+                    "Database still unreachable after %.1fs (%d attempts) — "
+                    "proceeding with startup anyway; index creation, the "
+                    "field-definition seed and backfills will run against a "
+                    "cold/down connection and may silently no-op (existing "
+                    "non-fatal guards apply). Last error: %s",
+                    elapsed, attempt, str(e)[:200])
+                return
+            await asyncio.sleep(interval_s)
+            continue
+        else:
+            elapsed = time.monotonic() - start
+            if attempt > 1:
+                logging.info(
+                    "Database connection ready after %.1fs (%d attempts)",
+                    elapsed, attempt)
+            return
+
+
 async def connect_db():
     """Called on startup — creates indexes (best-effort) and verifies connection.
 
@@ -54,6 +127,12 @@ async def connect_db():
     if db is None:
         logging.error("connect_db skipped — database not initialised (%s)", db_init_error)
         return
+
+    # Wait for a cold Atlas connection to warm up before doing any real work
+    # below — see _wait_for_db_ready()'s docstring for why this matters and
+    # reasoning for the bounds. Never raises; a genuinely dead DB just falls
+    # through to the existing non-fatal guards on every step below.
+    await _wait_for_db_ready(db)
 
     # ── Unique constraints ──────────────────────────────────────────────────
     await _i(db.users.create_index("email", unique=True))
@@ -233,7 +312,17 @@ async def connect_db():
         from field_registry import seed_field_definitions as _seed_fields
         await _seed_fields(db)
     except Exception as e:            # never let a seed/reconcile break startup
-        logging.warning("field_definitions seed skipped: %s", str(e)[:180])
+        # Loud on purpose: a skipped seed leaves import column aliases (e.g.
+        # phone/source/notes -> internal keys) stale or missing, which makes
+        # CSV/Excel imports SILENTLY DROP those columns on every import from now
+        # until this seed is re-run — see field_registry.seed_field_definitions().
+        # Re-run manually with: python -c "import asyncio, database as d, \
+        # field_registry as fr; asyncio.run(fr.seed_field_definitions(d.db))"
+        logging.error(
+            "field_definitions seed FAILED — import column aliases "
+            "(phone/source/notes/etc -> internal keys) are now stale or missing. "
+            "CSV/Excel imports will SILENTLY DROP those columns until this seed "
+            "is re-run. Error: %s", str(e)[:180])
 
     # ── Offline-mail touch lifecycle backfill ────────────────────────────────
     try:
