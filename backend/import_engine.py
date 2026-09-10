@@ -348,18 +348,45 @@ def _strip_blanks(d: dict) -> dict:
     return out
 
 
+# The contacts export merges a contact's own tags with its school's tags into
+# one `tags` cell so the owner can see school-level tags (applied via the
+# Schools tab bulk-tag button) without them silently going missing from the
+# export. A school-derived name is suffixed with this marker so re-importing
+# never writes it onto the contact — that would make every person at a school
+# permanently inherit tags that are only editable from the Schools export.
+# Single source of truth: admin_routes.export_contacts imports this constant
+# rather than hard-coding its own copy, so the two can never drift apart.
+SCHOOL_TAG_SUFFIX = " (school)"
+
+# Matches the marker at the end of a (whitespace-trimmed) tag entry, tolerant
+# of extra whitespace and case — the cell makes a round trip through Excel,
+# which can reflow spacing and Excel's autocorrect can retitle-case text.
+# Anchored to the literal "(school)" parenthetical so a legitimately named tag
+# like "Boarding School" (no parens) is never mistaken for the marker.
+_SCHOOL_TAG_MARKER_RE = _re.compile(
+    r"\s*" + _re.escape(SCHOOL_TAG_SUFFIX.strip()) + r"\s*$", _re.IGNORECASE)
+
+
 def parse_tag_cell(raw) -> list:
     """Split a spreadsheet tag cell into tag names.
 
     Accepts both separators seen in the wild: exports write pipe-joined
     ("A|B|C") while people type comma-separated ("A, B, C"). Order-preserving
     and de-duplicated; blank segments are dropped.
+
+    Any entry carrying the SCHOOL_TAG_SUFFIX marker (e.g. "SS Customer
+    (school)") is dropped entirely rather than un-marked and kept: it is
+    display context showing the contact's school is tagged, never a tag to
+    write onto the contact itself. A tag that merely contains the word
+    "school" (e.g. "Boarding School") does not match the marker and survives
+    untouched — only the exact trailing "(school)" parenthetical counts.
     """
     s = str(raw or "").strip()
     if not s:
         return []
     parts = [p.strip() for p in _re.split(r"[|,]", s)]
-    return list(dict.fromkeys([p for p in parts if p]))
+    parts = [p for p in parts if p and not _SCHOOL_TAG_MARKER_RE.search(p)]
+    return list(dict.fromkeys(parts))
 
 
 # Module-level map: key -> (entity, maps_to|None)

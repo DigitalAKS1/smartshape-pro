@@ -4,14 +4,18 @@ Run with:  cd backend && python -m pytest tests/test_contacts_import_upsert.py -
 """
 
 import asyncio
+import csv
+import io
 import os
 
 os.environ.setdefault("MONGO_URL", "mongodb://localhost:27017")
 os.environ.setdefault("DB_NAME", "smartshape_test")
 
 import pytest
+from mongomock_motor import AsyncMongoMockClient
 
 import import_engine as ie
+import routes.admin_routes as admin
 
 IMPORTER = {"email": "importer@smartshape.in", "name": "Importer"}
 
@@ -22,8 +26,51 @@ def _run(coro):
 
 @pytest.fixture()
 def db():
-    from mongomock_motor import AsyncMongoMockClient
     return AsyncMongoMockClient()["smartshape_test"]
+
+
+# ---------------------------------------------------------------------------
+# Residual review 2026-09-10, item 3: the contacts export merges a contact's
+# own tags with its SCHOOL's tags (applied via the Schools-tab bulk-tag
+# button) into one `tags` cell, marking the school-derived names " (school)"
+# so re-importing them can never write the school's tags onto the contact.
+# These tests exercise the merge (export) and the drop (import) together,
+# plus the full round trip, using the same "monkeypatch admin.db + call the
+# route function directly" pattern as tests/test_export_streaming.py.
+# ---------------------------------------------------------------------------
+
+ADMIN_USER = {"email": "info@smartshape.in", "name": "Owner", "role": "admin"}
+
+
+class FakeRequest:
+    """The route only uses the request to identify the caller."""
+
+
+def _as_admin(monkeypatch):
+    async def _me(_request):
+        return ADMIN_USER
+    monkeypatch.setattr(admin, "get_current_user", _me, raising=False)
+
+
+async def _drain(response):
+    chunks = []
+    async for chunk in response.body_iterator:
+        chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
+    return "".join(chunks)
+
+
+async def _export_contacts(db, monkeypatch):
+    monkeypatch.setattr(admin, "db", db, raising=False)
+    _as_admin(monkeypatch)
+    response = await admin.export_contacts(FakeRequest())
+    return await _drain(response)
+
+
+def _rows_by_contact_id(text):
+    rows = list(csv.reader(io.StringIO(text)))
+    header, data = rows[0], rows[1:]
+    idx = {name: i for i, name in enumerate(header)}
+    return {r[idx["contact_id"]]: r for r in data}, idx
 
 
 def test_parse_tag_cell_accepts_pipes_and_commas():
@@ -617,4 +664,209 @@ def test_unknown_school_row_with_contact_id_still_updates_by_id(db):
         c = await db.contacts.find_one({"contact_id": "con_by_id"})
         assert c["designation"] == "New Title"
         assert c["phone"] == "9444444444"
+    _run(go())
+
+
+# ---------------------------------------------------------------------------
+# parse_tag_cell: dropping the " (school)" marker
+# ---------------------------------------------------------------------------
+
+def test_parse_tag_cell_drops_school_marked_entries():
+    assert ie.parse_tag_cell("GSLC 2026|SS Customer (school)|Demo Done (school)") == [
+        "GSLC 2026"
+    ]
+    # Case-insensitive and whitespace-tolerant, since the cell round-trips
+    # through Excel (autocorrect re-casing, reflowed spacing).
+    assert ie.parse_tag_cell("Hot Lead  (School)") == []
+    assert ie.parse_tag_cell("Hot Lead(school)") == []
+    assert ie.parse_tag_cell("Hot Lead   (SCHOOL)  ") == []
+    # An entry made ENTIRELY of marked names leaves nothing behind.
+    assert ie.parse_tag_cell("SS Customer (school)|Demo Done (school)") == []
+
+
+def test_parse_tag_cell_preserves_a_tag_legitimately_named_boarding_school():
+    """The regression that would bite hardest: a real tag whose name merely
+    CONTAINS the word "school" must survive untouched — only the exact
+    trailing "(school)" parenthetical is the marker."""
+    assert ie.parse_tag_cell("Boarding School") == ["Boarding School"]
+    assert ie.parse_tag_cell("Boarding School|GSLC 2026") == ["Boarding School", "GSLC 2026"]
+    assert ie.parse_tag_cell("Boarding School|SS Customer (school)") == ["Boarding School"]
+
+
+# ---------------------------------------------------------------------------
+# Export: contact tags merged with school tags, school tags marked
+# ---------------------------------------------------------------------------
+
+def test_export_merges_contact_and_school_tags_with_school_marker(db, monkeypatch):
+    async def go():
+        await db.tags.insert_many([
+            {"tag_id": "tag_gslc", "name": "GSLC 2026"},
+            {"tag_id": "tag_ssc", "name": "SS Customer"},
+            {"tag_id": "tag_demo", "name": "Demo Done"},
+        ])
+        await db.schools.insert_one({
+            "school_id": "sch_merge", "school_name": "Merge School",
+            "tag_ids": ["tag_ssc", "tag_demo"], "is_deleted": False})
+        await db.contacts.insert_one({
+            "contact_id": "con_merge", "school_id": "sch_merge",
+            "name": "Merged Person", "tag_ids": ["tag_gslc"]})
+
+        text = await _export_contacts(db, monkeypatch)
+        by_id, idx = _rows_by_contact_id(text)
+        assert by_id["con_merge"][idx["tags"]] == (
+            "GSLC 2026|SS Customer (school)|Demo Done (school)"
+        ), "own tags first (unmarked), then school tags marked, in that order"
+    _run(go())
+
+
+def test_export_overlapping_tag_appears_once_unmarked(db, monkeypatch):
+    """A tag held by BOTH the contact and its school must appear exactly
+    once, unmarked — the contact's own (editable) tag wins."""
+    async def go():
+        await db.tags.insert_many([
+            {"tag_id": "tag_shared", "name": "SS Customer"},
+            {"tag_id": "tag_school_only", "name": "Demo Done"},
+        ])
+        await db.schools.insert_one({
+            "school_id": "sch_overlap", "school_name": "Overlap School",
+            "tag_ids": ["tag_shared", "tag_school_only"], "is_deleted": False})
+        await db.contacts.insert_one({
+            "contact_id": "con_overlap", "school_id": "sch_overlap",
+            "name": "Overlap Person", "tag_ids": ["tag_shared"]})
+
+        text = await _export_contacts(db, monkeypatch)
+        by_id, idx = _rows_by_contact_id(text)
+        assert by_id["con_overlap"][idx["tags"]] == "SS Customer|Demo Done (school)"
+    _run(go())
+
+
+def test_export_no_school_or_untagged_school_matches_prior_output(db, monkeypatch):
+    """A contact with no school, or with a school that carries no tags,
+    must produce exactly the pre-merge output: just its own tag names."""
+    async def go():
+        await db.tags.insert_one({"tag_id": "tag_solo", "name": "Solo Tag"})
+        await db.schools.insert_one({
+            "school_id": "sch_untagged", "school_name": "Untagged School",
+            "is_deleted": False})  # no tag_ids at all
+        await db.contacts.insert_many([
+            {"contact_id": "con_no_school", "school_id": "",
+             "name": "No School Person", "tag_ids": ["tag_solo"]},
+            {"contact_id": "con_untagged_school", "school_id": "sch_untagged",
+             "name": "Untagged School Person", "tag_ids": ["tag_solo"]},
+            {"contact_id": "con_no_tags", "school_id": "sch_untagged",
+             "name": "No Tags Person", "tag_ids": []},
+        ])
+
+        text = await _export_contacts(db, monkeypatch)
+        by_id, idx = _rows_by_contact_id(text)
+        assert by_id["con_no_school"][idx["tags"]] == "Solo Tag"
+        assert by_id["con_untagged_school"][idx["tags"]] == "Solo Tag"
+        assert by_id["con_no_tags"][idx["tags"]] == ""
+    _run(go())
+
+
+def test_export_does_not_issue_a_per_row_query(db, monkeypatch):
+    """The export must stay O(1) in round trips regardless of row count: one
+    batched schools query + one batched tags query, never one per contact."""
+    async def go():
+        await db.tags.insert_many([
+            {"tag_id": f"tag_{i}", "name": f"Tag {i}"} for i in range(5)
+        ])
+        await db.schools.insert_many([
+            {"school_id": f"sch_{i}", "school_name": f"School {i}",
+             "tag_ids": [f"tag_{i % 5}"], "is_deleted": False}
+            for i in range(50)
+        ])
+        await db.contacts.insert_many([
+            {"contact_id": f"con_{i}", "school_id": f"sch_{i}",
+             "name": f"Person {i}", "tag_ids": [f"tag_{(i + 1) % 5}"]}
+            for i in range(50)
+        ])
+
+        calls = {"schools_find": 0, "tags_find": 0}
+
+        class CountingCollection:
+            def __init__(self, inner, counter_key):
+                self._inner = inner
+                self._key = counter_key
+
+            def find(self, *a, **k):
+                calls[self._key] += 1
+                return self._inner.find(*a, **k)
+
+            def __getattr__(self, name):
+                return getattr(self._inner, name)
+
+        class CountingDb:
+            def __init__(self, inner):
+                self._inner = inner
+
+            @property
+            def schools(self):
+                return CountingCollection(self._inner.schools, "schools_find")
+
+            @property
+            def tags(self):
+                return CountingCollection(self._inner.tags, "tags_find")
+
+            def __getattr__(self, name):
+                return getattr(self._inner, name)
+
+        text = await _export_contacts(CountingDb(db), monkeypatch)
+        rows = list(csv.reader(io.StringIO(text)))
+        assert len(rows) == 51, "header + 50 contact rows"
+        assert calls["schools_find"] == 1, (
+            f"expected 1 batched schools query, got {calls['schools_find']} "
+            "(a per-row lookup crept back in)"
+        )
+        assert calls["tags_find"] == 1, (
+            f"expected 1 batched tags query, got {calls['tags_find']} "
+            "(a per-row lookup crept back in)"
+        )
+    _run(go())
+
+
+def test_full_round_trip_export_reimport_leaves_contact_tags_unchanged(db, monkeypatch):
+    """Export a merged cell, re-import it byte-for-byte unchanged, and assert
+    the contact's tag_ids are EXACTLY what they were before — no school tags
+    leaked onto the contact, nothing lost. This is the danger the whole
+    feature exists to engineer around."""
+    async def go():
+        await db.tags.insert_many([
+            {"tag_id": "tag_gslc_rt", "name": "GSLC 2026"},
+            {"tag_id": "tag_ssc_rt", "name": "SS Customer"},
+            {"tag_id": "tag_demo_rt", "name": "Demo Done"},
+        ])
+        await db.schools.insert_one({
+            "school_id": "sch_rt3", "school_name": "Round Trip Tag School",
+            "tag_ids": ["tag_ssc_rt", "tag_demo_rt"], "is_deleted": False})
+        await db.contacts.insert_one({
+            "contact_id": "con_rt3", "school_id": "sch_rt3",
+            "name": "Round Trip Person", "tag_ids": ["tag_gslc_rt"]})
+
+        # 1. Export — capture the merged cell exactly as the owner would see it.
+        text = await _export_contacts(db, monkeypatch)
+        by_id, idx = _rows_by_contact_id(text)
+        merged_cell = by_id["con_rt3"][idx["tags"]]
+        assert merged_cell == "GSLC 2026|SS Customer (school)|Demo Done (school)"
+
+        # 2. Re-import that exact cell, unchanged, through the real import path.
+        row = {"contact_id": "con_rt3", "name": "Round Trip Person",
+               "school_id": "sch_rt3", "tags": merged_cell}
+        await ie.commit_row(db, row, IMPORTER, create_leads=False,
+                            allow_school_create=False)
+
+        # 3. The contact's tag_ids must be EXACTLY what they started as — the
+        # school-marked entries never resolved to tags, let alone got written.
+        c = await db.contacts.find_one({"contact_id": "con_rt3"})
+        assert c["tag_ids"] == ["tag_gslc_rt"], (
+            "school tags leaked onto the contact, or the contact's own tag "
+            "was lost, on re-import of the merged export cell"
+        )
+        # And the school's own tags must be untouched too.
+        sch = await db.schools.find_one({"school_id": "sch_rt3"})
+        assert sch["tag_ids"] == ["tag_ssc_rt", "tag_demo_rt"]
+        # No stray "SS Customer (school)" / "Demo Done (school)" tag docs
+        # should have been minted by resolve_tags mistaking them for names.
+        assert await db.tags.count_documents({"name": {"$regex": r"\(school\)"}}) == 0
     _run(go())

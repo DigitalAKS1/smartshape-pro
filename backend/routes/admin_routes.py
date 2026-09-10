@@ -10,6 +10,7 @@ import asyncio
 from database import db
 from auth_utils import get_current_user, hash_password
 from pymongo.errors import BulkWriteError
+from import_engine import SCHOOL_TAG_SUFFIX
 
 try:
     from cache import set_cached, invalidate
@@ -1171,8 +1172,19 @@ async def export_users(request: Request):
 async def export_contacts(request: Request):
     await get_current_user(request)
     contacts_list = await db.contacts.find({}, {"_id": 0}).sort("created_at", -1).to_list(10000)
-    # Batch-fetch tag names for export
-    all_tag_ids = list({tid for c in contacts_list for tid in (c.get("tag_ids") or [])})
+    # Batch-fetch each contact's school's tag_ids for export — one query for
+    # every school referenced, never one per contact row (see school_tag_map).
+    all_school_ids = list({c["school_id"] for c in contacts_list if c.get("school_id")})
+    school_tag_map = {}
+    if all_school_ids:
+        async for s in db.schools.find({"school_id": {"$in": all_school_ids}}, {"_id": 0, "school_id": 1, "tag_ids": 1}):
+            school_tag_map[s["school_id"]] = s.get("tag_ids") or []
+    # Batch-fetch tag names for export — one query covering both the contacts'
+    # own tag ids and their schools' tag ids gathered above.
+    all_tag_ids = list(
+        {tid for c in contacts_list for tid in (c.get("tag_ids") or [])}
+        | {tid for tids in school_tag_map.values() for tid in tids}
+    )
     tag_name_map = {}
     if all_tag_ids:
         async for t in db.tags.find({"tag_id": {"$in": all_tag_ids}}, {"_id": 0, "tag_id": 1, "name": 1}):
@@ -1181,7 +1193,22 @@ async def export_contacts(request: Request):
     writer = csv.writer(output)
     writer.writerow(["contact_id", "name", "phone", "email", "company", "school_id", "designation", "source", "notes", "birthday", "assigned_to", "tags", "status", "converted", "lead_id", "created_at"])
     for c in contacts_list:
-        tag_names = "|".join(tag_name_map.get(tid, tid) for tid in (c.get("tag_ids") or []))
+        # Merged tags cell: the contact's own tags (unmarked) first, then its
+        # school's tags (marked " (school)") — skipping any school tag the
+        # contact already holds in its own right, so it appears once and
+        # unmarked (the contact's own tag wins; it is editable, the school's
+        # is not). No school, or an untagged school, reproduces today's output
+        # exactly: the school-tags loop simply contributes nothing.
+        own_tag_ids = c.get("tag_ids") or []
+        own_names = [tag_name_map.get(tid, tid) for tid in own_tag_ids]
+        own_names_lower = {n.lower() for n in own_names}
+        school_tag_ids = school_tag_map.get(c.get("school_id") or "", [])
+        merged_names = list(own_names)
+        for tid in school_tag_ids:
+            name = tag_name_map.get(tid, tid)
+            if name.lower() not in own_names_lower:
+                merged_names.append(f"{name}{SCHOOL_TAG_SUFFIX}")
+        tag_names = "|".join(merged_names)
         writer.writerow([
             c.get("contact_id", ""), c.get("name"), c.get("phone"), c.get("email"),
             c.get("company"), c.get("school_id", ""), c.get("designation"), c.get("source"),

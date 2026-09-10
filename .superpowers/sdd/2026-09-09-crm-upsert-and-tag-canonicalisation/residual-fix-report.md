@@ -353,6 +353,146 @@ tests). Staged and committed by explicit filename, no `git add -A`.
 
 ---
 
+## Follow-up 2026-09-10 — contacts export merges in the school's tags (marked, round-trip safe)
+
+**Shipped.** Owner-decided requirement: the contacts CSV export has one
+`tags` cell, built only from `contact.tag_ids`. Schools carry their own tags
+(`school.tag_ids`, applied via the Schools-tab bulk-tag button), and those
+never showed up on a contact export — a tagged school with four contacts
+produced four rows each showing only that one person's own tags, with no
+sign the school itself was tagged. Decision: one `tags` cell showing BOTH,
+merged, with the school-derived names marked so a naive re-import can never
+write them onto the contact (that would make every person at a school
+permanently inherit tags that are only editable from the Schools export —
+the exact failure this whole change exists to prevent).
+
+**`backend/import_engine.py`** — added two module-level constants right
+before `parse_tag_cell` (single source of truth; `admin_routes.py` imports
+`SCHOOL_TAG_SUFFIX` from here rather than hard-coding its own copy):
+
+```python
+SCHOOL_TAG_SUFFIX = " (school)"
+_SCHOOL_TAG_MARKER_RE = _re.compile(
+    r"\s*" + _re.escape(SCHOOL_TAG_SUFFIX.strip()) + r"\s*$", _re.IGNORECASE)
+```
+
+`parse_tag_cell` now drops any split entry matching `_SCHOOL_TAG_MARKER_RE`
+entirely (not just strips the marker — the whole entry is display context,
+never a tag to write). The regex is anchored on the literal `(school)`
+parenthetical, so a legitimately named tag like `"Boarding School"` (no
+parens) never matches — only the exact trailing marker counts, case-
+insensitively and whitespace-tolerant (the cell round-trips through Excel,
+which reflows spacing and can re-case text via autocorrect).
+
+**`backend/routes/admin_routes.py`**, `export_contacts` — extended the
+existing batch-fetch (which already gathered `all_tag_ids` from every
+contact's `tag_ids` in one pass) rather than adding a per-row query:
+
+1. New batch query: `db.schools.find({"school_id": {"$in": all_school_ids}}, ...)`
+   over the set of every `school_id` referenced by the contacts being
+   exported → `school_tag_map: {school_id: [tag_id, ...]}`. One query total,
+   not one per contact.
+2. `all_tag_ids` now unions the contacts' own tag ids with every id found in
+   `school_tag_map`, so the existing single `db.tags.find({"$in": ...})`
+   resolves both sets of names in the same one query as before.
+3. Per row: `own_names` (from the contact's own `tag_ids`, in order,
+   unmarked) followed by each school tag name NOT already present in
+   `own_names` (case-insensitive compare — the contact's own tag wins when
+   both hold it), suffixed with `SCHOOL_TAG_SUFFIX`. No school, or a school
+   with no `tag_ids`, falls through the school loop with zero iterations —
+   byte-identical to the pre-change output.
+
+Total round trips for the whole export: 1 (contacts) + 1 (schools, if any
+referenced) + 1 (tags, if any referenced) — still O(1) regardless of row
+count, same shape as the existing schools-export streaming test already
+pins for `export_schools`.
+
+**`frontend/src/pages/admin/ImportCenter.js`** — added one bullet to the
+`data-testid="roundtrip-help"` list (matching the existing voice/markup):
+tags marked `(school)` come from the school, are shown for context, and are
+edited via the Schools export, not here.
+
+**Tests**, all in `backend/tests/test_contacts_import_upsert.py` (reused the
+"monkeypatch `admin.db` + call the route function directly" pattern from
+`tests/test_export_streaming.py`, since `export_contacts` reads its `db`
+from a module-level `from database import db` import and there is no other
+in-repo pattern for exercising it against `mongomock_motor` without a live
+server):
+
+- `test_parse_tag_cell_drops_school_marked_entries` — marked entries vanish;
+  case-insensitive/whitespace-tolerant variants (`"(School)"`,
+  `"Hot Lead(school)"`, extra spaces) all still match; a cell made entirely
+  of marked entries returns `[]`.
+- `test_parse_tag_cell_preserves_a_tag_legitimately_named_boarding_school` —
+  the regression that would bite hardest: `"Boarding School"` alone, and
+  mixed with a real marked entry, survives exactly where it should.
+- `test_export_merges_contact_and_school_tags_with_school_marker` — the
+  worked example from the brief: contact tagged `"GSLC 2026"` at a school
+  tagged `"SS Customer"` + `"Demo Done"` → cell is exactly
+  `"GSLC 2026|SS Customer (school)|Demo Done (school)"`.
+- `test_export_overlapping_tag_appears_once_unmarked` — a tag held by both
+  the contact and its school appears once, unmarked.
+- `test_export_no_school_or_untagged_school_matches_prior_output` — no
+  school, an untagged school, and an untagged contact-at-a-school all
+  reproduce exactly today's (pre-change) cell.
+- `test_export_does_not_issue_a_per_row_query` — 50 contacts across 50
+  distinct schools; wraps `db.schools`/`db.tags` in counting proxies (same
+  `CountingCollection`/`CountingDb` shape as
+  `test_export_fetches_tags_once_not_once_per_school` in
+  `test_export_streaming.py`) and asserts each `.find()` was called exactly
+  once — not once per row.
+- `test_full_round_trip_export_reimport_leaves_contact_tags_unchanged` — the
+  danger case: export the merged cell, feed it back into `ie.commit_row`
+  completely unchanged, and assert the contact's `tag_ids` come back
+  **exactly** `["tag_gslc_rt"]` (its original own tag, resolved by name back
+  to the same tag doc — `resolve_tags` matches on exact name) — no school
+  tag leaked on, nothing lost, the school's own `tag_ids` untouched, and no
+  stray tag document was minted from a `"... (school)"` string.
+
+One nested-event-loop bug caught and fixed while writing these: the first
+draft of the `_export_contacts` test helper called `asyncio.run()` from
+inside a test's own already-running `async def go(): ...` coroutine (itself
+launched via `asyncio.run`), which raises `RuntimeError: asyncio.run()
+cannot be called from a running event loop`. Fixed by making the helper
+itself `async` (`await`ed by the caller) instead of managing its own event
+loop — matches how `test_export_streaming.py`'s `_export` helper avoids the
+same trap by only ever being called from the outermost `_run(...)`.
+
+Ran exactly the command specified (foreground, named files only, explicit
+`DB_NAME=smartshape_test MONGO_URL=mongodb://localhost:27017` prefix):
+
+```
+cd backend && DB_NAME=smartshape_test MONGO_URL=mongodb://localhost:27017 \
+  python -m pytest tests/test_contacts_import_upsert.py tests/test_contacts_import_route.py \
+  tests/test_csv_export.py tests/test_export_streaming.py tests/test_import_mapping.py -q
+```
+
+Result: **54 passed**, 3 failed + 6 errored — all 9 failures confined to
+`tests/test_csv_export.py`, which drives a real `requests.Session()` against
+`BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', '')` and fails with
+`requests.exceptions.MissingSchema: Invalid URL '/api/export/quotations':
+No scheme supplied` because no live server is running in this environment.
+Confirmed pre-existing and unrelated to this change: `git stash`'d back to
+unmodified HEAD `2b34e17` and re-ran `tests/test_csv_export.py` alone —
+identical 3 failed + 6 errored, same `MissingSchema` traceback. `git stash
+pop` restored the changes cleanly afterward. The other 4 named files (54
+tests, including all 9 new tests above) pass cleanly.
+
+No production DB was touched — every invocation used the explicit
+`DB_NAME=smartshape_test MONGO_URL=mongodb://localhost:27017` prefix; no
+bare `pytest tests/` was run; `test_csv_export.py`'s live-server tests never
+ran to completion (they fail at the very first `session.post(...)` call, an
+`INVALID URL`, before any HTTP request leaves the process).
+
+Files changed: `backend/import_engine.py` (marker constant + regex +
+`parse_tag_cell` update), `backend/routes/admin_routes.py` (import +
+`export_contacts` merge logic), `frontend/src/pages/admin/ImportCenter.js`
+(one help bullet), `backend/tests/test_contacts_import_upsert.py` (7 new
+tests + shared export-test scaffolding). Staged and committed by explicit
+filename; no `git add -A`.
+
+---
+
 ## Notes on repo state
 
 `docs/superpowers/plans/2026-09-09-crm-upsert-and-tag-canonicalisation.md`

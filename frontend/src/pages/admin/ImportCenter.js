@@ -278,6 +278,7 @@ export default function ImportCenter() {
                   <li>· <strong className={textSec}>An empty cell is skipped, not cleared.</strong> A re-upload never wipes a value you didn't touch — to actually clear a field, edit that record in the CRM.</li>
                   <li>· A school with several contacts exports one row per contact, repeating the school's own columns on each.</li>
                   <li>· Add a row with no School ID to create a new school.</li>
+                  <li>· <strong className={textSec}>Tags marked "(school)" come from the school, not the contact.</strong> They're shown for context so you can see a school's tags on every contact row — edit them from the Schools export, not here. Re-uploading them unchanged never writes them onto the contact.</li>
                 </ul>
               </div>
               <div className="bg-[var(--bg-primary)] border-2 border-dashed border-[var(--border-color)] rounded-md p-8 text-center cursor-pointer hover:border-[#e94560]/40 transition-all"
