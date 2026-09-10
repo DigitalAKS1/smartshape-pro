@@ -4878,14 +4878,26 @@ async def import_contacts_csv(
     (matches by contact_id first, then name+phone/phone/name — see commit_row).
     A blank cell never clears an existing field (D1). Contacts-only: never mints
     a new school (allow_school_create=False); an unresolved school on the row
-    leaves the contact's school_id untouched rather than blanking it."""
+    leaves the contact's school_id untouched rather than blanking it.
+
+    Gated like every other CRM write (require_module leads:read_write). Ownership
+    still matters even though the gate passed: a scoped ("own") user's row can
+    only ever UPDATE a contact they actually own (admin / "all"-scope unchanged) —
+    see _authorize_contact / commit_row's authorize_contact param. A row a user
+    may not touch is counted as skipped with a reason, never silently applied
+    and never a 500."""
     import import_engine as ie
     from routes.dynamic_import_routes import _key_rows
 
-    if request:
-        user = await get_current_user(request)
-    else:
-        user = {"email": "import", "name": "Import"}
+    user = await get_current_user(request)
+    require_module(user, "leads", "read_write")
+    user_sees_all = sees_all(user, "leads")
+
+    async def _authorize_contact(existing_contact: dict) -> bool:
+        if user_sees_all:
+            return True
+        return await _user_can_mutate_contact(user, existing_contact)
+
     tag_id_list = [t.strip() for t in (tag_ids or "").split(",") if t.strip()]
     extra_note = (global_notes or "").strip()
 
@@ -4899,7 +4911,7 @@ async def import_contacts_csv(
     mapping = await ie.propose_mapping(db, headers)
     keyed = _key_rows(headers, rows, mapping)
 
-    created = updated = skipped = 0
+    created = updated = skipped = error_count = 0
     errors: list = []
 
     for idx, row_keyed in enumerate(keyed, start=2):   # row 1 is the header
@@ -4910,13 +4922,22 @@ async def import_contacts_csv(
             if not (ie.valid_supplied_id(row_keyed.get("contact_id"))
                     or (row_keyed.get("name") or "").strip()):
                 skipped += 1
+                errors.append(f"Row {idx}: skipped — no contact_id or name to match or create by")
                 continue
 
             res = await ie.commit_row(db, row_keyed, user, create_leads=False,
-                                      allow_school_create=False)
+                                      allow_school_create=False,
+                                      authorize_contact=_authorize_contact)
             if res["action"] == "needs_review":
                 skipped += 1
-                errors.append(f"Row {idx}: ambiguous school, needs review")
+                errors.append(f"Row {idx}: skipped — ambiguous school match, needs review")
+                continue
+
+            contact_action = res.get("contact_action")
+            if contact_action == "forbidden":
+                skipped += 1
+                errors.append(
+                    f"Row {idx}: skipped — you do not own contact {res.get('contact_id')!r}")
                 continue
 
             cid = res.get("contact_id")
@@ -4931,19 +4952,22 @@ async def import_contacts_csv(
             # school returns action="update" (the school's action), and a new
             # contact with no school returns "skip_school"; both would be
             # miscounted as UPDATED if we read res["action"] here.
-            contact_action = res.get("contact_action")
             if contact_action == "create":
                 created += 1
             elif contact_action == "update":
                 updated += 1
             else:
                 skipped += 1
+                errors.append(f"Row {idx}: skipped — no contact was created or updated")
         except Exception as e:
+            # A genuine per-row exception is tracked ONLY in error_count, never
+            # also in `skipped` — a row belongs to exactly one of the four
+            # result tiles, so they can never sum to more than the row count.
+            error_count += 1
             errors.append(f"Row {idx}: {e}")
 
-    total_errors = len(errors)
     return {"created": created, "updated": updated, "skipped": skipped,
-            "errors": errors[:50], "error_count": total_errors}
+            "errors": errors[:50], "error_count": error_count}
 
 
 async def _backfill_contact_owners_core() -> dict:

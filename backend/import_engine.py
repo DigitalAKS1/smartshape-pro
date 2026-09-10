@@ -7,6 +7,7 @@ Task 3: parse_table(filename, content) -> (headers, rows)
 """
 import csv
 import datetime as _dt
+import inspect as _inspect
 import io
 import re as _re
 import unicodedata as _ud
@@ -462,8 +463,16 @@ def _phone_pair(bucket: dict, entity: str, warnings: list) -> tuple[str, str]:
 
 
 async def commit_row(db, row_keyed: dict, user: dict, create_leads: bool,
-                     allow_school_create: bool = True) -> dict:
+                     allow_school_create: bool = True, authorize_contact=None) -> dict:
     """Upsert one import row into schools / contacts / leads with a pre-update audit snapshot.
+
+    `authorize_contact`, when given, is called with the MATCHED existing contact
+    doc (never called on a create — there is nothing to own yet) and may return
+    a bool or an awaitable bool. When it returns False, the contact is left
+    completely untouched and this returns contact_action="forbidden" instead of
+    writing anything — used by the /contacts/import route so a scoped (non-"all")
+    user's CSV can only ever update contacts they actually own; master-import
+    never passes this and is completely unaffected.
 
     Safety rules:
     - If resolve_school returns needs_review → return immediately, write NOTHING,
@@ -631,6 +640,18 @@ async def commit_row(db, row_keyed: dict, user: dict, create_leads: bool,
             existing = await db.contacts.find_one({"school_id": sid, "phone": con_phone_raw, **_not_deleted})
         if existing is None and contact_name:
             existing = await db.contacts.find_one({"school_id": sid, "name": contact_name, **_not_deleted})
+
+        # Ownership gate (contacts-import only — see the authorize_contact
+        # docstring above). A denied row is left completely untouched: no
+        # $set, no tags, no lead. It must never silently apply and never 500.
+        if existing and authorize_contact is not None:
+            allowed = authorize_contact(existing)
+            if _inspect.isawaitable(allowed):
+                allowed = await allowed
+            if not allowed:
+                return {"action": res["action"], "school_id": sid,
+                        "contact_id": existing.get("contact_id"), "lead_id": None,
+                        "warnings": warnings, "contact_action": "forbidden"}
 
         # Pop BEFORE cvals/custom_fields are built so the raw tag string never
         # lands in custom_fields.tags — resolution itself waits until cid exists.
