@@ -340,3 +340,66 @@ def test_ambiguous_school_without_contact_id_still_needs_review(db):
         assert res["action"] == "needs_review"
         assert await db.contacts.count_documents({}) == 0, "nothing should be written"
     _run(go())
+
+
+# ---------------------------------------------------------------------------
+# Final whole-branch review, item 2: a contacts-only import must never write
+# school-entity fields (e.g. `company` -> school_name), even though it still
+# matches and links to the school by id.
+# ---------------------------------------------------------------------------
+
+def test_stale_company_cell_does_not_revert_a_corrected_school_name(db):
+    """Pins the bug directly: the school was renamed in the CRM after the
+    contact's `company` cell was exported, so the cell DISAGREES with the
+    school's current school_name. Re-uploading that export must not revert
+    the rename — school_id still matches with certainty, but a contacts-only
+    import has no business touching school master data at all."""
+    async def go():
+        await db.schools.insert_one({
+            "school_id": "sch_renamed", "school_name": "New Correct Name",
+            "is_deleted": False})
+        await db.contacts.insert_one({
+            "contact_id": "con_stale", "school_id": "sch_renamed",
+            "name": "Stale Contact", "company": "Old Stale Name",
+            "designation": "Principal"})
+
+        # Row as it would come out of an old export: `company` still carries
+        # the pre-rename name.
+        row = {"contact_id": "con_stale", "name": "Stale Contact",
+               "school_id": "sch_renamed", "company": "Old Stale Name",
+               "designation": "Director"}
+        res = await ie.commit_row(db, row, IMPORTER, create_leads=False,
+                                  allow_school_create=False)
+
+        assert res["action"] == "update", "the school row is still resolved/matched"
+        sch = await db.schools.find_one({"school_id": "sch_renamed"})
+        assert sch["school_name"] == "New Correct Name", (
+            "a contacts-only import must never revert a school rename via the "
+            "stale `company` column"
+        )
+        c = await db.contacts.find_one({"contact_id": "con_stale"})
+        assert c["designation"] == "Director", "the contact itself still updates"
+        # No audit_backup snapshot should be written either — the school was
+        # never touched, so there is nothing to snapshot.
+        assert await db.audit_backup.count_documents({"school_id": "sch_renamed"}) == 0
+    _run(go())
+
+
+def test_master_import_still_updates_school_name_from_company(db):
+    """Guard against over-fixing: master-import (allow_school_create=True) is
+    exactly the path that IS supposed to update school master data from a
+    `company`/school_name cell, and must keep doing so unchanged."""
+    async def go():
+        await db.schools.insert_one({
+            "school_id": "sch_master", "school_name": "Old Master Name",
+            "is_deleted": False})
+        row = {"school_id": "sch_master", "school_name": "Updated Master Name",
+               "name": "Some Contact"}
+        res = await ie.commit_row(db, row, IMPORTER, create_leads=False)  # allow_school_create=True (default)
+        assert res["action"] == "update"
+        sch = await db.schools.find_one({"school_id": "sch_master"})
+        assert sch["school_name"] == "Updated Master Name", (
+            "master-import must still be able to correct a school's name"
+        )
+        assert await db.audit_backup.count_documents({"school_id": "sch_master"}) == 1
+    _run(go())

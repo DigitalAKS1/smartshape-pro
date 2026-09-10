@@ -553,46 +553,60 @@ async def commit_row(db, row_keyed: dict, user: dict, create_leads: bool,
 
     sid = res["school_id"]
 
-    if res["action"] == "create":
-        sid = valid_supplied_id(row_keyed.get("school_id")) or f"sch_{_uuid.uuid4().hex[:12]}"
-        school_vals = dict(parts["school"])
-        if sch_phone_raw or "phone" in school_vals:
-            school_vals["phone"] = sch_phone_raw
-        doc = {
-            "school_id": sid,
-            "is_deleted": False,
-            "created_by": user_email,
-            "created_at": now,
-            "import_date": now,
-            "custom_fields": parts["custom"]["school"],
-            **school_vals,
-        }
-        if sch_phone_norm:
-            doc["phone_norm"] = sch_phone_norm
-        doc.update(school_assign_set)
-        await db.schools.insert_one(doc)
-    elif res["action"] == "update":
-        # Snapshot existing doc before overwriting (safety-critical — never skip)
-        old = await db.schools.find_one({"school_id": sid})
-        await db.audit_backup.insert_one({
-            "kind": "school_pre_import",
-            "school_id": sid,
-            "snapshot": {k: v for k, v in (old or {}).items() if k != "_id"},
-            "at": now,
-            "by": user_email,
-        })
-        upd: dict = _strip_blanks(parts["school"])
-        if sch_phone_raw:
-            upd["phone"] = sch_phone_raw
-        for k, v in _strip_blanks(parts["custom"]["school"]).items():
-            upd[f"custom_fields.{k}"] = v
-        upd["last_activity_date"] = now
-        upd["import_date"] = now
-        if sch_phone_norm:
-            upd["phone_norm"] = sch_phone_norm
-        upd.update(school_assign_set)
-        await db.schools.update_one({"school_id": sid}, {"$set": upd})
-    # action == "skip_school": no school is resolved, created or touched
+    # A contacts-only import (allow_school_create=False) has no business
+    # touching school MASTER DATA at all — not just ownership (school_assign_set,
+    # above). `contacts.company` is a stale denormalised snapshot: the school
+    # entity's real name lives on the school doc, and update_school does not
+    # cascade a rename down to its contacts. So a `company` cell in a contacts
+    # export can DISAGREE with the school's current, already-corrected name —
+    # and applying it here would silently revert that rename on every re-upload,
+    # matched with certainty via school_id. The contact still LINKS to the
+    # matched school (sid, below); it just never creates or $sets one. This also
+    # kills the per-row audit_backup school snapshot that used to fire on every
+    # contact row regardless of whether the school actually changed.
+    if allow_school_create:
+        if res["action"] == "create":
+            sid = valid_supplied_id(row_keyed.get("school_id")) or f"sch_{_uuid.uuid4().hex[:12]}"
+            school_vals = dict(parts["school"])
+            if sch_phone_raw or "phone" in school_vals:
+                school_vals["phone"] = sch_phone_raw
+            doc = {
+                "school_id": sid,
+                "is_deleted": False,
+                "created_by": user_email,
+                "created_at": now,
+                "import_date": now,
+                "custom_fields": parts["custom"]["school"],
+                **school_vals,
+            }
+            if sch_phone_norm:
+                doc["phone_norm"] = sch_phone_norm
+            doc.update(school_assign_set)
+            await db.schools.insert_one(doc)
+        elif res["action"] == "update":
+            # Snapshot existing doc before overwriting (safety-critical — never skip)
+            old = await db.schools.find_one({"school_id": sid})
+            await db.audit_backup.insert_one({
+                "kind": "school_pre_import",
+                "school_id": sid,
+                "snapshot": {k: v for k, v in (old or {}).items() if k != "_id"},
+                "at": now,
+                "by": user_email,
+            })
+            upd: dict = _strip_blanks(parts["school"])
+            if sch_phone_raw:
+                upd["phone"] = sch_phone_raw
+            for k, v in _strip_blanks(parts["custom"]["school"]).items():
+                upd[f"custom_fields.{k}"] = v
+            upd["last_activity_date"] = now
+            upd["import_date"] = now
+            if sch_phone_norm:
+                upd["phone_norm"] = sch_phone_norm
+            upd.update(school_assign_set)
+            await db.schools.update_one({"school_id": sid}, {"$set": upd})
+    # action == "skip_school", or allow_school_create is False: no school is
+    # resolved, created or touched — sid (if any) came only from an existing
+    # match and is used below purely to link the contact/lead.
 
     # ---- contact upsert: id → name+phone_norm → phone_norm → phone → name ----
     cid = None
