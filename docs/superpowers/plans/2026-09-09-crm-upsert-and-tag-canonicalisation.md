@@ -1519,16 +1519,82 @@ alias table, so its test file goes with it."
 
 ## Deployment
 
-After Task 8 passes, deploy per the repo's mechanism (`origin/main` auto-deploys
-via a VPS timer, ~1-2 minutes):
+Production auto-deploys from `origin/main` via a VPS timer (~1-2 minutes).
 
-1. **Take an Atlas snapshot before running any migration.** Both migrations are
-   non-destructive by design, but they rewrite fields on every school and lead.
-2. Run the migrations against production, in this order:
+**Order matters here, and it is deploy-then-migrate — not the reverse.** An
+earlier draft of this runbook migrated first. That is wrong: while the
+migration runs, the live *old* code is still writing `tags`, so any tag action
+in those minutes re-creates the legacy field on a document the migration has
+already passed, permanently orphaning those tags. Deploying first means the new
+code writes `tag_ids` from the outset and the migration's union then merges
+whatever remains. The only cost is that tag filters under-return during the
+gap — a transient read degradation, not data divergence. Do not "fix" this back.
+
+1. **Rebuild and commit the frontend bundle. This is mandatory, not optional.**
+   `frontend/build/` is committed (283 tracked files) and production serves it
+   directly. This branch changes files under `frontend/src` and no build
+   artifact, so merging without a rebuild ships **zero** frontend changes — the
+   migration would move tags to `tag_ids` while the live bundle still reads the
+   old field, and every CRM tag filter would silently return nothing.
+
+   ```bash
+   bash scripts/build-frontend.sh
+   git add frontend/build && git commit -m "build: rebuild bundle for tag_ids cutover"
+   ```
+
+   The script sets `REACT_APP_BACKEND_URL=https://app.smartshape.in` inline,
+   which is required — the `.env` files are gitignored, so a build that relies
+   on them silently bakes in `localhost:8000`. Build with
+   `DISABLE_ESLINT_PLUGIN=true`. **Never let the production VPS run the build**;
+   it runs out of memory and trips the host's resource monitor.
+
+2. **Take an Atlas snapshot.** The migrations are non-destructive by design, but
+   they rewrite fields on every school and lead.
+
+3. **Merge and push.** Merge `feat/crm-grid-upsert` into `main` and push.
+   Verify the deploy by bundle *content*, not by timestamp:
+   `curl https://app.smartshape.in/static/js/main.<hash>.js | grep -c tag_ids`
+
+4. **Confirm the field-definition seed actually ran.** The startup seed is now
+   wrapped in a try/except that logs a warning rather than crashing the API. A
+   silent failure there would leave the import header aliases stale in
+   production, so the phone column would keep being dropped:
+
+   ```bash
+   docker logs smartshape-backend 2>&1 | grep -i "field.definitions\|seed"
+   ```
+
+   Expect no warning. If one appears, the aliases did not reconcile and imports
+   will mis-map columns until it is resolved.
+
+5. **Preview the ownership migration before running it.** Ownership drives
+   row-level visibility, and there is a known population of blank-owner junk
+   schools. Print how many schools will change owner, and to whom, before
+   committing:
+
+   ```bash
+   cd backend && python -c "
+   import asyncio
+   from database import db
+   async def go():
+       n = await db.schools.count_documents({'owner': {'$exists': True}})
+       print('schools carrying legacy owner:', n)
+       seen = {}
+       async for s in db.schools.find({'owner': {'$exists': True}}, {'_id':0,'owner':1,'assigned_to':1}):
+           if not (s.get('assigned_to') or '').strip():
+               seen[s.get('owner','')] = seen.get(s.get('owner',''), 0) + 1
+       for k, v in sorted(seen.items(), key=lambda kv: -kv[1]):
+           print(f'{v:5d}  {k!r}')
+   asyncio.run(go())"
+   ```
+
+6. **Run the migrations**, in this order:
+
    ```bash
    cd backend && python -m migrations.canonicalise_tag_fields
    cd backend && python -m migrations.canonicalise_school_owner
    ```
+
    Each prints its result dict. Both are idempotent — a second run reports zero
    changes, so re-running after an interruption is safe.
 
@@ -1536,17 +1602,18 @@ via a VPS timer, ~1-2 minutes):
    mangles Mongo `$` operators, which is exactly the failure you cannot afford
    on a migration whose bad outcome is silent, permanent tag loss. Both modules
    carry an `if __name__ == "__main__":` runner for this reason.
-3. **Rebuild the tag indexes, and drop the orphaned ones.** This step is
-   mandatory and easy to forget: `ensure_indexes.py` is a manual script — it is
-   invoked by nothing, not `connect_db()`, not any Dockerfile, compose file or
-   deploy script. Without it the new `tag_ids` indexes never exist in
-   production and every tag-filtered query collscans.
+
+7. **Rebuild the tag indexes, and drop the orphaned ones.** Mandatory and easy
+   to forget: `ensure_indexes.py` is a manual script — it is invoked by nothing,
+   not `connect_db()`, not any Dockerfile, compose file or deploy script.
+   Without it the new `tag_ids` indexes never exist in production and every
+   tag-filtered query collscans.
 
    ```bash
    cd backend && python ensure_indexes.py --yes-production
    ```
 
-   Then drop the two indexes the rename orphaned. They now index a field that
+   Then drop the two indexes the rename orphaned — they now index a field that
    no longer exists, costing a write on every lead and school update:
 
    ```javascript
@@ -1559,15 +1626,14 @@ via a VPS timer, ~1-2 minutes):
 
    Deliberately NOT done: wiring index creation into application startup. That
    is the obvious fix, but this repo has already taken a production outage from
-   a startup-time index failure (a unique index over duplicate data crashed
-   `connect_db()`), so it trades a small performance gap for an availability
-   risk. Revisit separately, not inside this plan.
+   a startup-time index failure, so it trades a small performance gap for an
+   availability risk. Revisit separately, not inside this plan.
 
-4. Merge `feat/crm-grid-upsert` into `main` and push. Verify the deploy by
-   bundle content, not by timestamp.
-5. Smoke test the real workflow: export contacts, edit one designation and one
-   tag cell in Excel, re-upload, confirm the dialog reports `updated` and the
-   record changed while its blank columns kept their values.
+8. **Smoke test the real workflow.** Export contacts, edit one designation and
+   one tag cell in Excel, re-upload, and confirm the dialog reports **Updated**
+   (not Skipped), the record changed, and its blank columns kept their previous
+   values. Then check that a tag applied through the CRM's own tag button is
+   visible in the filter rail — that is the split-brain fix working end to end.
 
 ## Rollback
 
@@ -1579,4 +1645,15 @@ Tasks 2, 3 and 4 involve migrations. Because both union rather than overwrite,
 no data is destroyed in either direction, but reverting the code without
 reverting the data would leave the CRM reading `tags` on documents that now
 only have `tag_ids`. If a revert is needed after the migration has run, restore
-from the Atlas snapshot taken in Deployment step 1.
+from the Atlas snapshot taken in Deployment step 2.
+
+**Rolling back before the migrations have run is cheap** — that is the whole
+reason the runbook deploys first. Between Deployment steps 3 and 6 the new code
+is live but no data has changed shape, so a revert plus a bundle rebuild is a
+complete rollback with nothing to undo in the database. Once step 6 has run,
+the snapshot is the only clean path back.
+
+**Any rollback of frontend code must include a bundle rebuild.** `frontend/build/`
+is committed and served directly, so reverting `frontend/src` alone changes
+nothing in production — the same trap that made the bundle rebuild a mandatory
+deployment step.
