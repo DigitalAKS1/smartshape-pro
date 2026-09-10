@@ -499,3 +499,72 @@ def test_supplied_contact_id_colliding_with_deleted_contact_mints_new_id(db):
         assert new["name"] == "New Live Person"
         assert new["is_deleted"] is False
     _run(go())
+
+
+# ---------------------------------------------------------------------------
+# Residual review 2026-09-10, item 2: allow_school_create=False + a row naming
+# a school that does not exist. Intended behaviour (ships already, never
+# pinned by a test): the contact is created with no school link, and no junk
+# school is minted.
+# ---------------------------------------------------------------------------
+
+def test_contacts_only_row_with_unknown_school_name_creates_no_school(db):
+    """Distinct from test_contacts_only_row_creates_no_school above: THIS row
+    names a real (but unknown) school_name, so resolve_school actually runs
+    and returns action="create" (not skip_school) — allow_school_create=False
+    is what then stops it from minting one."""
+    async def go():
+        row = {"name": "Nameless School Person", "phone": "9223300000",
+               "school_name": "Totally Unknown School"}
+        res = await ie.commit_row(db, row, IMPORTER, create_leads=False,
+                                  allow_school_create=False)
+        assert res["action"] == "create", "school resolution itself still runs"
+        assert res["school_id"] is None
+        assert await db.schools.count_documents({}) == 0, "no junk school minted"
+        c = await db.contacts.find_one({"name": "Nameless School Person"})
+        assert c is not None
+        assert c.get("school_id") in (None, "")
+    _run(go())
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "REAL BUG (residual review 2026-09-10, item 2 — reported, not fixed "
+        "here; item 2 is test-only). The fallback contact matchers query "
+        "{'school_id': sid, ...}; when sid is None (an unresolved school "
+        "under allow_school_create=False) Mongo's {field: None} ALSO matches "
+        "documents where the field is missing entirely. Two unrelated real "
+        "people who happen to share a name — one already school-less, one "
+        "from a fresh row naming an unknown school — collide on the "
+        "name-only fallback matcher and get merged into a single contact, "
+        "with the new row's phone silently overwriting the original "
+        "person's. See residual-fix-report.md."
+    ),
+)
+def test_unknown_school_contact_does_not_merge_into_unrelated_same_name_contact(db):
+    """Deliberately constructed collision: a pre-existing, unrelated,
+    school-less contact happens to share a name with a brand-new person whose
+    row names an unknown school (so it also resolves to no school). They must
+    stay two separate contacts — sharing a name is not sharing an identity."""
+    async def go():
+        await db.contacts.insert_one({
+            "contact_id": "con_existing_common", "name": "Common Name",
+            "phone": "9111111111", "designation": "Existing Person",
+            "is_deleted": False})
+
+        row = {"name": "Common Name", "phone": "9222222222",
+               "school_name": "Totally Different Unknown School"}
+        await ie.commit_row(db, row, IMPORTER, create_leads=False,
+                            allow_school_create=False)
+
+        assert await db.contacts.count_documents({}) == 2, (
+            "two different people who merely share a name must not merge "
+            "into one contact just because both are school-less"
+        )
+        original = await db.contacts.find_one({"contact_id": "con_existing_common"})
+        assert original["phone"] == "9111111111", (
+            "the pre-existing, unrelated contact's own phone must never be "
+            "overwritten by an unrelated same-name row"
+        )
+    _run(go())
