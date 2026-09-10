@@ -441,3 +441,61 @@ def test_soft_deleted_contact_is_not_matched_and_resurrected(db):
         active = await db.contacts.find_one({"is_deleted": {"$ne": True}, "school_id": "sch_del"})
         assert active is not None and active["designation"] == "Director"
     _run(go())
+
+
+# ---------------------------------------------------------------------------
+# Residual review 2026-09-10, item 1: a SUPPLIED contact_id that belongs to a
+# soft-deleted contact must never be reused for the new live contact. The
+# matchers above (correctly) never match the deleted doc, so execution falls
+# into the create branch; without a guard it would do
+# `cid = supplied_cid or f"con_{...}"` and reuse the dead contact's id,
+# producing either a raw E11000 (the unique index on contacts.contact_id,
+# when it exists in the environment) or two live documents silently sharing
+# one id (when it does not). Chosen fix: mint a fresh id and create the
+# contact normally rather than skipping the row — the row's own name/phone
+# still identify a real, importable contact, and a later re-import of the
+# same file self-heals onto the new doc via the name+phone_norm / phone_norm
+# / name fallback matchers (the stale id in the source file just stops
+# matching anything, live or dead).
+# ---------------------------------------------------------------------------
+
+def test_supplied_contact_id_colliding_with_deleted_contact_mints_new_id(db):
+    async def go():
+        await db.schools.insert_one({
+            "school_id": "sch_collide", "school_name": "Collide School",
+            "is_deleted": False})
+        await db.contacts.insert_one({
+            "contact_id": "con_reused", "school_id": "sch_collide",
+            "name": "Old Deleted Person", "phone": "9000000000",
+            "is_deleted": True})
+
+        # An older export row whose contact_id happens to be the one the
+        # deleted contact used to hold.
+        row = {"contact_id": "con_reused", "name": "New Live Person",
+               "phone": "9111111111", "school_id": "sch_collide"}
+        res = await ie.commit_row(db, row, IMPORTER, create_leads=False,
+                                  allow_school_create=False)
+
+        assert res["contact_action"] == "create", "the row must still import"
+        assert res["contact_id"] != "con_reused", (
+            "must never reuse a deleted contact's id for the new live contact"
+        )
+        assert any("con_reused" in w for w in res["warnings"]), (
+            "the collision should be surfaced, not silent"
+        )
+
+        # No E11000, no id shared between two live docs: the deleted contact
+        # still exclusively holds the old id, unmodified...
+        assert await db.contacts.count_documents({"contact_id": "con_reused"}) == 1
+        old = await db.contacts.find_one({"contact_id": "con_reused"})
+        assert old["is_deleted"] is True
+        assert old["name"] == "Old Deleted Person"
+
+        # ...and exactly one LIVE contact holds the (newly minted) id the row
+        # actually ended up with.
+        assert await db.contacts.count_documents(
+            {"contact_id": res["contact_id"], "is_deleted": {"$ne": True}}) == 1
+        new = await db.contacts.find_one({"contact_id": res["contact_id"]})
+        assert new["name"] == "New Live Person"
+        assert new["is_deleted"] is False
+    _run(go())

@@ -676,6 +676,25 @@ async def commit_row(db, row_keyed: dict, user: dict, create_leads: bool,
             await db.contacts.update_one({"contact_id": cid}, {"$set": upd_c})
         else:
             cid = supplied_cid or f"con_{_uuid.uuid4().hex[:12]}"
+            if supplied_cid:
+                # No LIVE contact matched this id above (every matcher excludes
+                # is_deleted). If a SOFT-DELETED contact already holds it,
+                # reusing it here would either 500 with a raw E11000 (the
+                # unique index on contacts.contact_id, when it exists) or —
+                # worse, if the index is missing — leave two live documents
+                # silently sharing one contact_id, so every future
+                # find_one({"contact_id": ...}) returns whichever Mongo picks.
+                # Mint a fresh id instead: the row's own name/phone still let
+                # it create a normal live contact, and a later re-import
+                # self-heals onto that new doc via the name+phone_norm /
+                # phone_norm / name matchers above (the stale id in the source
+                # file just never matches again).
+                dead = await db.contacts.find_one({"contact_id": supplied_cid})
+                if dead:
+                    warnings.append(
+                        f"contact_id {supplied_cid!r} belongs to a deleted "
+                        f"contact; minted a new id instead of reusing it")
+                    cid = f"con_{_uuid.uuid4().hex[:12]}"
             contact_action = "create"
             await db.contacts.insert_one({
                 "contact_id": cid,
