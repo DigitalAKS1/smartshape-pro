@@ -527,21 +527,6 @@ def test_contacts_only_row_with_unknown_school_name_creates_no_school(db):
     _run(go())
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "REAL BUG (residual review 2026-09-10, item 2 — reported, not fixed "
-        "here; item 2 is test-only). The fallback contact matchers query "
-        "{'school_id': sid, ...}; when sid is None (an unresolved school "
-        "under allow_school_create=False) Mongo's {field: None} ALSO matches "
-        "documents where the field is missing entirely. Two unrelated real "
-        "people who happen to share a name — one already school-less, one "
-        "from a fresh row naming an unknown school — collide on the "
-        "name-only fallback matcher and get merged into a single contact, "
-        "with the new row's phone silently overwriting the original "
-        "person's. See residual-fix-report.md."
-    ),
-)
 def test_unknown_school_contact_does_not_merge_into_unrelated_same_name_contact(db):
     """Deliberately constructed collision: a pre-existing, unrelated,
     school-less contact happens to share a name with a brand-new person whose
@@ -567,4 +552,34 @@ def test_unknown_school_contact_does_not_merge_into_unrelated_same_name_contact(
             "the pre-existing, unrelated contact's own phone must never be "
             "overwritten by an unrelated same-name row"
         )
+    _run(go())
+
+
+def test_unknown_school_row_with_contact_id_still_updates_by_id(db):
+    """The fix disables matchers 2-5 when sid is None, but matcher 1
+    (contact_id) must still work exactly as before — this is the round-trip
+    case that matters most: a rep re-uploads their own export, one row's
+    school got deleted/renamed out from under it since, and the row still
+    carries the contact_id from that same export. It must UPDATE the existing
+    contact, not fall through to create a duplicate."""
+    async def go():
+        await db.contacts.insert_one({
+            "contact_id": "con_by_id", "name": "Id Matched Person",
+            "phone": "9333333333", "designation": "Old Title",
+            "is_deleted": False})
+
+        row = {"contact_id": "con_by_id", "name": "Id Matched Person",
+               "phone": "9444444444", "designation": "New Title",
+               "school_name": "Some School That Does Not Exist"}
+        res = await ie.commit_row(db, row, IMPORTER, create_leads=False,
+                                  allow_school_create=False)
+
+        assert res["contact_action"] == "update", (
+            "a supplied contact_id must still match and update even when "
+            "the row's school is unresolved (sid is None)"
+        )
+        assert await db.contacts.count_documents({}) == 1, "must not duplicate"
+        c = await db.contacts.find_one({"contact_id": "con_by_id"})
+        assert c["designation"] == "New Title"
+        assert c["phone"] == "9444444444"
     _run(go())

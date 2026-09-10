@@ -631,15 +631,29 @@ async def commit_row(db, row_keyed: dict, user: dict, create_leads: bool,
         existing = None
         if supplied_cid:
             existing = await db.contacts.find_one({"contact_id": supplied_cid, **_not_deleted})
-        if existing is None and contact_name and con_phone_norm:
-            existing = await db.contacts.find_one(
-                {"school_id": sid, "name": contact_name, "phone_norm": con_phone_norm, **_not_deleted})
-        if existing is None and con_phone_norm:
-            existing = await db.contacts.find_one({"school_id": sid, "phone_norm": con_phone_norm, **_not_deleted})
-        if existing is None and con_phone_raw:
-            existing = await db.contacts.find_one({"school_id": sid, "phone": con_phone_raw, **_not_deleted})
-        if existing is None and contact_name:
-            existing = await db.contacts.find_one({"school_id": sid, "name": contact_name, **_not_deleted})
+        # Matchers 2-5 are "school-scoped" only in the sense that they filter
+        # on school_id — and that's only a real scope when sid is an ACTUAL
+        # school. When sid is None (contacts-only row naming a school that
+        # doesn't exist), Mongo's {"school_id": None, ...} matches every
+        # contact with an explicit null school_id AND every contact where the
+        # field is simply missing — i.e. almost every schoolless contact in
+        # the system, not "this row's school". Real people legitimately share
+        # a name (and even a phone) across different schools, so a name/phone
+        # fallback with no school context can match a completely unrelated
+        # person and silently overwrite their phone number — unrecoverable,
+        # unlike a duplicate contact (visible in the UI, mergeable later). So:
+        # no school context, no fallback — only an explicit contact_id may
+        # match an existing contact.
+        if sid is not None:
+            if existing is None and contact_name and con_phone_norm:
+                existing = await db.contacts.find_one(
+                    {"school_id": sid, "name": contact_name, "phone_norm": con_phone_norm, **_not_deleted})
+            if existing is None and con_phone_norm:
+                existing = await db.contacts.find_one({"school_id": sid, "phone_norm": con_phone_norm, **_not_deleted})
+            if existing is None and con_phone_raw:
+                existing = await db.contacts.find_one({"school_id": sid, "phone": con_phone_raw, **_not_deleted})
+            if existing is None and contact_name:
+                existing = await db.contacts.find_one({"school_id": sid, "name": contact_name, **_not_deleted})
 
         # Ownership gate (contacts-import only — see the authorize_contact
         # docstring above). A denied row is left completely untouched: no
