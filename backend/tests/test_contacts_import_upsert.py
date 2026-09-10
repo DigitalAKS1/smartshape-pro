@@ -403,3 +403,41 @@ def test_master_import_still_updates_school_name_from_company(db):
         )
         assert await db.audit_backup.count_documents({"school_id": "sch_master"}) == 1
     _run(go())
+
+
+# ---------------------------------------------------------------------------
+# Final whole-branch review, item 3: soft-deleted contacts must never be
+# matched by re-import — that would $set + resurrect them while the import
+# result reports them as "updated", corresponding to nothing visible in the CRM.
+# ---------------------------------------------------------------------------
+
+def test_soft_deleted_contact_is_not_matched_and_resurrected(db):
+    async def go():
+        await db.schools.insert_one({
+            "school_id": "sch_del", "school_name": "Deletion School",
+            "is_deleted": False})
+        await db.contacts.insert_one({
+            "contact_id": "con_gone", "school_id": "sch_del",
+            "name": "Gone Person", "phone": "9812345678",
+            "designation": "Principal", "is_deleted": True})
+
+        # Re-uploading an older export of the now-deleted contact. No
+        # contact_id supplied (an id collision with the soft-deleted doc is a
+        # separate concern) — this exercises the name+phone/phone/name
+        # fallback matchers, which must all skip the deleted document.
+        row = {"name": "Gone Person", "phone": "9812345678",
+               "school_id": "sch_del", "designation": "Director"}
+        res = await ie.commit_row(db, row, IMPORTER, create_leads=False,
+                                  allow_school_create=False)
+
+        assert res["contact_action"] == "create", (
+            "a soft-deleted contact must never be matched — this must mint a "
+            "new (active) contact instead of resurrecting the deleted one"
+        )
+        assert await db.contacts.count_documents({"school_id": "sch_del"}) == 2
+        deleted = await db.contacts.find_one({"contact_id": "con_gone"})
+        assert deleted["designation"] == "Principal", "the deleted contact must be left untouched"
+        assert deleted["is_deleted"] is True
+        active = await db.contacts.find_one({"is_deleted": {"$ne": True}, "school_id": "sch_del"})
+        assert active is not None and active["designation"] == "Director"
+    _run(go())

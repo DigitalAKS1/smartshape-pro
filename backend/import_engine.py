@@ -614,18 +614,23 @@ async def commit_row(db, row_keyed: dict, user: dict, create_leads: bool,
     contact_name = parts["contact"].get("name", "")
     supplied_cid = valid_supplied_id(row_keyed.get("contact_id"))
     if contact_name or con_phone_raw or supplied_cid:
+        # Never match a soft-deleted contact — re-uploading an older export
+        # would otherwise $set + resurrect it and count it as "updated" while
+        # it stays invisible everywhere in the CRM (list endpoints all filter
+        # is_deleted the same way; see e.g. crm_routes.py list_contacts).
+        _not_deleted = {"is_deleted": {"$ne": True}}
         existing = None
         if supplied_cid:
-            existing = await db.contacts.find_one({"contact_id": supplied_cid})
+            existing = await db.contacts.find_one({"contact_id": supplied_cid, **_not_deleted})
         if existing is None and contact_name and con_phone_norm:
             existing = await db.contacts.find_one(
-                {"school_id": sid, "name": contact_name, "phone_norm": con_phone_norm})
+                {"school_id": sid, "name": contact_name, "phone_norm": con_phone_norm, **_not_deleted})
         if existing is None and con_phone_norm:
-            existing = await db.contacts.find_one({"school_id": sid, "phone_norm": con_phone_norm})
+            existing = await db.contacts.find_one({"school_id": sid, "phone_norm": con_phone_norm, **_not_deleted})
         if existing is None and con_phone_raw:
-            existing = await db.contacts.find_one({"school_id": sid, "phone": con_phone_raw})
+            existing = await db.contacts.find_one({"school_id": sid, "phone": con_phone_raw, **_not_deleted})
         if existing is None and contact_name:
-            existing = await db.contacts.find_one({"school_id": sid, "name": contact_name})
+            existing = await db.contacts.find_one({"school_id": sid, "name": contact_name, **_not_deleted})
 
         # Pop BEFORE cvals/custom_fields are built so the raw tag string never
         # lands in custom_fields.tags — resolution itself waits until cid exists.
