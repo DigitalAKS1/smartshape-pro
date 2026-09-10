@@ -1544,9 +1544,28 @@ gap — a transient read degradation, not data divergence. Do not "fix" this bac
 
    The script sets `REACT_APP_BACKEND_URL=https://app.smartshape.in` inline,
    which is required — the `.env` files are gitignored, so a build that relies
-   on them silently bakes in `localhost:8000`. Build with
-   `DISABLE_ESLINT_PLUGIN=true`. **Never let the production VPS run the build**;
-   it runs out of memory and trips the host's resource monitor.
+   on them silently bakes in `localhost:8000`. It also disables the eslint
+   plugin, turns off source maps, and raises the Node heap to 4 GB.
+   **Never let the production VPS run the build**; it runs out of memory and
+   trips the host's resource monitor.
+
+   **If the build fails, restore the bundle before doing anything else.** The
+   script runs `rm -rf build` under `set -euo pipefail`, so a failure leaves the
+   working tree with no `frontend/build/` at all — 283 tracked files showing as
+   deleted. That is recoverable but alarming:
+
+   ```bash
+   git checkout -- frontend/build      # restore the last committed bundle
+   ```
+
+   Never commit a partial or missing `build/`. Verify the new bundle before
+   committing it — it must contain the new field name and must NOT point at
+   localhost:
+
+   ```bash
+   grep -c tag_ids frontend/build/static/js/main.*.js        # expect > 0
+   grep -o 'localhost:8000' frontend/build/static/js/main.*.js | wc -l   # expect 0
+   ```
 
 2. **Take an Atlas snapshot.** The migrations are non-destructive by design, but
    they rewrite fields on every school and lead.
