@@ -1647,11 +1647,17 @@ reverting the data would leave the CRM reading `tags` on documents that now
 only have `tag_ids`. If a revert is needed after the migration has run, restore
 from the Atlas snapshot taken in Deployment step 2.
 
-**Rolling back before the migrations have run is cheap** — that is the whole
-reason the runbook deploys first. Between Deployment steps 3 and 6 the new code
-is live but no data has changed shape, so a revert plus a bundle rebuild is a
-complete rollback with nothing to undo in the database. Once step 6 has run,
-the snapshot is the only clean path back.
+**Rolling back before the migrations have run is cheaper, but not free** — that
+is still the reason the runbook deploys first. Between Deployment steps 3 and 6
+no *migration* has reshaped existing data, so a revert plus a bundle rebuild
+undoes the vast majority of the change.
+
+It is not literally nothing, though: during that window the new code writes
+`tag_ids`, so any tag applied in the gap would be stranded on a field the
+reverted code no longer reads. Recovering those means running
+`canonicalise_tag_fields` in reverse for the affected documents, or simply
+re-applying the handful of tags by hand. Keep the window short. Once step 6 has
+run, the snapshot is the only clean path back.
 
 **Any rollback of frontend code must include a bundle rebuild.** `frontend/build/`
 is committed and served directly, so reverting `frontend/src` alone changes
