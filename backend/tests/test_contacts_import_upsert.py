@@ -99,6 +99,40 @@ def test_notes_writes_to_native_column_not_custom_fields(db):
     _run(go())
 
 
+def test_source_cell_overwrites_existing_source(db):
+    async def go():
+        await db.schools.insert_one({
+            "school_id": "sch_src", "school_name": "Source School", "is_deleted": False})
+        await db.contacts.insert_one({
+            "contact_id": "con_src", "school_id": "sch_src",
+            "name": "Sourced Person", "source": "lead"})
+
+        row = {"school_id": "sch_src", "contact_id": "con_src",
+               "name": "Sourced Person", "source": "Exhibition"}
+        await ie.commit_row(db, row, IMPORTER, create_leads=False)
+
+        c = await db.contacts.find_one({"contact_id": "con_src"})
+        assert c["source"] == "Exhibition", "a non-blank source cell is authoritative"
+    _run(go())
+
+
+def test_blank_source_cell_leaves_existing_source(db):
+    async def go():
+        await db.schools.insert_one({
+            "school_id": "sch_src", "school_name": "Source School", "is_deleted": False})
+        await db.contacts.insert_one({
+            "contact_id": "con_src", "school_id": "sch_src",
+            "name": "Sourced Person", "source": "lead"})
+
+        row = {"school_id": "sch_src", "contact_id": "con_src",
+               "name": "Sourced Person", "source": ""}
+        await ie.commit_row(db, row, IMPORTER, create_leads=False)
+
+        c = await db.contacts.find_one({"contact_id": "con_src"})
+        assert c["source"] == "lead", "blank source cell must not clear the existing value"
+    _run(go())
+
+
 def test_contacts_only_row_creates_no_school(db):
     async def go():
         row = {"contact_id": "con_solo", "name": "Solo Person",
@@ -231,6 +265,7 @@ def test_export_headers_map_without_surprises(db):
         assert by_source["phone"] == "phone"
         assert by_source["company"] == "school_name"
         assert by_source["designation"] == "designation"
+        assert by_source["source"] == "source"
         assert by_source["notes"] == "notes"
         assert by_source["tags"] == "tags"
         assert by_source["assigned_to"] == "assign_to"
