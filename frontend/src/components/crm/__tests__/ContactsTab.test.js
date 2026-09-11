@@ -7,15 +7,30 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { act } from 'react';
 import ContactsTab from '../ContactsTab';
+import { contacts as contactsApi } from '../../../lib/api';
 
 global.IS_REACT_ACT_ENVIRONMENT = true;
 
 jest.mock('react-router-dom', () => ({ useNavigate: () => jest.fn() }), { virtual: true });
 jest.mock('../../../contexts/ThemeContext', () => ({ useTheme: () => ({ isDark: true }) }));
-jest.mock('../../../lib/api', () => ({ adminApi: {} }));
+jest.mock('../../../lib/api', () => ({
+  adminApi: {},
+  contacts: {
+    bulkTag: jest.fn(() => Promise.resolve({ data: { requested: 0, updated: 0, skipped: 0 } })),
+    bulkAssign: jest.fn(() => Promise.resolve({ data: { requested: 0, updated: 0, skipped: 0 } })),
+  },
+}));
 jest.mock('sonner', () => ({ toast: { success: jest.fn(), error: jest.fn() } }));
 jest.mock('../ContactDetailPanel', () => ({ CallStatusBadge: () => null }));
 jest.mock('../MultiFilterBar', () => () => null);
+// The owner picker isn't the point of these tests — Task 4 only needs to
+// prove it's offered to admins and wired up; AssignToPicker itself has its
+// own tests elsewhere. Captures the latest props (var must be `mock`-prefixed
+// — jest's hoist plugin only allows out-of-scope references to variables
+// named that way) so a test can drive its onChange directly, since it
+// otherwise renders nothing.
+let mockAssignToPickerProps = null;
+jest.mock('../AssignToPicker', () => (props) => { mockAssignToPickerProps = props; return null; });
 
 const CONTACTS = [
   { contact_id: 'c1', school_id: 's1', name: 'R Sharma', phone: '9811111111',
@@ -36,6 +51,15 @@ const SCHOOLS = [
 // The page owns sorting; the tab just applies it. Identity keeps these tests
 // about filtering and paging rather than about sort order.
 const sortData = (rows) => rows;
+
+// CRA's default Jest config sets `resetMocks: true` (wipes mock implementations
+// before every test, even ones set at jest.mock() factory time) — so the
+// implementations are (re)installed here, freshly, before each test (same
+// pattern as BulkDeleteSchoolsDialog.test.js / DataCleanupPanel.test.js).
+beforeEach(() => {
+  contactsApi.bulkTag.mockImplementation(() => Promise.resolve({ data: { requested: 2, updated: 2, skipped: 0 } }));
+  contactsApi.bulkAssign.mockImplementation(() => Promise.resolve({ data: { requested: 2, updated: 2, skipped: 0 } }));
+});
 
 function render(overrides = {}) {
   const props = {
@@ -83,6 +107,14 @@ function render(overrides = {}) {
     rowIds: () => Array.from(container.querySelectorAll('[data-testid^="contact-row-"]'))
       .map(el => el.getAttribute('data-testid').replace('contact-row-', '')),
     q: (id) => container.querySelector(`[data-testid="${id}"]`),
+    // Re-renders the SAME mounted instance with merged prop overrides — needed
+    // to test selection surviving a filter change (a fresh render() call would
+    // create a brand-new component instance and lose the in-progress selection
+    // state, since useBulkSelect's Set lives in ContactsTab's own useState).
+    rerender: (moreOverrides) => {
+      Object.assign(props, moreOverrides);
+      act(() => { root.render(<ContactsTab {...props} />); });
+    },
     unmount: () => act(() => root.unmount()),
   };
 }
@@ -178,5 +210,228 @@ test('an empty list still renders the tab rather than blowing up', () => {
   const v = render({ contactsList: [] });
   expect(v.rowIds()).toEqual([]);
   expect(v.q('contacts-list')).toBeTruthy();
+  v.unmount();
+});
+
+// ── Row selection + bulk bar (Task 4) ───────────────────────────────────────
+
+// 25 contacts, well past a single 10-per-page window (3 pages: 10/10/5).
+const MANY = Array.from({ length: 25 }, (_, i) => ({
+  contact_id: `m${i + 1}`, name: `Contact ${i + 1}`, phone: `98${String(i).padStart(9, '0')}`,
+  company: i < 8 ? 'Keep Co' : 'Other Co', tag_ids: [],
+}));
+
+test('ticking the header checkbox selects every filtered contact, not just the page on screen, and a bulk action reaches all of them', async () => {
+  const v = render({ contactsList: MANY, contactsPerPage: 10 });
+  // Only 10 rows are on screen…
+  expect(v.rowIds()).toHaveLength(10);
+  act(() => { v.q('contacts-select-all').click(); });
+  // …but selecting-all must act on all 25 matching contacts, not the 10 shown.
+  expect(v.q('contacts-bulk-bar').textContent).toContain('25 selected');
+  expect(v.q('contacts-bulk-bar').textContent).not.toContain('hidden by filter');
+
+  // And a bulk action fired from here must reach all 25, not just the page.
+  const addTagSelect = v.q('contacts-bulk-tag-add');
+  await act(async () => {
+    addTagSelect.value = 't_hot';
+    addTagSelect.dispatchEvent(new Event('change', { bubbles: true }));
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+  });
+  const sentIds = contactsApi.bulkTag.mock.calls[0][0].contact_ids;
+  expect(sentIds).toHaveLength(25);
+  expect(new Set(sentIds)).toEqual(new Set(MANY.map(c => c.contact_id)));
+  v.unmount();
+});
+
+test('ticking a row checkbox does NOT open the contact panel (desktop table)', () => {
+  const v = render();
+  const table = v.q('contacts-table');
+  const cb = table.querySelector('[data-testid="select-contact-c1"]');
+  act(() => { cb.click(); });
+  expect(v.props.openContactPanel).not.toHaveBeenCalled();
+  expect(cb.checked).toBe(true);
+  v.unmount();
+});
+
+test('the bulk bar appears only when something is selected and shows the count', () => {
+  const v = render();
+  expect(v.q('contacts-bulk-bar')).toBeNull();
+  act(() => { v.q('select-contact-c1').click(); });
+  expect(v.q('contacts-bulk-bar')).toBeTruthy();
+  expect(v.q('contacts-bulk-bar').textContent).toContain('1 selected');
+  v.unmount();
+});
+
+test('a filter change that hides some selected rows reports the hidden count with a clear control, and does not lose the rest of the selection', () => {
+  const v = render({ contactsList: MANY, contactsPerPage: 10 });
+  act(() => { v.q('contacts-select-all').click(); }); // selects all 25
+  expect(v.q('contacts-bulk-bar').textContent).toContain('25 selected');
+
+  // Filter down to just the 8 "Keep Co" contacts — 17 of the 25 selections
+  // are no longer visible under the new filter.
+  v.rerender({ searchTerm: 'keep co' });
+  expect(v.q('contacts-bulk-bar').textContent).toContain('25 selected (17 hidden by filter)');
+
+  act(() => { v.q('contacts-bulk-clear').click(); });
+  expect(v.q('contacts-bulk-bar')).toBeNull();
+  v.unmount();
+});
+
+test('a PAGE-level filter (search box / FilterRail, which narrows contactsList itself) counts selections as hidden, not deleted', () => {
+  const v = render({ contactsList: CONTACTS, allContactsList: CONTACTS });
+  act(() => { v.q('contacts-select-all').click(); });
+  expect(v.q('contacts-bulk-bar').textContent).toContain('3 selected');
+
+  // The page's master filter hands the tab only c1 — c2/c3 still exist.
+  v.rerender({ contactsList: [CONTACTS[0]] });
+  expect(v.q('contacts-bulk-bar').textContent).toContain('3 selected (2 hidden by filter)');
+
+  // Clearing the page filter brings the selection back intact.
+  v.rerender({ contactsList: CONTACTS });
+  expect(v.q('contacts-bulk-bar').textContent).toContain('3 selected');
+  expect(v.q('contacts-bulk-bar').textContent).not.toContain('hidden by filter');
+
+  // A contact deleted from the full list IS pruned.
+  v.rerender({ contactsList: [CONTACTS[0], CONTACTS[1]], allContactsList: [CONTACTS[0], CONTACTS[1]] });
+  expect(v.q('contacts-bulk-bar').textContent).toContain('2 selected');
+  expect(v.q('contacts-bulk-bar').textContent).not.toContain('hidden by filter');
+  v.unmount();
+});
+
+test('choosing "Add tag" calls contacts.bulkTag with every selected (visible) id', async () => {
+  const v = render();
+  act(() => { v.q('select-contact-c1').click(); });
+  act(() => { v.q('select-contact-c2').click(); });
+
+  const addTagSelect = v.q('contacts-bulk-tag-add');
+  await act(async () => {
+    addTagSelect.value = 't_hot';
+    addTagSelect.dispatchEvent(new Event('change', { bubbles: true }));
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+  });
+
+  expect(contactsApi.bulkTag).toHaveBeenCalledWith({ contact_ids: ['c1', 'c2'], tag_ids: ['t_hot'], action: 'add' });
+  v.unmount();
+});
+
+test('after a successful bulk tag, it refetches and clears the selection', async () => {
+  const v = render();
+  act(() => { v.q('select-contact-c1').click(); });
+  const addTagSelect = v.q('contacts-bulk-tag-add');
+  await act(async () => {
+    addTagSelect.value = 't_hot';
+    addTagSelect.dispatchEvent(new Event('change', { bubbles: true }));
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+  });
+  expect(v.props.fetchData).toHaveBeenCalled();
+  expect(v.q('contacts-bulk-bar')).toBeNull(); // selection cleared
+  v.unmount();
+});
+
+test('a failed bulk tag leaves the selection intact for a retry', async () => {
+  contactsApi.bulkTag.mockImplementation(() => Promise.reject({ response: { data: { detail: 'nope' } } }));
+  const v = render();
+  act(() => { v.q('select-contact-c1').click(); });
+  const addTagSelect = v.q('contacts-bulk-tag-add');
+  await act(async () => {
+    addTagSelect.value = 't_hot';
+    addTagSelect.dispatchEvent(new Event('change', { bubbles: true }));
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+  });
+  expect(v.q('contacts-bulk-bar')).toBeTruthy();
+  expect(v.q('contacts-bulk-bar').textContent).toContain('1 selected');
+  v.unmount();
+});
+
+// ── Fix round 1 ──────────────────────────────────────────────────────────────
+
+// item 1: bulk reassign confirms before sending — AssignToPicker commits on
+// Enter/blur, so without a confirm an admin who selects everything and hits
+// Enter would reassign the whole batch instantly.
+test('bulk reassign asks for confirmation, and sends nothing if the user cancels', async () => {
+  const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(false);
+  const v = render();
+  act(() => { v.q('select-contact-c1').click(); });
+  act(() => { v.q('select-contact-c2').click(); });
+
+  expect(mockAssignToPickerProps).toBeTruthy(); // rendered — user is admin
+  await act(async () => {
+    mockAssignToPickerProps.onChange('newowner@smartshape.in', 'New Owner');
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+  });
+
+  expect(confirmSpy).toHaveBeenCalledWith('Assign 2 contact(s) to New Owner?');
+  expect(contactsApi.bulkAssign).not.toHaveBeenCalled();
+  // Cancelling must not touch the selection either.
+  expect(v.q('contacts-bulk-bar').textContent).toContain('2 selected');
+  confirmSpy.mockRestore();
+  v.unmount();
+});
+
+test('bulk reassign sends the request once the user confirms', async () => {
+  const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(true);
+  const v = render();
+  act(() => { v.q('select-contact-c1').click(); });
+  act(() => { v.q('select-contact-c2').click(); });
+
+  await act(async () => {
+    mockAssignToPickerProps.onChange('newowner@smartshape.in', 'New Owner');
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+  });
+
+  expect(confirmSpy).toHaveBeenCalledWith('Assign 2 contact(s) to New Owner?');
+  expect(contactsApi.bulkAssign).toHaveBeenCalledWith({ contact_ids: ['c1', 'c2'], assigned_to: 'newowner@smartshape.in' });
+  confirmSpy.mockRestore();
+  v.unmount();
+});
+
+// item 5: the backend caps a single bulk request at 2,000 ids.
+test('selecting more than 2,000 contacts disables the bulk controls and shows a cap note', () => {
+  const huge = Array.from({ length: 2001 }, (_, i) => ({ contact_id: `h${i + 1}`, name: `H ${i + 1}`, tag_ids: [] }));
+  const v = render({ contactsList: huge, contactsPerPage: 50 });
+  act(() => { v.q('contacts-select-all').click(); });
+
+  expect(v.q('contacts-bulk-bar').textContent).toContain('2001 selected');
+  expect(v.q('contacts-bulk-cap-note')).toBeTruthy();
+  expect(v.q('contacts-bulk-cap-note').textContent).toContain('Max 2,000 at a time');
+  expect(v.q('contacts-bulk-tag-add').disabled).toBe(true);
+  expect(v.q('contacts-bulk-tag-remove').disabled).toBe(true);
+  expect(mockAssignToPickerProps.disabled).toBe(true);
+  v.unmount();
+});
+
+test('at or under the 2,000 cap, the bulk controls stay enabled and no cap note is shown', () => {
+  const v = render({ contactsList: MANY, contactsPerPage: 10 });
+  act(() => { v.q('contacts-select-all').click(); }); // 25, well under the cap
+  expect(v.q('contacts-bulk-cap-note')).toBeNull();
+  expect(v.q('contacts-bulk-tag-add').disabled).toBe(false);
+  v.unmount();
+});
+
+// item 6: shift-click range selection, spanning pages (selection is computed
+// against cFiltered, not the page on screen).
+test('shift-clicking a row checkbox selects every row between it and the last-clicked row, in list order', () => {
+  const v = render({ contactsList: MANY, contactsPerPage: 25 }); // all 25 on one page
+  const table = v.q('contacts-table');
+  const cb = (id) => table.querySelector(`[data-testid="select-contact-${id}"]`);
+
+  act(() => { cb('m3').click(); }); // anchor, plain click
+  act(() => {
+    cb('m7').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, shiftKey: true }));
+  });
+
+  expect(v.q('contacts-bulk-bar').textContent).toContain('5 selected'); // m3..m7 inclusive
+  ['m3', 'm4', 'm5', 'm6', 'm7'].forEach(id => expect(cb(id).checked).toBe(true));
+  ['m1', 'm2', 'm8'].forEach(id => expect(cb(id).checked).toBe(false));
+  v.unmount();
+});
+
+test('shift-click still does not open the contact panel', () => {
+  const v = render({ contactsList: MANY, contactsPerPage: 25 });
+  const table = v.q('contacts-table');
+  const cb = (id) => table.querySelector(`[data-testid="select-contact-${id}"]`);
+  act(() => { cb('m3').click(); });
+  act(() => { cb('m7').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, shiftKey: true })); });
+  expect(v.props.openContactPanel).not.toHaveBeenCalled();
   v.unmount();
 });

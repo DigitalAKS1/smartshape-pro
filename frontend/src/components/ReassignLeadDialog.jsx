@@ -42,7 +42,8 @@ export default function ReassignLeadDialog({ open, onOpenChange, lead, leadIds, 
     try {
       if (isBulk) {
         const res = await leadsApi.bulkAssign({ lead_ids: leadIds, new_agent_email: agentEmail, new_agent_name: agentNameToSend, reason });
-        toast.success(`${res.data.assigned} lead(s) reassigned`);
+        const skipped = res.data.skipped || 0;
+        toast.success(`${res.data.assigned} lead(s) reassigned${skipped ? ` (${skipped} skipped)` : ''}`);
       } else {
         await leadsApi.reassign({ lead_id: lead.lead_id, new_agent_email: agentEmail, new_agent_name: agentNameToSend, reason });
         toast.success('Lead reassigned');
