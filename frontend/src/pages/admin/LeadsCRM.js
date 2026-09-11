@@ -451,6 +451,7 @@ export default function LeadsCRM() {
         {crm.activeTab === 'contacts' && (
           <ContactsTab
             contactsList={crm.masterFiltered.contacts}
+            allContactsList={crm.contactsList}
             leadsList={crm.leadsList}
             schoolsList={crm.schoolsList}
             sourcesList={crm.sourcesList}

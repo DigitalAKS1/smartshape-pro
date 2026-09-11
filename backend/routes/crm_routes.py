@@ -4755,8 +4755,17 @@ async def bulk_tag_contacts(request: Request):
     action = body.get("action", "add")
     if not raw_ids or not tag_ids:
         raise HTTPException(status_code=400, detail="contact_ids and tag_ids are required")
+    if (not isinstance(raw_ids, list) or not isinstance(tag_ids, list)
+            or not all(isinstance(t, str) for t in tag_ids)):
+        raise HTTPException(status_code=400, detail="contact_ids and tag_ids must be lists")
     if action not in ("add", "remove"):
         raise HTTPException(status_code=400, detail="action must be add or remove")
+    tag_ids = list(dict.fromkeys(tag_ids))
+    # Only tags that really exist may be written — a dangling id would show
+    # as a blank chip and never match any tag filter.
+    known = {t["tag_id"] async for t in db.tags.find({"tag_id": {"$in": tag_ids}}, {"_id": 0, "tag_id": 1})}
+    if action == "add" and len(known) != len(tag_ids):
+        raise HTTPException(status_code=400, detail="Unknown tag_ids: " + ", ".join(t for t in tag_ids if t not in known))
     ids = list(dict.fromkeys(raw_ids))  # dedupe, preserve order
     if len(ids) > 2000:
         raise HTTPException(status_code=400, detail="Cannot act on more than 2000 contacts at once")
@@ -4807,6 +4816,7 @@ async def bulk_assign_contacts(request: Request):
             owner_name = (body.get("assigned_name") or "").strip() or raw_owner
         else:
             raise HTTPException(status_code=400, detail="Could not resolve assignee to a user")
+    owner_name = owner_name or owner_email  # never save a blank display name
     query = {"contact_id": {"$in": ids}, "is_deleted": {"$ne": True}}
     if not sees_all(user, "leads"):
         _merge_or(query, await _contacts_visibility_or(user["email"]))

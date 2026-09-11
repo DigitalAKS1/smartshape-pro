@@ -277,6 +277,27 @@ test('a filter change that hides some selected rows reports the hidden count wit
   v.unmount();
 });
 
+test('a PAGE-level filter (search box / FilterRail, which narrows contactsList itself) counts selections as hidden, not deleted', () => {
+  const v = render({ contactsList: CONTACTS, allContactsList: CONTACTS });
+  act(() => { v.q('contacts-select-all').click(); });
+  expect(v.q('contacts-bulk-bar').textContent).toContain('3 selected');
+
+  // The page's master filter hands the tab only c1 — c2/c3 still exist.
+  v.rerender({ contactsList: [CONTACTS[0]] });
+  expect(v.q('contacts-bulk-bar').textContent).toContain('3 selected (2 hidden by filter)');
+
+  // Clearing the page filter brings the selection back intact.
+  v.rerender({ contactsList: CONTACTS });
+  expect(v.q('contacts-bulk-bar').textContent).toContain('3 selected');
+  expect(v.q('contacts-bulk-bar').textContent).not.toContain('hidden by filter');
+
+  // A contact deleted from the full list IS pruned.
+  v.rerender({ contactsList: [CONTACTS[0], CONTACTS[1]], allContactsList: [CONTACTS[0], CONTACTS[1]] });
+  expect(v.q('contacts-bulk-bar').textContent).toContain('2 selected');
+  expect(v.q('contacts-bulk-bar').textContent).not.toContain('hidden by filter');
+  v.unmount();
+});
+
 test('choosing "Add tag" calls contacts.bulkTag with every selected (visible) id', async () => {
   const v = render();
   act(() => { v.q('select-contact-c1').click(); });

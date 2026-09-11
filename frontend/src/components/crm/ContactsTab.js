@@ -16,7 +16,7 @@ import { deriveFilterOptions, buildCrmContext, matchesCrmFilter } from '../../li
 import { CallStatusBadge } from './ContactDetailPanel';
 
 export default function ContactsTab({
-  contactsList, leadsList,
+  contactsList, allContactsList, leadsList,
   schoolsList = [], sourcesList = [],
   filterRole, setFilterRole,
   searchTerm,
@@ -109,7 +109,10 @@ export default function ContactsTab({
   // unfiltered universe) is passed as the 3rd arg so a row that's genuinely
   // gone — deleted, or dropped by a refetch — is pruned from the selection
   // automatically instead of showing up as "hidden by filter" forever.
-  const sel = useBulkSelect(cFiltered, (c) => c.contact_id, contactsList);
+  // `allContactsList` is every contact loaded, BEFORE the page-level search /
+  // FilterRail narrow it into `contactsList` — so a row those filters hide is
+  // counted as "hidden by filter", not mistaken for deleted and dropped.
+  const sel = useBulkSelect(cFiltered, (c) => c.contact_id, allContactsList || contactsList);
   const [bulkAssignPick, setBulkAssignPick] = React.useState({ email: '', name: '' });
   const [bulkBusy, setBulkBusy] = React.useState(false);
 

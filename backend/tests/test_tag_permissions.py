@@ -82,10 +82,16 @@ def test_a_rep_can_tag_leads_in_bulk(db, monkeypatch):
 
     async def go():
         await _seed(db)
+        # Bulk lead actions are scoped to what the rep can SEE in GET /leads:
+        # her own/assigned leads, or leads at schools she owns. l1 is hers;
+        # l2 (unassigned, unowned school) is not and must be skipped.
+        await db.leads.update_one({"lead_id": "l1"}, {"$set": {"assigned_to": REP["email"]}})
+        await db.leads.insert_one({"lead_id": "l2", "school_id": "s1", "is_deleted": False})
         out = await crm.bulk_tag_leads(FakeRequest(
-            {"lead_ids": ["l1"], "tag_id": "tag_hot", "action": "add"}))
-        assert out["modified"] == 1
+            {"lead_ids": ["l1", "l2"], "tag_id": "tag_hot", "action": "add"}))
+        assert out["updated"] == 1 and out["skipped"] == 1
         assert (await db.leads.find_one({"lead_id": "l1"}))["tag_ids"] == ["tag_hot"]
+        assert not (await db.leads.find_one({"lead_id": "l2"})).get("tag_ids")
     _run(go())
 
 

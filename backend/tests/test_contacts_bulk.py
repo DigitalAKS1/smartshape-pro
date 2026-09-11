@@ -383,3 +383,51 @@ def test_bulk_assign_reaches_a_contact_at_a_school_the_rep_owns_even_if_assigned
         assert (await db.contacts.find_one({"contact_id": "c_owned_school"}))["assigned_to"] == "newowner@smartshape.in"
         assert (await db.contacts.find_one({"contact_id": "c_other_school"}))["assigned_to"] == OTHER_REP_EMAIL
     _run(go())
+
+
+# ---------------------------------------------------------------------------
+# input hardening (final-review fixes)
+# ---------------------------------------------------------------------------
+
+def test_bulk_tag_add_rejects_a_tag_id_that_does_not_exist(db, monkeypatch):
+    _as(ADMIN, monkeypatch)
+
+    async def go():
+        await _seed_tag(db, "t_real", "Real")
+        await _seed_contact(db, "c1")
+        with pytest.raises(HTTPException) as exc:
+            await crm.bulk_tag_contacts(FakeRequest({
+                "contact_ids": ["c1"], "tag_ids": ["t_real", "t_ghost"], "action": "add",
+            }))
+        assert exc.value.status_code == 400
+        assert "t_ghost" in exc.value.detail
+        assert (await db.contacts.find_one({"contact_id": "c1"}))["tag_ids"] == []
+    _run(go())
+
+
+def test_bulk_tag_a_non_list_tag_ids_is_a_400_not_a_500(db, monkeypatch):
+    _as(ADMIN, monkeypatch)
+
+    async def go():
+        await _seed_tag(db, "t_real", "Real")
+        await _seed_contact(db, "c1")
+        with pytest.raises(HTTPException) as exc:
+            await crm.bulk_tag_contacts(FakeRequest({
+                "contact_ids": ["c1"], "tag_ids": "t_real", "action": "add",
+            }))
+        assert exc.value.status_code == 400
+    _run(go())
+
+
+def test_bulk_assign_to_an_unknown_email_never_saves_a_blank_display_name(db, monkeypatch):
+    _as(ADMIN, monkeypatch)
+
+    async def go():
+        await _seed_contact(db, "c1")
+        await crm.bulk_assign_contacts(FakeRequest({
+            "contact_ids": ["c1"], "assigned_to": "freshhire@smartshape.in",
+        }))
+        c = await db.contacts.find_one({"contact_id": "c1"})
+        assert c["assigned_to"] == "freshhire@smartshape.in"
+        assert c["assigned_name"]  # never ""
+    _run(go())
