@@ -19,6 +19,7 @@ jest.mock('../../../lib/api', () => ({
     bulkTag: jest.fn(() => Promise.resolve({ data: { requested: 0, updated: 0, skipped: 0 } })),
     bulkAssign: jest.fn(() => Promise.resolve({ data: { requested: 0, updated: 0, skipped: 0 } })),
   },
+  tags: { create: jest.fn() },
 }));
 jest.mock('sonner', () => ({ toast: { success: jest.fn(), error: jest.fn() } }));
 jest.mock('../ContactDetailPanel', () => ({ CallStatusBadge: () => null }));
@@ -31,6 +32,16 @@ jest.mock('../MultiFilterBar', () => () => null);
 // otherwise renders nothing.
 let mockAssignToPickerProps = null;
 jest.mock('../AssignToPicker', () => (props) => { mockAssignToPickerProps = props; return null; });
+
+// Tagging goes through BulkTagPicker: open it, tick each tag, press Add/Remove.
+async function applyTags(v, tagIds, action = 'add') {
+  act(() => { v.q('contacts-bulk-tags-button').click(); });
+  tagIds.forEach(id => act(() => { v.q(`contacts-bulk-tags-check-${id}`).click(); }));
+  await act(async () => {
+    v.q(`contacts-bulk-tags-${action}`).click();
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+  });
+}
 
 const CONTACTS = [
   { contact_id: 'c1', school_id: 's1', name: 'R Sharma', phone: '9811111111',
@@ -70,7 +81,10 @@ function render(overrides = {}) {
     filterRole: '',
     setFilterRole: jest.fn(),
     searchTerm: '',
-    tagsList: [{ tag_id: 't_hot', name: 'Hot Lead', color: '#f00' }],
+    tagsList: [
+      { tag_id: 't_hot', name: 'Hot Lead', color: '#f00' },
+      { tag_id: 't_cbse', name: 'CBSE', color: '#0f0' },
+    ],
     rolesList: [],
     sortConfig: { key: 'name', dir: 'asc' },
     toggleSort: jest.fn(),
@@ -231,12 +245,7 @@ test('ticking the header checkbox selects every filtered contact, not just the p
   expect(v.q('contacts-bulk-bar').textContent).not.toContain('hidden by filter');
 
   // And a bulk action fired from here must reach all 25, not just the page.
-  const addTagSelect = v.q('contacts-bulk-tag-add');
-  await act(async () => {
-    addTagSelect.value = 't_hot';
-    addTagSelect.dispatchEvent(new Event('change', { bubbles: true }));
-    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
-  });
+  await applyTags(v, ['t_hot']);
   const sentIds = contactsApi.bulkTag.mock.calls[0][0].contact_ids;
   expect(sentIds).toHaveLength(25);
   expect(new Set(sentIds)).toEqual(new Set(MANY.map(c => c.contact_id)));
@@ -298,31 +307,63 @@ test('a PAGE-level filter (search box / FilterRail, which narrows contactsList i
   v.unmount();
 });
 
-test('choosing "Add tag" calls contacts.bulkTag with every selected (visible) id', async () => {
+test('adding a tag calls contacts.bulkTag with every selected (visible) id', async () => {
   const v = render();
   act(() => { v.q('select-contact-c1').click(); });
   act(() => { v.q('select-contact-c2').click(); });
 
-  const addTagSelect = v.q('contacts-bulk-tag-add');
-  await act(async () => {
-    addTagSelect.value = 't_hot';
-    addTagSelect.dispatchEvent(new Event('change', { bubbles: true }));
-    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
-  });
+  await applyTags(v, ['t_hot']);
 
   expect(contactsApi.bulkTag).toHaveBeenCalledWith({ contact_ids: ['c1', 'c2'], tag_ids: ['t_hot'], action: 'add' });
+  v.unmount();
+});
+
+test('several ticked tags are added in ONE request, and the toast counts them', async () => {
+  const { toast } = jest.requireMock('sonner');
+  contactsApi.bulkTag.mockImplementation(() => Promise.resolve({ data: { requested: 2, updated: 2, skipped: 1 } }));
+  const v = render();
+  act(() => { v.q('select-contact-c1').click(); });
+  act(() => { v.q('select-contact-c2').click(); });
+
+  await applyTags(v, ['t_cbse', 't_hot']);
+
+  expect(contactsApi.bulkTag).toHaveBeenCalledTimes(1);
+  expect(contactsApi.bulkTag).toHaveBeenCalledWith({ contact_ids: ['c1', 'c2'], tag_ids: ['t_cbse', 't_hot'], action: 'add' });
+  expect(toast.success).toHaveBeenCalledWith('Added 2 tags to 2 contacts (1 skipped)');
+  v.unmount();
+});
+
+test('removing tags sends action "remove" with every ticked tag', async () => {
+  const v = render();
+  act(() => { v.q('select-contact-c1').click(); });
+  await applyTags(v, ['t_hot', 't_cbse'], 'remove');
+  expect(contactsApi.bulkTag).toHaveBeenCalledWith({ contact_ids: ['c1'], tag_ids: ['t_hot', 't_cbse'], action: 'remove' });
+  v.unmount();
+});
+
+test('a tag created in the picker is passed up through onTagCreated and can be applied at once', async () => {
+  const { tags: tagsApi } = jest.requireMock('../../../lib/api');
+  tagsApi.create.mockImplementation(({ name, color }) => Promise.resolve({ data: { tag_id: 't_new', name, color } }));
+  const onTagCreated = jest.fn();
+  const v = render({ onTagCreated });
+  act(() => { v.q('select-contact-c1').click(); });
+  act(() => { v.q('contacts-bulk-tags-button').click(); });
+  act(() => {
+    const input = v.q('contacts-bulk-tags-search');
+    Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(input, 'Expo lead');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  await act(async () => { v.q('contacts-bulk-tags-create').click(); for (let i = 0; i < 5; i++) await Promise.resolve(); });
+  expect(onTagCreated).toHaveBeenCalledWith({ tag_id: 't_new', name: 'Expo lead', color: '#6366f1' });
+  await act(async () => { v.q('contacts-bulk-tags-add').click(); for (let i = 0; i < 5; i++) await Promise.resolve(); });
+  expect(contactsApi.bulkTag).toHaveBeenCalledWith({ contact_ids: ['c1'], tag_ids: ['t_new'], action: 'add' });
   v.unmount();
 });
 
 test('after a successful bulk tag, it refetches and clears the selection', async () => {
   const v = render();
   act(() => { v.q('select-contact-c1').click(); });
-  const addTagSelect = v.q('contacts-bulk-tag-add');
-  await act(async () => {
-    addTagSelect.value = 't_hot';
-    addTagSelect.dispatchEvent(new Event('change', { bubbles: true }));
-    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
-  });
+  await applyTags(v, ['t_hot']);
   expect(v.props.fetchData).toHaveBeenCalled();
   expect(v.q('contacts-bulk-bar')).toBeNull(); // selection cleared
   v.unmount();
@@ -330,16 +371,14 @@ test('after a successful bulk tag, it refetches and clears the selection', async
 
 test('a failed bulk tag leaves the selection intact for a retry', async () => {
   contactsApi.bulkTag.mockImplementation(() => Promise.reject({ response: { data: { detail: 'nope' } } }));
+  const { toast } = jest.requireMock('sonner');
   const v = render();
   act(() => { v.q('select-contact-c1').click(); });
-  const addTagSelect = v.q('contacts-bulk-tag-add');
-  await act(async () => {
-    addTagSelect.value = 't_hot';
-    addTagSelect.dispatchEvent(new Event('change', { bubbles: true }));
-    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
-  });
+  await applyTags(v, ['t_hot']);
+  expect(toast.error).toHaveBeenCalledWith('nope');
   expect(v.q('contacts-bulk-bar')).toBeTruthy();
   expect(v.q('contacts-bulk-bar').textContent).toContain('1 selected');
+  expect(v.props.fetchData).not.toHaveBeenCalled();
   v.unmount();
 });
 
@@ -394,8 +433,7 @@ test('selecting more than 2,000 contacts disables the bulk controls and shows a 
   expect(v.q('contacts-bulk-bar').textContent).toContain('2001 selected');
   expect(v.q('contacts-bulk-cap-note')).toBeTruthy();
   expect(v.q('contacts-bulk-cap-note').textContent).toContain('Max 2,000 at a time');
-  expect(v.q('contacts-bulk-tag-add').disabled).toBe(true);
-  expect(v.q('contacts-bulk-tag-remove').disabled).toBe(true);
+  expect(v.q('contacts-bulk-tags-button').disabled).toBe(true);
   expect(mockAssignToPickerProps.disabled).toBe(true);
   v.unmount();
 });
@@ -404,7 +442,7 @@ test('at or under the 2,000 cap, the bulk controls stay enabled and no cap note 
   const v = render({ contactsList: MANY, contactsPerPage: 10 });
   act(() => { v.q('contacts-select-all').click(); }); // 25, well under the cap
   expect(v.q('contacts-bulk-cap-note')).toBeNull();
-  expect(v.q('contacts-bulk-tag-add').disabled).toBe(false);
+  expect(v.q('contacts-bulk-tags-button').disabled).toBe(false);
   v.unmount();
 });
 

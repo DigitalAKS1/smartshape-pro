@@ -6,6 +6,7 @@ import { useTheme } from '../../contexts/ThemeContext';
 import { leads as leadsApi } from '../../lib/api';
 import { settableStages } from '../../lib/crmConstants';
 import { splitSelection, BULK_ID_CAP } from '../../lib/leadSelection';
+import BulkTagPicker, { formatTagResult } from './BulkTagPicker';
 
 /**
  * Bulk-action bar for lead rows. The Leads list tab and the Pipeline tab both
@@ -36,11 +37,15 @@ import { splitSelection, BULK_ID_CAP } from '../../lib/leadSelection';
  *   onReassign   (ids) => void
  *   onClear      () => void, empties the whole selection (hidden included)
  *   onDone       () => void, refetch after a successful action
+ *   onTagCreated (tag) => void, a tag was created from the tag picker
+ *
+ * Tagging goes through BulkTagPicker: tick several tags (or create one) and
+ * add/remove them all in one request (`tag_ids`).
  */
 export default function LeadsBulkBar({
   selectedIds, visibleIds, allIds,
   tagsList = [], isAdmin = false,
-  onReassign, onClear, onDone,
+  onReassign, onClear, onDone, onTagCreated,
 }) {
   const { isDark } = useTheme();
   const [busy, setBusy] = React.useState(false);
@@ -61,19 +66,21 @@ export default function LeadsBulkBar({
   const finish = () => { if (onDone) onDone(); if (onClear) onClear(); };
   const skippedNote = (skipped) => (skipped ? ` (${skipped} skipped)` : '');
 
-  const bulkTag = async (tagId, action) => {
-    if (!tagId || visible.length === 0 || overCap) return;
-    const tagName = tagsList.find(t => t.tag_id === tagId)?.name || 'tag';
+  // Called by BulkTagPicker with every ticked tag at once. Returns false on
+  // failure so the picker stays open with the ticks intact for a retry.
+  const bulkTag = async ({ tagIds, action }) => {
+    if (!tagIds || tagIds.length === 0 || visible.length === 0 || overCap) return false;
     setBusy(true);
     try {
-      const res = await leadsApi.bulkTag({ lead_ids: visible, tag_id: tagId, action });
+      const res = await leadsApi.bulkTag({ lead_ids: visible, tag_ids: tagIds, action });
       const d = res?.data || {};
       const updated = d.updated ?? d.modified ?? 0;
-      const verb = action === 'remove' ? 'Removed tag from' : 'Tagged';
-      toast.success(`${verb} ${updated} lead(s) — “${tagName}”${skippedNote(d.skipped)}`);
+      toast.success(formatTagResult({ action, tagIds, tags: tagsList, targets: [[updated, 'lead']], skipped: d.skipped }));
       finish();
+      return true;
     } catch (err) {
       toast.error(err?.response?.data?.detail || 'Bulk tag failed');
+      return false;
     } finally {
       setBusy(false);
     }
@@ -113,16 +120,13 @@ export default function LeadsBulkBar({
           <UserCog className="mr-1 h-3 w-3" /> Reassign
         </Button>
       )}
-      <select defaultValue="" disabled={disabled} className={`h-8 px-2 rounded text-xs ${inputCls} cursor-pointer`} data-testid="leads-bulk-tag-add"
-        onChange={async e => { const v = e.target.value; e.target.value = ''; await bulkTag(v, 'add'); }}>
-        <option value="">Add tag…</option>
-        {tagsList.map(t => <option key={t.tag_id} value={t.tag_id}>{t.name}</option>)}
-      </select>
-      <select defaultValue="" disabled={disabled} className={`h-8 px-2 rounded text-xs ${inputCls} cursor-pointer`} data-testid="leads-bulk-tag-remove"
-        onChange={async e => { const v = e.target.value; e.target.value = ''; await bulkTag(v, 'remove'); }}>
-        <option value="">Remove tag…</option>
-        {tagsList.map(t => <option key={t.tag_id} value={t.tag_id}>{t.name}</option>)}
-      </select>
+      <BulkTagPicker
+        tags={tagsList}
+        disabled={disabled}
+        onApply={bulkTag}
+        onTagCreated={onTagCreated}
+        testIdPrefix="leads-bulk-tags"
+      />
       <select defaultValue="" disabled={disabled} className={`h-8 px-2 rounded text-xs ${inputCls} cursor-pointer`} data-testid="leads-bulk-stage"
         onChange={async e => { const v = e.target.value; e.target.value = ''; await bulkStage(v); }}>
         <option value="">Move to Stage</option>

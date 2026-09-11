@@ -8,7 +8,7 @@ import { toast } from 'sonner';
 import {
   Plus, MessageSquare, Calendar, Target, Building2, UserPlus,
   Upload, Search, ChevronRight, AlertTriangle, Clock, MoreHorizontal,
-  Edit2, Trash2, Lock, UserCog, FileText, Linkedin, Instagram, Eye, Printer,
+  Edit2, Trash2, Lock, UserCog, FileText, Linkedin, Instagram, Eye,
 } from 'lucide-react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../../components/ui/dropdown-menu';
 import WhatsAppSendDialog from '../../components/WhatsAppSendDialog';
@@ -38,8 +38,9 @@ import SearchFacetSuggestions from '../../components/crm/SearchFacetSuggestions'
 import DataCleanupPanel from '../../components/crm/DataCleanupPanel';
 import DataHealthPanel from '../../components/crm/DataHealthPanel';
 import BulkDeleteSchoolsDialog from '../../components/crm/BulkDeleteSchoolsDialog';
-import AssignToPicker from '../../components/crm/AssignToPicker';
 import LeadsBulkBar from '../../components/crm/LeadsBulkBar';
+import SchoolsBulkBar from '../../components/crm/SchoolsBulkBar';
+import useBulkSelect from '../../hooks/useBulkSelect';
 import { toggleAllVisible, allVisibleSelected } from '../../lib/leadSelection';
 import { useIsOwner, usePermission } from '../../hooks/usePermission';
 import { deriveFilterOptions, buildCrmContext, matchesCrmFilter, hasActiveFilters } from '../../lib/crmFilter';
@@ -55,6 +56,9 @@ const SEARCH_HELP = [
   'Shortcuts: owner:parul  city:rohini  type:CBSE  stage:demo  tag:hot  has:phone  is:unassigned',
   'Values can be partial. Use quotes around spaces: owner:"Parul Kanchan"',
 ].join(String.fromCharCode(10));
+
+// Stable id getter for the Schools selection (useBulkSelect memoizes on it).
+const schoolIdOf = (s) => s.school_id;
 
 export default function LeadsCRM() {
   const navigate = useNavigate();
@@ -154,8 +158,6 @@ export default function LeadsCRM() {
     )
   );
 
-  // Bulk school assignment (admin): select many schools, assign all to one Sales Exec.
-  const [selectedSchoolIds, setSelectedSchoolIds] = React.useState(new Set());
   // Schools whose usual gap between orders has elapsed again — the repeat
   // business that previously only got chased if a rep happened to remember.
   // Derived server-side from order history, so there is nothing to keep in sync.
@@ -174,51 +176,67 @@ export default function LeadsCRM() {
   const [planActivityOpen, setPlanActivityOpen] = React.useState(false);
   const [seqEnrollOpen, setSeqEnrollOpen] = React.useState(false);
   const [unassignedOnly, setUnassignedOnly] = React.useState(false);
-  const toggleSchoolSelect = (id) => setSelectedSchoolIds(prev => {
-    const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n;
-  });
-  const [bulkAssignPick, setBulkAssignPick] = React.useState({ email: '', name: '' });
+
+  // The Schools tab's rows: masterFiltered.schools already applies the search
+  // box + the left FilterRail (Owner/City/Type/Source/Stage/Tag — O17)
+  // identically to how leads/contacts get filtered; `unassignedOnly` and
+  // `reorderOnly` layer on top. Computed up here (not inside the tab's render)
+  // because the selection hook below needs it, and hooks can't live there.
+  const masterSchools = crm.masterFiltered.schools;
+  const { sortData, sortConfig, setTagsList } = crm;
+  const schFiltered = React.useMemo(() => {
+    let rows = masterSchools;
+    if (unassignedOnly) rows = rows.filter(sc => !(sc.assigned_to || '').trim());
+    if (reorderOnly) rows = rows.filter(sc => reorderById.has(sc.school_id));
+    return sortData(rows, sortConfig.key, sortConfig.dir);
+  }, [masterSchools, unassignedOnly, reorderOnly, reorderById, sortData, sortConfig]);
+
+  // School selection works exactly like Contacts (useBulkSelect): select-all
+  // covers every FILTERED school, unticking the header removes only the ones
+  // on screen, shift-click selects a range, and a school the filter hides
+  // stays selected but is counted as "hidden" and never acted on. Every bulk
+  // action below sends `schoolSel.visibleIds` only. `crm.schoolsList` is the
+  // full universe, so only a school that is really gone is pruned.
+  const schoolSel = useBulkSelect(schFiltered, schoolIdOf, crm.schoolsList);
+
+  // Bulk school assignment (admin): assign every visible selected school to one Sales Exec.
   const bulkAssignSchools = async (email, name) => {
-    setBulkAssignPick({ email: '', name: '' }); // AssignToPicker resets itself after each pick, same as the old native <select>
-    if (!email || selectedSchoolIds.size === 0) return;
+    const ids = schoolSel.visibleIds;
+    if (!email || ids.length === 0) return;
     const label = name || 'this owner';
-    if (!window.confirm(`Assign ${selectedSchoolIds.size} school(s) to ${label}?\n\nThis moves ALL their leads & contacts to ${label}.`)) return;
+    if (!window.confirm(`Assign ${ids.length} school(s) to ${label}?\n\nThis moves ALL their leads & contacts to ${label}.`)) return;
     try {
-      const r = await schoolsApiObj.bulkAssign({ school_ids: Array.from(selectedSchoolIds), assigned_to: email, assigned_name: name });
+      const r = await schoolsApiObj.bulkAssign({ school_ids: ids, assigned_to: email, assigned_name: name });
       const c = r.data?.cascaded || {};
       toast.success(`${c.schools ?? 0} school(s) → ${label} — moved ${c.leads ?? 0} leads, ${c.contacts ?? 0} contacts`);
-      setSelectedSchoolIds(new Set());
+      schoolSel.clear();
       crm.fetchData();
     } catch (err) { toast.error(err?.response?.data?.detail || 'Bulk assign failed'); }
   };
 
-  // Tagging is how the owner segments anything — a mailing, a drip audience, a
-  // "CBSE, 1000+ students" list. The endpoint has always existed for schools;
-  // only the Leads bulk bar ever offered it, so tagging a set of schools was
-  // impossible from the UI and the Tags filter looked broken on that tab.
-  const bulkTagSchools = async (tagId) => {
-    if (!tagId || selectedSchoolIds.size === 0) return;
-    const tagName = crm.tagsList.find(t => t.tag_id === tagId)?.name || 'tag';
-    try {
-      await schoolsApiObj.bulkTagSchools({ school_ids: Array.from(selectedSchoolIds), tag_id: tagId, action: 'add' });
-      toast.success(`Tagged ${selectedSchoolIds.size} school(s) as “${tagName}”`);
-      crm.fetchData();
-    } catch (err) { toast.error(err?.response?.data?.detail || 'Could not add the tag'); }
-  };
+  // A tag created from any bulk bar's tag picker joins the page's tag list
+  // straight away, so the other tabs' pickers and the Tags filter offer it
+  // without waiting for the next refetch.
+  const addCreatedTag = React.useCallback((tag) => {
+    if (!tag || !tag.tag_id) return;
+    setTagsList(prev => (prev.some(t => t.tag_id === tag.tag_id)
+      ? prev
+      : [...prev, tag].sort((a, b) => (a.name || '').localeCompare(b.name || ''))));
+  }, [setTagsList]);
 
   // Turn the current filtered school selection into a physical mail run (brochure
   // by default), then jump to Offline Mail to review addresses + print stickers.
   const [mailRunBusy, setMailRunBusy] = React.useState(false);
   const createMailRunFromSelection = async () => {
-    if (selectedSchoolIds.size === 0) return;
-    const ids = Array.from(selectedSchoolIds);
+    const ids = schoolSel.visibleIds;
+    if (ids.length === 0) return;
     const name = window.prompt(`Name this mail run (${ids.length} schools):`, `Brochure drop — ${new Date().toLocaleDateString()}`);
     if (name === null) return;
     setMailRunBusy(true);
     try {
       await mailRunsApi.create({ name: name || 'Brochure drop', piece_type: 'brochure', school_ids: ids });
       toast.success(`Mail run created for ${ids.length} schools — opening Offline Mail to print stickers`);
-      setSelectedSchoolIds(new Set());
+      schoolSel.clear();
       navigate('/offline-mail');
     } catch (err) { toast.error(err?.response?.data?.detail || 'Could not create mail run'); }
     finally { setMailRunBusy(false); }
@@ -240,6 +258,7 @@ export default function LeadsCRM() {
       onReassign={(ids) => { crm.setReassignBulkIds(ids); crm.setReassignLead(null); crm.setReassignOpen(true); }}
       onClear={crm.clearLeadSelection}
       onDone={crm.fetchData}
+      onTagCreated={addCreatedTag}
     />
   );
 
@@ -489,6 +508,7 @@ export default function LeadsCRM() {
             fetchData={crm.fetchData}
             user={crm.user}
             spList={crm.spList}
+            onTagCreated={addCreatedTag}
           />
         )}
 
@@ -820,13 +840,9 @@ export default function LeadsCRM() {
 
         {/* ── SCHOOLS TAB ───────────────────────────────────────────── */}
         {crm.activeTab === 'schools' && (() => {
-          // masterFiltered.schools already applies the search box + the left
-          // FilterRail (Owner/City/Type/Source/Stage/Tag — O17) identically to
-          // how leads/contacts get filtered; `unassignedOnly` layers on top.
-          let schFiltered = crm.masterFiltered.schools;
-          if (unassignedOnly) schFiltered = schFiltered.filter(sc => !(sc.assigned_to || '').trim());
-          if (reorderOnly) schFiltered = schFiltered.filter(sc => reorderById.has(sc.school_id));
-          schFiltered = crm.sortData(schFiltered, crm.sortConfig.key, crm.sortConfig.dir);
+          // `schFiltered` (search + FilterRail + Unassigned/Reorder chips,
+          // sorted) is computed at the top of the component, next to the
+          // selection hook that depends on it.
           return (
             <div className="space-y-3">
               {/* Reps see this too: chasing a repeat order is their work, and
@@ -866,41 +882,27 @@ export default function LeadsCRM() {
                   </div>
                 );
               })()}
-              {canTagSchools && selectedSchoolIds.size > 0 && (
-                <div className={`${card} border rounded-md p-2.5 flex items-center gap-2 flex-wrap`} data-testid="school-bulk-bar">
-                  <span className={`text-xs font-medium ${textPri}`}>{selectedSchoolIds.size} school(s) selected</span>
-                  {isAdmin && (
-                    <AssignToPicker
-                      value={bulkAssignPick.email}
-                      valueName={bulkAssignPick.name}
-                      users={crm.spList}
-                      onChange={(email, name) => { setBulkAssignPick({ email, name }); if (email) bulkAssignSchools(email, name); }}
-                      placeholder="Assign owner to…"
-                      className="w-48"
-                    />
-                  )}
-                  <select defaultValue="" className={`h-8 px-2 rounded text-xs ${inputCls} cursor-pointer`} data-testid="school-bulk-tag"
-                    onChange={async e => { const v = e.target.value; e.target.value = ''; await bulkTagSchools(v); }}>
-                    <option value="">Add tag…</option>
-                    {crm.tagsList.map(t => <option key={t.tag_id} value={t.tag_id}>{t.name}</option>)}
-                  </select>
-                  {isAdmin && <>
-                    <Button size="sm" onClick={() => setPlanActivityOpen(true)} className="bg-[#e94560] hover:bg-[#f05c75] text-white h-8" data-testid="plan-activity-btn">Plan Activity</Button>
-                    <Button size="sm" onClick={() => setSeqEnrollOpen(true)} className="bg-[#6d4ad8] hover:bg-[#7d5ae0] text-white h-8" data-testid="start-sequence-btn">Start Sequence</Button>
-                    <Button size="sm" variant="outline" onClick={createMailRunFromSelection} disabled={mailRunBusy} className={`border-[var(--border-color)] ${textSec} h-8`} data-testid="mail-run-btn">
-                      <Printer className="mr-1 h-3 w-3" /> {mailRunBusy ? 'Creating…' : 'Mail Run'}
-                    </Button>
-                  </>}
-                  <Button size="sm" variant="outline" onClick={() => setSelectedSchoolIds(new Set())} className={`border-[var(--border-color)] ${textSec} h-8`}>Clear</Button>
-                  {/* Superadmin-only (O20): guarded bulk delete of the current selection,
-                      same dry-run-preview -> confirm -> delete flow as Data Cleanup. */}
-                  {isOwner && (
-                    <Button size="sm" onClick={() => setBulkDeleteOpen(true)} data-testid="school-bulk-delete-btn"
-                      className="bg-red-600 hover:bg-red-700 text-white h-8 ml-auto">
-                      <Trash2 className="mr-1 h-3 w-3" /> Delete selected
-                    </Button>
-                  )}
-                </div>
+              {canTagSchools && (
+                <SchoolsBulkBar
+                  count={schoolSel.count}
+                  hiddenCount={schoolSel.hiddenCount}
+                  visibleIds={schoolSel.visibleIds}
+                  tagsList={crm.tagsList}
+                  contactsList={crm.contactsList}
+                  leadsList={crm.leadsList}
+                  isAdmin={isAdmin}
+                  isOwner={isOwner}
+                  spList={crm.spList}
+                  onAssign={bulkAssignSchools}
+                  onPlanActivity={() => setPlanActivityOpen(true)}
+                  onStartSequence={() => setSeqEnrollOpen(true)}
+                  onMailRun={createMailRunFromSelection}
+                  mailRunBusy={mailRunBusy}
+                  onDelete={() => setBulkDeleteOpen(true)}
+                  onClear={schoolSel.clear}
+                  onDone={crm.fetchData}
+                  onTagCreated={addCreatedTag}
+                />
               )}
               {/* Mobile: school cards */}
               <div className="sm:hidden space-y-2" data-testid="schools-list-mobile">
@@ -908,7 +910,10 @@ export default function LeadsCRM() {
                   const schLeads = crm.leadsList.filter(l => l.school_id === sch.school_id);
                   return (
                     <div key={sch.school_id} className={`${card} border rounded-md p-3 flex items-start justify-between gap-2`} data-testid={`school-card-${sch.school_id}`}>
-                      {canTagSchools && <input type="checkbox" className="accent-[#e94560] mt-1 flex-shrink-0" checked={selectedSchoolIds.has(sch.school_id)} onChange={() => toggleSchoolSelect(sch.school_id)} />}
+                      {/* onChange can't see shiftKey, so the toggle (incl. shift-click
+                          range select) happens in onClick; onChange is a no-op only to
+                          keep React's controlled-input contract (same as ContactsTab). */}
+                      {canTagSchools && <input type="checkbox" className="accent-[#e94560] mt-1 flex-shrink-0" checked={schoolSel.isSelected(sch.school_id)} onChange={() => {}} onClick={e => { e.stopPropagation(); schoolSel.toggle(sch.school_id, { shift: e.shiftKey }); }} data-testid={`select-school-card-${sch.school_id}`} />}
                       <div className="flex-1 min-w-0">
                         <p className={`${textPri} font-medium text-sm truncate`}>{sch.school_name}</p>
                         <p className={`text-xs ${textMuted}`}>{sch.school_type}{sch.city ? ` • ${sch.city}` : ''}</p>
@@ -958,7 +963,7 @@ export default function LeadsCRM() {
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm" data-testid="schools-table">
                     <thead><tr className="bg-[var(--bg-primary)]">
-                      {canTagSchools && <th className="py-3 px-3 w-8"><input type="checkbox" className="accent-[#e94560]" onChange={e => setSelectedSchoolIds(e.target.checked ? new Set(schFiltered.map(s => s.school_id)) : new Set())} checked={schFiltered.length > 0 && schFiltered.every(s => selectedSchoolIds.has(s.school_id))} data-testid="school-select-all" /></th>}
+                      {canTagSchools && <th className="py-3 px-3 w-8"><input type="checkbox" className="accent-[#e94560]" onChange={schoolSel.toggleAll} checked={schoolSel.allSelected} data-testid="school-select-all" /></th>}
                       <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} cursor-pointer select-none`} onClick={() => crm.toggleSort('school_name')}>School{crm.sortIndicator('school_name')}</th>
                       <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden sm:table-cell cursor-pointer select-none`} onClick={() => crm.toggleSort('school_type')}>Type{crm.sortIndicator('school_type')}</th>
                       <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden md:table-cell cursor-pointer select-none`} onClick={() => crm.toggleSort('city')}>City{crm.sortIndicator('city')}</th>
@@ -975,7 +980,7 @@ export default function LeadsCRM() {
                         const schLeads = crm.leadsList.filter(l => l.school_id === sch.school_id);
                         return (
                           <tr key={sch.school_id} className="border-t border-[var(--border-color)] hover:bg-[var(--bg-hover)] cursor-pointer" onClick={() => navigate(`/school-profile/${sch.school_id}`)} data-testid={`school-row-${sch.school_id}`}>
-                            {canTagSchools && <td className="py-2.5 px-3" onClick={e => e.stopPropagation()}><input type="checkbox" className="accent-[#e94560]" checked={selectedSchoolIds.has(sch.school_id)} onChange={() => toggleSchoolSelect(sch.school_id)} data-testid={`select-school-${sch.school_id}`} /></td>}
+                            {canTagSchools && <td className="py-2.5 px-3" onClick={e => e.stopPropagation()}><input type="checkbox" className="accent-[#e94560]" checked={schoolSel.isSelected(sch.school_id)} onChange={() => {}} onClick={e => { e.stopPropagation(); schoolSel.toggle(sch.school_id, { shift: e.shiftKey }); }} data-testid={`select-school-${sch.school_id}`} /></td>}
                             <td className="py-2.5 px-3">
                               <p className={`${textPri} font-medium hover:text-[#e94560] transition-colors`}>{sch.school_name}</p>
                               <div className="flex items-center gap-2 mt-0.5 flex-wrap">
@@ -1213,23 +1218,23 @@ export default function LeadsCRM() {
           open={bulkDeleteOpen}
           onOpenChange={setBulkDeleteOpen}
           mode="selected"
-          schoolIds={Array.from(selectedSchoolIds)}
-          onDeleted={() => { setSelectedSchoolIds(new Set()); crm.fetchData(); }}
+          schoolIds={schoolSel.visibleIds}
+          onDeleted={() => { schoolSel.clear(); crm.fetchData(); }}
         />
 
         <PlanActivityDialog
           open={planActivityOpen}
           onClose={() => setPlanActivityOpen(false)}
-          schoolIds={Array.from(selectedSchoolIds)}
+          schoolIds={schoolSel.visibleIds}
           spList={crm.spList}
-          onDone={() => { setSelectedSchoolIds(new Set()); crm.fetchData(); }}
+          onDone={() => { schoolSel.clear(); crm.fetchData(); }}
         />
 
         <SequenceEnrollDialog
           open={seqEnrollOpen}
           onClose={() => setSeqEnrollOpen(false)}
-          schoolIds={Array.from(selectedSchoolIds)}
-          onDone={() => { setSelectedSchoolIds(new Set()); crm.fetchData(); }}
+          schoolIds={schoolSel.visibleIds}
+          onDone={() => { schoolSel.clear(); crm.fetchData(); }}
         />
 
         <ContactDetailPanel

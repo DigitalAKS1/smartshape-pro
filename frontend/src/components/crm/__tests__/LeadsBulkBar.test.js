@@ -23,10 +23,14 @@ jest.mock('../../../lib/api', () => ({
     bulkTag: jest.fn(),
     bulkStage: jest.fn(),
   },
+  tags: { create: jest.fn() },
 }));
 jest.mock('sonner', () => ({ toast: { success: jest.fn(), error: jest.fn() } }));
 
-const TAGS = [{ tag_id: 't_hot', name: 'Hot Lead', color: '#f00' }];
+const TAGS = [
+  { tag_id: 't_hot', name: 'Hot Lead', color: '#f00' },
+  { tag_id: 't_cold', name: 'Cold', color: '#00f' },
+];
 
 // CRA's Jest config sets `resetMocks: true`, which wipes jest.mock() factory
 // implementations before every test, so they're reinstalled here.
@@ -61,6 +65,16 @@ function render(overrides = {}) {
     },
     unmount: () => act(() => root.unmount()),
   };
+}
+
+// Tagging goes through BulkTagPicker: open it, tick each tag, press Add/Remove.
+async function applyTags(v, tagIds, action = 'add') {
+  act(() => { v.q('leads-bulk-tags-button').click(); });
+  tagIds.forEach(id => act(() => { v.q(`leads-bulk-tags-check-${id}`).click(); }));
+  await act(async () => {
+    v.q(`leads-bulk-tags-${action}`).click();
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+  });
 }
 
 async function choose(select, value) {
@@ -107,26 +121,36 @@ test('stays visible when the filter hides every selected row, so it can still be
   v.unmount();
 });
 
-// ── Tag actions ─────────────────────────────────────────────────────────────
+// ── Tag actions (BulkTagPicker) ─────────────────────────────────────────────
 
-test('"Add tag" sends only the visible selected ids, in list order', async () => {
+test('adding a tag sends only the visible selected ids, in list order, as tag_ids', async () => {
   const v = render({ selectedIds: new Set(['l3', 'l4', 'l1']) }); // l4 hidden
-  await choose(v.q('leads-bulk-tag-add'), 't_hot');
-  expect(leadsApi.bulkTag).toHaveBeenCalledWith({ lead_ids: ['l1', 'l3'], tag_id: 't_hot', action: 'add' });
+  await applyTags(v, ['t_hot']);
+  expect(leadsApi.bulkTag).toHaveBeenCalledWith({ lead_ids: ['l1', 'l3'], tag_ids: ['t_hot'], action: 'add' });
   v.unmount();
 });
 
-test('"Remove tag" calls bulkTag with action "remove"', async () => {
+test('several ticked tags go in ONE request', async () => {
   const v = render({ selectedIds: new Set(['l1', 'l2']) });
-  await choose(v.q('leads-bulk-tag-remove'), 't_hot');
-  expect(leadsApi.bulkTag).toHaveBeenCalledWith({ lead_ids: ['l1', 'l2'], tag_id: 't_hot', action: 'remove' });
+  await applyTags(v, ['t_cold', 't_hot']);
+  expect(leadsApi.bulkTag).toHaveBeenCalledTimes(1);
+  expect(leadsApi.bulkTag).toHaveBeenCalledWith({ lead_ids: ['l1', 'l2'], tag_ids: ['t_cold', 't_hot'], action: 'add' });
+  expect(toast.success).toHaveBeenCalledWith('Added 2 tags to 2 leads');
+  v.unmount();
+});
+
+test('"Remove" calls bulkTag with action "remove"', async () => {
+  const v = render({ selectedIds: new Set(['l1', 'l2']) });
+  await applyTags(v, ['t_hot'], 'remove');
+  expect(leadsApi.bulkTag).toHaveBeenCalledWith({ lead_ids: ['l1', 'l2'], tag_ids: ['t_hot'], action: 'remove' });
+  expect(toast.success).toHaveBeenCalledWith('Removed “Hot Lead” from 2 leads');
   v.unmount();
 });
 
 test('a successful bulk tag toasts the updated count, then refetches and clears', async () => {
   const v = render({ selectedIds: new Set(['l1', 'l2']) });
-  await choose(v.q('leads-bulk-tag-add'), 't_hot');
-  expect(toast.success).toHaveBeenCalledWith('Tagged 2 lead(s) — “Hot Lead”');
+  await applyTags(v, ['t_hot']);
+  expect(toast.success).toHaveBeenCalledWith('Added “Hot Lead” to 2 leads');
   expect(v.props.onDone).toHaveBeenCalledTimes(1);
   expect(v.props.onClear).toHaveBeenCalledTimes(1);
   v.unmount();
@@ -135,18 +159,36 @@ test('a successful bulk tag toasts the updated count, then refetches and clears'
 test('skipped leads are reported in the toast when non-zero', async () => {
   leadsApi.bulkTag.mockImplementation(() => Promise.resolve({ data: { requested: 3, updated: 1, skipped: 2, modified: 1 } }));
   const v = render({ selectedIds: new Set(['l1', 'l2', 'l3']) });
-  await choose(v.q('leads-bulk-tag-add'), 't_hot');
-  expect(toast.success).toHaveBeenCalledWith('Tagged 1 lead(s) — “Hot Lead” (2 skipped)');
+  await applyTags(v, ['t_hot']);
+  expect(toast.success).toHaveBeenCalledWith('Added “Hot Lead” to 1 lead (2 skipped)');
   v.unmount();
 });
 
 test('a failed bulk tag toasts the error and keeps the selection for a retry', async () => {
   leadsApi.bulkTag.mockImplementation(() => Promise.reject({ response: { data: { detail: 'nope' } } }));
   const v = render({ selectedIds: new Set(['l1']) });
-  await choose(v.q('leads-bulk-tag-add'), 't_hot');
+  await applyTags(v, ['t_hot']);
   expect(toast.error).toHaveBeenCalledWith('nope');
   expect(v.props.onClear).not.toHaveBeenCalled();
   expect(v.props.onDone).not.toHaveBeenCalled();
+  // the picker stays open with the tick intact, ready for a retry
+  expect(v.q('leads-bulk-tags-check-t_hot').checked).toBe(true);
+  v.unmount();
+});
+
+test('a tag created in the picker is reported to the parent', async () => {
+  const { tags: tagsApi } = jest.requireMock('../../../lib/api');
+  tagsApi.create.mockImplementation(({ name, color }) => Promise.resolve({ data: { tag_id: 't_new', name, color } }));
+  const onTagCreated = jest.fn();
+  const v = render({ selectedIds: new Set(['l1']), onTagCreated });
+  act(() => { v.q('leads-bulk-tags-button').click(); });
+  act(() => {
+    const input = v.q('leads-bulk-tags-search');
+    Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(input, 'Expo');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  await act(async () => { v.q('leads-bulk-tags-create').click(); for (let i = 0; i < 5; i++) await Promise.resolve(); });
+  expect(onTagCreated).toHaveBeenCalledWith({ tag_id: 't_new', name: 'Expo', color: '#6366f1' });
   v.unmount();
 });
 
@@ -209,7 +251,7 @@ test('Reassign (admin) hands only the visible selected ids to the reassign dialo
 test('Reassign is not offered to non-admins', () => {
   const v = render({ selectedIds: new Set(['l1']), isAdmin: false });
   expect(v.q('bulk-reassign-btn')).toBeNull();
-  expect(v.q('leads-bulk-tag-add')).toBeTruthy(); // tagging still is
+  expect(v.q('leads-bulk-tags-button')).toBeTruthy(); // tagging still is
   v.unmount();
 });
 
@@ -220,8 +262,7 @@ test('more than 2,000 visible selected ids disables the controls and shows the c
   const v = render({ selectedIds: new Set(ids), visibleIds: ids, allIds: ids });
   expect(v.q('leads-bulk-count').textContent).toBe('2001 selected');
   expect(v.q('leads-bulk-cap-note').textContent).toContain('Max 2,000 at a time');
-  expect(v.q('leads-bulk-tag-add').disabled).toBe(true);
-  expect(v.q('leads-bulk-tag-remove').disabled).toBe(true);
+  expect(v.q('leads-bulk-tags-button').disabled).toBe(true);
   expect(v.q('leads-bulk-stage').disabled).toBe(true);
   expect(v.q('bulk-reassign-btn').disabled).toBe(true);
   expect(v.q('leads-bulk-clear').disabled).toBe(false); // can always get out
@@ -233,6 +274,6 @@ test('the cap counts visible ids only: 2,001 selected with 1 hidden stays enable
   const v = render({ selectedIds: new Set(ids), visibleIds: ids.slice(0, 2000), allIds: ids });
   expect(v.q('leads-bulk-count').textContent).toBe('2001 selected (1 hidden by filter)');
   expect(v.q('leads-bulk-cap-note')).toBeNull();
-  expect(v.q('leads-bulk-tag-add').disabled).toBe(false);
+  expect(v.q('leads-bulk-tags-button').disabled).toBe(false);
   v.unmount();
 });

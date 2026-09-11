@@ -276,6 +276,10 @@ export const schools = {
   getProfile: (id) => API.get(`/schools/${id}/profile`),
   assign: (id, data) => API.post(`/schools/${id}/assign`, data),
   bulkAssign: (data) => API.post('/schools/bulk-assign', data),
+  // {school_ids, tag_ids, action: 'add'|'remove', include_people}. The Schools
+  // bar used to call `schools.bulkTagSchools`, which only ever existed on
+  // `mailRuns` — so its "Add tag" failed every time.
+  bulkTag: (data) => API.post('/schools/bulk-tag', data),
   backfillOwners: () => API.post('/schools/backfill-owners'),
   // Owner-only (info@smartshape.in): cascade hard-delete + preview
   cascadePreview: (id) => API.get(`/schools/${id}/cascade-preview`),

@@ -11,6 +11,7 @@ import { adminApi, contacts as contactsApi } from '../../lib/api';
 import { toast } from 'sonner';
 import MultiFilterBar from './MultiFilterBar';
 import AssignToPicker from './AssignToPicker';
+import BulkTagPicker, { formatTagResult } from './BulkTagPicker';
 import useBulkSelect from '../../hooks/useBulkSelect';
 import { deriveFilterOptions, buildCrmContext, matchesCrmFilter } from '../../lib/crmFilter';
 import { CallStatusBadge } from './ContactDetailPanel';
@@ -39,12 +40,12 @@ export default function ContactsTab({
   fetchData,
   user,
   spList = [],
+  onTagCreated,
 }) {
   const navigate = useNavigate();
   const { isDark } = useTheme();
 
   const card = isDark ? 'bg-[var(--bg-card)] border-[var(--border-color)]' : 'bg-white border-[var(--border-color)]';
-  const inputCls = 'bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]';
   const textPri = 'text-[var(--text-primary)]';
   const textSec = 'text-[var(--text-secondary)]';
   const textMuted = 'text-[var(--text-muted)]';
@@ -126,19 +127,21 @@ export default function ContactsTab({
   // filter still shows. Hidden selections (from before a filter change)
   // stay selected but are excluded from the request; the bar tells the user
   // how many are hidden so nothing is silently acted on out of sight.
-  const bulkTagContacts = async (tagId, action) => {
-    if (!tagId || sel.visibleIds.length === 0 || overBulkCap) return;
-    const tagName = tagsList.find(t => t.tag_id === tagId)?.name || 'tag';
+  // Called by BulkTagPicker with every ticked tag at once. Returns false on
+  // failure so the picker stays open with the ticks intact for a retry.
+  const bulkTagContacts = async ({ tagIds, action }) => {
+    if (!tagIds || tagIds.length === 0 || sel.visibleIds.length === 0 || overBulkCap) return false;
     setBulkBusy(true);
     try {
-      const res = await contactsApi.bulkTag({ contact_ids: sel.visibleIds, tag_ids: [tagId], action });
+      const res = await contactsApi.bulkTag({ contact_ids: sel.visibleIds, tag_ids: tagIds, action });
       const { updated = 0, skipped = 0 } = res.data || {};
-      const verb = action === 'remove' ? 'Removed tag from' : 'Tagged';
-      toast.success(`${verb} ${updated} contact(s) — “${tagName}”${skipped ? ` (${skipped} skipped)` : ''}`);
+      toast.success(formatTagResult({ action, tagIds, tags: tagsList, targets: [[updated, 'contact']], skipped }));
       fetchData();
       sel.clear();
+      return true;
     } catch (err) {
       toast.error(err?.response?.data?.detail || 'Bulk tag failed');
+      return false;
     } finally {
       setBulkBusy(false);
     }
@@ -268,16 +271,13 @@ export default function ContactsTab({
               disabled={bulkBusy || overBulkCap}
             />
           )}
-          <select defaultValue="" disabled={bulkBusy || overBulkCap} className={`h-8 px-2 rounded text-xs ${inputCls} cursor-pointer`} data-testid="contacts-bulk-tag-add"
-            onChange={async e => { const v = e.target.value; e.target.value = ''; await bulkTagContacts(v, 'add'); }}>
-            <option value="">Add tag…</option>
-            {tagsList.map(t => <option key={t.tag_id} value={t.tag_id}>{t.name}</option>)}
-          </select>
-          <select defaultValue="" disabled={bulkBusy || overBulkCap} className={`h-8 px-2 rounded text-xs ${inputCls} cursor-pointer`} data-testid="contacts-bulk-tag-remove"
-            onChange={async e => { const v = e.target.value; e.target.value = ''; await bulkTagContacts(v, 'remove'); }}>
-            <option value="">Remove tag…</option>
-            {tagsList.map(t => <option key={t.tag_id} value={t.tag_id}>{t.name}</option>)}
-          </select>
+          <BulkTagPicker
+            tags={tagsList}
+            disabled={bulkBusy || overBulkCap}
+            onApply={bulkTagContacts}
+            onTagCreated={onTagCreated}
+            testIdPrefix="contacts-bulk-tags"
+          />
           <Button size="sm" variant="outline" onClick={sel.clear} className={`border-[var(--border-color)] ${textSec} h-8`} data-testid="contacts-bulk-clear">Clear</Button>
         </div>
       )}
