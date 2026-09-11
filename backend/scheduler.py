@@ -454,7 +454,10 @@ async def _claim_enrollment(enr: dict, now: datetime) -> bool:
         {"enrollment_id": enr["enrollment_id"], "status": "active",
          "current_step": enr.get("current_step"),
          "next_step_at": enr.get("next_step_at")},
-        {"$set": {"next_step_at": (now + timedelta(minutes=DRIP_CLAIM_MINUTES)).isoformat()}})
+        # Claim window from the CURRENT time, not the pass start: a long pass
+        # could otherwise write a claim that has already expired.
+        {"$set": {"next_step_at": (datetime.now(timezone.utc)
+                                   + timedelta(minutes=DRIP_CLAIM_MINUTES)).isoformat()}})
     return getattr(res, "modified_count", 0) == 1
 
 

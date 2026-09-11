@@ -168,6 +168,27 @@ def test_the_orphan_sweep_keeps_a_contact_drips_task_and_dispatch(db):
     _run(go())
 
 
+def test_the_orphan_sweep_never_deletes_a_manual_task_saved_with_a_blank_lead(db):
+    # The Leads CRM "Add task" form saves a task with no lead as lead_id "".
+    # The sweep used to treat "" as a dead lead id and delete every such task.
+    async def go():
+        await _base(db)
+        await db.tasks.insert_many([
+            {"task_id": "t_manual_blank", "lead_id": "", "title": "Call back Monday"},
+            {"task_id": "t_manual_null", "lead_id": None, "title": "Order samples"},
+            {"task_id": "t_orphan", "lead_id": "L_gone"},
+        ])
+        await db.followups.insert_many([
+            {"followup_id": "f_blank", "lead_id": ""},
+            {"followup_id": "f_orphan", "lead_id": "L_gone"},
+        ])
+        await admin.run_db_integrity(FakeRequest())
+        assert {t["task_id"] for t in await db.tasks.find({}).to_list(None)} == {
+            "t_manual_blank", "t_manual_null"}
+        assert {f["followup_id"] for f in await db.followups.find({}).to_list(None)} == {"f_blank"}
+    _run(go())
+
+
 # ── Deleting the contact / school ───────────────────────────────────────────
 
 def test_archiving_a_contact_cancels_its_sequences_with_a_reason(db):

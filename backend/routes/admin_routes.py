@@ -2074,7 +2074,10 @@ async def run_db_integrity(request: Request):
         ("physical_dispatches", "lead_id"),
     ]:
         coll = db[coll_name]
-        orphan_q = {id_field: {"$nin": valid_lead_list, "$ne": None}}
+        # A blank lead_id ("") means "no lead", exactly like null — the Leads
+        # CRM "Add task" form saves a task with no lead as lead_id "". Treating
+        # "" as a dead id deleted every such manual task on each sweep.
+        orphan_q = {id_field: {"$nin": valid_lead_list + [None, ""]}}
         if coll_name in ("tasks", "physical_dispatches"):
             # A contact-keyed drip (D5) writes its task / dispatch with a null
             # lead_id and a contact_id. Orphan when:
@@ -2082,7 +2085,7 @@ async def run_db_integrity(request: Request):
             #  - its contact is set and exists nowhere, and its lead is null,
             #    blank or dead.
             orphan_q = {"$or": [
-                {id_field: {"$nin": valid_lead_list, "$ne": None},
+                {id_field: {"$nin": valid_lead_list + [None, ""]},
                  "contact_id": {"$nin": existing_contact_list}},
                 {"contact_id": {"$nin": existing_contact_list + [None, ""]},
                  id_field: {"$nin": valid_lead_list}},
