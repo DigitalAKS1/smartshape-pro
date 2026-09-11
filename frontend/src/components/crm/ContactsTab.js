@@ -105,17 +105,26 @@ export default function ContactsTab({
   // Selection is computed against cFiltered (every row the current filter
   // matches, across all pages) — never `paginated` (the 10 on screen).
   // Ticking "select all" must select every matching contact, not just the
-  // page the user happens to be looking at.
-  const sel = useBulkSelect(cFiltered, (c) => c.contact_id);
+  // page the user happens to be looking at. `contactsList` (the full,
+  // unfiltered universe) is passed as the 3rd arg so a row that's genuinely
+  // gone — deleted, or dropped by a refetch — is pruned from the selection
+  // automatically instead of showing up as "hidden by filter" forever.
+  const sel = useBulkSelect(cFiltered, (c) => c.contact_id, contactsList);
   const [bulkAssignPick, setBulkAssignPick] = React.useState({ email: '', name: '' });
   const [bulkBusy, setBulkBusy] = React.useState(false);
+
+  // The backend caps a single bulk request at 2,000 ids (crm_routes.py).
+  // Surface that before the user hits it, rather than letting the request
+  // 400.
+  const BULK_ID_CAP = 2000;
+  const overBulkCap = sel.visibleIds.length > BULK_ID_CAP;
 
   // Every bulk action sends only `sel.visibleIds` — the ids the current
   // filter still shows. Hidden selections (from before a filter change)
   // stay selected but are excluded from the request; the bar tells the user
   // how many are hidden so nothing is silently acted on out of sight.
   const bulkTagContacts = async (tagId, action) => {
-    if (!tagId || sel.visibleIds.length === 0) return;
+    if (!tagId || sel.visibleIds.length === 0 || overBulkCap) return;
     const tagName = tagsList.find(t => t.tag_id === tagId)?.name || 'tag';
     setBulkBusy(true);
     try {
@@ -134,12 +143,16 @@ export default function ContactsTab({
 
   const bulkAssignContacts = async (email, name) => {
     setBulkAssignPick({ email: '', name: '' }); // AssignToPicker resets itself after each pick
-    if (!email || sel.visibleIds.length === 0) return;
+    if (!email || sel.visibleIds.length === 0 || overBulkCap) return;
+    const label = name || email;
+    // AssignToPicker commits on Enter/blur — without this, an admin who
+    // selects everything and hits Enter reassigns the whole batch instantly.
+    if (!window.confirm(`Assign ${sel.visibleIds.length} contact(s) to ${label}?`)) return;
     setBulkBusy(true);
     try {
       const res = await contactsApi.bulkAssign({ contact_ids: sel.visibleIds, assigned_to: email });
       const { updated = 0, skipped = 0 } = res.data || {};
-      toast.success(`Assigned ${updated} contact(s) to ${name || email}${skipped ? ` (${skipped} skipped)` : ''}`);
+      toast.success(`Assigned ${updated} contact(s) to ${label}${skipped ? ` (${skipped} skipped)` : ''}`);
       fetchData();
       sel.clear();
     } catch (err) {
@@ -236,6 +249,11 @@ export default function ContactsTab({
           <span className={`text-xs font-medium ${textPri}`}>
             {sel.count} selected{sel.hiddenCount > 0 ? ` (${sel.hiddenCount} hidden by filter)` : ''}
           </span>
+          {overBulkCap && (
+            <span className="text-[11px] text-red-400 font-medium" data-testid="contacts-bulk-cap-note">
+              Max 2,000 at a time — narrow the filter
+            </span>
+          )}
           {user?.role === 'admin' && (
             <AssignToPicker
               value={bulkAssignPick.email}
@@ -244,15 +262,15 @@ export default function ContactsTab({
               onChange={(email, name) => { setBulkAssignPick({ email, name }); if (email) bulkAssignContacts(email, name); }}
               placeholder="Assign owner to…"
               className="w-48"
-              disabled={bulkBusy}
+              disabled={bulkBusy || overBulkCap}
             />
           )}
-          <select defaultValue="" disabled={bulkBusy} className={`h-8 px-2 rounded text-xs ${inputCls} cursor-pointer`} data-testid="contacts-bulk-tag-add"
+          <select defaultValue="" disabled={bulkBusy || overBulkCap} className={`h-8 px-2 rounded text-xs ${inputCls} cursor-pointer`} data-testid="contacts-bulk-tag-add"
             onChange={async e => { const v = e.target.value; e.target.value = ''; await bulkTagContacts(v, 'add'); }}>
             <option value="">Add tag…</option>
             {tagsList.map(t => <option key={t.tag_id} value={t.tag_id}>{t.name}</option>)}
           </select>
-          <select defaultValue="" disabled={bulkBusy} className={`h-8 px-2 rounded text-xs ${inputCls} cursor-pointer`} data-testid="contacts-bulk-tag-remove"
+          <select defaultValue="" disabled={bulkBusy || overBulkCap} className={`h-8 px-2 rounded text-xs ${inputCls} cursor-pointer`} data-testid="contacts-bulk-tag-remove"
             onChange={async e => { const v = e.target.value; e.target.value = ''; await bulkTagContacts(v, 'remove'); }}>
             <option value="">Remove tag…</option>
             {tagsList.map(t => <option key={t.tag_id} value={t.tag_id}>{t.name}</option>)}
@@ -278,8 +296,13 @@ export default function ContactsTab({
                 className={`${card} border rounded-md p-3 flex items-start justify-between gap-2 cursor-pointer ${contact.converted_to_lead ? 'opacity-60' : ''}`}>
                 <input type="checkbox" className="accent-[#e94560] mt-1 flex-shrink-0"
                   checked={sel.isSelected(contact.contact_id)}
-                  onClick={e => e.stopPropagation()}
-                  onChange={() => sel.toggle(contact.contact_id)}
+                  // onChange (a plain "change" event) doesn't carry modifier
+                  // keys, so shift-click range selection has to read
+                  // e.shiftKey off the click event instead; onChange is kept
+                  // as a no-op only to satisfy React's controlled-input
+                  // contract.
+                  onChange={() => {}}
+                  onClick={e => { e.stopPropagation(); sel.toggle(contact.contact_id, { shift: e.shiftKey }); }}
                   data-testid={`select-contact-${contact.contact_id}`} />
                 <div className="flex-1 min-w-0">
                   <p className={`${textPri} font-medium text-sm truncate`}>{contact.name}</p>
@@ -364,7 +387,11 @@ export default function ContactsTab({
                         <td className="py-2.5 px-3" onClick={e => e.stopPropagation()}>
                           <input type="checkbox" className="accent-[#e94560]"
                             checked={sel.isSelected(contact.contact_id)}
-                            onChange={() => sel.toggle(contact.contact_id)}
+                            // See the mobile checkbox above: onChange can't
+                            // see shiftKey, so the toggle (incl. shift-click
+                            // range select) happens in onClick instead.
+                            onChange={() => {}}
+                            onClick={e => { e.stopPropagation(); sel.toggle(contact.contact_id, { shift: e.shiftKey }); }}
                             data-testid={`select-contact-${contact.contact_id}`} />
                         </td>
                         <td className="py-2.5 px-3">
