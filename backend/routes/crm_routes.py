@@ -3448,11 +3448,30 @@ async def _owned_school_ids(email: str) -> list:
     return [s["school_id"] async for s in cur]
 
 
+async def _leads_visibility_or(email: str) -> list:
+    """The exact `$or` clause a non-"all" caller's LEAD visibility is built from:
+    leads assigned to me, OR any lead at a school I own (even when that lead's
+    own `assigned_to` is someone else).
+
+    Single source of truth for "which leads can this rep see". GET /leads,
+    GET /leads/search and the bulk tag/stage routes all call this, so a lead a
+    rep can see in the list is exactly a lead a bulk action will reach — never
+    a silent "skipped". Note: unlike `_owner_clause` (schools/contacts), there
+    is deliberately NO created-by-while-unassigned fallback for leads — GET
+    /leads never had one, and adding it here would widen what a rep can touch.
+    """
+    owned = await _owned_school_ids(email)
+    return [
+        {"assigned_to": email},
+        {"school_id": {"$in": owned}} if owned else {"lead_id": "__none__"},
+    ]
+
+
 async def _sales_lead_scope(email: str) -> list:
     """$or clauses making a sales user's lead view = assigned + under owned schools.
-    Mirrors GET /leads so deal analytics agree with the pipeline a rep can see."""
-    owned = await _owned_school_ids(email)
-    return [{"assigned_to": email}, {"school_id": {"$in": owned}}]
+    Delegates to `_leads_visibility_or` so deal analytics agree with the pipeline
+    a rep can see in GET /leads."""
+    return await _leads_visibility_or(email)
 
 
 async def resolve_owner(db, raw: str):
@@ -5205,14 +5224,6 @@ def _stable_key(*parts) -> str:
     return hashlib.md5(blob.encode("utf-8")).hexdigest()
 
 
-def _lead_scope_clauses(user: dict, owned: list) -> list:
-    """The own-scope $or for leads: assigned to me, or under a school I own."""
-    return [
-        {"assigned_to": user["email"]},
-        {"school_id": {"$in": owned}} if owned else {"lead_id": "__none__"},
-    ]
-
-
 async def _fetch_schools_map(school_ids: list) -> dict:
     """school_id -> school doc, in ONE query, cached.
 
@@ -5471,8 +5482,7 @@ async def get_leads(request: Request,
     # search clause also does) would clobber one of the two and leak every rep's
     # pipeline to every rep.
     if not sees_all(user, "leads"):
-        owned = await _owned_school_ids(user["email"])
-        clauses.append({"$or": _lead_scope_clauses(user, owned)})
+        clauses.append({"$or": await _leads_visibility_or(user["email"])})
 
     if not clauses:
         query = {}
@@ -5520,11 +5530,7 @@ async def search_leads(request: Request, q: str = "", limit: int = 8):
     if sees_all(user, "leads"):
         scope = {}
     else:  # own-scoped — assigned + everything under owned schools
-        owned = await _owned_school_ids(user["email"])
-        scope = {"$or": [
-            {"assigned_to": user["email"]},
-            {"school_id": {"$in": owned}} if owned else {"lead_id": "__none__"},
-        ]}
+        scope = {"$or": await _leads_visibility_or(user["email"])}
 
     rx = {"$regex": re.escape(q), "$options": "i"}
     text = {"$or": [
@@ -6243,18 +6249,50 @@ async def reassign_lead(request: Request):
     return await db.leads.find_one({"lead_id": lead_id}, {"_id": 0})
 
 
+_LEAD_BULK_CAP = 2000
+
+
+def _dedupe_capped_lead_ids(raw_ids) -> list:
+    """Order-preserving dedupe of a bulk request's `lead_ids`, capped at 2,000.
+
+    The cap is checked AFTER the dedupe (so 3,000 copies of one id is fine) and
+    BEFORE any DB work. The Leads bulk bar disables itself past the same number,
+    so the UI never sends a request this rejects."""
+    ids = list(dict.fromkeys(i for i in (raw_ids or []) if i))
+    if len(ids) > _LEAD_BULK_CAP:
+        raise HTTPException(status_code=400,
+                            detail=f"Cannot act on more than {_LEAD_BULK_CAP} leads at once")
+    return ids
+
+
+async def _scoped_lead_query(user: dict, ids: list) -> dict:
+    """`{"lead_id": {"$in": ids}}`, narrowed for a non-"all" caller to exactly
+    the leads GET /leads shows them (`_leads_visibility_or`). An id outside that
+    reach simply never matches, so it lands in the response's `skipped` count
+    rather than 403ing a mixed selection."""
+    query = {"lead_id": {"$in": ids}}
+    if not sees_all(user, "leads"):
+        _merge_or(query, await _leads_visibility_or(user["email"]))
+    return query
+
+
 @router.post("/leads/bulk-assign")
 async def bulk_assign_leads(request: Request):
+    """Reassign many leads to one agent. Admin-only (admin sees every lead, so
+    no visibility narrowing applies), but deduped and capped like bulk-tag/
+    bulk-stage, and reports `requested/updated/skipped` alongside the
+    `assigned` key ReassignLeadDialog already reads."""
     user = await get_current_user(request)
     if get_team(user) != "admin":
         raise HTTPException(status_code=403, detail="Only an admin can reassign leads")
     body = await request.json()
-    lead_ids = body.get("lead_ids") or []
+    raw_ids = body.get("lead_ids") or []
     new_agent_email = body.get("new_agent_email")
     new_agent_name = body.get("new_agent_name", "")
     reason = (body.get("reason") or "Bulk assignment").strip()
-    if not lead_ids or not new_agent_email:
+    if not raw_ids or not new_agent_email:
         raise HTTPException(status_code=400, detail="lead_ids and new_agent_email required")
+    lead_ids = _dedupe_capped_lead_ids(raw_ids)
     # Resolve a typed/picked NAME or EMAIL to the real user; never store a raw name.
     _r_email, _r_name = await resolve_owner(db, new_agent_email)
     if _r_email:
@@ -6294,63 +6332,98 @@ async def bulk_assign_leads(request: Request):
                            details=f"-> {new_agent_name} | {reason}")
         count += 1
     await _bust_lead_details(*[l["lead_id"] for l in leads])
-    return {"assigned": count}
+    await invalidate("crm:facets:*")
+    requested = len(lead_ids)
+    return {"assigned": count, "requested": requested, "updated": count,
+            "skipped": requested - count}
 
 
 @router.post("/leads/bulk-tag")
 async def bulk_tag_leads(request: Request):
-    """Add or remove a tag from multiple leads at once."""
+    """Add or remove a tag from multiple leads at once, visibility-scoped.
+
+    Used to check only get_current_user, so any logged-in user could tag ANY
+    lead. Now: needs `leads` read_write; a non-"all" caller only reaches the
+    leads GET /leads shows them (`_leads_visibility_or`) — everything else is
+    reported in `skipped`, not a 403. Request shape is unchanged
+    (`{lead_ids, tag_id, action}`); `modified` is kept for older callers.
+    """
     user = await get_current_user(request)
+    require_module(user, "leads", "read_write")
     body = await request.json()
-    lead_ids = body.get("lead_ids") or []
-    tag_id = body.get("tag_id", "").strip()
+    raw_ids = body.get("lead_ids") or []
+    tag_id = (body.get("tag_id") or "").strip()
     action = body.get("action", "add")  # "add" or "remove"
-    if not lead_ids or not tag_id:
+    if not raw_ids or not tag_id:
         raise HTTPException(400, "lead_ids and tag_id are required")
+    if action not in ("add", "remove"):
+        raise HTTPException(400, "action must be add or remove")
+    ids = _dedupe_capped_lead_ids(raw_ids)
     if not await db.tags.find_one({"tag_id": tag_id}):
         raise HTTPException(404, "Tag not found")
+    query = await _scoped_lead_query(user, ids)
     op = {"$addToSet": {"tag_ids": tag_id}} if action == "add" else {"$pull": {"tag_ids": tag_id}}
-    result = await db.leads.update_many({"lead_id": {"$in": lead_ids}}, op)
-    await log_activity(user["email"], f"bulk_tag_{action}", "lead", ",".join(lead_ids[:5]),
-                       details=f"tag_id={tag_id} action={action} count={result.modified_count}")
-    await _bust_lead_details(*lead_ids)
-    return {"modified": result.modified_count}
+    result = await db.leads.update_many(query, op)
+    # matched, not modified — same reasoning as bulk_tag_contacts: an out-of-
+    # scope id never matches (that is the "skipped"), while an idempotent
+    # add/remove on a lead the caller CAN reach still counts as honoured.
+    updated = result.matched_count
+    requested = len(ids)
+    await log_activity(user["email"], f"bulk_tag_{action}", "lead", ",".join(ids[:20]),
+                       details=f"tag_id={tag_id} action={action} requested={requested} updated={updated}")
+    await _bust_lead_details(*ids)
+    await invalidate("crm:facets:*")
+    await invalidate("tags:*")
+    return {"requested": requested, "updated": updated, "skipped": requested - updated,
+            "modified": result.modified_count}
 
 
 @router.post("/leads/bulk-stage")
 async def bulk_stage_leads(request: Request):
-    """Move multiple leads to a new pipeline stage."""
+    """Move multiple leads to a new pipeline stage, visibility-scoped like
+    bulk-tag (it too used to let any logged-in user move ANY lead).
+
+    One write per distinct CURRENT stage rather than one per lead: every lead
+    in a group gets the same `pipeline_history` entry (same from/to/by/at), so
+    2,000 leads cost a handful of round trips, not 2,000.
+    """
     user = await get_current_user(request)
+    require_module(user, "leads", "read_write")
     body = await request.json()
-    lead_ids = body.get("lead_ids") or []
-    stage = body.get("stage", "").strip()
-    if not lead_ids or not stage:
+    raw_ids = body.get("lead_ids") or []
+    stage = (body.get("stage") or "").strip()
+    if not raw_ids or not stage:
         raise HTTPException(400, "lead_ids and stage are required")
+    ids = _dedupe_capped_lead_ids(raw_ids)
+    query = await _scoped_lead_query(user, ids)
     now_iso = datetime.now(timezone.utc).isoformat()
-    count = 0
-    for lead_id in lead_ids:
-        lead = await db.leads.find_one({"lead_id": lead_id}, {"_id": 0, "stage": 1})
-        if not lead:
-            continue
+    reached = await db.leads.find(query, {"_id": 0, "lead_id": 1, "stage": 1}).to_list(len(ids))
+    by_from_stage = {}
+    for lead in reached:
+        by_from_stage.setdefault(lead.get("stage"), []).append(lead["lead_id"])
+    for from_stage, group in by_from_stage.items():
         history_entry = {
-            "from_stage": lead.get("stage"),
+            "from_stage": from_stage,
             "to_stage": stage,
             "by_email": user["email"],
             "by_name": user.get("name", user["email"]),
             "at": now_iso,
         }
-        await db.leads.update_one(
-            {"lead_id": lead_id},
+        await db.leads.update_many(
+            {"lead_id": {"$in": group}},
             {
                 "$set": {"stage": stage, "updated_at": now_iso, "last_activity_date": now_iso},
                 "$push": {"pipeline_history": history_entry},
             },
         )
-        count += 1
-    await log_activity(user["email"], "bulk_stage_change", "lead", ",".join(lead_ids[:5]),
-                       details=f"-> {stage} | count={count}")
-    await _bust_lead_details(*lead_ids)
-    return {"modified": count}
+    updated = len(reached)
+    requested = len(ids)
+    await log_activity(user["email"], "bulk_stage_change", "lead", ",".join(ids[:20]),
+                       details=f"-> {stage} | requested={requested} updated={updated}")
+    await _bust_lead_details(*[l["lead_id"] for l in reached])
+    await invalidate("crm:facets:*")
+    return {"requested": requested, "updated": updated, "skipped": requested - updated,
+            "modified": updated}
 
 
 @router.post("/leads/auto-assign")
