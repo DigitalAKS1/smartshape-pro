@@ -7,7 +7,7 @@ import { contacts as contactsApi } from '../../lib/api';
 
 const DEFAULT_INTRO = 'Hi {name}, thank you for your interest in SmartShape. Our team will reach out shortly!';
 
-export default function ConvertContactDialog({ open, onOpenChange, contact, spList = [], onDone }) {
+export default function ConvertContactDialog({ open, onOpenChange, contact, spList = [], onDone, fallbackSchoolId }) {
   const [saving, setSaving] = useState(false);
   const [leadType, setLeadType] = useState('warm');
   const [assignedTo, setAssignedTo] = useState('');
@@ -27,7 +27,12 @@ export default function ConvertContactDialog({ open, onOpenChange, contact, spLi
         lead_type: leadType, priority: 'medium',
         assigned_to: assignedTo || undefined,
         intro_message: message,
-        school_id: contact.school_id || undefined,
+        // A contact found on the School Profile only via a company-name
+        // match (not linked by contact.school_id) has a blank school_id of
+        // its own — fall back to the profile's school so the resulting
+        // lead isn't orphaned. The backend's explicit-body-value precedence
+        // still wins over this.
+        school_id: contact.school_id || fallbackSchoolId || undefined,
       });
       toast.success(sendIntro ? 'Converted to lead — intro sent' : 'Converted to lead');
       onOpenChange(false);
