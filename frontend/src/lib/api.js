@@ -324,6 +324,8 @@ export const contacts = {
   completeFollowup: (id, followupId, data = {}) =>
     API.patch(`/contacts/${id}/followups/${followupId}/complete`, data),
   listFollowups: (id) => API.get('/followups', { params: { contact_id: id } }),
+  bulkTag: (data) => API.post('/contacts/bulk-tag', data),
+  bulkAssign: (data) => API.post('/contacts/bulk-assign', data),
   importCsv: (file, { tagIds = [], globalNotes = '' } = {}) => {
     const fd = new FormData();
     fd.append('file', file);
