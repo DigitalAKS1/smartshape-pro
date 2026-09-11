@@ -5606,7 +5606,7 @@ async def get_leads(request: Request,
         # at a school the tag reaches — the same rule the CRM screen filters by.
         # It is one more AND'd clause, so the visibility scope below still
         # narrows it: the roll-up can never show a rep a lead they cannot see.
-        tag_lead_ids = list((await resolve_tag_scope(db, tag))["lead_ids"])
+        tag_lead_ids = sorted((await resolve_tag_scope(db, tag))["lead_ids"], key=str)  # stable facet cache key
         clauses.append({"lead_id": {"$in": tag_lead_ids}})
     if search and search.strip():
         rx = {"$regex": re.escape(search.strip()), "$options": "i"}

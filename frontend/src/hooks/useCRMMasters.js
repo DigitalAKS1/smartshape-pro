@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { toast } from 'sonner';
 import {
   groups as groupsApi,
@@ -30,7 +30,9 @@ export function describeBroadcastReach(tagName, p) {
 }
 
 export function confirmBroadcastText(tagName, p) {
-  return `Send this WhatsApp template to ${plural(p.unique_recipients, 'person', 'people')}?\n\n`
+  // Over the cap only `capped_at` people are actually messaged — quote that.
+  const willSend = p.capped_at ? Math.min(p.unique_recipients, p.capped_at) : p.unique_recipients;
+  return `Send this WhatsApp template to ${plural(willSend, 'person', 'people')}?\n\n`
     + `${describeBroadcastReach(tagName, p)}\n\nThis sends real messages and cannot be undone.`;
 }
 
@@ -260,7 +262,16 @@ export function useCRMMasters() {
   };
 
   // ── Campaign ────────────────────────────────────────────────────────────────
+  // In-flight guard: a ref, not state, so a fast double-click can't open two
+  // confirm boxes (a state update lands too late to stop the second click)
+  // and send the same real WhatsApp campaign twice.
+  const sendingRef = useRef(false);
   const sendCampaign = async () => {
+    if (sendingRef.current) return;
+    sendingRef.current = true;
+    try { await sendCampaignOnce(); } finally { sendingRef.current = false; }
+  };
+  const sendCampaignOnce = async () => {
     if (!campaignTag) { toast.error('Select a tag'); return; }
     if (!campaignTemplate) { toast.error('Select a WhatsApp template'); return; }
     const tagName = tagsList.find(t => t.tag_id === campaignTag)?.name || 'this tag';
