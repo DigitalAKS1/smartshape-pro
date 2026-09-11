@@ -10,6 +10,10 @@ const NEW_TAG_COLOR = '#6366f1';
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
+// Coarse pointer = a phone/tablet, where focusing an input opens the keyboard.
+const IS_TOUCH = typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+  && window.matchMedia('(pointer: coarse)').matches;
+
 /**
  * The success line every bulk bar shows after tagging, in one place so the
  * three tabs read the same:
@@ -175,7 +179,9 @@ export default function BulkTagPicker({
           <div className="p-2 border-b border-[var(--border-color)] flex items-center gap-2">
             <div className="relative flex-1">
               <Search className={`h-3.5 w-3.5 absolute left-2 top-1/2 -translate-y-1/2 ${textMuted}`} />
-              <input type="text" value={query} autoFocus
+              {/* No autofocus on touch screens: it pops the phone keyboard up
+                  over the bottom-pinned Add/Remove buttons. */}
+              <input type="text" value={query} autoFocus={!IS_TOUCH}
                 onChange={e => setQuery(e.target.value)} onKeyDown={onSearchKey}
                 placeholder="Search or create a tag"
                 className={`w-full h-8 pl-7 pr-2 rounded border text-xs ${inputCls} outline-none focus:border-[#e94560]`}

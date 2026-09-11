@@ -617,14 +617,17 @@ export default function useLeadsCRM() {
     setSortConfig(prev => prev.key === key ? { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' });
   };
   const sortIndicator = (key) => sortConfig.key === key ? (sortConfig.dir === 'asc' ? ' ▲' : ' ▼') : '';
-  const sortData = (data, key, dir) => {
+  // Stable identity (pure, no deps) so callers can list it in useMemo deps —
+  // a fresh function every render would re-sort the whole schools list on
+  // every render of every tab.
+  const sortData = useCallback((data, key, dir) => {
     if (!key) return data;
     return [...data].sort((a, b) => {
       const av = (a[key] || ''), bv = (b[key] || '');
       if (typeof av === 'number' && typeof bv === 'number') return dir === 'asc' ? av - bv : bv - av;
       return dir === 'asc' ? String(av).localeCompare(String(bv)) : String(bv).localeCompare(String(av));
     });
-  };
+  }, []);
 
   // ─────────────────────────────────────────────────────────────────────────────
   // UTILITY FUNCTIONS (computed / used by UI)
