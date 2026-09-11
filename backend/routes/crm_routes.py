@@ -4693,6 +4693,94 @@ async def remove_contact_tag(contact_id: str, tag_id: str, request: Request):
     return await db.contacts.find_one({"contact_id": contact_id}, {"_id": 0})
 
 
+@router.post("/contacts/bulk-tag")
+async def bulk_tag_contacts(request: Request):
+    """Add or remove tags across many contacts at once, owner-scoped.
+
+    Contacts had no bulk endpoint of any kind before this — only the per-contact
+    add/remove above. Modelled on POST /schools/bulk-tag, but — unlike the
+    existing /leads/bulk-tag, which lets any logged-in user touch any lead —
+    a non-"all" caller here can only ever reach contacts `_owner_clause` says
+    are theirs; ids outside that reach quietly land in `skipped`, not a 403,
+    so a scoped rep who selects a mixed page from the UI still gets a result.
+    """
+    user = await get_current_user(request)
+    require_module(user, "leads", "read_write")
+    body = await _parse_json_body(request)
+    raw_ids = body.get("contact_ids") or []
+    tag_ids = body.get("tag_ids") or []
+    action = body.get("action", "add")
+    if not raw_ids or not tag_ids:
+        raise HTTPException(status_code=400, detail="contact_ids and tag_ids are required")
+    if action not in ("add", "remove"):
+        raise HTTPException(status_code=400, detail="action must be add or remove")
+    ids = list(dict.fromkeys(raw_ids))  # dedupe, preserve order
+    if len(ids) > 2000:
+        raise HTTPException(status_code=400, detail="Cannot act on more than 2000 contacts at once")
+    query = {"contact_id": {"$in": ids}, "is_deleted": {"$ne": True}}
+    if not sees_all(user, "leads"):
+        query["$or"] = _owner_clause(user["email"])["$or"]
+    op = ({"$addToSet": {"tag_ids": {"$each": tag_ids}}} if action == "add"
+          else {"$pull": {"tag_ids": {"$in": tag_ids}}})
+    res = await db.contacts.update_many(query, op)
+    # matched, not modified: an id outside this user's scope never matches the
+    # query at all, which is exactly the "skipped" this endpoint promises to
+    # report — an idempotent add/remove that touches nothing still counts as
+    # "updated" because the request WAS honoured for that contact.
+    updated = res.matched_count
+    requested = len(ids)
+    await log_activity(user["email"], f"bulk_tag_{action}", "contact", ",".join(ids[:20]),
+                       details=f"tag_ids={tag_ids} action={action} requested={requested} updated={updated}")
+    await invalidate("crm:facets:*")
+    await invalidate("tags:*")
+    return {"requested": requested, "updated": updated, "skipped": requested - updated}
+
+
+@router.post("/contacts/bulk-assign")
+async def bulk_assign_contacts(request: Request):
+    """Reassign many contacts to one owner at once, owner-scoped like bulk-tag.
+
+    Resolves the target via `resolve_owner` (same helper `/leads/bulk-assign`
+    uses) so a typed/picked display NAME never lands in `assigned_to` — that
+    exact bug once required a production backfill. An unresolvable name is a
+    400, not a silent no-op reassignment to a blank owner.
+    """
+    user = await get_current_user(request)
+    require_module(user, "leads", "read_write")
+    body = await _parse_json_body(request)
+    raw_ids = body.get("contact_ids") or []
+    if not raw_ids:
+        raise HTTPException(status_code=400, detail="contact_ids are required")
+    ids = list(dict.fromkeys(raw_ids))
+    if len(ids) > 2000:
+        raise HTTPException(status_code=400, detail="Cannot act on more than 2000 contacts at once")
+    raw_owner = (body.get("assigned_to") or "").strip()
+    if not raw_owner:
+        raise HTTPException(status_code=400, detail="assigned_to is required")
+    owner_email, owner_name = await resolve_owner(db, raw_owner)
+    if not owner_email:
+        if "@" in raw_owner:  # unknown but syntactically valid — still a usable key
+            owner_email = raw_owner
+            owner_name = (body.get("assigned_name") or "").strip() or raw_owner
+        else:
+            raise HTTPException(status_code=400, detail="Could not resolve assignee to a user")
+    query = {"contact_id": {"$in": ids}, "is_deleted": {"$ne": True}}
+    if not sees_all(user, "leads"):
+        query["$or"] = _owner_clause(user["email"])["$or"]
+    now_iso = datetime.now(timezone.utc).isoformat()
+    res = await db.contacts.update_many(query, {"$set": {
+        "assigned_to": owner_email,
+        "assigned_name": owner_name,
+        "last_activity_date": now_iso,
+    }})
+    updated = res.matched_count
+    requested = len(ids)
+    await log_activity(user["email"], "bulk_assign_contact", "contact", ",".join(ids[:20]),
+                       details=f"-> {owner_name} ({owner_email}) requested={requested} updated={updated}")
+    await invalidate("crm:facets:*")
+    return {"requested": requested, "updated": updated, "skipped": requested - updated}
+
+
 @router.get("/contacts/{contact_id}/activity")
 async def get_contact_activity(contact_id: str, request: Request):
     """Unified activity timeline: WhatsApp campaigns, drip enrollments, greeting logs."""
