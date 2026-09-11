@@ -687,7 +687,7 @@ export default function useLeadsCRM() {
   const {
     searchTerm, setSearchTerm, filterType, setFilterType, filterTag, setFilterTag,
     masterFilter, setMasterFilter, filterOptions, parsedQuery, effectiveFilter,
-    masterFiltered, filteredLeads, masterCountFor, activeTabKind,
+    masterFiltered, filteredLeads, masterCountFor, activeTabKind, masterContexts,
   } = filters;
 
 
@@ -706,6 +706,7 @@ export default function useLeadsCRM() {
     filterTag, setFilterTag,
     filterRole, setFilterRole,
     masterFilter, setMasterFilter, masterFiltered, filterOptions, masterCountFor, activeTabKind,
+    masterContexts,
     parsedQuery, effectiveFilter,
     sortConfig, toggleSort, sortIndicator, sortData,
     contactPage, setContactPage, contactsPerPage,

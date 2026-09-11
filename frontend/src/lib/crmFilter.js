@@ -44,7 +44,52 @@ export function deriveFilterOptions({ contacts = [], leads = [], schools = [], s
   };
 }
 
-export function buildCrmContext(kind, { schools = [], leads = [], contacts = [], roles = [] } = {}) {
+const arr = (v) => (Array.isArray(v) ? v : []);
+
+// ── Tag roll-up (spec 2026-09-11, D1-D4) ─────────────────────────────────────
+// Tags sit on people and deals, not schools, so a school matches a tag through
+// its children. The rule is the backend's services/tag_scope.py, restated here
+// over the loaded arrays:
+//   D1  a contact matches only on its OWN tag_ids — never through its school
+//   D2  a school matches if it, or any live contact or lead of it, is tagged
+//   D3  a lead matches if it is tagged, or its school matches under D2
+// Soft-deleted rows never match and never contribute, and a school_id with no
+// live school behind it rolls nothing up. src/lib/__tests__/
+// tagRollupAgreement.test.js runs the backend's fixture through this and must
+// produce the resolver's exact sets.
+//
+// school_id -> Set of every tag id the school reaches under D2. Built ONCE per
+// data change (callers memoise the context that holds it), so matching a row is
+// a Map lookup — O(rows) per filter pass, not O(rows x children).
+export function buildSchoolTagIndex({ schools = [], contacts = [], leads = [] } = {}) {
+  const index = new Map();
+  const addTags = (sid, tags) => {
+    const ids = arr(tags);
+    if (!ids.length) return;
+    const set = index.get(sid);
+    ids.forEach(t => set.add(t));
+  };
+  (schools || []).forEach(s => {
+    if (!s || !s.school_id || s.is_deleted) return;
+    if (!index.has(s.school_id)) index.set(s.school_id, new Set());
+    addTags(s.school_id, s.tag_ids);
+  });
+  const addChild = (row) => {
+    if (!row || row.is_deleted || !row.school_id || !index.has(row.school_id)) return;
+    addTags(row.school_id, row.tag_ids);
+  };
+  (contacts || []).forEach(addChild);
+  (leads || []).forEach(addChild);
+  return index;
+}
+
+// `schoolTags` is the index above. Pass one already built (buildMasterContexts
+// shares a single index across all three contexts); otherwise a school/lead
+// context builds its own from the arrays given — and a lead context built
+// WITHOUT `contacts` would silently miss every school surfaced by a tagged
+// person, so production callers must go through buildMasterContexts. A contact
+// context never needs it (D1), so none is built.
+export function buildCrmContext(kind, { schools = [], leads = [], contacts = [], roles = [], schoolTags } = {}) {
   const schoolsById = {};
   schools.forEach(s => { schoolsById[s.school_id] = s; });
   const leadsBySchoolId = {};
@@ -53,10 +98,20 @@ export function buildCrmContext(kind, { schools = [], leads = [], contacts = [],
   contacts.forEach(c => { if (c.school_id) (contactsBySchoolId[c.school_id] = contactsBySchoolId[c.school_id] || []).push(c); });
   const rolesById = {};
   (roles || []).forEach(r => { rolesById[r.role_id] = r.name; });
-  return { kind, schoolsById, leadsBySchoolId, contactsBySchoolId, rolesById };
+  const tagIndex = schoolTags || (kind === 'contact' ? null : buildSchoolTagIndex({ schools, contacts, leads }));
+  return { kind, schoolsById, leadsBySchoolId, contactsBySchoolId, rolesById, schoolTags: tagIndex };
 }
 
-const arr = (v) => (Array.isArray(v) ? v : []);
+// Does `row` (of `kind`) match ANY of `tags` under D1-D3?
+export function matchesTagRollup(row, tags, kind, schoolTags) {
+  if (!row || row.is_deleted) return false;
+  const own = arr(row.tag_ids);
+  if (tags.some(t => own.includes(t))) return true;
+  if (kind === 'contact') return false;                  // D1: people never roll up
+  const rolled = schoolTags && row.school_id ? schoolTags.get(row.school_id) : null;
+  return !!rolled && tags.some(t => rolled.has(t));      // D2 school / D3 lead
+}
+
 const nonEmpty = (v) => arr(v).length > 0;
 
 const hasDateRange = (f, key) => f[`${key}_from`] != null || f[`${key}_to`] != null;
@@ -101,7 +156,7 @@ function withinDateRange(row, field, filter) {
 
 export function matchesCrmFilter(row, filter, ctx) {
   if (!hasActiveFilters(filter)) return true;
-  const { kind, schoolsById = {}, leadsBySchoolId = {}, contactsBySchoolId = {}, rolesById = {} } = ctx || {};
+  const { kind, schoolsById = {}, leadsBySchoolId = {}, contactsBySchoolId = {}, rolesById = {}, schoolTags = null } = ctx || {};
   const f = filter;
 
   if (nonEmpty(f.owners)) {
@@ -140,10 +195,9 @@ export function matchesCrmFilter(row, filter, ctx) {
     }
   }
 
-  if (nonEmpty(f.tags)) {
-    const rowTags = arr(row.tag_ids);
-    if (!f.tags.some(t => rowTags.includes(t))) return false;
-  }
+  // Tags roll up: a school matches through its tagged people and deals, a lead
+  // through its school — never a contact through its school (D1-D3 above).
+  if (nonEmpty(f.tags) && !matchesTagRollup(row, f.tags, kind, schoolTags)) return false;
 
   if (nonEmpty(f.roles)) {
     const wanted = f.roles.map(r => r.toLowerCase());
