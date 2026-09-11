@@ -80,8 +80,11 @@ async def build_school_plan(school: dict):
         ("followups", {"lead_id": lead_in}),
         ("call_notes", {"lead_id": lead_in}),
         ("tasks", {"lead_id": lead_in}),
-        ("physical_dispatches", {"lead_id": lead_in}),
-        ("drip_enrollments", {"lead_id": lead_in}),
+        ("physical_dispatches", {"$or": [{"lead_id": lead_in}, {"contact_id": contact_in}]}),
+        # An enrolment keys a lead OR a contact (D5). Deleted with the school,
+        # exactly as the lead-keyed ones always were (snapshotted first).
+        ("drip_enrollments", {"$or": [{"lead_id": lead_in}, {"contact_id": contact_in},
+                                      {"school_id": sid, "lead_id": {"$in": [None, ""]}}]}),
         ("whatsapp_logs", {"lead_id": lead_in}),
         ("greeting_logs", {"contact_id": contact_in}),
         # school portal
@@ -141,8 +144,9 @@ async def build_contact_plan(contact: dict):
         ("call_notes", {"contact_id": cid}),
         ("followups", {"contact_id": cid}),
         ("tasks", {"contact_id": cid}),
-        ("physical_dispatches", {"lead_id": lead_in}),
-        ("drip_enrollments", {"lead_id": lead_in}),
+        ("physical_dispatches", {"$or": [{"lead_id": lead_in}, {"contact_id": cid}]}),
+        # The contact's own enrolments (D5) go with it, like its lead chain's.
+        ("drip_enrollments", {"$or": [{"lead_id": lead_in}, {"contact_id": cid}]}),
         ("whatsapp_logs", {"lead_id": lead_in}),
         ("greeting_logs", {"contact_id": cid}),
     ]

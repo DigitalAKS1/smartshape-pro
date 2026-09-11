@@ -2057,22 +2057,44 @@ async def run_db_integrity(request: Request):
     report["found"]["quotations_orphan_lead"] = quots_bad_lead
     report["fixed"]["quotations_orphan_lead"] = quots_bad_lead
 
-    # ── 7. Orphaned followups/call_notes/tasks/physical_dispatches ──────────
+    # ── 7. Orphaned followups/call_notes/tasks/physical_dispatches/drips ────
+    valid_lead_list = [i for i in valid_lead_ids if i not in (None, "")]
+    valid_contact_list = [i for i in valid_contact_ids if i not in (None, "")]
     for coll_name, id_field in [
         ("followups", "lead_id"),
         ("call_notes", "lead_id"),
         ("tasks", "lead_id"),
         ("physical_dispatches", "lead_id"),
-        ("drip_enrollments", "lead_id"),
     ]:
         coll = db[coll_name]
-        orphan_count = await coll.count_documents({
-            id_field: {"$nin": list(valid_lead_ids), "$ne": None}
-        })
+        orphan_q = {id_field: {"$nin": valid_lead_list, "$ne": None}}
+        if coll_name in ("tasks", "physical_dispatches"):
+            # A contact-keyed drip's task / dispatch has no lead (D5); it is not
+            # an orphan while its contact is alive.
+            orphan_q["contact_id"] = {"$nin": valid_contact_list}
+        orphan_count = await coll.count_documents(orphan_q)
         if orphan_count:
-            await coll.delete_many({id_field: {"$nin": list(valid_lead_ids), "$ne": None}})
+            await coll.delete_many(orphan_q)
         report["found"][f"{coll_name}_orphan"] = orphan_count
         report["fixed"][f"{coll_name}_orphan"] = orphan_count
+
+    # Drip enrolments key a lead OR a contact (D5). One is an orphan only when
+    # EVERY id it carries points at nothing: a contact-only enrolment has no
+    # lead at all, and must not be deleted for that. `$nin` also matches a
+    # missing/null/blank field, so each side reads "unset, or set to a dead id";
+    # the last clause requires the enrolment to carry at least one id, so a
+    # malformed row with neither is left for the executor to cancel, not deleted.
+    drip_orphan_q = {"$and": [
+        {"lead_id": {"$nin": valid_lead_list}},
+        {"contact_id": {"$nin": valid_contact_list}},
+        {"$or": [{"lead_id": {"$nin": [None, ""]}},
+                 {"contact_id": {"$nin": [None, ""]}}]},
+    ]}
+    orphan_count = await db.drip_enrollments.count_documents(drip_orphan_q)
+    if orphan_count:
+        await db.drip_enrollments.delete_many(drip_orphan_q)
+    report["found"]["drip_enrollments_orphan"] = orphan_count
+    report["fixed"]["drip_enrollments_orphan"] = orphan_count
 
     # ── 8. Order_items / order_timeline / payments orphaned from orders ──────
     valid_order_ids = {

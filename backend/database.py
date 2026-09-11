@@ -235,6 +235,8 @@ async def connect_db():
     await db.drip_enrollments.create_index([("lead_id", 1), ("status", 1)], background=True)
     await db.drip_enrollments.create_index([("sequence_id", 1), ("status", 1)], background=True)
     await db.drip_enrollments.create_index("next_step_at", background=True)
+    # An enrolment can key a contact instead of a lead (D5).
+    await db.drip_enrollments.create_index([("contact_id", 1), ("status", 1)], background=True)
     await db.greeting_logs.create_index([("contact_id", 1), ("sent_at", -1)], background=True)
     await db.greeting_logs.create_index([("phone", 1), ("year", 1)], background=True)
     await db.whatsapp_logs.create_index([("lead_id", 1), ("sent_at", -1)], background=True)
