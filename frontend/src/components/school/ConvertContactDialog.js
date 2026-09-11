@@ -27,6 +27,7 @@ export default function ConvertContactDialog({ open, onOpenChange, contact, spLi
         lead_type: leadType, priority: 'medium',
         assigned_to: assignedTo || undefined,
         intro_message: message,
+        school_id: contact.school_id || undefined,
       });
       toast.success(sendIntro ? 'Converted to lead — intro sent' : 'Converted to lead');
       onOpenChange(false);

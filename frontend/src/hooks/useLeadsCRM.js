@@ -494,7 +494,7 @@ export default function useLeadsCRM() {
 
   const openConvert = (c) => {
     setConvertContact(c);
-    setConvertForm({ school_id: '', lead_type: 'warm', priority: 'medium', interested_product: '', assigned_to: user?.email || '', assigned_name: user?.name || '' });
+    setConvertForm({ school_id: c?.school_id || '', lead_type: 'warm', priority: 'medium', interested_product: '', assigned_to: user?.email || '', assigned_name: user?.name || '' });
     setConvertAddNewSchool(false);
     setConvertNewSchool({ school_name: '', school_type: 'CBSE', city: '', state: '', pincode: '', phone: '', school_strength: 0 });
     setConvertDialogOpen(true);

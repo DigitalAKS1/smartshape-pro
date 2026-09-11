@@ -4139,15 +4139,30 @@ async def get_school_profile(school_id: str, request: Request):
         raise HTTPException(status_code=403, detail="Not authorized to view this school")
     school_name = school.get("school_name", "")
 
-    leads = await db.leads.find({"school_id": school_id}, {"_id": 0}).to_list(None)
+    leads = await db.leads.find(
+        {"school_id": school_id, "is_deleted": {"$ne": True}}, {"_id": 0}
+    ).to_list(None)
     lead_ids = [l["lead_id"] for l in leads]
 
-    # Query by FK first, fall back to string match for legacy records; deduplicate
-    contacts_by_fk = await db.contacts.find({"school_id": school_id}, {"_id": 0}).to_list(None)
-    fk_ids = {c["contact_id"] for c in contacts_by_fk}
-    contacts_by_name = await db.contacts.find(
-        {"company": school_name, "contact_id": {"$nin": list(fk_ids)}}, {"_id": 0}
+    # Query by FK first, fall back to string match for legacy records; deduplicate.
+    # The name fallback only exists to catch contacts that were never FK-linked —
+    # it must never steal a contact that IS linked to a (possibly duplicate)
+    # school, and a blank school_name must not match every blank-company contact.
+    contacts_by_fk = await db.contacts.find(
+        {"school_id": school_id, "is_deleted": {"$ne": True}}, {"_id": 0}
     ).to_list(None)
+    fk_ids = {c["contact_id"] for c in contacts_by_fk}
+    contacts_by_name = []
+    if school_name and school_name.strip():
+        contacts_by_name = await db.contacts.find(
+            {
+                "company": school_name,
+                "contact_id": {"$nin": list(fk_ids)},
+                "is_deleted": {"$ne": True},
+                "$or": [{"school_id": {"$exists": False}}, {"school_id": None}, {"school_id": ""}],
+            },
+            {"_id": 0},
+        ).to_list(None)
     contacts_list = contacts_by_fk + contacts_by_name
 
     quotations = await db.quotations.find(
@@ -4788,7 +4803,11 @@ async def convert_contact_to_lead(contact_id: str, request: Request):
         body, default_email=_cv_default, default_name=_cv_default_name)
 
     # Inline school creation
-    school_id = body.get("school_id", "")
+    # Fall back to the contact's own school_id when the request body omits one
+    # (e.g. the School Profile's Convert button sends no school_id at all) so a
+    # contact converted from its school's profile doesn't produce an orphaned
+    # lead with school_id=''. An explicit non-empty body value still wins.
+    school_id = (body.get("school_id") or contact.get("school_id") or "").strip()
     company_name = contact.get("company", "")
     new_school_data = body.get("new_school")
     if new_school_data and new_school_data.get("school_name"):
