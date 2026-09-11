@@ -14,7 +14,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import WhatsAppSendDialog from '../../components/WhatsAppSendDialog';
 import KanbanBoard, { ageColor, AgeBadge } from '../../components/KanbanBoard';
 import ReassignLeadDialog from '../../components/ReassignLeadDialog';
-import { STAGES, SCHOOL_TYPES, settableStages } from '../../lib/crmConstants';
+import { STAGES, SCHOOL_TYPES } from '../../lib/crmConstants';
 import LeadMobileCard from '../../components/crm/LeadMobileCard';
 import { FieldTooltip } from '../../components/ui/Tooltip';
 import EmptyState, { EMPTY_STATES } from '../../components/ui/EmptyState';
@@ -39,6 +39,8 @@ import DataCleanupPanel from '../../components/crm/DataCleanupPanel';
 import DataHealthPanel from '../../components/crm/DataHealthPanel';
 import BulkDeleteSchoolsDialog from '../../components/crm/BulkDeleteSchoolsDialog';
 import AssignToPicker from '../../components/crm/AssignToPicker';
+import LeadsBulkBar from '../../components/crm/LeadsBulkBar';
+import { toggleAllVisible, allVisibleSelected } from '../../lib/leadSelection';
 import { useIsOwner, usePermission } from '../../hooks/usePermission';
 import { deriveFilterOptions, buildCrmContext, matchesCrmFilter, hasActiveFilters } from '../../lib/crmFilter';
 import ActiveFilterBar from '../../components/crm/ActiveFilterBar';
@@ -222,6 +224,25 @@ export default function LeadsCRM() {
     finally { setMailRunBusy(false); }
   };
 
+  // One bulk bar for lead rows, rendered by the Leads list tab (visible =
+  // sortedLeads) and the Pipeline tab (visible = filteredLeads). Actions send
+  // only the selected ids in `visibleLeads`; selections the filter hides are
+  // counted, not acted on. Ids of leads that no longer exist are ignored here
+  // and pruned by useLeadSelection.
+  const allLeadIds = crm.leadsList.map(l => l.lead_id);
+  const renderLeadsBulkBar = (visibleLeads) => (
+    <LeadsBulkBar
+      selectedIds={crm.selectedLeadIds}
+      visibleIds={visibleLeads.map(l => l.lead_id)}
+      allIds={allLeadIds}
+      tagsList={crm.tagsList}
+      isAdmin={crm.user?.role === 'admin'}
+      onReassign={(ids) => { crm.setReassignBulkIds(ids); crm.setReassignLead(null); crm.setReassignOpen(true); }}
+      onClear={crm.clearLeadSelection}
+      onDone={crm.fetchData}
+    />
+  );
+
   if (crm.loading) return (
     <AppShell>
       <div className="flex items-center justify-center h-96">
@@ -352,50 +373,9 @@ export default function LeadsCRM() {
                 </button>
               ))}
             </div>
-            {crm.selectedLeadIds.size > 0 && (
-              <div className="flex items-center gap-2 flex-wrap" data-testid="bulk-actions-bar">
-                <span className={`text-xs ${textSec}`}>{crm.selectedLeadIds.size} selected</span>
-                {crm.user?.role === 'admin' && (
-                  <Button size="sm" onClick={() => { crm.setReassignBulkIds(Array.from(crm.selectedLeadIds)); crm.setReassignLead(null); crm.setReassignOpen(true); }} className="bg-[#e94560] hover:bg-[#f05c75] text-white h-8" data-testid="bulk-reassign-btn">
-                    <UserCog className="mr-1 h-3 w-3" /> Reassign
-                  </Button>
-                )}
-                <select defaultValue="" className={`h-8 px-2 rounded text-xs ${inputCls} cursor-pointer`}
-                  onChange={async e => {
-                    const tagId = e.target.value;
-                    if (!tagId) return;
-                    try {
-                      await leadsApiObj.bulkTag({ lead_ids: Array.from(crm.selectedLeadIds), tag_id: tagId, action: 'add' });
-                      toast.success(`Tag added to ${crm.selectedLeadIds.size} lead(s)`);
-                      crm.fetchData();
-                    } catch { toast.error('Bulk tag failed'); }
-                    e.target.value = '';
-                  }}>
-                  <option value="">Add tag…</option>
-                  {crm.tagsList.map(t => <option key={t.tag_id} value={t.tag_id}>{t.name}</option>)}
-                </select>
-                <select defaultValue="" className={`h-8 px-2 rounded text-xs ${inputCls} cursor-pointer`}
-                  onChange={async e => {
-                    const stage = e.target.value;
-                    if (!stage) return;
-                    if (!window.confirm(`Move ${crm.selectedLeadIds.size} lead(s) to stage "${stage}"?`)) { e.target.value = ''; return; }
-                    try {
-                      await leadsApiObj.bulkStage({ lead_ids: Array.from(crm.selectedLeadIds), stage });
-                      toast.success(`${crm.selectedLeadIds.size} lead(s) moved to ${stage}`);
-                      crm.setSelectedLeadIds(new Set());
-                      crm.fetchData();
-                    } catch { toast.error('Bulk stage change failed'); }
-                    e.target.value = '';
-                  }}>
-                  <option value="">Move to Stage</option>
-                  {/* Live stages only — a bulk move has no single current stage
-                      to make an exception for, and nothing should be moved INTO
-                      a retired one. */}
-                  {settableStages().map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
-                </select>
-                <Button size="sm" variant="outline" onClick={() => crm.setSelectedLeadIds(new Set())} className={`border-[var(--border-color)] ${textSec} h-8`}>Clear</Button>
-              </div>
-            )}
+            {/* The same bar the Leads list tab renders. "Visible" here is what
+                the Pipeline tab shows: crm.filteredLeads. */}
+            {renderLeadsBulkBar(crm.filteredLeads)}
           </div>
         )}
 
@@ -517,9 +497,23 @@ export default function LeadsCRM() {
           const lOptions = deriveFilterOptions({ leads: crm.leadsList, schools: crm.schoolsList, sources: crm.sourcesList, roles: crm.rolesList, tags: crm.tagsList });
           const sortedLeads = crm.sortData(crm.filteredLeads, crm.sortConfig.key, crm.sortConfig.dir)
             .filter(l => matchesCrmFilter(l, leadsFilter, lctx));
+          // Every row this filter shows, in display order. The header checkbox,
+          // shift-click ranges and the bulk bar all work over this list.
+          const sortedIds = sortedLeads.map(l => l.lead_id);
+          // onChange (a plain "change" event) carries no modifier keys, so
+          // shift-click reads e.shiftKey off the click. onChange stays a no-op
+          // to satisfy React's controlled-input contract (as in ContactsTab).
+          const rowCheckbox = (lead, extraCls = '') => (
+            <input type="checkbox" className={`accent-[#e94560] ${extraCls}`}
+              checked={crm.selectedLeadIds.has(lead.lead_id)}
+              onChange={() => {}}
+              onClick={e => { e.stopPropagation(); crm.toggleLeadSelect(lead.lead_id, { shift: e.shiftKey, orderedIds: sortedIds }); }}
+              data-testid={`select-lead-${lead.lead_id}`} />
+          );
           return (
             <>
             <MultiFilterBar options={lOptions} value={leadsFilter} onChange={setLeadsFilter} resultCount={sortedLeads.length} />
+            {renderLeadsBulkBar(sortedLeads)}
             <div className={`${card} border rounded-md overflow-hidden`} data-testid="leads-list-view">
               {/* Mobile cards */}
               <div className="sm:hidden divide-y divide-[var(--border-color)]">
@@ -527,6 +521,7 @@ export default function LeadsCRM() {
                   const stg = getStageObj(lead.stage);
                   return (
                     <div key={lead.lead_id} onClick={() => crm.openDetail(lead)} className="p-3 flex items-start justify-between gap-2 active:bg-[var(--bg-hover)]">
+                      {rowCheckbox(lead, 'mt-1 flex-shrink-0')}
                       <div className="flex-1 min-w-0">
                         <p className={`${textPri} font-medium text-sm truncate`}>{lead.company_name || lead.contact_name}</p>
                         <p className={`text-xs ${textMuted}`}>{lead.contact_name} • {lead.contact_phone}</p>
@@ -545,7 +540,11 @@ export default function LeadsCRM() {
               <div className="hidden sm:block overflow-x-auto">
                 <table className="w-full text-sm" data-testid="leads-flat-table">
                   <thead><tr className="bg-[var(--bg-primary)]">
-                    <th className="py-3 px-3 w-8"><input type="checkbox" className="accent-[#e94560]" onChange={e => { if (e.target.checked) crm.setSelectedLeadIds(new Set(sortedLeads.map(l => l.lead_id))); else crm.setSelectedLeadIds(new Set()); }} checked={sortedLeads.length > 0 && sortedLeads.every(l => crm.selectedLeadIds.has(l.lead_id))} /></th>
+                    {/* Adds/removes only the rows this filter shows. Unticking
+                        used to wipe the whole Set, including hidden selections. */}
+                    <th className="py-3 px-3 w-8"><input type="checkbox" className="accent-[#e94560]" data-testid="leads-select-all"
+                      onChange={() => crm.setSelectedLeadIds(prev => toggleAllVisible(prev, sortedIds))}
+                      checked={allVisibleSelected(crm.selectedLeadIds, sortedIds)} /></th>
                     <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} cursor-pointer select-none`} onClick={() => crm.toggleSort('company_name')}>School{crm.sortIndicator('company_name')}</th>
                     <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} cursor-pointer select-none`} onClick={() => crm.toggleSort('contact_name')}>Contact{crm.sortIndicator('contact_name')}</th>
                     <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} cursor-pointer select-none`} onClick={() => crm.toggleSort('lead_type')}>Type{crm.sortIndicator('lead_type')}</th>
@@ -560,7 +559,7 @@ export default function LeadsCRM() {
                       const stg = getStageObj(lead.stage);
                       return (
                         <tr key={lead.lead_id} className="border-t border-[var(--border-color)] hover:bg-[var(--bg-hover)] cursor-pointer" onClick={() => crm.openDetail(lead)}>
-                          <td className="py-2.5 px-3" onClick={e => e.stopPropagation()}><input type="checkbox" className="accent-[#e94560]" checked={crm.selectedLeadIds.has(lead.lead_id)} onChange={() => crm.toggleLeadSelect(lead.lead_id)} /></td>
+                          <td className="py-2.5 px-3" onClick={e => e.stopPropagation()}>{rowCheckbox(lead)}</td>
                           <td className="py-2.5 px-3">
                             <p className={`${textPri} font-medium text-sm`}>{lead.company_name}</p>
                             <p className={`text-xs ${textMuted}`}>{lead.school_type} {lead.school_city && `| ${lead.school_city}`}</p>
@@ -1380,7 +1379,7 @@ export default function LeadsCRM() {
           onOpenChange={crm.setReassignOpen}
           lead={crm.reassignLead}
           leadIds={crm.reassignBulkIds}
-          onSuccess={() => { crm.setSelectedLeadIds(new Set()); crm.fetchData(); }}
+          onSuccess={() => { crm.clearLeadSelection(); crm.fetchData(); }}
         />
 
       </div>

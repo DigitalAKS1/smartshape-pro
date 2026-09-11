@@ -21,6 +21,7 @@ import {
 import { useDataSync, useAutoRefresh } from '../lib/dataSync';
 import useCrmData from './useCrmData';
 import useCrmFilters from './useCrmFilters';
+import useLeadSelection from './useLeadSelection';
 import { useAuth } from '../contexts/AuthContext';
 import { toast } from 'sonner';
 
@@ -54,7 +55,11 @@ export default function useLeadsCRM() {
 
   // ── View / selection ─────────────────────────────────────────────────────────
   const [leadView, setLeadView] = useState('pipeline'); // 'pipeline' | 'kanban' | 'table'
-  const [selectedLeadIds, setSelectedLeadIds] = useState(new Set());
+  // One selection shared by the Leads list, the Kanban and ReassignLeadDialog.
+  // It is cleared on tab change and pruned of deleted leads (useLeadSelection).
+  const {
+    selectedLeadIds, setSelectedLeadIds, toggleLeadSelect, clearLeadSelection,
+  } = useLeadSelection(leadsList, activeTab);
   const [reassignOpen, setReassignOpen] = useState(false);
   const [reassignLead, setReassignLead] = useState(null);
   const [reassignBulkIds, setReassignBulkIds] = useState(null);
@@ -337,12 +342,6 @@ export default function useLeadsCRM() {
       toast.error(e?.response?.data?.detail || 'Move failed');
     }
   };
-
-  const toggleLeadSelect = (id) => setSelectedLeadIds(prev => {
-    const n = new Set(prev);
-    if (n.has(id)) n.delete(id); else n.add(id);
-    return n;
-  });
 
   const handleImport = async (file) => {
     try {
@@ -708,7 +707,7 @@ export default function useLeadsCRM() {
     sortConfig, toggleSort, sortIndicator, sortData,
     contactPage, setContactPage, contactsPerPage,
     leadView, setLeadView,
-    selectedLeadIds, setSelectedLeadIds,
+    selectedLeadIds, setSelectedLeadIds, clearLeadSelection,
     filteredLeads,
 
     // State — WhatsApp
