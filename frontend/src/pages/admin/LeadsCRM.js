@@ -507,6 +507,7 @@ export default function LeadsCRM() {
             openContactPanel={crm.openContactPanel}
             fetchData={crm.fetchData}
             user={crm.user}
+            spList={crm.spList}
           />
         )}
 

@@ -7,9 +7,11 @@ import {
   Building2, ArrowRightCircle, Download, Upload, ChevronLeft,
   ChevronRight, ExternalLink,
 } from 'lucide-react';
-import { adminApi } from '../../lib/api';
+import { adminApi, contacts as contactsApi } from '../../lib/api';
 import { toast } from 'sonner';
 import MultiFilterBar from './MultiFilterBar';
+import AssignToPicker from './AssignToPicker';
+import useBulkSelect from '../../hooks/useBulkSelect';
 import { deriveFilterOptions, buildCrmContext, matchesCrmFilter } from '../../lib/crmFilter';
 import { CallStatusBadge } from './ContactDetailPanel';
 
@@ -36,11 +38,13 @@ export default function ContactsTab({
   openContactPanel,
   fetchData,
   user,
+  spList = [],
 }) {
   const navigate = useNavigate();
   const { isDark } = useTheme();
 
   const card = isDark ? 'bg-[var(--bg-card)] border-[var(--border-color)]' : 'bg-white border-[var(--border-color)]';
+  const inputCls = 'bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]';
   const textPri = 'text-[var(--text-primary)]';
   const textSec = 'text-[var(--text-secondary)]';
   const textMuted = 'text-[var(--text-muted)]';
@@ -97,6 +101,53 @@ export default function ContactsTab({
   const totalPages = Math.max(1, Math.ceil(cFiltered.length / contactsPerPage));
   const safePage = Math.min(contactPage, totalPages);
   const paginated = cFiltered.slice((safePage - 1) * contactsPerPage, safePage * contactsPerPage);
+
+  // Selection is computed against cFiltered (every row the current filter
+  // matches, across all pages) — never `paginated` (the 10 on screen).
+  // Ticking "select all" must select every matching contact, not just the
+  // page the user happens to be looking at.
+  const sel = useBulkSelect(cFiltered, (c) => c.contact_id);
+  const [bulkAssignPick, setBulkAssignPick] = React.useState({ email: '', name: '' });
+  const [bulkBusy, setBulkBusy] = React.useState(false);
+
+  // Every bulk action sends only `sel.visibleIds` — the ids the current
+  // filter still shows. Hidden selections (from before a filter change)
+  // stay selected but are excluded from the request; the bar tells the user
+  // how many are hidden so nothing is silently acted on out of sight.
+  const bulkTagContacts = async (tagId, action) => {
+    if (!tagId || sel.visibleIds.length === 0) return;
+    const tagName = tagsList.find(t => t.tag_id === tagId)?.name || 'tag';
+    setBulkBusy(true);
+    try {
+      const res = await contactsApi.bulkTag({ contact_ids: sel.visibleIds, tag_ids: [tagId], action });
+      const { updated = 0, skipped = 0 } = res.data || {};
+      const verb = action === 'remove' ? 'Removed tag from' : 'Tagged';
+      toast.success(`${verb} ${updated} contact(s) — “${tagName}”${skipped ? ` (${skipped} skipped)` : ''}`);
+      fetchData();
+      sel.clear();
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || 'Bulk tag failed');
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  const bulkAssignContacts = async (email, name) => {
+    setBulkAssignPick({ email: '', name: '' }); // AssignToPicker resets itself after each pick
+    if (!email || sel.visibleIds.length === 0) return;
+    setBulkBusy(true);
+    try {
+      const res = await contactsApi.bulkAssign({ contact_ids: sel.visibleIds, assigned_to: email });
+      const { updated = 0, skipped = 0 } = res.data || {};
+      toast.success(`Assigned ${updated} contact(s) to ${name || email}${skipped ? ` (${skipped} skipped)` : ''}`);
+      fetchData();
+      sel.clear();
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || 'Bulk assign failed');
+    } finally {
+      setBulkBusy(false);
+    }
+  };
 
   return (
     <div className="space-y-3" data-testid="contacts-list">
@@ -176,6 +227,40 @@ export default function ContactsTab({
 
       <MultiFilterBar options={filterOptions} value={crmFilter} onChange={setCrmFilter} resultCount={cFiltered.length} />
 
+      {/* Bulk bar: shown whenever anything is selected, even if the current
+          filter now hides every one of those rows (cFiltered could be empty
+          here while sel.count > 0) — the user still needs a way to see the
+          hidden count and clear it. */}
+      {sel.count > 0 && (
+        <div className={`${card} border rounded-md p-2.5 flex items-center gap-2 flex-wrap`} data-testid="contacts-bulk-bar">
+          <span className={`text-xs font-medium ${textPri}`}>
+            {sel.count} selected{sel.hiddenCount > 0 ? ` (${sel.hiddenCount} hidden by filter)` : ''}
+          </span>
+          {user?.role === 'admin' && (
+            <AssignToPicker
+              value={bulkAssignPick.email}
+              valueName={bulkAssignPick.name}
+              users={spList}
+              onChange={(email, name) => { setBulkAssignPick({ email, name }); if (email) bulkAssignContacts(email, name); }}
+              placeholder="Assign owner to…"
+              className="w-48"
+              disabled={bulkBusy}
+            />
+          )}
+          <select defaultValue="" disabled={bulkBusy} className={`h-8 px-2 rounded text-xs ${inputCls} cursor-pointer`} data-testid="contacts-bulk-tag-add"
+            onChange={async e => { const v = e.target.value; e.target.value = ''; await bulkTagContacts(v, 'add'); }}>
+            <option value="">Add tag…</option>
+            {tagsList.map(t => <option key={t.tag_id} value={t.tag_id}>{t.name}</option>)}
+          </select>
+          <select defaultValue="" disabled={bulkBusy} className={`h-8 px-2 rounded text-xs ${inputCls} cursor-pointer`} data-testid="contacts-bulk-tag-remove"
+            onChange={async e => { const v = e.target.value; e.target.value = ''; await bulkTagContacts(v, 'remove'); }}>
+            <option value="">Remove tag…</option>
+            {tagsList.map(t => <option key={t.tag_id} value={t.tag_id}>{t.name}</option>)}
+          </select>
+          <Button size="sm" variant="outline" onClick={sel.clear} className={`border-[var(--border-color)] ${textSec} h-8`} data-testid="contacts-bulk-clear">Clear</Button>
+        </div>
+      )}
+
       {cFiltered.length === 0 ? (
         <div className={`${card} border rounded-md p-12 text-center`}>
           <UserPlus className={`h-12 w-12 mx-auto mb-3 ${textMuted}`} strokeWidth={1} />
@@ -191,6 +276,11 @@ export default function ContactsTab({
                 onClick={() => openContactPanel(contact)}
                 data-testid={`contact-card-${contact.contact_id}`}
                 className={`${card} border rounded-md p-3 flex items-start justify-between gap-2 cursor-pointer ${contact.converted_to_lead ? 'opacity-60' : ''}`}>
+                <input type="checkbox" className="accent-[#e94560] mt-1 flex-shrink-0"
+                  checked={sel.isSelected(contact.contact_id)}
+                  onClick={e => e.stopPropagation()}
+                  onChange={() => sel.toggle(contact.contact_id)}
+                  data-testid={`select-contact-${contact.contact_id}`} />
                 <div className="flex-1 min-w-0">
                   <p className={`${textPri} font-medium text-sm truncate`}>{contact.name}</p>
                   <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
@@ -249,6 +339,12 @@ export default function ContactsTab({
             <div className="overflow-x-auto">
               <table className="w-full text-sm" data-testid="contacts-table">
                 <thead><tr className="bg-[var(--bg-primary)]">
+                  <th className="py-3 px-3 w-8">
+                    <input type="checkbox" className="accent-[#e94560]"
+                      checked={sel.allSelected}
+                      onChange={sel.toggleAll}
+                      data-testid="contacts-select-all" />
+                  </th>
                   <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} cursor-pointer select-none`} onClick={() => toggleSort('name')}>Name{sortIndicator('name')}</th>
                   <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} cursor-pointer select-none`} onClick={() => toggleSort('phone')}>Phone{sortIndicator('phone')}</th>
                   <th className={`text-left text-xs uppercase py-3 px-3 ${textMuted} hidden sm:table-cell cursor-pointer select-none`} onClick={() => toggleSort('email')}>Email{sortIndicator('email')}</th>
@@ -265,6 +361,12 @@ export default function ContactsTab({
                     <React.Fragment key={contact.contact_id}>
                       <tr className={`border-t border-[var(--border-color)] hover:bg-[var(--bg-hover)] cursor-pointer ${contact.converted_to_lead ? 'opacity-55' : ''}`} data-testid={`contact-row-${contact.contact_id}`}
                         onClick={() => openContactPanel(contact)}>
+                        <td className="py-2.5 px-3" onClick={e => e.stopPropagation()}>
+                          <input type="checkbox" className="accent-[#e94560]"
+                            checked={sel.isSelected(contact.contact_id)}
+                            onChange={() => sel.toggle(contact.contact_id)}
+                            data-testid={`select-contact-${contact.contact_id}`} />
+                        </td>
                         <td className="py-2.5 px-3">
                           <div className="flex items-center gap-1.5">
                             <p className={`${textPri} font-medium text-sm`}>{contact.name}</p>
