@@ -1292,6 +1292,9 @@ export const physicalDispatches = {
 // path would be a worse one.
 export const broadcastApi = {
   byTag: (data) => API.post('/whatsapp/broadcast-by-tag', data),
+  // Who byTag would message — {deals, unique_recipients, skipped_no_phone,
+  // capped_at, over_cap}. Sends nothing.
+  previewByTag: (tagId) => API.get('/whatsapp/broadcast-by-tag/preview', { params: { tag_id: tagId } }),
 };
 
 // Admin — Security & System
