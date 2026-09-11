@@ -19,6 +19,7 @@ from rbac import (get_team, require_admin, require_superadmin, require_module, h
                   has_team, sees_all, can_read_crm)
 from audit_backup import snapshot_and_delete, preview_counts
 from cascade_delete import build_school_plan, build_contact_plan
+from services.drip_recipient import find_active_duplicate, CONTACT_DELETED_REASON
 from services.engagement import normalize_timeline, fetch_events, log_engagement_event
 from services.tag_scope import resolve_tag_scope
 import crm_contact_calls as cc
@@ -90,10 +91,9 @@ async def _auto_enroll_lead(lead_doc: dict):
                 continue
             if not seq.get("steps"):
                 continue
-            existing = await db.drip_enrollments.find_one(
-                {"sequence_id": seq["sequence_id"], "lead_id": lead_doc["lead_id"], "status": "active"}
-            )
-            if existing:
+            # The same person never twice — incl. a contact of this lead that is
+            # already running the sequence as a contact (D5/R3).
+            if await find_active_duplicate(db, seq["sequence_id"], lead_id=lead_doc["lead_id"]):
                 continue
             first_delay = seq["steps"][0].get("delay_days", 0)
             await db.drip_enrollments.insert_one({
@@ -140,9 +140,7 @@ async def _auto_enroll_on_trigger(lead_id: str, trigger: str) -> int:
                 continue
             if not seq.get("steps"):
                 continue
-            existing = await db.drip_enrollments.find_one(
-                {"sequence_id": seq["sequence_id"], "lead_id": lead_id, "status": "active"})
-            if existing:
+            if await find_active_duplicate(db, seq["sequence_id"], lead_id=lead_id):
                 continue
             first_delay = seq["steps"][0].get("delay_days", 0)
             await db.drip_enrollments.insert_one({
@@ -194,10 +192,16 @@ async def create_physical_from_drip(lead: dict, material_type: str, seq_name: st
     now = datetime.now(timezone.utc)
     now_iso = now.isoformat()
     item = (material_name or "").strip() or (material_type or "brochure")
+    # A contact-keyed drip (D5) has no lead: carry the contact instead, so the
+    # dispatch, the task and the mailer still point at a person. Lead-keyed
+    # sends are written exactly as before.
+    who = ({"contact_id": lead["contact_id"]}
+           if not lead.get("lead_id") and lead.get("contact_id") else {})
     dispatch_id = f"pd_{uuid.uuid4().hex[:12]}"
     await db.physical_dispatches.insert_one({
         "dispatch_id": dispatch_id,
         "lead_id": lead.get("lead_id", ""),
+        **who,
         "lead_name": lead.get("contact_name", ""),
         "material_type": material_type or "brochure",
         "material_name": (material_name or "").strip(),
@@ -211,7 +215,7 @@ async def create_physical_from_drip(lead: dict, material_type: str, seq_name: st
         "task_id": f"task_{uuid.uuid4().hex[:10]}",
         "title": f"Ship {item} → {lead.get('company_name', '')}",
         "description": f"Auto-created by drip sequence '{seq_name}'. Add courier + tracking after shipping.",
-        "type": "other", "lead_id": lead.get("lead_id", ""),
+        "type": "other", "lead_id": lead.get("lead_id", ""), **who,
         "assigned_to": lead.get("assigned_to", ""),
         "due_date": "", "due_time": "", "priority": "medium",
         "status": "pending", "created_by": "system", "created_at": now_iso,
@@ -254,7 +258,7 @@ async def create_physical_from_drip(lead: dict, material_type: str, seq_name: st
             if not await db.mail_touches.find_one({"run_id": run_id, "school_id": sid}, {"_id": 0, "touch_id": 1}):
                 await db.mail_touches.insert_one({
                     "touch_id": f"mt_{uuid.uuid4().hex[:10]}", "run_id": run_id, "school_id": sid,
-                    "lead_id": lead.get("lead_id", ""), "piece_type": piece,
+                    "lead_id": lead.get("lead_id", ""), **who, "piece_type": piece,
                     "item_name": item, "posted_at": None,
                     "qr_token": uuid.uuid4().hex[:16], "delivery_status": "pending",
                     "responded": False, "responded_at": None, "response_channel": "",
@@ -2413,7 +2417,11 @@ async def engagement_dashboard(request: Request):
         _in = {"$in": my_lead_ids}
         ev_match["lead_id"] = _in
         b_match["lead_id"] = _in
-        seq_q["lead_id"] = _in
+        # A rep's sequences include the ones running on their CONTACTS (D5).
+        my_contact_ids = [c["contact_id"] async for c in db.contacts.find(
+            {"assigned_to": scope_owner, "is_deleted": {"$ne": True}},
+            {"_id": 0, "contact_id": 1}) if c.get("contact_id")]
+        seq_q["$or"] = [{"lead_id": _in}, {"contact_id": {"$in": my_contact_ids}}]
     hot_q = {"source": "brochure_open", "created_at": {"$gte": since}}
     if scope_owner is not None:
         hot_q["assigned_to"] = scope_owner
@@ -4359,7 +4367,14 @@ async def get_school_profile(school_id: str, request: Request):
         meetings = await db.followups.find(
             {"lead_id": {"$in": lead_ids}, "followup_type": "meeting"}, {"_id": 0}
         ).sort("followup_date", -1).to_list(None)
-        dispatches = await db.physical_dispatches.find({"lead_id": {"$in": lead_ids}}, {"_id": 0}).sort("sent_date", -1).to_list(None)
+    disp_or = []
+    if lead_ids:
+        disp_or.append({"lead_id": {"$in": lead_ids}})
+    if contact_ids:
+        # a contact-keyed drip's post step carries the contact, not a lead (D5)
+        disp_or.append({"contact_id": {"$in": contact_ids}})
+    if disp_or:
+        dispatches = await db.physical_dispatches.find({"$or": disp_or}, {"_id": 0}).sort("sent_date", -1).to_list(None)
 
     # Sales Orders (SO) for this school — by FK, its leads, or its quotations
     quote_ids = [q.get("quotation_id") for q in quotations if q.get("quotation_id")]
@@ -4388,9 +4403,16 @@ async def get_school_profile(school_id: str, request: Request):
         ).sort("queued_at", -1).limit(200):
             communications.append({"channel": "email", "label": m.get("subject") or "Email",
                                    "status": m.get("status", ""), "at": m.get("sent_at") or m.get("queued_at")})
+    # Drip enrolments reach a school through its leads, OR — for a contact-keyed
+    # enrolment (D5) — through its contacts or the school_id stamped on it.
+    drip_or = [{"school_id": school_id, "lead_id": {"$in": [None, ""]}}]
     if lead_ids:
+        drip_or.append({"lead_id": {"$in": lead_ids}})
+    if contact_ids:
+        drip_or.append({"contact_id": {"$in": contact_ids}})
+    if drip_or:
         enrolls = await db.drip_enrollments.find(
-            {"lead_id": {"$in": lead_ids}},
+            {"$or": drip_or},
             {"_id": 0, "sequence_id": 1, "status": 1, "enrolled_at": 1, "current_step": 1}
         ).sort("enrolled_at", -1).limit(100).to_list(100)
         seq_names = {}
@@ -4783,6 +4805,13 @@ async def delete_contact(contact_id: str, request: Request):
         {"referred_by_contact_id": contact_id},
         {"$unset": {"referred_by_contact_id": ""}}
     )
+    # Stop any sequence still messaging this person (D5). Cancelled, not
+    # deleted: an archive is reversible, and the history of what was sent
+    # should survive it. The owner-only cascade below deletes them outright.
+    await db.drip_enrollments.update_many(
+        {"contact_id": contact_id, "status": {"$in": ["active", "paused"]}},
+        {"$set": {"status": "cancelled", "completed_at": now_iso, "cancelled_at": now_iso,
+                  "cancel_reason": CONTACT_DELETED_REASON}})
     return {"message": "Contact archived (soft-deleted)"}
 
 
@@ -4998,11 +5027,14 @@ async def get_contact_activity(contact_id: str, request: Request):
             "at": msg.get("sent_at") or msg.get("scheduled_at", ""),
         })
 
-    # Drip enrollments via linked lead
+    # Drip enrollments: the contact's own (D5) and its linked lead's
     lead_id = contact.get("lead_id")
+    drip_or = [{"contact_id": contact_id}]
     if lead_id:
+        drip_or.append({"lead_id": lead_id})
+    if drip_or:
         async for enr in db.drip_enrollments.find(
-            {"lead_id": lead_id}, {"_id": 0, "sequence_id": 1, "status": 1, "enrolled_at": 1, "current_step": 1}
+            {"$or": drip_or}, {"_id": 0, "sequence_id": 1, "status": 1, "enrolled_at": 1, "current_step": 1}
         ).sort("enrolled_at", -1).limit(20):
             seq = await db.drip_sequences.find_one({"sequence_id": enr["sequence_id"]}, {"_id": 0, "name": 1})
             seq_name = seq["name"] if seq else enr["sequence_id"]

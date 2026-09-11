@@ -479,7 +479,7 @@ export default function SchoolProfile() {
         rolesList={rolesList} sourcesList={sourcesList} spList={spList} onDone={sp.reload} />
       <ConvertContactDialog open={!!convertTarget} onOpenChange={(v) => { if (!v) setConvertTarget(null); }}
         contact={convertTarget} spList={spList} onDone={sp.reload} fallbackSchoolId={school.school_id} />
-      <EnrollDripDialog open={enrollOpen} onOpenChange={setEnrollOpen} leads={leads} onDone={sp.reload} />
+      <EnrollDripDialog open={enrollOpen} onOpenChange={setEnrollOpen} leads={leads} contacts={contacts} onDone={sp.reload} />
 
       <ContactDetailPanel
         detailContact={detailContact} setDetailContact={closeContactPanel}

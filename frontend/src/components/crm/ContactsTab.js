@@ -7,11 +7,12 @@ import {
   Building2, ArrowRightCircle, Download, Upload, ChevronLeft,
   ChevronRight, ExternalLink,
 } from 'lucide-react';
-import { adminApi, contacts as contactsApi } from '../../lib/api';
+import { adminApi, contacts as contactsApi, dripSequences as dripApi } from '../../lib/api';
 import { toast } from 'sonner';
 import MultiFilterBar from './MultiFilterBar';
 import AssignToPicker from './AssignToPicker';
 import BulkTagPicker, { formatTagResult } from './BulkTagPicker';
+import BulkDripPicker, { formatDripEnrolResult } from './BulkDripPicker';
 import useBulkSelect from '../../hooks/useBulkSelect';
 import { deriveFilterOptions, buildCrmContext, matchesCrmFilter } from '../../lib/crmFilter';
 import { CallStatusBadge } from './ContactDetailPanel';
@@ -168,6 +169,28 @@ export default function ContactsTab({
     }
   };
 
+  // Enrol the selected (visible) contacts in a drip sequence — directly, no
+  // lead is made for anyone (D5). Confirmed first: this starts real messages.
+  // Returns false to keep the picker open (cancelled or failed).
+  const bulkEnrolDrip = async (seq) => {
+    const ids = sel.visibleIds;
+    if (!seq || ids.length === 0 || overBulkCap) return false;
+    const n = ids.length;
+    if (!window.confirm(`Enrol ${n} contact${n === 1 ? '' : 's'} in ${seq.name}?`)) return false;
+    setBulkBusy(true);
+    try {
+      const res = await dripApi.enrollContacts({ sequence_id: seq.sequence_id, contact_ids: ids });
+      toast.success(formatDripEnrolResult(res.data, seq.name));
+      sel.clear();
+      return true;
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || 'Could not enrol in the drip');
+      return false;
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
   return (
     <div className="space-y-3" data-testid="contacts-list">
       {/* Role filter chips */}
@@ -277,6 +300,12 @@ export default function ContactsTab({
             onApply={bulkTagContacts}
             onTagCreated={onTagCreated}
             testIdPrefix="contacts-bulk-tags"
+          />
+          <BulkDripPicker
+            count={sel.visibleIds.length}
+            disabled={bulkBusy || overBulkCap || sel.visibleIds.length === 0}
+            onEnrol={bulkEnrolDrip}
+            testIdPrefix="contacts-bulk-drip"
           />
           <Button size="sm" variant="outline" onClick={sel.clear} className={`border-[var(--border-color)] ${textSec} h-8`} data-testid="contacts-bulk-clear">Clear</Button>
         </div>

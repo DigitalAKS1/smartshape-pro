@@ -2,9 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { toast } from 'sonner';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
-import { Phone, PhoneCall, X, Clock, CheckCircle2, BookOpen } from 'lucide-react';
+import { Phone, PhoneCall, X, Clock, CheckCircle2, BookOpen, Zap } from 'lucide-react';
 import { startCall } from '../../lib/callBus';
-import { dealTypes as dealTypesApi } from '../../lib/api';
+import { dealTypes as dealTypesApi, dripSequences as dripApi } from '../../lib/api';
 import ShareBrochureDialog from './ShareBrochureDialog';
 
 /** Trigger a Bonvoice click-to-call and open the live call widget. Rings the rep's
@@ -31,6 +31,106 @@ export function CallStatusBadge({ contact }) {
     <span className={`text-[10px] px-2 py-0.5 rounded-full ${o ? o.color : 'bg-slate-100 text-slate-600'}`}>
       {o ? o.label : 'Called'}
     </span>
+  );
+}
+
+const DRIP_STATUS_CLS = {
+  active: 'bg-green-500/20 text-green-500',
+  completed: 'bg-blue-500/20 text-blue-500',
+  paused: 'bg-yellow-500/20 text-yellow-600',
+};
+
+/** The drip sequences this CONTACT is enrolled in directly (D5) — sequence,
+ *  status, step — with Cancel, and Resume for a paused one. Mirrors the lead
+ *  panel's list: an enrolment stopped with a `cancel_reason` (bulk-cancelled,
+ *  or stopped because the person was deleted) offers no Resume — resuming
+ *  would fire a stale step — only "re-enrol". */
+export function ContactDripSection({ contactId }) {
+  const [rows, setRows] = useState(null);           // null = loading
+  const [seqs, setSeqs] = useState({});
+
+  useEffect(() => {
+    if (!contactId) return undefined;
+    let alive = true;
+    setRows(null);
+    Promise.all([
+      dripApi.enrollments({ contact_id: contactId }),
+      dripApi.getAll().catch(() => ({ data: [] })),
+    ]).then(([e, s]) => {
+      if (!alive) return;
+      setRows(Array.isArray(e?.data) ? e.data : []);
+      setSeqs(Object.fromEntries((s?.data || []).map(x => [x.sequence_id, x])));
+    }).catch(() => { if (alive) setRows([]); });
+    return () => { alive = false; };
+  }, [contactId]);
+
+  const patch = (id, change) => setRows(prev => (prev || []).map(r => (r.enrollment_id === id ? { ...r, ...change } : r)));
+
+  const cancel = async (enr) => {
+    try {
+      await dripApi.cancelEnrollment(enr.enrollment_id);
+      patch(enr.enrollment_id, { status: 'cancelled' });
+      toast.success('Enrollment cancelled');
+    } catch { toast.error('Failed to cancel'); }
+  };
+  const resume = async (enr) => {
+    try {
+      await dripApi.resumeEnrollment(enr.enrollment_id);
+      patch(enr.enrollment_id, { status: 'active', paused_reason: '' });
+      toast.success('Back in the sequence — the next step runs shortly');
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Could not resume'); }
+  };
+
+  return (
+    <div className="border-t border-[var(--border-color)] pt-3 mt-3" data-testid="contact-drips">
+      <p className="text-xs font-medium text-[var(--text-secondary)] mb-2 flex items-center gap-1">
+        <Zap className="h-3 w-3" /> Drip sequences{rows ? ` (${rows.length})` : ''}
+      </p>
+      {rows === null ? (
+        <p className="text-[11px] text-[var(--text-secondary)]">Loading…</p>
+      ) : rows.length === 0 ? (
+        <p className="text-[11px] text-[var(--text-secondary)]">Not enrolled in any sequence</p>
+      ) : (
+        <div className="space-y-1">
+          {rows.map(enr => {
+            const seq = seqs[enr.sequence_id];
+            const total = (seq?.steps || []).length;
+            const stopped = enr.status === 'cancelled' && enr.cancel_reason;
+            return (
+              <div key={enr.enrollment_id} data-testid={`contact-drip-${enr.enrollment_id}`}
+                className="flex items-center justify-between gap-2 text-xs border border-[var(--border-color)] rounded px-2.5 py-1.5">
+                <div className="min-w-0">
+                  <p className="font-medium text-[var(--text-primary)] truncate">{seq?.name || enr.sequence_id}</p>
+                  <p className="text-[10px] text-[var(--text-secondary)]">
+                    Step {Math.min((enr.current_step || 0) + 1, total || Infinity)}{total ? ` of ${total}` : ''}
+                    {enr.status === 'paused' && enr.paused_reason ? ` · ${enr.paused_reason}` : ''}
+                  </p>
+                </div>
+                <div className="flex items-center gap-1 flex-shrink-0">
+                  <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${DRIP_STATUS_CLS[enr.status] || 'bg-gray-500/20 text-gray-500'}`}>{enr.status}</span>
+                  {enr.status === 'active' && (
+                    <Button size="sm" variant="ghost" onClick={() => cancel(enr)}
+                      title="Stop this sequence for this contact" aria-label="Cancel enrolment"
+                      data-testid={`cancel-contact-drip-${enr.enrollment_id}`}
+                      className="text-red-500 h-6 w-6 p-0"><X className="h-3 w-3" /></Button>
+                  )}
+                  {(enr.status === 'paused' || enr.status === 'cancelled') && !enr.cancel_reason && (
+                    <Button size="sm" variant="ghost" onClick={() => resume(enr)}
+                      data-testid={`resume-contact-drip-${enr.enrollment_id}`}
+                      className="text-green-600 h-6 px-1.5 text-[10px]">Resume</Button>
+                  )}
+                  {stopped && (
+                    <span className="text-[10px] italic text-[var(--text-secondary)]" title={enr.cancel_reason}>
+                      {/in bulk/i.test(enr.cancel_reason) ? 'Cancelled in bulk' : 'Stopped'} — re-enrol to continue
+                    </span>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -104,6 +204,7 @@ export default function ContactDetailPanel({
             <p><span className="font-medium">Email:</span> {detailContact.email || '—'}</p>
             <p><span className="font-medium">Designation:</span> {detailContact.designation || '—'}</p>
             <p><span className="font-medium">Owner:</span> {detailContact.assigned_name || 'Unassigned'}</p>
+            <ContactDripSection contactId={detailContact.contact_id} />
           </div>
         )}
 

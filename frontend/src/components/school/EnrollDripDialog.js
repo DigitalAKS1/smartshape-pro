@@ -5,25 +5,40 @@ import { Label } from '../ui/label';
 import { toast } from 'sonner';
 import { dripSequences as dripApi } from '../../lib/api';
 
-export default function EnrollDripDialog({ open, onOpenChange, leads = [], onDone }) {
+// One picker for everyone at the school a sequence can reach: its deals (leads)
+// and its people (contacts). A contact is enrolled directly — no lead is made
+// for it. The option value carries the kind so the right id is sent.
+const leadLabel = (l) => `${l.contact_name || l.company_name || 'Unnamed'} — Lead · ${l.stage || 'no stage'}`;
+const contactLabel = (c) => `${c.name || 'Unnamed'} — Contact · ${c.designation || 'no designation'}`;
+
+export default function EnrollDripDialog({ open, onOpenChange, leads = [], contacts = [], onDone }) {
   const [sequences, setSequences] = useState([]);
-  const [leadId, setLeadId] = useState('');
+  const [pick, setPick] = useState('');
   const [seqId, setSeqId] = useState('');
   const [saving, setSaving] = useState(false);
   const inputCls = 'bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]';
   const textSec = 'text-[var(--text-secondary)]';
 
+  const liveLeads = (leads || []).filter(l => l && l.lead_id && !l.is_deleted);
+  const liveContacts = (contacts || []).filter(c => c && c.contact_id && !c.is_deleted);
+
   useEffect(() => {
     if (!open) return;
+    setPick('');
     dripApi.getAll().then(r => setSequences((r.data || []).filter(s => s.is_active))).catch(() => {});
   }, [open]);
 
   const submit = async () => {
-    if (!leadId || !seqId) { toast.error('Pick a lead and a sequence'); return; }
+    if (!pick || !seqId) { toast.error('Pick a person and a sequence'); return; }
+    const cut = pick.indexOf(':');
+    const kind = pick.slice(0, cut);
+    const id = pick.slice(cut + 1);
     setSaving(true);
     try {
-      await dripApi.enroll({ lead_id: leadId, sequence_id: seqId });
-      toast.success('Lead enrolled in drip');
+      await dripApi.enroll(kind === 'contact'
+        ? { contact_id: id, sequence_id: seqId }
+        : { lead_id: id, sequence_id: seqId });
+      toast.success(kind === 'contact' ? 'Contact enrolled in drip' : 'Lead enrolled in drip');
       onOpenChange(false);
       onDone && onDone();
     } catch (e) {
@@ -34,13 +49,22 @@ export default function EnrollDripDialog({ open, onOpenChange, leads = [], onDon
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="bg-[var(--bg-card)] border-[var(--border-color)] text-[var(--text-primary)] w-[calc(100vw-1rem)] sm:max-w-md">
-        <DialogHeader><DialogTitle>Enroll Lead in Drip</DialogTitle></DialogHeader>
+        <DialogHeader><DialogTitle>Enroll in Drip</DialogTitle></DialogHeader>
         <div className="space-y-3 py-2">
           <div>
-            <Label className={`${textSec} text-xs`}>Lead</Label>
-            <select value={leadId} onChange={e => setLeadId(e.target.value)} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`} data-testid="enroll-lead">
-              <option value="">Select a lead</option>
-              {leads.map(l => <option key={l.lead_id} value={l.lead_id}>{l.contact_name} · {l.stage}</option>)}
+            <Label className={`${textSec} text-xs`}>Lead or contact</Label>
+            <select value={pick} onChange={e => setPick(e.target.value)} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`} data-testid="enroll-lead">
+              <option value="">Select a lead or contact</option>
+              {liveLeads.length > 0 && (
+                <optgroup label="Leads">
+                  {liveLeads.map(l => <option key={`lead:${l.lead_id}`} value={`lead:${l.lead_id}`}>{leadLabel(l)}</option>)}
+                </optgroup>
+              )}
+              {liveContacts.length > 0 && (
+                <optgroup label="Contacts">
+                  {liveContacts.map(c => <option key={`contact:${c.contact_id}`} value={`contact:${c.contact_id}`}>{contactLabel(c)}</option>)}
+                </optgroup>
+              )}
             </select>
           </div>
           <div>

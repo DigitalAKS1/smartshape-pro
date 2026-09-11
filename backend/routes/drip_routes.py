@@ -8,6 +8,8 @@ from auth_utils import get_current_user
 from rbac import get_team, require_module, sees_all
 from routes.crm_routes import create_physical_from_drip
 from services.tag_scope import resolve_tag_scope
+from services.drip_recipient import (CONTACT_DELETED_REASON, RECIPIENT_GONE_REASON,
+                                     contacts_already_enrolled, find_active_duplicate)
 
 router = APIRouter()
 
@@ -420,10 +422,8 @@ async def _auto_enroll_quotation_sent(lead_doc: dict):
     for seq in seqs:
         if not seq.get("steps"):
             continue
-        existing = await db.drip_enrollments.find_one(
-            {"sequence_id": seq["sequence_id"], "lead_id": lead_doc["lead_id"], "status": "active"}
-        )
-        if existing:
+        # Same person, same sequence, never twice — incl. the lead's contact (R3).
+        if await find_active_duplicate(db, seq["sequence_id"], lead_id=lead_doc["lead_id"]):
             continue
         first_delay = seq["steps"][0].get("delay_days", 0)
         await db.drip_enrollments.insert_one({
@@ -443,31 +443,71 @@ async def _auto_enroll_quotation_sent(lead_doc: dict):
 
 # ── Enrollments ────────────────────────────────────────────────────────────────
 
+def _dup_message(existing: dict, *, asked_lead: bool) -> str:
+    """Why a second enrolment was refused, naming the cross case plainly."""
+    if asked_lead and existing.get("lead_id") is None and existing.get("contact_id"):
+        return ("This lead's contact is already running this sequence — the same "
+                "person would get every message twice.")
+    if not asked_lead and existing.get("lead_id"):
+        return ("This contact's lead is already running this sequence — the same "
+                "person would get every message twice.")
+    return ("Lead is already actively enrolled in this sequence" if asked_lead
+            else "Contact is already actively enrolled in this sequence")
+
+
 @router.post("/drip/enroll")
 async def enroll_lead(request: Request):
+    """Enrol ONE lead or ONE contact (D5) — `{sequence_id, lead_id}` or
+    `{sequence_id, contact_id}`, never both. Refuses a second active enrolment
+    for the same person, including a contact whose linked lead is already in
+    the sequence and vice-versa."""
     user = await get_current_user(request)
     require_module(user, "leads", "read_write")
     body = await request.json()
     sequence_id = body.get("sequence_id")
-    lead_id = body.get("lead_id")
-    if not sequence_id or not lead_id:
-        raise HTTPException(400, "sequence_id and lead_id are required")
+    lead_id = body.get("lead_id") or None
+    contact_id = body.get("contact_id") or None
+    if not sequence_id or (not lead_id and not contact_id):
+        raise HTTPException(400, "sequence_id and a lead_id or contact_id are required")
+    if lead_id and contact_id:
+        raise HTTPException(400, "Enrol a lead or a contact, not both at once")
     seq = await db.drip_sequences.find_one({"sequence_id": sequence_id}, {"_id": 0})
     if not seq:
         raise HTTPException(404, "Sequence not found")
     if not seq.get("steps"):
         raise HTTPException(400, "Sequence has no steps")
-    existing = await db.drip_enrollments.find_one(
-        {"sequence_id": sequence_id, "lead_id": lead_id, "status": "active"}
-    )
+
+    school_id = ""
+    if contact_id:
+        contact = await db.contacts.find_one(
+            {"contact_id": contact_id, "is_deleted": {"$ne": True}},
+            {"_id": 0, "contact_id": 1, "school_id": 1})
+        if not contact:
+            raise HTTPException(404, "Contact not found")
+        if not sees_all(user, "leads"):
+            from routes.crm_routes import _contacts_visibility_or, _merge_or
+            vq = _merge_or({"contact_id": contact_id},
+                           await _contacts_visibility_or(user["email"]))
+            if not await db.contacts.find_one(vq, {"_id": 0, "contact_id": 1}):
+                raise HTTPException(403, "Not authorized for this contact")
+        school_id = contact.get("school_id") or ""
+    else:
+        lead = await db.leads.find_one({"lead_id": lead_id}, {"_id": 0, "school_id": 1})
+        school_id = (lead or {}).get("school_id") or ""
+
+    existing = await find_active_duplicate(db, sequence_id, lead_id=lead_id, contact_id=contact_id)
     if existing:
-        raise HTTPException(409, "Lead is already actively enrolled in this sequence")
+        raise HTTPException(409, _dup_message(existing, asked_lead=bool(lead_id)))
     now = datetime.now(timezone.utc)
     first_delay = seq["steps"][0].get("delay_days", 0)
     enr = {
         "enrollment_id": f"denr_{uuid.uuid4().hex[:10]}",
         "sequence_id": sequence_id,
+        # Exactly one of the two is set; the other is written as null so every
+        # new enrolment has the same shape.
         "lead_id": lead_id,
+        "contact_id": contact_id,
+        "school_id": school_id,
         "current_step": 0,
         "status": "active",
         "enrolled_at": now.isoformat(),
@@ -479,6 +519,118 @@ async def enroll_lead(request: Request):
     await db.drip_enrollments.insert_one(enr)
     enr.pop("_id", None)
     return enr
+
+
+_CONTACT_BULK_CAP = 2000
+
+
+@router.post("/drip/enroll-contacts")
+async def enroll_contacts(request: Request):
+    """Enrol many CONTACTS in one sequence — `{sequence_id, contact_ids[]}` or
+    `{sequence_id, tag_id}` (both may be given; the sets are unioned).
+
+    A tag reaches the people who carry it themselves (D1) — never their
+    colleagues at the same school. A caller without "all" scope reaches only
+    the contacts GET /contacts shows them; the rest are counted, not enrolled
+    and not a 403 for the batch. Deleted contacts are skipped. A contact with
+    no phone and no email is still enrolled (a post or call step can reach
+    them) and counted in `no_channel`. No lead is created.
+    """
+    user = await get_current_user(request)
+    require_module(user, "leads", "read_write")
+    body = await request.json()
+    sequence_id = body.get("sequence_id")
+    raw_ids = body.get("contact_ids") or []
+    tag_id = (body.get("tag_id") or "").strip() if isinstance(body.get("tag_id"), str) else ""
+    if not sequence_id:
+        raise HTTPException(400, "sequence_id is required")
+    if not isinstance(raw_ids, list):
+        raise HTTPException(400, "contact_ids must be a list")
+    ids = [c for c in raw_ids if isinstance(c, str) and c]
+
+    matched_by_tag = 0
+    if tag_id:
+        tagged = sorted((await resolve_tag_scope(db, tag_id))["contact_ids"], key=str)
+        matched_by_tag = len(tagged)
+        ids.extend(tagged)
+        if not ids:
+            raise HTTPException(400, "That tag matched no contacts, so nobody was enrolled.")
+    if not ids:
+        raise HTTPException(400, "contact_ids or tag_id is required")
+    ids = list(dict.fromkeys(ids))          # dedupe, order kept
+    if len(ids) > _CONTACT_BULK_CAP:
+        raise HTTPException(400, f"Cannot enrol more than {_CONTACT_BULK_CAP} contacts at once")
+
+    seq = await db.drip_sequences.find_one({"sequence_id": sequence_id}, {"_id": 0})
+    if not seq or not seq.get("steps"):
+        raise HTTPException(404, "Sequence not found or has no steps")
+
+    requested = len(ids)
+    proj = {"_id": 0, "contact_id": 1, "school_id": 1, "lead_id": 1,
+            "phone": 1, "email": 1, "is_deleted": 1}
+    docs = {c["contact_id"]: c async for c in db.contacts.find(
+        {"contact_id": {"$in": ids}}, proj)}
+    live = [cid for cid in ids if cid in docs and not docs[cid].get("is_deleted")]
+    skipped_missing = requested - len(live)
+
+    skipped_not_visible = 0
+    if not sees_all(user, "leads") and live:
+        from routes.crm_routes import _contacts_visibility_or, _merge_or
+        vq = _merge_or({"contact_id": {"$in": live}},
+                       await _contacts_visibility_or(user["email"]))
+        visible = {c["contact_id"] async for c in db.contacts.find(vq, {"_id": 0, "contact_id": 1})}
+        skipped_not_visible = sum(1 for cid in live if cid not in visible)
+        live = [cid for cid in live if cid in visible]
+
+    covered = await contacts_already_enrolled(db, sequence_id, [docs[cid] for cid in live])
+    skipped_duplicate = sum(1 for cid in live if cid in covered)
+    to_enrol = [cid for cid in live if cid not in covered]
+
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+    first_delay = seq["steps"][0].get("delay_days", 0)
+    next_at = (now + timedelta(days=first_delay)).isoformat()
+    rows, no_channel = [], 0
+    for cid in to_enrol:
+        c = docs[cid]
+        if not (c.get("phone") or "").strip() and not (c.get("email") or "").strip():
+            no_channel += 1
+        rows.append({
+            "enrollment_id": f"denr_{uuid.uuid4().hex[:10]}",
+            "sequence_id": sequence_id,
+            "lead_id": None, "contact_id": cid, "school_id": c.get("school_id") or "",
+            "current_step": 0, "status": "active", "enrolled_at": now_iso,
+            "next_step_at": next_at, "last_step_at": None, "completed_at": None,
+            "enrolled_by": user["email"],
+        })
+    if rows:
+        await db.drip_enrollments.insert_many(rows)
+
+    from routes.crm_routes import log_activity
+    await log_activity(
+        user["email"], "drip_enroll_contacts", "drip_sequence", sequence_id,
+        details=(f"sequence={seq.get('name', '')} tag_id={tag_id or '-'} requested={requested} "
+                 f"enrolled={len(rows)} skipped_duplicate={skipped_duplicate} "
+                 f"skipped_not_visible={skipped_not_visible} skipped_missing={skipped_missing} "
+                 f"no_channel={no_channel} contacts={','.join(to_enrol[:20])}"))
+
+    # Same as enroll-schools: a first step due today goes out now, not in an hour.
+    starting_now = False
+    if rows and first_delay == 0:
+        try:
+            import scheduler as _sched          # lazy: avoid an import cycle
+            asyncio.create_task(_sched.run_drip_executor())
+            starting_now = True
+        except Exception:
+            starting_now = False
+
+    return {"sequence_id": sequence_id, "sequence_name": seq.get("name", ""),
+            "requested": requested, "enrolled": len(rows),
+            "skipped_duplicate": skipped_duplicate,
+            "skipped_not_visible": skipped_not_visible,
+            "skipped_missing": skipped_missing,
+            "no_channel": no_channel, "matched_by_tag": matched_by_tag,
+            "starting_now": starting_now}
 
 
 @router.post("/drip/enroll-schools")
@@ -566,13 +718,15 @@ async def enroll_schools(request: Request):
             lead_id = lead["lead_id"]
         if not lead_id:
             continue
-        if await db.drip_enrollments.find_one(
-                {"sequence_id": sequence_id, "lead_id": lead_id, "status": "active"}, {"_id": 0, "enrollment_id": 1}):
+        # A lead whose contact is already running this sequence (enrolled as a
+        # contact, D5) is the same person — skip it like any other duplicate.
+        if await find_active_duplicate(db, sequence_id, lead_id=lead_id):
             skipped += 1
             continue
         await db.drip_enrollments.insert_one({
             "enrollment_id": f"denr_{uuid.uuid4().hex[:10]}",
             "sequence_id": sequence_id, "lead_id": lead_id,
+            "contact_id": None, "school_id": sid,
             "current_step": 0, "status": "active", "enrolled_at": now_iso,
             "next_step_at": (now + timedelta(days=first_delay)).isoformat(),
             "last_step_at": None, "completed_at": None,
@@ -609,6 +763,7 @@ async def list_enrollments(request: Request):
     params = dict(request.query_params)
     filt = {}
     if params.get("lead_id"):      filt["lead_id"] = params["lead_id"]
+    if params.get("contact_id"):   filt["contact_id"] = params["contact_id"]
     if params.get("sequence_id"):  filt["sequence_id"] = params["sequence_id"]
     if params.get("status"):       filt["status"] = params["status"]
     return await db.drip_enrollments.find(filt, {"_id": 0}).sort("enrolled_at", -1).to_list(500)
@@ -647,11 +802,25 @@ async def resume_enrollment(enrollment_id: str, request: Request):
         # whatever stale step the migration froze it at (or, for a formerly-
         # "completed" enrolment, leave it active with no step left to fire,
         # re-checked forever). Refuse; point at re-enrolment instead.
+        if enr["cancel_reason"] in (RECIPIENT_GONE_REASON, CONTACT_DELETED_REASON):
+            # Stopped because the person is gone (D5) — not the bulk migration.
+            raise HTTPException(
+                409, f"This enrolment cannot be resumed: {enr['cancel_reason']} "
+                     "Enrol them again if they are back.")
         raise HTTPException(
             409,
             "This enrolment was cancelled in bulk and cannot be resumed. "
             "Re-enrol the lead into a current sequence instead.",
         )
+    # Resuming must not put the same person in the sequence twice: while this
+    # one sat paused, they may have been enrolled again (as a lead or as the
+    # linked contact).
+    if await find_active_duplicate(db, enr.get("sequence_id"), lead_id=enr.get("lead_id"),
+                                   contact_id=enr.get("contact_id"),
+                                   exclude_enrollment_id=enrollment_id):
+        raise HTTPException(
+            409, "This person is already running this sequence in another enrolment, "
+                 "so this one cannot be resumed.")
     now_iso = datetime.now(timezone.utc).isoformat()
     await db.drip_enrollments.update_one(
         {"enrollment_id": enrollment_id},
@@ -673,14 +842,26 @@ async def school_drips(school_id: str, request: Request):
     user = await get_current_user(request)
     require_module(user, "leads", "read")
 
-    leads = await db.leads.find({"school_id": school_id},
-                                {"_id": 0, "lead_id": 1}).to_list(500)
-    lead_ids = [l["lead_id"] for l in leads]
-    if not lead_ids:
-        return {"school_id": school_id, "rows": [], "active": 0, "total": 0}
+    leads = {l["lead_id"]: l for l in await db.leads.find(
+        {"school_id": school_id},
+        {"_id": 0, "lead_id": 1, "contact_name": 1, "assigned_to": 1}).to_list(500)
+        if l.get("lead_id")}
+    # A contact-keyed enrolment (D5) belongs to the school through its contact.
+    contacts = {c["contact_id"]: c for c in await db.contacts.find(
+        {"school_id": school_id},
+        {"_id": 0, "contact_id": 1, "name": 1, "designation": 1, "assigned_to": 1}).to_list(2000)
+        if c.get("contact_id")}
+    ors = [{"school_id": school_id, "lead_id": {"$in": [None, ""]}}]
+    if leads:
+        ors.append({"lead_id": {"$in": list(leads)}})
+    if contacts:
+        ors.append({"contact_id": {"$in": list(contacts)}})
 
     enrolments = await db.drip_enrollments.find(
-        {"lead_id": {"$in": lead_ids}}, {"_id": 0}).sort("enrolled_at", -1).to_list(200)
+        {"$or": ors}, {"_id": 0}).sort("enrolled_at", -1).to_list(200)
+    if not enrolments:
+        return {"school_id": school_id, "rows": [], "active": 0, "total": 0}
+    school = await db.schools.find_one({"school_id": school_id}, {"_id": 0, "assigned_to": 1}) or {}
     seq_ids = list({e["sequence_id"] for e in enrolments})
     seqs = {s["sequence_id"]: s for s in await db.drip_sequences.find(
         {"sequence_id": {"$in": seq_ids}}, {"_id": 0}).to_list(200)}
@@ -692,11 +873,24 @@ async def school_drips(school_id: str, request: Request):
         idx = int(e.get("current_step", 0) or 0)
         live = e.get("status") == "active" and idx < len(steps)
         nxt = steps[idx] if live else None
+        lead = leads.get(e.get("lead_id")) if e.get("lead_id") else None
+        contact = contacts.get(e.get("contact_id")) if e.get("contact_id") else None
+        if lead:
+            kind, who, owner = "lead", lead.get("contact_name", ""), lead.get("assigned_to", "")
+        elif contact:
+            kind, who = "contact", contact.get("name", "")
+            owner = contact.get("assigned_to") or school.get("assigned_to", "")
+        else:
+            kind, who, owner = ("contact" if e.get("contact_id") else "lead"), "", ""
         rows.append({
             "enrollment_id": e["enrollment_id"],
             "sequence_id": e["sequence_id"],
             "sequence_name": seq.get("name", "(deleted sequence)"),
-            "lead_id": e["lead_id"],
+            "lead_id": e.get("lead_id"),
+            "contact_id": e.get("contact_id"),
+            "recipient_kind": kind,
+            "recipient_name": who,
+            "owner": owner,
             "status": e.get("status", "active"),
             "paused_reason": e.get("paused_reason", ""),
             "step": idx + 1 if live else idx,
@@ -733,11 +927,17 @@ async def sequence_deliveries(sequence_id: str, request: Request):
 
     enrolments = await db.drip_enrollments.find({"sequence_id": sequence_id},
                                                 {"_id": 0}).to_list(2000)
-    lead_ids = [e["lead_id"] for e in enrolments]
+    lead_ids = [e["lead_id"] for e in enrolments if e.get("lead_id")]
     leads = {l["lead_id"]: l for l in await db.leads.find(
         {"lead_id": {"$in": lead_ids}}, {"_id": 0}).to_list(None)}
+    # Contact-keyed enrolments (D5) name their school + owner through the contact.
+    contact_ids = [e["contact_id"] for e in enrolments if e.get("contact_id")]
+    contacts = {c["contact_id"]: c for c in await db.contacts.find(
+        {"contact_id": {"$in": contact_ids}},
+        {"_id": 0, "contact_id": 1, "name": 1, "school_id": 1, "company": 1,
+         "assigned_to": 1}).to_list(None)} if contact_ids else {}
     schools = {s["school_id"]: s for s in await db.schools.find(
-        {}, {"_id": 0, "school_id": 1, "school_name": 1}).to_list(None)}
+        {}, {"_id": 0, "school_id": 1, "school_name": 1, "assigned_to": 1}).to_list(None)}
     logs = {}
     for lg in await db.drip_step_logs.find({"sequence_id": sequence_id}, {"_id": 0}).to_list(5000):
         logs[(lg["enrollment_id"], lg["step_number"])] = lg
@@ -756,9 +956,16 @@ async def sequence_deliveries(sequence_id: str, request: Request):
 
     rows = []
     for enr in enrolments:
-        lead = leads.get(enr["lead_id"], {})
-        sid = lead.get("school_id", "")
-        school_name = schools.get(sid, {}).get("school_name") or lead.get("company_name", "")
+        lead = leads.get(enr.get("lead_id"), {}) if enr.get("lead_id") else {}
+        contact = contacts.get(enr.get("contact_id"), {}) if enr.get("contact_id") else {}
+        if lead or not enr.get("contact_id"):   # lead-keyed (as before)
+            sid = lead.get("school_id", "")
+            school_name = schools.get(sid, {}).get("school_name") or lead.get("company_name", "")
+            owner = lead.get("assigned_to", "")
+        else:
+            sid = contact.get("school_id") or enr.get("school_id") or ""
+            school_name = schools.get(sid, {}).get("school_name") or contact.get("company", "")
+            owner = contact.get("assigned_to") or schools.get(sid, {}).get("assigned_to", "")
         for n, step in steps.items():
             log = logs.get((enr["enrollment_id"], n))
             touch = touches.get((enr["enrollment_id"], n))
@@ -778,9 +985,10 @@ async def sequence_deliveries(sequence_id: str, request: Request):
                 status = "planned" if enr.get("status") == "active" else "cancelled"
                 actual = ""
             rows.append({
-                "enrollment_id": enr["enrollment_id"], "lead_id": enr["lead_id"],
+                "enrollment_id": enr["enrollment_id"], "lead_id": enr.get("lead_id"),
+                "contact_id": enr.get("contact_id"),
                 "school_id": sid, "school_name": school_name or "(no school)",
-                "owner": lead.get("assigned_to", ""), "step_number": n,
+                "owner": owner, "step_number": n,
                 "channel": _CHANNEL_OF.get(step.get("message_type", ""), step.get("message_type", "")),
                 "item": step.get("material_name") or step.get("material_type") or "",
                 "planned_date": planned, "actual_date": actual, "status": status,

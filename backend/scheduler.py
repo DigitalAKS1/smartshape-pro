@@ -33,6 +33,7 @@ from routes.crm_routes import (
     get_crm_settings, compute_attention, resolve_lead_value,
     _build_quote_map, OPEN_STAGES, create_physical_from_drip,
 )
+from services.drip_recipient import resolve_drip_recipient, RECIPIENT_GONE_REASON
 
 log = logging.getLogger("scheduler")
 
@@ -404,7 +405,63 @@ async def _wa_consent_ok(lead: dict) -> bool:
 DRIP_MAX_STEP_FAILURES = 3
 
 
+# ── Never send the same step twice ────────────────────────────────────────────
+# The executor is started by the hourly loop AND kicked by enroll-contacts /
+# enroll-schools (asyncio.create_task). Two overlapping runs both loaded the same
+# due rows and both sent — 5 contacts got 10 WhatsApps. Two guards:
+#
+#  1. `_DRIP_LOCK` (one process): a call made while a run is in progress returns
+#     at once instead of queueing, and sets `_DRIP_RERUN` so the run in progress
+#     makes one more pass before letting go — a batch enrolled after it loaded
+#     its rows still goes out now, not at the next hourly tick. Bounded passes.
+#  2. A per-row claim (any number of workers / processes): before a step is
+#     fired, the row is atomically moved `next_step_at -> now + claim window`,
+#     conditioned on the exact `current_step` / `next_step_at` this pass loaded.
+#     Only the pass whose update matched sends; any other sees 0 modified and
+#     skips. The normal post-send update then writes the real next values. If a
+#     pass dies mid-step the claim simply expires and the step is retried later.
+_DRIP_LOCK = asyncio.Lock()
+_DRIP_RERUN = False
+DRIP_MAX_PASSES = 3             # the first pass + up to two re-runs asked for meanwhile
+DRIP_CLAIM_MINUTES = 10
+
+
 async def run_drip_executor():
+    """Advance every due drip enrolment. Safe to call concurrently: overlapping
+    calls in this process collapse into the one running (see `_DRIP_LOCK`)."""
+    global _DRIP_RERUN
+    if _DRIP_LOCK.locked():
+        _DRIP_RERUN = True
+        log.info("[drip] executor already running — this call skipped; "
+                 "the running pass will look again for newly due steps")
+        return
+    async with _DRIP_LOCK:
+        for _ in range(DRIP_MAX_PASSES):
+            _DRIP_RERUN = False
+            await _drip_executor_pass()
+            if not _DRIP_RERUN:
+                break
+
+
+async def _claim_enrollment(enr: dict, now: datetime) -> bool:
+    """Atomically take this enrolment's due step for the current pass.
+
+    Compare-and-set on the values this pass LOADED: if another pass (or
+    process) has already claimed or advanced the row, `next_step_at` /
+    `current_step` no longer match and nothing is modified. `current_step`
+    compares as loaded — None also matches a legacy row with no such key."""
+    res = await db.drip_enrollments.update_one(
+        {"enrollment_id": enr["enrollment_id"], "status": "active",
+         "current_step": enr.get("current_step"),
+         "next_step_at": enr.get("next_step_at")},
+        # Claim window from the CURRENT time, not the pass start: a long pass
+        # could otherwise write a claim that has already expired.
+        {"$set": {"next_step_at": (datetime.now(timezone.utc)
+                                   + timedelta(minutes=DRIP_CLAIM_MINUTES)).isoformat()}})
+    return getattr(res, "modified_count", 0) == 1
+
+
+async def _drip_executor_pass():
     now = datetime.now(timezone.utc)
     now_iso = now.isoformat()
 
@@ -466,14 +523,30 @@ async def run_drip_executor():
 
             fire_idx, step = step_to_fire
 
-            # Personalize message
-            lead = await db.leads.find_one({"lead_id": enr["lead_id"]}, {"_id": 0})
+            # Claim the step before anything can send it. Lost the race -> some
+            # other pass or worker owns this step; leave it to them.
+            if not await _claim_enrollment(enr, now):
+                log.info(f"[drip] {enr['enrollment_id']} step {step['step_number']} "
+                         f"already claimed by another run — skipped")
+                continue
+
+            # The ONE place an enrolment becomes a recipient. An enrolment keys a
+            # lead OR a contact (D5); the resolver returns a lead-shaped dict for
+            # either, so every branch below reads it unchanged. `lead` keeps its
+            # name because a lead-keyed enrolment still reads the lead document.
+            lead = await resolve_drip_recipient(db, enr)
             if not lead:
+                # Nobody left to send to. Say so on the enrolment rather than
+                # cancelling silently (or, before D5, raising a KeyError on a
+                # contact-only enrolment every hour forever).
                 await db.drip_enrollments.update_one(
                     {"enrollment_id": enr["enrollment_id"]},
-                    {"$set": {"status": "cancelled", "completed_at": now_iso}},
+                    {"$set": {"status": "cancelled", "completed_at": now_iso,
+                              "cancelled_at": now_iso,
+                              "cancel_reason": RECIPIENT_GONE_REASON}},
                 )
                 continue
+            is_contact = lead.get("recipient_kind") == "contact"
 
             _name_parts = (lead.get("contact_name") or "").split()
             first_name = _name_parts[0] if _name_parts else "there"
@@ -527,7 +600,7 @@ async def run_drip_executor():
                 # becomes a crm_activity, so it surfaces on the calendar + the
                 # rep's daily "Marketing Touches" queue (Phase 1a/1b).
                 try:
-                    await db.crm_activities.insert_one({
+                    act_doc = {
                         "activity_id": f"act_{uuid.uuid4().hex[:10]}",
                         "school_id": lead.get("school_id", ""),
                         "school_name": lead.get("company_name", ""),
@@ -538,7 +611,12 @@ async def run_drip_executor():
                         "assigned_name": lead.get("assigned_name", ""),
                         "status": "pending", "source": "drip",
                         "created_by": "drip", "created_at": now_iso, "done_at": None,
-                    })
+                    }
+                    if is_contact:
+                        # A school has many people; say which one to ring.
+                        act_doc["contact_id"] = lead.get("contact_id", "")
+                        act_doc["contact_name"] = lead.get("contact_name", "")
+                    await db.crm_activities.insert_one(act_doc)
                     sent = True
                 except Exception as e:
                     err_detail = str(e)[:200]
@@ -555,7 +633,7 @@ async def run_drip_executor():
                     await log_engagement_event(
                         channel=_ch, kind=f"{seq.get('name', 'Drip')} · step {step['step_number']}",
                         title=_title, school_id=lead.get("school_id", ""),
-                        lead_id=enr["lead_id"], contact_id=lead.get("contact_id", ""),
+                        lead_id=enr.get("lead_id") or "", contact_id=lead.get("contact_id") or "",
                         status="sent", direction="out", by="Drip sequence", at=now_iso,
                         meta={"sequence_id": enr["sequence_id"], "step": step["step_number"]},
                         dedup_key=f"drip:{enr['enrollment_id']}:{step['step_number']}")
@@ -567,7 +645,8 @@ async def run_drip_executor():
                 "log_id": f"dlog_{uuid.uuid4().hex[:10]}",
                 "enrollment_id": enr["enrollment_id"],
                 "sequence_id": enr["sequence_id"],
-                "lead_id": enr["lead_id"],
+                "lead_id": enr.get("lead_id"),
+                "contact_id": enr.get("contact_id") or "",
                 "step_number": step["step_number"],
                 "message_type": msg_type,
                 "status": "sent" if sent else ("skipped" if skipped else "failed"),
@@ -600,7 +679,8 @@ async def run_drip_executor():
                                   + (f"Reason: {err_detail}. " if err_detail else
                                      f"The {msg_type} channel looks unconfigured. ")
                                   + "Nothing further will be sent until this is fixed."),
-                            ref_type="lead", ref_id=enr["lead_id"],
+                            ref_type="contact" if is_contact else "lead",
+                            ref_id=(enr.get("contact_id") if is_contact else enr.get("lead_id")) or "",
                             from_name="Drip sequence")
                     log.warning(f"[drip] {enr['enrollment_id']} PAUSED after {fails} failed "
                                 f"attempts on step {step['step_number']} ({msg_type})")
