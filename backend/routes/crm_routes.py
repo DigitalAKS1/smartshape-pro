@@ -20,6 +20,7 @@ from rbac import (get_team, require_admin, require_superadmin, require_module, h
 from audit_backup import snapshot_and_delete, preview_counts
 from cascade_delete import build_school_plan, build_contact_plan
 from services.engagement import normalize_timeline, fetch_events, log_engagement_event
+from services.tag_scope import resolve_tag_scope
 import crm_contact_calls as cc
 from notify import notify_user
 import services.account_lifecycle as al
@@ -5596,7 +5597,12 @@ async def get_leads(request: Request,
     if owner:
         clauses.append({"assigned_to": owner})
     if tag:
-        clauses.append({"tag_ids": tag})
+        # The tag roll-up's lead set (D3): a deal tagged itself, or any live deal
+        # at a school the tag reaches — the same rule the CRM screen filters by.
+        # It is one more AND'd clause, so the visibility scope below still
+        # narrows it: the roll-up can never show a rep a lead they cannot see.
+        tag_lead_ids = sorted((await resolve_tag_scope(db, tag))["lead_ids"])
+        clauses.append({"lead_id": {"$in": tag_lead_ids}})
     if search and search.strip():
         rx = {"$regex": re.escape(search.strip()), "$options": "i"}
         clauses.append({"$or": [

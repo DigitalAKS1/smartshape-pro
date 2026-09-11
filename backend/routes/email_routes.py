@@ -7,6 +7,7 @@ from auth_utils import get_current_user
 from rbac import get_team
 from email_utils import sanitize_html, personalize, personalize_html, plain_from_html, wrap_email_shell
 from email_templates_html import HTML_BODIES
+from services.tag_scope import resolve_tag_scope
 
 
 def _owner_clause(user: dict):
@@ -494,7 +495,14 @@ async def _resolve_audience(audience_filter: dict, user: dict = None) -> list:
     if sources:
         contact_q["source"] = {"$in": sources}
     if tags:
-        contact_q["tag_ids"] = {"$in": tags}
+        # This audience is PEOPLE, so it takes the contact set of the tag
+        # roll-up — D1: a contact carrying one of the tags itself, never a
+        # colleague at a school that matches. Asked of the shared resolver so
+        # the rule has one home; the owner scope above still applies on top.
+        tagged = (await resolve_tag_scope(db, tags))["contact_ids"]
+        if not tagged:
+            return []
+        contact_q["contact_id"] = {"$in": sorted(tagged)}
 
     contacts = await db.contacts.find(_scoped(contact_q), {"_id": 0}).to_list(None)
 

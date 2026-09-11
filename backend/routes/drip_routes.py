@@ -7,6 +7,7 @@ from database import db
 from auth_utils import get_current_user
 from rbac import get_team, require_module
 from routes.crm_routes import create_physical_from_drip
+from services.tag_scope import resolve_tag_scope
 
 router = APIRouter()
 
@@ -497,14 +498,17 @@ async def enroll_schools(request: Request):
         raise HTTPException(400, "sequence_id is required")
 
     # Target by tag: the labels the team already keeps become the audience, instead
-    # of a list assembled by hand every time.
+    # of a list assembled by hand every time. This enrols SCHOOLS, so it takes the
+    # school set of the tag roll-up (D2): a school carrying the tag itself, or one
+    # where any live contact or lead carries it. Asking db.schools alone matched
+    # nothing — in production no school is tagged directly, the tags sit on people.
     matched_by_tag = 0
     if tag_id:
-        tagged = await db.schools.find({"tag_ids": tag_id}, {"_id": 0, "school_id": 1}).to_list(5000)
+        tagged = sorted((await resolve_tag_scope(db, tag_id))["school_ids"])
         matched_by_tag = len(tagged)
-        for row in tagged:
-            if row["school_id"] not in school_ids:
-                school_ids.append(row["school_id"])
+        for sid in tagged:
+            if sid not in school_ids:
+                school_ids.append(sid)
         if not school_ids:
             # Enrolling nobody and reporting success is indistinguishable from a
             # campaign that ran — say so instead.

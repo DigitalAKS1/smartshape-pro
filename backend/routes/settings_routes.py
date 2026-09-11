@@ -11,6 +11,7 @@ from email.mime.multipart import MIMEMultipart
 from database import db
 from auth_utils import get_current_user
 from rbac import get_team, require_module
+from services.tag_scope import resolve_tag_scope
 
 router = APIRouter()
 
@@ -917,7 +918,14 @@ async def whatsapp_broadcast_by_tag(request: Request):
     if not template_body:
         raise HTTPException(status_code=400, detail="message or template_id with body is required")
 
-    leads = await db.leads.find({"tag_ids": tag_id}, {"_id": 0}).to_list(5000)
+    # This messages LEADS (their contact_phone), so it takes the lead set of the
+    # tag roll-up (D3): a deal tagged itself, or any live deal at a school the tag
+    # reaches (a school tagged itself, or holding a tagged contact or lead). The
+    # tagged PEOPLE are not leads and are not messaged here — that is a campaign.
+    lead_ids = sorted((await resolve_tag_scope(db, tag_id))["lead_ids"])
+    leads = await db.leads.find(
+        {"lead_id": {"$in": lead_ids}, "is_deleted": {"$ne": True}}, {"_id": 0}
+    ).to_list(5000) if lead_ids else []
     sent, failed, skipped = 0, 0, 0
     import httpx
     now_iso = datetime.now(timezone.utc).isoformat()

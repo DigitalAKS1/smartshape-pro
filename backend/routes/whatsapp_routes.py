@@ -12,6 +12,7 @@ from database import db
 from auth_utils import get_current_user
 from services.evolution_client import evolution
 from services.ai_personalizer import personalize_message
+from services.tag_scope import resolve_tag_scope
 
 logger = logging.getLogger(__name__)
 
@@ -319,7 +320,13 @@ async def _resolve_audience(audience_filter: dict) -> list:
     if sources:
         contact_q["source"] = {"$in": sources}
     if tags:
-        contact_q["tag_ids"] = {"$in": tags}
+        # PEOPLE, so the contact set of the tag roll-up — D1: a contact carrying
+        # one of the tags itself, never a colleague at a matching school. Same
+        # resolver as the email audience, so the two channels cannot disagree.
+        tagged = (await resolve_tag_scope(db, tags))["contact_ids"]
+        if not tagged:
+            return []
+        contact_q["contact_id"] = {"$in": sorted(tagged)}
 
     contacts = await db.contacts.find(contact_q, {"_id": 0}).to_list(None)
 
