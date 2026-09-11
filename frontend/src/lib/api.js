@@ -538,6 +538,11 @@ export const dripSequences = {
   delete: (id) => API.delete(`/drip/sequences/${id}`),
   enroll: (data) => API.post('/drip/enroll', data),
   enrollSchools: (data) => API.post('/drip/enroll-schools', data),
+  // Contacts directly — {sequence_id, contact_ids} or {sequence_id, tag_id}. No
+  // lead is created. Returns {requested, enrolled, skipped_duplicate,
+  // skipped_not_visible, skipped_missing, no_channel, starting_now}.
+  enrollContacts: (data) => API.post('/drip/enroll-contacts', data),
+  // params: {lead_id} | {contact_id} | {sequence_id} | {status}
   enrollments: (params) => API.get('/drip/enrollments', { params }),
   cancelEnrollment: (id) => API.put(`/drip/enrollments/${id}/cancel`),
   resumeEnrollment: (id) => API.put(`/drip/enrollments/${id}/resume`),

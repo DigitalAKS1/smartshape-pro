@@ -57,6 +57,13 @@ export default function SchoolDripsCard({ schoolId }) {
               <div className="min-w-0">
                 <p className="text-[13px] font-semibold text-[var(--text-primary)] truncate">
                   {r.sequence_name}
+                  {/* A school has many people; say which one this is sending to. */}
+                  {r.recipient_name ? (
+                    <span className="font-normal text-[11px] text-[var(--text-muted)]"
+                      data-testid={`drip-recipient-${r.enrollment_id}`}>
+                      {' '}· to {r.recipient_name}{r.recipient_kind === 'contact' ? ' (contact)' : ''}
+                    </span>
+                  ) : null}
                 </p>
                 <p className="text-[11px] text-[var(--text-muted)] mt-0.5">
                   Step {r.step} of {r.total_steps}
