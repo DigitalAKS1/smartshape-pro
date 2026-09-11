@@ -6,7 +6,7 @@ import { Label } from '../../components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../../components/ui/dialog';
 import { Plus, Building2, Tag, UserCheck, Send, Briefcase, Edit2, Trash2, SlidersHorizontal, Package } from 'lucide-react';
 import { toast } from 'sonner';
-import { useCRMMasters } from '../../hooks/useCRMMasters';
+import { useCRMMasters, describeBroadcastReach } from '../../hooks/useCRMMasters';
 import { pipelineSettings, schoolTypes as schoolTypesApi, interestedProducts as interestedProductsApi } from '../../lib/api';
 import { STAGES } from '../../lib/crmConstants';
 import MasterEntityTable from '../../components/crm/MasterEntityTable';
@@ -356,7 +356,7 @@ export default function CRMMasters() {
             {/* Campaign Section */}
             <div className={`${card} border rounded-md p-5`}>
               <h2 className={`text-lg font-medium ${textPri} mb-1`}>WhatsApp Campaign by Tag</h2>
-              <p className={`text-xs ${textMuted} mb-4`}>Select a tag and a template to send a WhatsApp message to all leads with that tag.</p>
+              <p className={`text-xs ${textMuted} mb-4`}>Select a tag and a template to send one WhatsApp message to each person on the deals that tag reaches.</p>
               <div className="flex flex-wrap gap-3 items-end">
                 <div>
                   <Label className={`${textSec} text-xs`}>Tag</Label>
@@ -378,8 +378,12 @@ export default function CRMMasters() {
                 </Button>
               </div>
               {m.campaignTag && (
-                <p className={`text-xs ${textMuted} mt-3`}>
-                  Will send to all leads tagged <strong className={textPri}>{m.tagsList.find(t => t.tag_id === m.campaignTag)?.name}</strong> that have a phone number.
+                <p className={`text-xs ${textMuted} mt-3`} data-testid="wa-tag-broadcast-reach">
+                  {m.campaignPreviewLoading && !m.campaignPreview
+                    ? 'Working out who this reaches…'
+                    : m.campaignPreview
+                      ? describeBroadcastReach(m.tagsList.find(t => t.tag_id === m.campaignTag)?.name || 'this tag', m.campaignPreview)
+                      : 'Could not work out who this reaches — the send checks again before anything goes out.'}
                 </p>
               )}
             </div>

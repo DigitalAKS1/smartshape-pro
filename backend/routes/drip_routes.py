@@ -5,8 +5,9 @@ import uuid
 
 from database import db
 from auth_utils import get_current_user
-from rbac import get_team, require_module
+from rbac import get_team, require_module, sees_all
 from routes.crm_routes import create_physical_from_drip
+from services.tag_scope import resolve_tag_scope
 
 router = APIRouter()
 
@@ -492,19 +493,27 @@ async def enroll_schools(request: Request):
     body = await request.json()
     sequence_id = body.get("sequence_id")
     school_ids = body.get("school_ids", []) or []
+    if not isinstance(school_ids, list):
+        raise HTTPException(400, "school_ids must be a list")
+    school_ids = list(school_ids)   # never mutate the caller's body below
     tag_id = (body.get("tag_id") or "").strip()
     if not sequence_id:
         raise HTTPException(400, "sequence_id is required")
 
     # Target by tag: the labels the team already keeps become the audience, instead
-    # of a list assembled by hand every time.
+    # of a list assembled by hand every time. This enrols SCHOOLS, so it takes the
+    # school set of the tag roll-up (D2): a school carrying the tag itself, or one
+    # where any live contact or lead carries it. Asking db.schools alone matched
+    # nothing — in production no school is tagged directly, the tags sit on people.
     matched_by_tag = 0
     if tag_id:
-        tagged = await db.schools.find({"tag_ids": tag_id}, {"_id": 0, "school_id": 1}).to_list(5000)
+        # key=str: the order only has to be stable, and a stray non-string id
+        # must not raise a TypeError out of sorted() and 500 the request.
+        tagged = sorted((await resolve_tag_scope(db, tag_id))["school_ids"], key=str)
         matched_by_tag = len(tagged)
-        for row in tagged:
-            if row["school_id"] not in school_ids:
-                school_ids.append(row["school_id"])
+        for sid in tagged:
+            if sid not in school_ids:
+                school_ids.append(sid)
         if not school_ids:
             # Enrolling nobody and reporting success is indistinguishable from a
             # campaign that ran — say so instead.
@@ -515,7 +524,22 @@ async def enroll_schools(request: Request):
     if not seq or not seq.get("steps"):
         raise HTTPException(404, "Sequence not found or has no steps")
 
-    from routes.crm_routes import OPEN_STAGES, _upsert_direct_mail_lead
+    from routes.crm_routes import (OPEN_STAGES, _upsert_direct_mail_lead,
+                                   _schools_visibility_or, _merge_or)
+
+    # A caller without "all" scope reaches only the schools GET /schools shows
+    # them — for the tag path AND hand-picked school_ids alike. The tag roll-up
+    # is the whole CRM, so without this a rep's GSLC drip would enrol (and open
+    # Direct-Mail leads at) other reps' schools. Out-of-reach schools are
+    # counted, not silently dropped and not a 403 for the whole batch.
+    school_ids = list(dict.fromkeys(s for s in school_ids if isinstance(s, str) and s))
+    skipped_not_visible = 0
+    if not sees_all(user, "leads"):
+        vq = _merge_or({"school_id": {"$in": school_ids}},
+                       await _schools_visibility_or(user["email"]))
+        visible = {s["school_id"] async for s in db.schools.find(vq, {"_id": 0, "school_id": 1})}
+        skipped_not_visible = sum(1 for s in school_ids if s not in visible)
+        school_ids = [s for s in school_ids if s in visible]
     now = datetime.now(timezone.utc)
     now_iso = now.isoformat()
     first_delay = seq["steps"][0].get("delay_days", 0)
@@ -574,6 +598,7 @@ async def enroll_schools(request: Request):
     return {"sequence_id": sequence_id, "sequence_name": seq.get("name", ""),
             "enrolled": enrolled, "skipped": skipped, "leads_created": leads_created,
             "matched_by_tag": matched_by_tag, "total": len(school_ids),
+            "skipped_not_visible": skipped_not_visible,
             "starting_now": starting_now}
 
 

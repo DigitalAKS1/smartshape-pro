@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { toast } from 'sonner';
 import {
   groups as groupsApi,
@@ -11,6 +11,30 @@ import {
   dealTypes as dealTypesApi,
   activityTypes as activityTypesApi,
 } from '../lib/api';
+
+const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+
+// Plain-words reach of a WhatsApp tag broadcast, from the server preview
+// ({deals, unique_recipients, skipped_no_phone, capped_at, over_cap}). The
+// audience is the tag roll-up's deals (D3): deals tagged X, plus every deal at a
+// school the tag reaches — at ANY stage, as the broadcast always has been —
+// merged to one message per phone number.
+export function describeBroadcastReach(tagName, p) {
+  if (!p) return '';
+  let s = `Sends to deals tagged "${tagName}", plus every deal (any stage, won and lost included) `
+    + `at a school the tag reaches — ${plural(p.unique_recipients, 'person', 'people')} `
+    + `(${plural(p.deals, 'deal', 'deals')}). Deals that share a phone number get one message.`;
+  if (p.skipped_no_phone) s += ` ${plural(p.skipped_no_phone, 'deal has', 'deals have')} no usable phone and will be skipped.`;
+  if (p.capped_at) s += ` Capped at ${p.capped_at}: ${plural(p.over_cap, 'more person', 'more people')} will NOT be messaged.`;
+  return s;
+}
+
+export function confirmBroadcastText(tagName, p) {
+  // Over the cap only `capped_at` people are actually messaged — quote that.
+  const willSend = p.capped_at ? Math.min(p.unique_recipients, p.capped_at) : p.unique_recipients;
+  return `Send this WhatsApp template to ${plural(willSend, 'person', 'people')}?\n\n`
+    + `${describeBroadcastReach(tagName, p)}\n\nThis sends real messages and cannot be undone.`;
+}
 
 export function useCRMMasters() {
   const [loading, setLoading] = useState(true);
@@ -62,6 +86,20 @@ export function useCRMMasters() {
   const [campaignTag, setCampaignTag] = useState('');
   const [campaignTemplate, setCampaignTemplate] = useState('');
   const [campaignSending, setCampaignSending] = useState(false);
+  // What the tag broadcast would reach, from the server's own preview — the
+  // same function the send uses, so this number is the number messaged.
+  const [campaignPreview, setCampaignPreview] = useState(null);
+  const [campaignPreviewLoading, setCampaignPreviewLoading] = useState(false);
+  useEffect(() => {
+    if (!campaignTag) { setCampaignPreview(null); return undefined; }
+    let live = true;
+    setCampaignPreviewLoading(true);
+    broadcastApi.previewByTag(campaignTag)
+      .then(r => { if (live) setCampaignPreview(r.data || null); })
+      .catch(() => { if (live) setCampaignPreview(null); })
+      .finally(() => { if (live) setCampaignPreviewLoading(false); });
+    return () => { live = false; };
+  }, [campaignTag]);
 
   const fetchAll = async () => {
     try {
@@ -224,15 +262,41 @@ export function useCRMMasters() {
   };
 
   // ── Campaign ────────────────────────────────────────────────────────────────
+  // In-flight guard: a ref, not state, so a fast double-click can't open two
+  // confirm boxes (a state update lands too late to stop the second click)
+  // and send the same real WhatsApp campaign twice.
+  const sendingRef = useRef(false);
   const sendCampaign = async () => {
+    if (sendingRef.current) return;
+    sendingRef.current = true;
+    try { await sendCampaignOnce(); } finally { sendingRef.current = false; }
+  };
+  const sendCampaignOnce = async () => {
     if (!campaignTag) { toast.error('Select a tag'); return; }
     if (!campaignTemplate) { toast.error('Select a WhatsApp template'); return; }
     const tagName = tagsList.find(t => t.tag_id === campaignTag)?.name || 'this tag';
-    if (!window.confirm(`Send this WhatsApp template to ALL leads tagged "${tagName}" that have a phone number?\n\nThis sends real messages and cannot be undone.`)) return;
+    // Ask the server again right before sending: the confirm box must quote the
+    // exact number of people about to be messaged, not a count from minutes ago.
+    let p;
+    try {
+      p = (await broadcastApi.previewByTag(campaignTag)).data;
+      setCampaignPreview(p);
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Could not work out who this would reach');
+      return;
+    }
+    if (!p || !p.unique_recipients) {
+      toast.error(`Nobody to message: "${tagName}" reaches ${p?.deals || 0} deal(s), none with a usable phone number.`);
+      return;
+    }
+    if (!window.confirm(confirmBroadcastText(tagName, p))) return;
     setCampaignSending(true);
     try {
       const res = await broadcastApi.byTag({ tag_id: campaignTag, template_id: campaignTemplate });
-      toast.success(`Campaign sent: ${res.data.sent} delivered, ${res.data.failed} failed, ${res.data.skipped} skipped (no phone)`);
+      const d = res.data;
+      toast.success(`Campaign sent: ${d.sent} delivered, ${d.failed} failed`
+        + (d.skipped_no_phone ? `, ${d.skipped_no_phone} deal(s) with no usable phone` : '')
+        + (d.capped_at ? ` — capped at ${d.capped_at}, ${d.over_cap} not messaged` : ''));
     } catch (e) {
       toast.error(e?.response?.data?.detail || 'Campaign failed');
     } finally { setCampaignSending(false); }
@@ -267,5 +331,6 @@ export function useCRMMasters() {
     campaignTag, setCampaignTag,
     campaignTemplate, setCampaignTemplate,
     campaignSending, sendCampaign,
+    campaignPreview, campaignPreviewLoading,
   };
 }

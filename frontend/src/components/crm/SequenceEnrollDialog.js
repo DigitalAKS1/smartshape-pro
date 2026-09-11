@@ -67,6 +67,7 @@ export default function SequenceEnrollDialog({ open, onClose, schoolIds = [], on
     const d = r.data;
     toast.success(`Enrolled ${d.enrolled} school${d.enrolled === 1 ? '' : 's'} in "${d.sequence_name}"`
       + (d.skipped ? ` · ${d.skipped} already in it` : '')
+      + (d.skipped_not_visible ? ` · ${d.skipped_not_visible} outside your schools, not enrolled` : '')
       + (d.leads_created ? ` · ${d.leads_created} new lead(s)` : ''));
     // Step 1 goes out in the background. Say where to look for it — otherwise
     // Offline Mail just sits there empty and the plan looks like it did nothing.

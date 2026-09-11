@@ -11,7 +11,7 @@
 //      are unit-testable without mounting the hook or any component. These are
 //      literally what feeds the `masterFiltered.{schools,contacts,leads}.length`
 //      numbers that the LeadsCRM tab badges render (O5, honest counts).
-import { buildCrmContext, matchesCrmFilter, UNASSIGNED, FACET_LABELS } from './crmFilter';
+import { buildCrmContext, buildSchoolTagIndex, matchesCrmFilter, UNASSIGNED, FACET_LABELS } from './crmFilter';
 
 const norm = (v) => (v == null ? '' : String(v)).toLowerCase();
 
@@ -34,12 +34,20 @@ export function matchesGlobalSearch(row, kind, term) {
     .some((v) => norm(v).includes(s));
 }
 
-// One buildCrmContext() per entity kind, memoized by the caller (useLeadsCRM).
+// One buildCrmContext() per entity kind, memoized by the caller (useCrmFilters).
+//
+// The tag roll-up index is built ONCE here from all three lists and shared by
+// every context. The lead context has to see contacts through it — a lead at a
+// school where a tagged PERSON works matches (D3) — but it is deliberately NOT
+// handed `contacts` itself: that would populate its contactsBySchoolId and
+// quietly change how a source-less lead rolls up its `sources` facet. The
+// contact context gets the index too, and ignores it (D1).
 export function buildMasterContexts({ schoolsList = [], leadsList = [], contactsList = [], rolesList = [] } = {}) {
+  const schoolTags = buildSchoolTagIndex({ schools: schoolsList, contacts: contactsList, leads: leadsList });
   return {
-    school: buildCrmContext('school', { schools: schoolsList, leads: leadsList, contacts: contactsList, roles: rolesList }),
-    contact: buildCrmContext('contact', { schools: schoolsList, leads: leadsList, roles: rolesList }),
-    lead: buildCrmContext('lead', { schools: schoolsList, leads: leadsList, roles: rolesList }),
+    school: buildCrmContext('school', { schools: schoolsList, leads: leadsList, contacts: contactsList, roles: rolesList, schoolTags }),
+    contact: buildCrmContext('contact', { schools: schoolsList, leads: leadsList, roles: rolesList, schoolTags }),
+    lead: buildCrmContext('lead', { schools: schoolsList, leads: leadsList, roles: rolesList, schoolTags }),
   };
 }
 

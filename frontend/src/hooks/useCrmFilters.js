@@ -91,5 +91,9 @@ export default function useCrmFilters({
     filterOptions, parsedQuery, effectiveFilter,
     masterFiltered, filteredLeads,
     masterCountFor, activeTabKind,
+    // The memoised per-kind contexts, for any secondary filter on the page (the
+    // Leads list's own filter bar) — reusing them keeps the tag roll-up index to
+    // one build per data change instead of one per render.
+    masterContexts,
   };
 }

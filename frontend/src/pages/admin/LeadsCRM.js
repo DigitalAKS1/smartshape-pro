@@ -43,7 +43,7 @@ import SchoolsBulkBar from '../../components/crm/SchoolsBulkBar';
 import useBulkSelect from '../../hooks/useBulkSelect';
 import { toggleAllVisible, allVisibleSelected } from '../../lib/leadSelection';
 import { useIsOwner, usePermission } from '../../hooks/usePermission';
-import { deriveFilterOptions, buildCrmContext, matchesCrmFilter, hasActiveFilters } from '../../lib/crmFilter';
+import { deriveFilterOptions, matchesCrmFilter, hasActiveFilters } from '../../lib/crmFilter';
 import ActiveFilterBar from '../../components/crm/ActiveFilterBar';
 import SegmentPerformance from '../../components/crm/SegmentPerformance';
 
@@ -514,7 +514,11 @@ export default function LeadsCRM() {
 
         {/* ── LEADS LIST VIEW ───────────────────────────────────────── */}
         {crm.activeTab === 'list' && (() => {
-          const lctx = buildCrmContext('lead', { schools: crm.schoolsList, leads: crm.leadsList, roles: crm.rolesList });
+          // The page's memoised lead context: same schools/leads/roles as before,
+          // plus the tag roll-up index (built with contacts), so a Tag chip here
+          // matches a lead at a school where a tagged person works — and it is no
+          // longer rebuilt on every render.
+          const lctx = crm.masterContexts.lead;
           const lOptions = deriveFilterOptions({ leads: crm.leadsList, schools: crm.schoolsList, sources: crm.sourcesList, roles: crm.rolesList, tags: crm.tagsList });
           const sortedLeads = crm.sortData(crm.filteredLeads, crm.sortConfig.key, crm.sortConfig.dir)
             .filter(l => matchesCrmFilter(l, leadsFilter, lctx));

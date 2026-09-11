@@ -28,7 +28,7 @@ const CONTACTS = [
   { contact_id: 'c2', school_id: 's_dps', name: 'K Verma', phone: '9822222222',
     designation: 'Director', assigned_to: 'parul@ss.in', status: 'active' },
   { contact_id: 'c3', school_id: 's_lotus', name: 'A Menon', phone: '9833333333',
-    designation: 'Principal', assigned_to: '', status: 'active' },
+    designation: 'Principal', assigned_to: '', status: 'active', tag_ids: ['t_gslc'] },
 ];
 const LEADS = [
   { lead_id: 'l1', school_id: 's_dps', company_name: 'Delhi Public School',
@@ -134,10 +134,24 @@ test('Hot/Warm/Cold rolls up from leads to their school', async () => {
   expect(api.masterFiltered.schools.map(s => s.school_id)).toEqual(['s_dps']);
 });
 
-test('the Tags dropdown narrows every tab', async () => {
+test('the Tags dropdown narrows every tab, with the tag roll-up (D1-D3)', async () => {
   await set(() => api.setFilterTag('t_hot'));
   expect(api.masterFiltered.schools.map(s => s.school_id)).toEqual(['s_dps']);
-  expect(api.filteredLeads.map(l => l.lead_id)).toEqual(['l1']);
+  // D3: l2 carries no tag, but it is a deal at s_dps, which matches — so it is
+  // in. (Before the roll-up a lead matched on its own tag_ids only: ['l1'].)
+  expect(api.filteredLeads.map(l => l.lead_id)).toEqual(['l1', 'l2']);
+  // D1: no contact carries t_hot, and a contact never inherits its school's tag.
+  expect(api.masterFiltered.contacts.map(c => c.contact_id)).toEqual([]);
+});
+
+test('a tag carried only by a contact surfaces its school and the school\'s deals', async () => {
+  // t_gslc sits on c3 alone — no school or lead carries it.
+  await set(() => api.setActiveTab('schools'));
+  expect(api.masterCountFor('tags', 't_gslc')).toBe(1);   // the rail count agrees
+  await set(() => api.setMasterFilter({ tags: ['t_gslc'] }));
+  expect(api.masterFiltered.contacts.map(c => c.contact_id)).toEqual(['c3']);
+  expect(api.masterFiltered.schools.map(s => s.school_id)).toEqual(['s_lotus']);
+  expect(api.filteredLeads.map(l => l.lead_id)).toEqual(['l3']);
 });
 
 // ── Search box ──────────────────────────────────────────────────────────────

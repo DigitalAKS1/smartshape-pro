@@ -435,3 +435,33 @@ def test_lead_details_cache_is_busted_by_bulk_writes(db, cache, monkeypatch):
         {"lead_ids": [f"b{i:03d}" for i in range(30)], "stage": "lost"})))
     assert not [k for k in cache if k.startswith("lead:") and k.endswith(":details")]
     assert _run(crm.get_lead_details("b002", FakeRequest()))["probability"] == 0
+
+
+@pytest.mark.usefixtures("cache")
+def test_soft_deleted_leads_are_never_listed_on_any_path(db, monkeypatch):
+    """GET /leads hides `is_deleted: True` on EVERY path — legacy array,
+    paginated envelope, and each filter — not only where a tag is given. GET
+    /schools and GET /contacts already did; deleted work is reviewed through
+    the audit-backup "Recently deleted" view, never through this list."""
+    _as(ADMIN, monkeypatch)
+    _run(db.leads.insert_many([
+        {"lead_id": "l_live", "stage": "demo", "assigned_to": "a@x.in", "tag_ids": ["t1"],
+         "company_name": "Delhi Public School", "created_at": "2026-09-02T00:00:00+00:00"},
+        {"lead_id": "l_gone", "stage": "demo", "assigned_to": "a@x.in", "tag_ids": ["t1"],
+         "company_name": "Delhi Public School", "created_at": "2026-09-01T00:00:00+00:00",
+         "is_deleted": True},
+        {"lead_id": "l_false", "stage": "new", "is_deleted": False,
+         "created_at": "2026-09-03T00:00:00+00:00"},
+    ]))
+
+    legacy = _run(crm.get_leads(FakeRequest()))
+    assert sorted(l["lead_id"] for l in legacy) == ["l_false", "l_live"]
+
+    page = _run(crm.get_leads(FakeRequest(), page=1, limit=50))
+    assert page["total"] == 2
+    assert "l_gone" not in [l["lead_id"] for l in page["leads"]]
+    assert page["facets"]["stages"] == {"demo": 1, "new": 1}
+
+    for kwargs in ({"stage": "demo"}, {"owner": "a@x.in"}, {"search": "Delhi"}, {"tag": "t1"}):
+        rows = _run(crm.get_leads(FakeRequest(), **kwargs))
+        assert [l["lead_id"] for l in rows] == ["l_live"], kwargs
