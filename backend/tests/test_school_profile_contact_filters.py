@@ -135,3 +135,51 @@ def test_an_unlinked_contact_matching_by_company_is_still_found(db, monkeypatch)
         names = {c["name"] for c in profile["contacts"]}
         assert "Legacy Contact" in names
     _run(go())
+
+
+def test_a_blank_named_school_pulls_in_nobody_by_quotation_or_visit_name(db, monkeypatch):
+    # Same blank-name-must-never-be-a-match-value guard as the contact
+    # fallback, applied to the quotations and field_visits queries: a
+    # nameless junk school must not pull in every quotation (and,
+    # transitively, every order/invoice linked through it) or field visit
+    # that itself has a blank school_name.
+    _as(ADMIN, monkeypatch)
+
+    async def go():
+        await _seed_school(db, "s_blank", "")
+        await db.quotations.insert_one({
+            "quotation_id": "q1", "quotation_number": "Q-1", "school_id": "",
+            "school_name": "", "quotation_status": "sent", "grand_total": 1000,
+            "created_at": "2026-09-01T00:00:00+00:00",
+        })
+        await db.field_visits.insert_one({
+            "visit_id": "fv1", "school_id": "", "school_name": "",
+            "visit_date": "2026-09-01", "status": "planned",
+        })
+        profile = await crm.get_school_profile("s_blank", FakeRequest())
+        assert profile["quotations"] == []
+        assert profile["visits"] == []
+    _run(go())
+
+
+def test_a_named_school_still_pulls_in_its_quotations_and_visits_by_name(db, monkeypatch):
+    # Guard the guard: a school WITH a real name must keep matching
+    # quotations/visits recorded only by school_name (legacy records with no
+    # school_id FK), same as before this fix.
+    _as(ADMIN, monkeypatch)
+
+    async def go():
+        await _seed_school(db, "s_dps", "Delhi Public School")
+        await db.quotations.insert_one({
+            "quotation_id": "q1", "quotation_number": "Q-1", "school_id": "",
+            "school_name": "Delhi Public School", "quotation_status": "sent",
+            "grand_total": 1000, "created_at": "2026-09-01T00:00:00+00:00",
+        })
+        await db.field_visits.insert_one({
+            "visit_id": "fv1", "school_id": "", "school_name": "Delhi Public School",
+            "visit_date": "2026-09-01", "status": "planned",
+        })
+        profile = await crm.get_school_profile("s_dps", FakeRequest())
+        assert len(profile["quotations"]) == 1
+        assert len(profile["visits"]) == 1
+    _run(go())

@@ -4165,8 +4165,15 @@ async def get_school_profile(school_id: str, request: Request):
         ).to_list(None)
     contacts_list = contacts_by_fk + contacts_by_name
 
+    # Same guard as the contact name-fallback above: a blank school_name must
+    # never be used as a match value, or a nameless junk school pulls in
+    # every quotation (and, transitively, every order/invoice linked through
+    # those quotations) or field visit with a blank school_name too.
+    quotations_or = [{"school_id": school_id}]
+    if school_name and school_name.strip():
+        quotations_or.append({"school_name": school_name})
     quotations = await db.quotations.find(
-        {"$or": [{"school_id": school_id}, {"school_name": school_name}]},
+        {"$or": quotations_or},
         {"_id": 0, "quotation_id": 1, "quotation_number": 1, "status": 1, "quotation_status": 1,
          "grand_total": 1, "currency_symbol": 1, "created_at": 1, "created_by_name": 1, "items": 1,
          "deal_type": 1}
@@ -4175,7 +4182,10 @@ async def get_school_profile(school_id: str, request: Request):
     # Fetch from visit_plans (admin-scheduled, have school_id)
     vp_list = await db.visit_plans.find({"school_id": school_id}, {"_id": 0}).sort("visit_date", -1).to_list(None)
     # Also fetch self-created field_visits by school_name match (reps who didn't have a plan)
-    fv_list = await db.field_visits.find({"$or": [{"school_id": school_id}, {"school_name": school_name}]}, {"_id": 0}).sort("visit_date", -1).to_list(None)
+    field_visits_or = [{"school_id": school_id}]
+    if school_name and school_name.strip():
+        field_visits_or.append({"school_name": school_name})
+    fv_list = await db.field_visits.find({"$or": field_visits_or}, {"_id": 0}).sort("visit_date", -1).to_list(None)
     # Normalize both to a unified schema for the frontend
     def _norm_vp(v):
         status = v.get("status", "planned")

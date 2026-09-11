@@ -16,17 +16,26 @@ were enrolled in June, and a months-late "following up on your enquiry"
 would read as broken.
 
 Scope:
-  - Every enrolment with status "active" or "completed" -> "cancelled".
+  - Every enrolment with status "active", "completed", or "paused" ->
+    "cancelled". Paused enrolments carry the same stale-step risk as active
+    ones (the executor only paused them after repeated send failures — the
+    step it was frozen at may still be one this bug faked) and, like any
+    cancelled/paused enrolment, could otherwise be resumed straight into
+    that stale step.
   - Records WHY: cancel_reason (plain English), cancelled_at, and the
     PREVIOUS status in status_before_cancel, so a genuine completion is
     never silently indistinguishable from a false one.
   - Enrolments already "cancelled" are left completely untouched (no
     cancel_reason/status_before_cancel is added retroactively — we cannot
     know why they were really cancelled).
+  - The update filters on {_id, status: prev_status}, not _id alone, so an
+    enrolment the scheduler or a user changes concurrently while this runs
+    is not blindly overwritten — and only a Mongo-confirmed modification is
+    counted, not just an attempted match.
   - Does NOT touch whatsapp_logs.
 
 Idempotent: a second run cancels zero (nothing left matching status
-active/completed).
+active/completed/paused).
 """
 
 _REASON = (
@@ -42,15 +51,19 @@ async def cancel_stale_drip_enrollments(db) -> dict:
     from datetime import datetime, timezone
 
     now_iso = datetime.now(timezone.utc).isoformat()
-    counts = {"active": 0, "completed": 0}
+    counts = {"active": 0, "completed": 0, "paused": 0}
 
-    for prev_status in ("active", "completed"):
+    for prev_status in ("active", "completed", "paused"):
         cursor = db.drip_enrollments.find(
             {"status": prev_status}, {"_id": 1}
         )
         async for doc in cursor:
-            await db.drip_enrollments.update_one(
-                {"_id": doc["_id"]},
+            result = await db.drip_enrollments.update_one(
+                # Filter on the previous status too, not just _id — if the
+                # scheduler or a user changed this enrolment's status
+                # between the find() above and this update, we must not
+                # blindly overwrite whatever it changed to.
+                {"_id": doc["_id"], "status": prev_status},
                 {"$set": {
                     "status": "cancelled",
                     "status_before_cancel": prev_status,
@@ -58,12 +71,14 @@ async def cancel_stale_drip_enrollments(db) -> dict:
                     "cancelled_at": now_iso,
                 }},
             )
-            counts[prev_status] += 1
+            if result.modified_count:
+                counts[prev_status] += 1
 
     return {
         "cancelled_from_active": counts["active"],
         "cancelled_from_completed": counts["completed"],
-        "total_cancelled": counts["active"] + counts["completed"],
+        "cancelled_from_paused": counts["paused"],
+        "total_cancelled": counts["active"] + counts["completed"] + counts["paused"],
     }
 
 

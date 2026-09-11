@@ -53,6 +53,24 @@ def test_active_and_completed_are_both_cancelled_with_reason_and_prior_status(db
     _run(go())
 
 
+def test_paused_is_also_cancelled_with_reason_and_prior_status(db):
+    async def go():
+        await db.drip_enrollments.insert_one({
+            "enrollment_id": "e_paused", "status": "paused", "current_step": 2,
+            "paused_reason": "3 consecutive send failures",
+        })
+        result = await cancel_stale_drip_enrollments(db)
+        assert result["cancelled_from_paused"] == 1
+        assert result["total_cancelled"] == 1
+
+        paused = await db.drip_enrollments.find_one({"enrollment_id": "e_paused"})
+        assert paused["status"] == "cancelled"
+        assert paused["status_before_cancel"] == "paused"
+        assert paused["cancel_reason"]
+        assert paused["cancelled_at"]
+    _run(go())
+
+
 def test_an_already_cancelled_enrollment_is_untouched(db):
     async def go():
         await db.drip_enrollments.insert_one({
