@@ -405,7 +405,60 @@ async def _wa_consent_ok(lead: dict) -> bool:
 DRIP_MAX_STEP_FAILURES = 3
 
 
+# ── Never send the same step twice ────────────────────────────────────────────
+# The executor is started by the hourly loop AND kicked by enroll-contacts /
+# enroll-schools (asyncio.create_task). Two overlapping runs both loaded the same
+# due rows and both sent — 5 contacts got 10 WhatsApps. Two guards:
+#
+#  1. `_DRIP_LOCK` (one process): a call made while a run is in progress returns
+#     at once instead of queueing, and sets `_DRIP_RERUN` so the run in progress
+#     makes one more pass before letting go — a batch enrolled after it loaded
+#     its rows still goes out now, not at the next hourly tick. Bounded passes.
+#  2. A per-row claim (any number of workers / processes): before a step is
+#     fired, the row is atomically moved `next_step_at -> now + claim window`,
+#     conditioned on the exact `current_step` / `next_step_at` this pass loaded.
+#     Only the pass whose update matched sends; any other sees 0 modified and
+#     skips. The normal post-send update then writes the real next values. If a
+#     pass dies mid-step the claim simply expires and the step is retried later.
+_DRIP_LOCK = asyncio.Lock()
+_DRIP_RERUN = False
+DRIP_MAX_PASSES = 3             # the first pass + up to two re-runs asked for meanwhile
+DRIP_CLAIM_MINUTES = 10
+
+
 async def run_drip_executor():
+    """Advance every due drip enrolment. Safe to call concurrently: overlapping
+    calls in this process collapse into the one running (see `_DRIP_LOCK`)."""
+    global _DRIP_RERUN
+    if _DRIP_LOCK.locked():
+        _DRIP_RERUN = True
+        log.info("[drip] executor already running — this call skipped; "
+                 "the running pass will look again for newly due steps")
+        return
+    async with _DRIP_LOCK:
+        for _ in range(DRIP_MAX_PASSES):
+            _DRIP_RERUN = False
+            await _drip_executor_pass()
+            if not _DRIP_RERUN:
+                break
+
+
+async def _claim_enrollment(enr: dict, now: datetime) -> bool:
+    """Atomically take this enrolment's due step for the current pass.
+
+    Compare-and-set on the values this pass LOADED: if another pass (or
+    process) has already claimed or advanced the row, `next_step_at` /
+    `current_step` no longer match and nothing is modified. `current_step`
+    compares as loaded — None also matches a legacy row with no such key."""
+    res = await db.drip_enrollments.update_one(
+        {"enrollment_id": enr["enrollment_id"], "status": "active",
+         "current_step": enr.get("current_step"),
+         "next_step_at": enr.get("next_step_at")},
+        {"$set": {"next_step_at": (now + timedelta(minutes=DRIP_CLAIM_MINUTES)).isoformat()}})
+    return getattr(res, "modified_count", 0) == 1
+
+
+async def _drip_executor_pass():
     now = datetime.now(timezone.utc)
     now_iso = now.isoformat()
 
@@ -466,6 +519,13 @@ async def run_drip_executor():
                 continue
 
             fire_idx, step = step_to_fire
+
+            # Claim the step before anything can send it. Lost the race -> some
+            # other pass or worker owns this step; leave it to them.
+            if not await _claim_enrollment(enr, now):
+                log.info(f"[drip] {enr['enrollment_id']} step {step['step_number']} "
+                         f"already claimed by another run — skipped")
+                continue
 
             # The ONE place an enrolment becomes a recipient. An enrolment keys a
             # lead OR a contact (D5); the resolver returns a lead-shaped dict for
