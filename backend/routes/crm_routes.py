@@ -5359,7 +5359,9 @@ async def _fetch_schools_map(school_ids: list) -> dict:
     This is the fix for the N+1 that made the CRM list take 10-30s: the old code
     ran a find_one per lead.
     """
-    ids = sorted({s for s in (school_ids or []) if s})
+    # key=str: sorted only to make the cache key stable; a stray int school_id
+    # beside string ones must not raise TypeError and 500 the whole lead list.
+    ids = sorted({s for s in (school_ids or []) if s}, key=str)
     if not ids:
         return {}
     key = f"schools:batch:{_stable_key(ids)}"
@@ -5591,7 +5593,10 @@ async def get_leads(request: Request,
     limit = max(1, min(int(limit or 50), 100))
 
     # ── Build the filter. Every clause ANDs; nothing overwrites anything else.
-    clauses = []
+    # A soft-deleted lead is never listed, on any path — GET /schools and GET
+    # /contacts already hide theirs, and deleted work is reviewed through the
+    # audit-backup "Recently deleted" view, not through this list.
+    clauses = [{"is_deleted": {"$ne": True}}]
     if stage:
         clauses.append({"stage": stage})
     if owner:
@@ -5601,7 +5606,7 @@ async def get_leads(request: Request,
         # at a school the tag reaches — the same rule the CRM screen filters by.
         # It is one more AND'd clause, so the visibility scope below still
         # narrows it: the roll-up can never show a rep a lead they cannot see.
-        tag_lead_ids = sorted((await resolve_tag_scope(db, tag))["lead_ids"])
+        tag_lead_ids = list((await resolve_tag_scope(db, tag))["lead_ids"])
         clauses.append({"lead_id": {"$in": tag_lead_ids}})
     if search and search.strip():
         rx = {"$regex": re.escape(search.strip()), "$options": "i"}

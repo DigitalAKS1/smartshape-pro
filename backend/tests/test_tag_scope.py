@@ -408,7 +408,10 @@ def test_whatsapp_tag_broadcast_reaches_the_lead_at_a_school_surfaced_by_a_tagge
 
         out = await settings_mod.whatsapp_broadcast_by_tag(
             FakeRequest({"tag_id": "t_gslc", "message": "Hi {contact_name}"}))
-        assert out == {"sent": 1, "failed": 0, "skipped": 0, "total": 1}
+        assert {k: out[k] for k in ("sent", "failed", "skipped", "total")} == {
+            "sent": 1, "failed": 0, "skipped": 0, "total": 1}
+        assert out["unique_recipients"] == 1 and out["deals"] == 1
+        # This one goes through the real _send_wa_autosender, into a fake transport.
         assert [s["receiverMobileNo"] for s in _FakeHttpClient.sent] == ["9222222222"]
         # before the roll-up: db.leads.find({"tag_ids": tag}) -> total 0
     _run(go())
@@ -503,4 +506,36 @@ def test_get_leads_by_tag_never_widens_a_reps_visibility(db, monkeypatch, no_cac
 
         out = await crm.get_leads(FakeRequest(), tag="t_gslc")
         assert [lead["lead_id"] for lead in out] == ["l_mine"]
+    _run(go())
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Fix round: a non-string id must never 500 a caller
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_mixed_type_ids_do_not_raise_anywhere(db, monkeypatch, no_cache):
+    """Ids are strings by convention, but an import or a hand edit can leave an
+    int behind. sorted() over {1, "s2"} raises TypeError -> a 500; the resolver
+    and its callers must not sort mixed sets."""
+    _as(ADMIN, monkeypatch)
+
+    async def go():
+        await _school(db, 101)                      # int school_id
+        await _school(db, "s2")
+        await _contact(db, 7, 101, ["t"])           # int contact_id at the int school
+        await _contact(db, "c2", "s2", ["t"])
+        await _lead(db, 55, 101)                    # int lead_id
+        await _lead(db, "l2", "s2")
+
+        scope = await resolve_tag_scope(db, "t")
+        assert scope == {"contact_ids": {7, "c2"}, "school_ids": {101, "s2"}, "lead_ids": {55, "l2"}}
+
+        assert len(await email_mod._resolve_audience({"tags": ["t"]}, ADMIN)) == 2
+        assert len(await wa_mod._resolve_audience({"tags": ["t"]})) == 2
+        assert len(await crm.get_leads(FakeRequest(), tag="t")) == 2
+        await db.drip_sequences.insert_one({
+            "sequence_id": "seq1", "name": "x", "is_active": True,
+            "steps": [{"step_number": 1, "delay_days": 3, "message_type": "call_task"}]})
+        out = await drip.enroll_schools(FakeRequest({"sequence_id": "seq1", "tag_id": "t"}))
+        assert out["matched_by_tag"] == 2
     _run(go())

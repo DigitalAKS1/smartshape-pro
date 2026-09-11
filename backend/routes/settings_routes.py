@@ -893,6 +893,96 @@ async def cancel_scheduled_wa(schedule_id: str, request: Request):
 
 # ==================== WHATSAPP BROADCAST BY TAG ====================
 
+# Most people one broadcast will message. The send is synchronous — one HTTP call
+# per person inside the request — so an unbounded list would time the request
+# out half-way through. The cap is stated, never silent: the preview and the
+# response both carry `capped_at` / `over_cap`, and the screen shows them.
+BROADCAST_MAX_RECIPIENTS = 5000
+
+
+async def _tag_broadcast_audience(tag_id: str) -> dict:
+    """Who a WhatsApp broadcast for this tag would message. Shared by the
+    preview and the send, so the number on the confirm box is the number sent.
+
+    The deals are the tag roll-up's LEAD set (D3): a deal tagged itself, or any
+    live deal at a school the tag reaches (tagged itself, or holding a tagged
+    contact or deal). Every STAGE counts, won and lost included — the broadcast
+    has never filtered by stage, and the roll-up does not change that.
+
+    Deals are merged into PEOPLE by normalised phone (digits, last 10 — the CRM's
+    own `_norm_phone`): three deals at one school with one principal's number are
+    one message, not three. A deal whose phone has fewer than 10 digits is
+    skipped, like one with no phone at all.
+    """
+    from routes.crm_routes import _norm_phone   # lazy: crm_routes is the heavy module
+
+    lead_ids = list((await resolve_tag_scope(db, tag_id))["lead_ids"])
+    deals = []
+    if lead_ids:
+        deals = await db.leads.find(
+            {"lead_id": {"$in": lead_ids}, "is_deleted": {"$ne": True}},
+            {"_id": 0, "lead_id": 1, "contact_phone": 1, "contact_name": 1,
+             "company_name": 1, "school_name": 1, "created_at": 1},
+        ).to_list(None)
+    # Oldest deal first, so the name a merged message is personalised with is
+    # stable from one preview to the send.
+    deals.sort(key=lambda d: (str(d.get("created_at") or ""), str(d.get("lead_id") or "")))
+
+    people, skipped_no_phone = {}, 0
+    for d in deals:
+        raw = str(d.get("contact_phone") or "").strip()
+        key = _norm_phone(raw)
+        if len(key) != 10:
+            skipped_no_phone += 1
+            continue
+        person = people.get(key)
+        if person is None:
+            people[key] = {"phone": raw, "lead": d, "lead_ids": [d.get("lead_id")]}
+        else:
+            person["lead_ids"].append(d.get("lead_id"))
+
+    recipients = list(people.values())
+    over_cap = max(0, len(recipients) - BROADCAST_MAX_RECIPIENTS)
+    return {
+        "recipients": recipients[:BROADCAST_MAX_RECIPIENTS],
+        "deals": len(deals),
+        "unique_recipients": len(recipients),
+        "skipped_no_phone": skipped_no_phone,
+        "capped_at": BROADCAST_MAX_RECIPIENTS if over_cap else None,
+        "over_cap": over_cap,
+    }
+
+
+def _audience_counts(aud: dict) -> dict:
+    return {k: aud[k] for k in ("deals", "unique_recipients", "skipped_no_phone", "capped_at", "over_cap")}
+
+
+async def _send_wa_autosender(wa_settings: dict, phone: str, message: str) -> bool:
+    """One message through the MessageAutoSender account in Settings. True when
+    the provider accepted it. Its own function so tests replace it — nothing in
+    the test suite may reach the real provider."""
+    import httpx
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.post(
+            "https://app.messageautosender.com/message/new",
+            data={"username": wa_settings["username"], "password": wa_settings["password"],
+                  "receiverMobileNo": phone, "message": message},
+        )
+    return 200 <= resp.status_code < 300
+
+
+@router.get("/whatsapp/broadcast-by-tag/preview")
+async def whatsapp_broadcast_by_tag_preview(request: Request, tag_id: str = ""):
+    """Exactly who POST /whatsapp/broadcast-by-tag would message. Sends nothing
+    and needs no WhatsApp account, so it works before one is configured."""
+    user = await get_current_user(request)
+    if get_team(user) != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    if not (tag_id or "").strip():
+        raise HTTPException(status_code=400, detail="tag_id is required")
+    return _audience_counts(await _tag_broadcast_audience(tag_id.strip()))
+
+
 @router.post("/whatsapp/broadcast-by-tag")
 async def whatsapp_broadcast_by_tag(request: Request):
     user = await get_current_user(request)
@@ -901,7 +991,7 @@ async def whatsapp_broadcast_by_tag(request: Request):
     body = await request.json()
     tag_id = body.get("tag_id", "")
     template_id = body.get("template_id")
-    if not tag_id:
+    if not tag_id or not isinstance(tag_id, str):
         raise HTTPException(status_code=400, detail="tag_id is required")
 
     wa_settings = await db.settings.find_one({"type": "whatsapp"}, {"_id": 0})
@@ -918,38 +1008,25 @@ async def whatsapp_broadcast_by_tag(request: Request):
     if not template_body:
         raise HTTPException(status_code=400, detail="message or template_id with body is required")
 
-    # This messages LEADS (their contact_phone), so it takes the lead set of the
-    # tag roll-up (D3): a deal tagged itself, or any live deal at a school the tag
-    # reaches (a school tagged itself, or holding a tagged contact or lead). The
-    # tagged PEOPLE are not leads and are not messaged here — that is a campaign.
-    lead_ids = sorted((await resolve_tag_scope(db, tag_id))["lead_ids"])
-    leads = await db.leads.find(
-        {"lead_id": {"$in": lead_ids}, "is_deleted": {"$ne": True}}, {"_id": 0}
-    ).to_list(5000) if lead_ids else []
-    sent, failed, skipped = 0, 0, 0
-    import httpx
+    # The tag roll-up's deals, merged into one message per person by phone —
+    # see _tag_broadcast_audience, which the preview shares.
+    aud = await _tag_broadcast_audience(tag_id)
+    sent, failed = 0, 0
     now_iso = datetime.now(timezone.utc).isoformat()
 
-    for lead in leads:
-        phone = lead.get("contact_phone", "").strip()
-        if not phone:
-            skipped += 1
-            continue
-        msg = template_body.replace("{contact_name}", lead.get("contact_name", "")).replace("{school_name}", lead.get("company_name", ""))
-        status = "failed"
+    for person in aud["recipients"]:
+        lead = person["lead"]
+        phone = person["phone"]
+        school = lead.get("company_name") or lead.get("school_name") or ""
+        msg = template_body.replace("{contact_name}", lead.get("contact_name") or "").replace("{school_name}", school)
         try:
-            async with httpx.AsyncClient(timeout=15) as client:
-                resp = await client.post(
-                    "https://app.messageautosender.com/message/new",
-                    data={"username": wa_settings["username"], "password": wa_settings["password"],
-                          "receiverMobileNo": phone, "message": msg},
-                )
-            status = "sent" if 200 <= resp.status_code < 300 else "failed"
-            if status == "sent":
-                sent += 1
-            else:
-                failed += 1
+            ok = await _send_wa_autosender(wa_settings, phone, msg)
         except Exception:
+            ok = False
+        status = "sent" if ok else "failed"
+        if ok:
+            sent += 1
+        else:
             failed += 1
         await db.whatsapp_logs.insert_one({
             "log_id": f"wal_{uuid.uuid4().hex[:10]}",
@@ -957,12 +1034,16 @@ async def whatsapp_broadcast_by_tag(request: Request):
             "phone": phone,
             "body": msg,
             "lead_id": lead.get("lead_id"),
+            "lead_ids": person["lead_ids"],     # every deal this one message covered
             "send_mode": "broadcast_tag",
             "status": status,
             "sent_by": user["email"],
             "sent_at": now_iso,
         })
-    return {"sent": sent, "failed": failed, "skipped": skipped, "total": len(leads)}
+    # `skipped` and `total` keep their old meanings for older callers: deals with
+    # no usable phone, and deals considered.
+    return {"sent": sent, "failed": failed, "skipped": aud["skipped_no_phone"],
+            "total": aud["deals"], **_audience_counts(aud)}
 
 
 # ==================== EMAIL BROADCAST BY TAG ====================

@@ -89,7 +89,7 @@ async def resolve_tag_scope(db, tag_ids) -> dict:
     # school and a school_id that points at nothing.
     school_or = [{"tag_ids": {"$in": ids}}]
     if surfaced_school_ids:
-        school_or.append({"school_id": {"$in": sorted(surfaced_school_ids)}})
+        school_or.append({"school_id": {"$in": list(surfaced_school_ids)}})
     async for s in db.schools.find({"$or": school_or, **_LIVE}, {"_id": 0, "school_id": 1}):
         if s.get("school_id"):
             scope["school_ids"].add(s["school_id"])
@@ -97,7 +97,7 @@ async def resolve_tag_scope(db, tag_ids) -> dict:
     # D3 (roll-up half) — every live deal at a matching school.
     if scope["school_ids"]:
         async for lead in db.leads.find(
-                {"school_id": {"$in": sorted(scope["school_ids"])}, **_LIVE},
+                {"school_id": {"$in": list(scope["school_ids"])}, **_LIVE},
                 {"_id": 0, "lead_id": 1}):
             if lead.get("lead_id"):
                 scope["lead_ids"].add(lead["lead_id"])

@@ -502,7 +502,7 @@ async def _resolve_audience(audience_filter: dict, user: dict = None) -> list:
         tagged = (await resolve_tag_scope(db, tags))["contact_ids"]
         if not tagged:
             return []
-        contact_q["contact_id"] = {"$in": sorted(tagged)}
+        contact_q["contact_id"] = {"$in": list(tagged)}
 
     contacts = await db.contacts.find(_scoped(contact_q), {"_id": 0}).to_list(None)
 
