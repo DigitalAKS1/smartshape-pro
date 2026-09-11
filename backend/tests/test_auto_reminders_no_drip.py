@@ -96,6 +96,28 @@ def test_an_active_due_drip_enrollment_is_left_completely_untouched(db, monkeypa
 def test_greetings_and_delegation_alerts_still_fire(db, monkeypatch):
     # Non-drip behavior in the same loop must be unaffected by removing the
     # drip block.
+    #
+    # `_push`/`_push_admins` route through routes.push_routes, whose module-
+    # level `db` is imported straight from `database` and is NOT the
+    # mongomock `db` this fixture patches onto `admin`. If an earlier test
+    # module already loaded backend/.env into the environment, push_routes'
+    # `db` is the REAL production database — letting this test's delegation-
+    # overdue alert run unpatched would read the real admin list and push a
+    # live "Delegation Overdue" notification to their browsers. Neutralise
+    # both push entry points with no-op recorders so this test has zero
+    # outward side effects, and assert on the recordings instead.
+    push_calls = []
+    push_admin_calls = []
+
+    async def fake_push(email, title, body, url="/today", tag="general"):
+        push_calls.append({"email": email, "title": title, "body": body, "url": url, "tag": tag})
+
+    async def fake_push_admins(title, body, url="/today", tag="admin"):
+        push_admin_calls.append({"title": title, "body": body, "url": url, "tag": tag})
+
+    monkeypatch.setattr(admin, "_push", fake_push)
+    monkeypatch.setattr(admin, "_push_admins", fake_push_admins)
+
     async def go():
         from datetime import datetime, timezone
         today_mmdd = datetime.now(timezone.utc).strftime("%m-%d")
@@ -119,6 +141,9 @@ def test_greetings_and_delegation_alerts_still_fire(db, monkeypatch):
         assert await db.whatsapp_scheduled.count_documents({"rule_id": "gr1"}) == 1
         note = await db.notifications.find_one({"type": "delegation_overdue"})
         assert note is not None
+        # The delegation-overdue push must have gone through the patched
+        # recorder, not a real push_routes call.
+        assert any(c["tag"] == "delegation_overdue" for c in push_admin_calls)
     _run(go())
 
 
