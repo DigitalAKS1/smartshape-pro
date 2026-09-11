@@ -616,6 +616,17 @@ async def resume_enrollment(enrollment_id: str, request: Request):
         raise HTTPException(404, "Enrollment not found")
     if enr.get("status") not in ("paused", "cancelled"):
         raise HTTPException(400, f"Enrollment is {enr.get('status')}, not paused")
+    if enr.get("cancel_reason"):
+        # Bulk-cancelled by cancel_stale_drip_enrollments.py — the owner's
+        # call was "cancel all, re-enrol deliberately". Resuming would fire
+        # whatever stale step the migration froze it at (or, for a formerly-
+        # "completed" enrolment, leave it active with no step left to fire,
+        # re-checked forever). Refuse; point at re-enrolment instead.
+        raise HTTPException(
+            409,
+            "This enrolment was cancelled in bulk and cannot be resumed. "
+            "Re-enrol the lead into a current sequence instead.",
+        )
     now_iso = datetime.now(timezone.utc).isoformat()
     await db.drip_enrollments.update_one(
         {"enrollment_id": enrollment_id},

@@ -453,7 +453,7 @@ export default function LeadDetailPanel({
                           {/* Putting a school back into a sequence was a
                               server-only capability with no button, so a pause or
                               a mis-click was permanent. */}
-                          {(enr.status === 'paused' || enr.status === 'cancelled') && (
+                          {(enr.status === 'paused' || enr.status === 'cancelled') && !enr.cancel_reason && (
                             <Button size="sm" variant="ghost"
                               onClick={async () => {
                                 try {
@@ -468,6 +468,16 @@ export default function LeadDetailPanel({
                               className="text-green-400 h-6 px-1.5 text-[10px]">
                               Resume
                             </Button>
+                          )}
+                          {/* Bulk-cancelled by the stale-drip migration: the
+                              owner's call was cancel-all-and-re-enrol-
+                              deliberately, so there's no Resume here — offering
+                              it would fire a stale step. */}
+                          {enr.status === 'cancelled' && enr.cancel_reason && (
+                            <span className={`${textMuted} text-[10px] italic`}
+                              title={enr.cancel_reason}>
+                              Cancelled in bulk — re-enrol to continue
+                            </span>
                           )}
                         </div>
                       </div>
