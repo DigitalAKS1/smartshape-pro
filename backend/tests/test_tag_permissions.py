@@ -106,16 +106,21 @@ def test_a_rep_can_tag_a_contact(db, monkeypatch):
 
 
 def test_a_rep_with_the_leads_grant_can_bulk_tag_schools(db, monkeypatch):
-    # The server has always allowed this — it asks for leads:read_write, not for
-    # admin. The Schools tab UI is the part that does not offer it.
+    # The server asks for leads:read_write, not for admin — but, like every other
+    # bulk route, a scoped rep only reaches the schools GET /schools shows her.
+    # s1 is hers; s2 (owned by someone else) is skipped, not tagged.
     _as(REP, monkeypatch)
 
     async def go():
         await _seed(db)
+        await db.schools.update_one({"school_id": "s1"}, {"$set": {"assigned_to": REP["email"]}})
+        await db.schools.insert_one({"school_id": "s2", "school_name": "KV",
+                                     "assigned_to": "someone.else@smartshape.in", "is_deleted": False})
         out = await crm.bulk_tag_schools(FakeRequest(
-            {"school_ids": ["s1"], "tag_id": "tag_hot", "action": "add"}))
-        assert out["updated"] == 1
+            {"school_ids": ["s1", "s2"], "tag_id": "tag_hot", "action": "add"}))
+        assert out["updated"] == 1 and out["skipped"] == 1
         assert (await db.schools.find_one({"school_id": "s1"}))["tag_ids"] == ["tag_hot"]
+        assert not (await db.schools.find_one({"school_id": "s2"})).get("tag_ids")
     _run(go())
 
 

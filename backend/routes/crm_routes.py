@@ -3474,6 +3474,31 @@ async def _sales_lead_scope(email: str) -> list:
     return await _leads_visibility_or(email)
 
 
+async def _schools_visibility_or(email: str) -> list:
+    """The exact `$or` clause a non-"all" caller's SCHOOL visibility is built
+    from: schools I own (`_owner_clause`), OR any school holding one of my
+    leads or quotations.
+
+    Single source of truth for "which schools can this rep see". GET /schools
+    and POST /schools/bulk-tag both call this, so a school a rep can see in the
+    list is exactly a school a bulk action will reach — never a silent
+    "skipped" — and nothing outside it is ever touched.
+    """
+    own_leads = await db.leads.find({"assigned_to": email}, {"_id": 0, "school_id": 1}).to_list(10000)
+    # A quotation links a school exactly as a lead does. Without this, a rep
+    # who quoted another rep's school could not see it again afterwards —
+    # so her own quotation would vanish from her CRM the moment she saved it.
+    own_quotes = await db.quotations.find(
+        {"$or": [{"assigned_to": email}, {"created_by": email}],
+         "is_deleted": {"$ne": True}},
+        {"_id": 0, "school_id": 1}).to_list(10000)
+    linked_school_ids = [r.get("school_id") for r in (own_leads + own_quotes) if r.get("school_id")]
+    return [
+        *_owner_clause(email)["$or"],
+        {"school_id": {"$in": linked_school_ids}} if linked_school_ids else {"school_id": "__none__"},
+    ]
+
+
 async def resolve_owner(db, raw: str):
     """Map an owner value (an email OR a display name) to a real (email, name).
 
@@ -3702,19 +3727,7 @@ async def get_schools(request: Request):
     if sees_all(user, "leads"):
         query = {}
     else:  # own-scoped — owned + created + schools holding their leads OR quotations
-        own_leads = await db.leads.find({"assigned_to": user["email"]}, {"_id": 0, "school_id": 1}).to_list(10000)
-        # A quotation links a school exactly as a lead does. Without this, a rep
-        # who quoted another rep's school could not see it again afterwards —
-        # so her own quotation would vanish from her CRM the moment she saved it.
-        own_quotes = await db.quotations.find(
-            {"$or": [{"assigned_to": user["email"]}, {"created_by": user["email"]}],
-             "is_deleted": {"$ne": True}},
-            {"_id": 0, "school_id": 1}).to_list(10000)
-        linked_school_ids = [r.get("school_id") for r in (own_leads + own_quotes) if r.get("school_id")]
-        query = {"$or": [
-            *_owner_clause(user["email"])["$or"],
-            {"school_id": {"$in": linked_school_ids}} if linked_school_ids else {"school_id": "__none__"},
-        ]}
+        query = {"$or": await _schools_visibility_or(user["email"])}
     query["is_deleted"] = {"$ne": True}
     schools = await db.schools.find(query, {"_id": 0}).sort("school_name", 1).to_list(10000)
     return schools
@@ -3892,30 +3905,125 @@ async def create_school(request: Request):
     return await db.schools.find_one({"school_id": school_id}, {"_id": 0})
 
 
+_SCHOOL_BULK_CAP = 2000
+
+
+def _bulk_tag_ids(body: dict) -> list:
+    """Normalise a bulk-tag body's tags to a deduped, order-preserving list.
+
+    Accepts the multi-tag picker's `tag_ids: [str]` AND the legacy single
+    `tag_id: str` older callers still send (both may be present; they merge).
+    Anything that is not a list of strings is a 400, never a 500 — a stray
+    string would otherwise be iterated character by character.
+    """
+    raw = body.get("tag_ids")
+    if raw is None:
+        raw = []
+    if not isinstance(raw, list) or not all(isinstance(t, str) for t in raw):
+        raise HTTPException(status_code=400, detail="tag_ids must be a list of strings")
+    legacy = body.get("tag_id")
+    if legacy not in (None, ""):
+        if not isinstance(legacy, str):
+            raise HTTPException(status_code=400, detail="tag_id must be a string")
+        raw = raw + [legacy]
+    return list(dict.fromkeys(t.strip() for t in raw if t and t.strip()))
+
+
+def _bulk_tag_op(tag_ids: list, action: str) -> dict:
+    """One update doc for every tag at once: `$addToSet/$each` or `$pull/$in`."""
+    if action == "add":
+        return {"$addToSet": {"tag_ids": {"$each": tag_ids}}}
+    return {"$pull": {"tag_ids": {"$in": tag_ids}}}
+
+
+async def _require_known_tags(tag_ids: list, action: str) -> None:
+    """On add, every tag must exist — a dangling id would show as a blank chip
+    and never match any tag filter. Removing an unknown id is a harmless no-op
+    (it may be a tag deleted since), so remove is not checked. Same rule and
+    message as POST /contacts/bulk-tag."""
+    if action != "add":
+        return
+    known = {t["tag_id"] async for t in db.tags.find({"tag_id": {"$in": tag_ids}}, {"_id": 0, "tag_id": 1})}
+    if len(known) != len(tag_ids):
+        raise HTTPException(status_code=400,
+                            detail="Unknown tag_ids: " + ", ".join(t for t in tag_ids if t not in known))
+
+
 @router.post("/schools/bulk-tag")
 async def bulk_tag_schools(request: Request):
-    """Add or remove one tag across many schools.
+    """Add or remove tags across many schools — optionally their people too.
 
     Tags were kept on contacts and leads but not on schools, so the labels the team
     already maintains ("CBSE", "1000+ students") could not be used to build a mailing
     or a sequence audience. Tagging in bulk is the only way it happens in practice —
     nobody tags 400 schools one at a time.
+
+    Body: `{school_ids, tag_ids | tag_id, action, include_people?}`.
+    - A non-"all" caller only reaches the schools GET /schools shows them
+      (`_schools_visibility_or`); everything else lands in `skipped`, not a 403.
+    - `include_people: true` applies the same add/remove to the non-deleted
+      contacts and leads at the schools that were actually MATCHED (never the
+      raw requested ids), further narrowed for a rep by the contact / lead
+      visibility rules — so it can never reach a record the rep cannot see.
+    Keeps the `ok`, `updated`, `tag_id` (first tag) and `action` keys existing
+    callers read; `updated` is a matched count, like the contacts route.
     """
     user = await get_current_user(request)
     require_module(user, "leads", "read_write")
     body = await _parse_json_body(request)
-    ids = body.get("school_ids") or []
-    tag_id = (body.get("tag_id") or "").strip()
+    raw_ids = body.get("school_ids") or []
+    tag_ids = _bulk_tag_ids(body)
     action = body.get("action", "add")
-    if not ids or not tag_id:
-        raise HTTPException(status_code=400, detail="school_ids and tag_id are required")
+    include_people = body.get("include_people") is True
+    if not raw_ids or not tag_ids:
+        raise HTTPException(status_code=400, detail="school_ids and tag_ids are required")
+    if not isinstance(raw_ids, list) or not all(isinstance(i, str) for i in raw_ids):
+        raise HTTPException(status_code=400, detail="school_ids must be a list")
     if action not in ("add", "remove"):
         raise HTTPException(status_code=400, detail="action must be add or remove")
-    if not await db.tags.find_one({"tag_id": tag_id}):
-        raise HTTPException(status_code=404, detail="Tag not found")
-    op = {"$addToSet": {"tag_ids": tag_id}} if action == "add" else {"$pull": {"tag_ids": tag_id}}
-    res = await db.schools.update_many({"school_id": {"$in": ids}}, op)
-    return {"ok": True, "updated": res.modified_count, "tag_id": tag_id, "action": action}
+    ids = list(dict.fromkeys(i for i in raw_ids if i))  # dedupe, preserve order
+    if len(ids) > _SCHOOL_BULK_CAP:
+        raise HTTPException(status_code=400,
+                            detail=f"Cannot act on more than {_SCHOOL_BULK_CAP} schools at once")
+    await _require_known_tags(tag_ids, action)
+
+    all_scope = sees_all(user, "leads")
+    query = {"school_id": {"$in": ids}, "is_deleted": {"$ne": True}}
+    if not all_scope:
+        _merge_or(query, await _schools_visibility_or(user["email"]))
+    # Resolve the scoped set first: it drives the school write AND, with
+    # include_people, the contact/lead writes — so people are only ever
+    # reached through a school this caller could actually tag.
+    matched_ids = [s["school_id"] async for s in db.schools.find(query, {"_id": 0, "school_id": 1})]
+    op = _bulk_tag_op(tag_ids, action)
+    updated = 0
+    if matched_ids:
+        res = await db.schools.update_many({"school_id": {"$in": matched_ids}}, op)
+        updated = res.matched_count
+
+    contacts_updated = leads_updated = 0
+    if include_people and matched_ids:
+        cq = {"school_id": {"$in": matched_ids}, "is_deleted": {"$ne": True}}
+        lq = {"school_id": {"$in": matched_ids}, "is_deleted": {"$ne": True}}
+        if not all_scope:
+            _merge_or(cq, await _contacts_visibility_or(user["email"]))
+            _merge_or(lq, await _leads_visibility_or(user["email"]))
+        contacts_updated = (await db.contacts.update_many(cq, op)).matched_count
+        lead_ids = [l["lead_id"] async for l in db.leads.find(lq, {"_id": 0, "lead_id": 1}) if l.get("lead_id")]
+        if lead_ids:
+            leads_updated = (await db.leads.update_many({"lead_id": {"$in": lead_ids}}, op)).matched_count
+            await _bust_lead_details(*lead_ids)
+
+    requested = len(ids)
+    await log_activity(user["email"], f"bulk_tag_{action}", "school", ",".join(ids[:20]),
+                       details=(f"tag_ids={tag_ids} action={action} requested={requested} updated={updated}"
+                                f" include_people={include_people} contacts_updated={contacts_updated}"
+                                f" leads_updated={leads_updated}"))
+    await invalidate("crm:facets:*")
+    await invalidate("tags:*")
+    return {"ok": True, "requested": requested, "updated": updated, "skipped": requested - updated,
+            "tag_id": tag_ids[0], "tag_ids": tag_ids, "action": action,
+            "contacts_updated": contacts_updated, "leads_updated": leads_updated}
 
 
 @router.post("/schools/wa-consent")
@@ -6360,29 +6468,31 @@ async def bulk_assign_leads(request: Request):
 
 @router.post("/leads/bulk-tag")
 async def bulk_tag_leads(request: Request):
-    """Add or remove a tag from multiple leads at once, visibility-scoped.
+    """Add or remove tags from multiple leads at once, visibility-scoped.
 
     Used to check only get_current_user, so any logged-in user could tag ANY
     lead. Now: needs `leads` read_write; a non-"all" caller only reaches the
     leads GET /leads shows them (`_leads_visibility_or`) — everything else is
-    reported in `skipped`, not a 403. Request shape is unchanged
-    (`{lead_ids, tag_id, action}`); `modified` is kept for older callers.
+    reported in `skipped`, not a 403. Body: `{lead_ids, tag_ids | tag_id,
+    action}` — the multi-tag picker sends `tag_ids`, the legacy single
+    `tag_id` still works; `modified` is kept for older callers.
     """
     user = await get_current_user(request)
     require_module(user, "leads", "read_write")
     body = await request.json()
     raw_ids = body.get("lead_ids") or []
-    tag_id = (body.get("tag_id") or "").strip()
+    tag_ids = _bulk_tag_ids(body)
     action = body.get("action", "add")  # "add" or "remove"
-    if not raw_ids or not tag_id:
-        raise HTTPException(400, "lead_ids and tag_id are required")
+    if not raw_ids or not tag_ids:
+        raise HTTPException(400, "lead_ids and tag_ids are required")
+    if not isinstance(raw_ids, list):
+        raise HTTPException(400, "lead_ids must be a list")
     if action not in ("add", "remove"):
         raise HTTPException(400, "action must be add or remove")
     ids = _dedupe_capped_lead_ids(raw_ids)
-    if not await db.tags.find_one({"tag_id": tag_id}):
-        raise HTTPException(404, "Tag not found")
+    await _require_known_tags(tag_ids, action)
     query = await _scoped_lead_query(user, ids)
-    op = {"$addToSet": {"tag_ids": tag_id}} if action == "add" else {"$pull": {"tag_ids": tag_id}}
+    op = _bulk_tag_op(tag_ids, action)
     result = await db.leads.update_many(query, op)
     # matched, not modified — same reasoning as bulk_tag_contacts: an out-of-
     # scope id never matches (that is the "skipped"), while an idempotent
@@ -6390,7 +6500,7 @@ async def bulk_tag_leads(request: Request):
     updated = result.matched_count
     requested = len(ids)
     await log_activity(user["email"], f"bulk_tag_{action}", "lead", ",".join(ids[:20]),
-                       details=f"tag_id={tag_id} action={action} requested={requested} updated={updated}")
+                       details=f"tag_ids={tag_ids} action={action} requested={requested} updated={updated}")
     await _bust_lead_details(*ids)
     await invalidate("crm:facets:*")
     await invalidate("tags:*")
