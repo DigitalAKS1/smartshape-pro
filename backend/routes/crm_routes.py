@@ -4400,6 +4400,32 @@ async def set_school_password(school_id: str, request: Request):
 
 # ==================== CONTACTS ====================
 
+async def _contacts_visibility_or(email: str) -> list:
+    """The exact `$or` clause a non-"all" caller's contact visibility is built
+    from: own/assigned contacts, OR any contact at a school this user owns.
+    GET /contacts and the bulk-tag/bulk-assign routes below must all use this
+    same rule — a contact a rep can see in the list (because it sits at a
+    school they own, even if `assigned_to` is someone else) must not come
+    back from a bulk action as a silent "skipped"."""
+    owned = await _owned_school_ids(email)
+    return [
+        *_owner_clause(email)["$or"],
+        {"school_id": {"$in": owned}} if owned else {"contact_id": "__none__"},
+    ]
+
+
+def _merge_or(query: dict, or_clause: list) -> dict:
+    """Merge an `$or` clause into `query`, combining with `$and` if `query`
+    already carries an `$or` — Mongo allows only one `$or` key per query
+    level, so a plain `query["$or"] = or_clause` would silently discard
+    whichever `$or` was already there."""
+    if "$or" in query:
+        query["$and"] = query.get("$and", []) + [{"$or": query.pop("$or")}, {"$or": or_clause}]
+    else:
+        query["$or"] = or_clause
+    return query
+
+
 @router.get("/contacts")
 async def get_contacts(request: Request):
     user = await get_current_user(request)
@@ -4408,11 +4434,7 @@ async def get_contacts(request: Request):
     if sees_all(user, "leads"):
         query = {}
     else:  # own-scoped — own + assigned + everything under owned schools
-        owned = await _owned_school_ids(user["email"])
-        query = {"$or": [
-            *_owner_clause(user["email"])["$or"],
-            {"school_id": {"$in": owned}} if owned else {"contact_id": "__none__"},
-        ]}
+        query = {"$or": await _contacts_visibility_or(user["email"])}
     query["is_deleted"] = {"$ne": True}
     contacts = await db.contacts.find(query, {"_id": 0}).sort("created_at", -1).to_list(10000)
     return contacts
@@ -4700,8 +4722,10 @@ async def bulk_tag_contacts(request: Request):
     Contacts had no bulk endpoint of any kind before this — only the per-contact
     add/remove above. Modelled on POST /schools/bulk-tag, but — unlike the
     existing /leads/bulk-tag, which lets any logged-in user touch any lead —
-    a non-"all" caller here can only ever reach contacts `_owner_clause` says
-    are theirs; ids outside that reach quietly land in `skipped`, not a 403,
+    a non-"all" caller here can only ever reach contacts `_contacts_visibility_or`
+    says are theirs (own/assigned, or under a school they own — the exact rule
+    GET /contacts uses, so nothing a rep can see in the list comes back
+    "skipped"); ids outside that reach quietly land in `skipped`, not a 403,
     so a scoped rep who selects a mixed page from the UI still gets a result.
     """
     user = await get_current_user(request)
@@ -4719,7 +4743,7 @@ async def bulk_tag_contacts(request: Request):
         raise HTTPException(status_code=400, detail="Cannot act on more than 2000 contacts at once")
     query = {"contact_id": {"$in": ids}, "is_deleted": {"$ne": True}}
     if not sees_all(user, "leads"):
-        query["$or"] = _owner_clause(user["email"])["$or"]
+        _merge_or(query, await _contacts_visibility_or(user["email"]))
     op = ({"$addToSet": {"tag_ids": {"$each": tag_ids}}} if action == "add"
           else {"$pull": {"tag_ids": {"$in": tag_ids}}})
     res = await db.contacts.update_many(query, op)
@@ -4766,7 +4790,7 @@ async def bulk_assign_contacts(request: Request):
             raise HTTPException(status_code=400, detail="Could not resolve assignee to a user")
     query = {"contact_id": {"$in": ids}, "is_deleted": {"$ne": True}}
     if not sees_all(user, "leads"):
-        query["$or"] = _owner_clause(user["email"])["$or"]
+        _merge_or(query, await _contacts_visibility_or(user["email"]))
     now_iso = datetime.now(timezone.utc).isoformat()
     res = await db.contacts.update_many(query, {"$set": {
         "assigned_to": owner_email,

@@ -311,3 +311,75 @@ def test_bulk_assign_more_than_2000_ids_is_rejected(db, monkeypatch):
             }))
         assert exc.value.status_code == 400
     _run(go())
+
+
+# ---------------------------------------------------------------------------
+# Visibility must match GET /contacts (fix round 1, item 7)
+#
+# GET /contacts shows a scoped rep a contact whenever it sits at a school
+# they own, even if that contact's own `assigned_to` is someone else
+# (`_contacts_visibility_or` = `_owner_clause` OR under-an-owned-school). The
+# bulk routes originally scoped with `_owner_clause` alone, so a contact the
+# rep could plainly see in the list came back "skipped" from a bulk action —
+# this pins the fix.
+# ---------------------------------------------------------------------------
+
+async def _seed_school(db, school_id, *, assigned_to=""):
+    await db.schools.insert_one({
+        "school_id": school_id, "school_name": school_id,
+        "assigned_to": assigned_to, "is_deleted": False,
+    })
+
+
+def test_bulk_tag_reaches_a_contact_at_a_school_the_rep_owns_even_if_assigned_elsewhere(db, monkeypatch):
+    _as(REP, monkeypatch)
+
+    async def go():
+        await _seed_tag(db, "tag_hot", "Hot")
+        await _seed_school(db, "sch_owned", assigned_to=REP["email"])
+        await _seed_school(db, "sch_other", assigned_to=OTHER_REP_EMAIL)
+        # Visible to the rep via GET /contacts (owned school), even though its
+        # own assigned_to is someone else — must be reachable by bulk-tag too.
+        await db.contacts.insert_one({
+            "contact_id": "c_owned_school", "name": "c_owned_school", "phone": "9000000000",
+            "assigned_to": OTHER_REP_EMAIL, "school_id": "sch_owned", "tag_ids": [], "is_deleted": False,
+        })
+        # Not visible: someone else's contact at a school the rep does not own.
+        await db.contacts.insert_one({
+            "contact_id": "c_other_school", "name": "c_other_school", "phone": "9000000000",
+            "assigned_to": OTHER_REP_EMAIL, "school_id": "sch_other", "tag_ids": [], "is_deleted": False,
+        })
+
+        out = await crm.bulk_tag_contacts(FakeRequest({
+            "contact_ids": ["c_owned_school", "c_other_school"],
+            "tag_ids": ["tag_hot"], "action": "add",
+        }))
+        assert out == {"requested": 2, "updated": 1, "skipped": 1}
+        assert (await db.contacts.find_one({"contact_id": "c_owned_school"}))["tag_ids"] == ["tag_hot"]
+        assert (await db.contacts.find_one({"contact_id": "c_other_school"}))["tag_ids"] == []
+    _run(go())
+
+
+def test_bulk_assign_reaches_a_contact_at_a_school_the_rep_owns_even_if_assigned_elsewhere(db, monkeypatch):
+    _as(REP, monkeypatch)
+
+    async def go():
+        await db.users.insert_one({"email": "newowner@smartshape.in", "name": "New Owner"})
+        await _seed_school(db, "sch_owned", assigned_to=REP["email"])
+        await _seed_school(db, "sch_other", assigned_to=OTHER_REP_EMAIL)
+        await db.contacts.insert_one({
+            "contact_id": "c_owned_school", "name": "c_owned_school", "phone": "9000000000",
+            "assigned_to": OTHER_REP_EMAIL, "school_id": "sch_owned", "tag_ids": [], "is_deleted": False,
+        })
+        await db.contacts.insert_one({
+            "contact_id": "c_other_school", "name": "c_other_school", "phone": "9000000000",
+            "assigned_to": OTHER_REP_EMAIL, "school_id": "sch_other", "tag_ids": [], "is_deleted": False,
+        })
+
+        out = await crm.bulk_assign_contacts(FakeRequest({
+            "contact_ids": ["c_owned_school", "c_other_school"], "assigned_to": "newowner@smartshape.in",
+        }))
+        assert out == {"requested": 2, "updated": 1, "skipped": 1}
+        assert (await db.contacts.find_one({"contact_id": "c_owned_school"}))["assigned_to"] == "newowner@smartshape.in"
+        assert (await db.contacts.find_one({"contact_id": "c_other_school"}))["assigned_to"] == OTHER_REP_EMAIL
+    _run(go())
