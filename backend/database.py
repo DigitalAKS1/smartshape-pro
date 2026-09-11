@@ -191,6 +191,9 @@ async def connect_db():
     await db.leads.create_index("converted_from_contact", background=True)
     await db.leads.create_index("referred_by_contact_id", background=True)
     await _i(db.leads.create_index("phone_norm", background=True))  # normalized dedup (P2.2)
+    # lead.contact_id is the canonical contact link — the drip duplicate guard
+    # (same person never twice, D5/R3) looks leads up by it.
+    await _i(db.leads.create_index("contact_id", background=True))
 
     # ── CRM child collections ───────────────────────────────────────────────
     await db.followups.create_index([("lead_id", 1), ("status", 1)], background=True)
@@ -235,8 +238,10 @@ async def connect_db():
     await db.drip_enrollments.create_index([("lead_id", 1), ("status", 1)], background=True)
     await db.drip_enrollments.create_index([("sequence_id", 1), ("status", 1)], background=True)
     await db.drip_enrollments.create_index("next_step_at", background=True)
-    # An enrolment can key a contact instead of a lead (D5).
-    await db.drip_enrollments.create_index([("contact_id", 1), ("status", 1)], background=True)
+    # An enrolment can key a contact instead of a lead (D5); a contact-only one
+    # reaches its school through `school_id`. Guarded: never crash startup.
+    await _i(db.drip_enrollments.create_index([("contact_id", 1), ("status", 1)], background=True))
+    await _i(db.drip_enrollments.create_index([("school_id", 1), ("status", 1)], background=True))
     await db.greeting_logs.create_index([("contact_id", 1), ("sent_at", -1)], background=True)
     await db.greeting_logs.create_index([("phone", 1), ("year", 1)], background=True)
     await db.whatsapp_logs.create_index([("lead_id", 1), ("sent_at", -1)], background=True)

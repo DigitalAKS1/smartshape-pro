@@ -50,6 +50,20 @@ async def build_school_plan(school: dict):
     order_in = {"$in": order_ids}
     flow_in = {"$in": flow_ids}
 
+    # Contact-only drip enrolments (D5) go with the school when their contact is
+    # CURRENTLY here (contact_in, above) — or when their contact no longer exists
+    # at all and the enrolment is stamped with this school. A stamp alone is not
+    # enough: a contact who moved to another school keeps their sequence.
+    stamped = await db.drip_enrollments.find(
+        {"school_id": sid, "lead_id": {"$in": [None, ""]}},
+        {"_id": 0, "enrollment_id": 1, "contact_id": 1}).to_list(_CAP)
+    stamped_cids = [e["contact_id"] for e in stamped if e.get("contact_id")]
+    existing_cids = set(await _ids("contacts", {"contact_id": {"$in": stamped_cids}},
+                                   "contact_id")) if stamped_cids else set()
+    dangling_enrollment_ids = [
+        e["enrollment_id"] for e in stamped
+        if e.get("enrollment_id") and e.get("contact_id") not in existing_cids]
+
     inv_or = [{"school_id": sid}, {"order_id": order_in}] + ([{"school_name": name}] if name else [])
 
     plan = [
@@ -84,7 +98,7 @@ async def build_school_plan(school: dict):
         # An enrolment keys a lead OR a contact (D5). Deleted with the school,
         # exactly as the lead-keyed ones always were (snapshotted first).
         ("drip_enrollments", {"$or": [{"lead_id": lead_in}, {"contact_id": contact_in},
-                                      {"school_id": sid, "lead_id": {"$in": [None, ""]}}]}),
+                                      {"enrollment_id": {"$in": dangling_enrollment_ids}}]}),
         ("whatsapp_logs", {"lead_id": lead_in}),
         ("greeting_logs", {"contact_id": contact_in}),
         # school portal

@@ -113,19 +113,23 @@ def test_the_orphan_sweep_keeps_contact_only_enrolments(db):
             _enr("keep_blank_lead", lead_id="", contact_id="c_live"),
             _enr("keep_lead", lead_id="L_live"),
             _enr("keep_dead_lead_live_contact", lead_id="L_gone", contact_id="c_live"),
-            _enr("keep_live_lead_dead_contact", lead_id="L_live", contact_id="c_deleted"),
+            _enr("keep_live_lead_archived_contact", lead_id="L_live", contact_id="c_deleted"),
             _enr("keep_no_ids_at_all"),                     # malformed: executor cancels it
+            # An ARCHIVED contact still exists: archive is reversible, so its
+            # drip history is not an orphan (fix round, item 2).
+            _enr("keep_archived_contact", contact_id="c_deleted", status="cancelled"),
+            _enr("keep_dead_lead_archived_contact", lead_id="L_gone", contact_id="c_deleted"),
             _enr("orphan_dead_lead", lead_id="L_gone"),
-            _enr("orphan_dead_contact", contact_id="c_deleted"),
             _enr("orphan_missing_contact", contact_id="c_never_existed"),
             _enr("orphan_both_dead", lead_id="L_gone", contact_id="c_never_existed"),
         ])
         report = await admin.run_db_integrity(FakeRequest())
         left = {e["enrollment_id"] for e in await db.drip_enrollments.find({}).to_list(None)}
         assert left == {"keep_contact_only", "keep_blank_lead", "keep_lead",
-                        "keep_dead_lead_live_contact", "keep_live_lead_dead_contact",
-                        "keep_no_ids_at_all"}
-        assert report["found"]["drip_enrollments_orphan"] == 4
+                        "keep_dead_lead_live_contact", "keep_live_lead_archived_contact",
+                        "keep_no_ids_at_all", "keep_archived_contact",
+                        "keep_dead_lead_archived_contact"}
+        assert report["found"]["drip_enrollments_orphan"] == 3
     _run(go())
 
 
@@ -135,18 +139,32 @@ def test_the_orphan_sweep_keeps_a_contact_drips_task_and_dispatch(db):
         await db.tasks.insert_many([
             {"task_id": "t_contact_drip", "lead_id": None, "contact_id": "c_live"},
             {"task_id": "t_contact_blank", "lead_id": "", "contact_id": "c_live"},
+            {"task_id": "t_archived_contact", "lead_id": None, "contact_id": "c_deleted"},
+            {"task_id": "t_dead_lead_archived_contact", "lead_id": "L_gone", "contact_id": "c_deleted"},
+            {"task_id": "t_no_ids", "title": "a plain to-do"},           # never touched
             {"task_id": "t_orphan", "lead_id": "L_gone"},
+            # fix round, item 5: a contact drip's task whose contact is gone
+            # entirely is an orphan even though its lead_id is null.
+            {"task_id": "t_orphan_contact_gone", "lead_id": None, "contact_id": "c_never"},
+            {"task_id": "t_orphan_both_gone", "lead_id": "L_gone", "contact_id": "c_never"},
             {"task_id": "t_live", "lead_id": "L_live"},
+            {"task_id": "t_live_lead_contact_gone", "lead_id": "L_live", "contact_id": "c_never"},
         ])
         await db.physical_dispatches.insert_many([
             {"dispatch_id": "pd_contact", "lead_id": None, "contact_id": "c_live"},
+            {"dispatch_id": "pd_archived_contact", "lead_id": None, "contact_id": "c_deleted"},
             {"dispatch_id": "pd_orphan", "lead_id": "L_gone"},
+            {"dispatch_id": "pd_orphan_contact_gone", "lead_id": None, "contact_id": "c_never"},
         ])
-        await admin.run_db_integrity(FakeRequest())
+        report = await admin.run_db_integrity(FakeRequest())
         tasks = {t["task_id"] for t in await db.tasks.find({}).to_list(None)}
-        assert tasks == {"t_contact_drip", "t_contact_blank", "t_live"}
+        assert tasks == {"t_contact_drip", "t_contact_blank", "t_archived_contact",
+                         "t_dead_lead_archived_contact", "t_no_ids", "t_live",
+                         "t_live_lead_contact_gone"}
         disp = {d["dispatch_id"] for d in await db.physical_dispatches.find({}).to_list(None)}
-        assert disp == {"pd_contact"}
+        assert disp == {"pd_contact", "pd_archived_contact"}
+        assert report["found"]["tasks_orphan"] == 3
+        assert report["found"]["physical_dispatches_orphan"] == 2
     _run(go())
 
 
@@ -173,6 +191,37 @@ def test_archiving_a_contact_cancels_its_sequences_with_a_reason(db):
         assert by_id["e_done"]["status"] == "completed"
         assert by_id["e_other"]["status"] == "active"
         assert by_id["e_lead"]["status"] == "active"
+    _run(go())
+
+
+def test_archive_then_sweep_then_restore_keeps_the_contacts_drip_history(db):
+    # Fix round, item 2: the sweep used to count only LIVE contacts as valid,
+    # so archiving a contact and running DB-integrity deleted its enrolments,
+    # drip tasks and dispatches, and restoring the contact brought back a
+    # person with no history.
+    async def go():
+        await _base(db)
+        await db.drip_enrollments.insert_many([
+            _enr("e_running", contact_id="c_live"),
+            _enr("e_done", contact_id="c_live", status="completed"),
+        ])
+        await db.tasks.insert_one({"task_id": "t_drip", "lead_id": None, "contact_id": "c_live"})
+        await db.physical_dispatches.insert_one({"dispatch_id": "pd_drip", "lead_id": None,
+                                                 "contact_id": "c_live"})
+        await crm.delete_contact("c_live", FakeRequest())          # archive
+        await admin.run_db_integrity(FakeRequest())                  # sweep
+        await crm.restore_contact("c_live", FakeRequest())           # restore
+
+        by_id = {e["enrollment_id"]: e for e in
+                 await db.drip_enrollments.find({"contact_id": "c_live"}, {"_id": 0}).to_list(None)}
+        assert set(by_id) == {"e_running", "e_done"}
+        assert by_id["e_running"]["status"] == "cancelled"          # stopped by the archive
+        assert by_id["e_done"]["status"] == "completed"
+        assert await db.tasks.count_documents({"task_id": "t_drip"}) == 1
+        assert await db.physical_dispatches.count_documents({"dispatch_id": "pd_drip"}) == 1
+        # and the contact panel lists it again
+        rows = await drip.list_enrollments(FakeRequest(params={"contact_id": "c_live"}))
+        assert {r["enrollment_id"] for r in rows} == {"e_running", "e_done"}
     _run(go())
 
 
@@ -223,8 +272,11 @@ def test_the_school_cascade_takes_contact_only_enrolments_too(db):
         await db.drip_enrollments.insert_many([
             _enr("e_contact", contact_id="c_live"),
             _enr("e_lead", lead_id="L_live"),
-            # contact moved away / gone, but the enrolment is stamped with s1
+            # contact gone altogether, the enrolment is stamped with s1: it goes
             _enr("e_stamped", contact_id="c_vanished", school_id="s1"),
+            # fix round, item 4: the contact MOVED to s2 but the enrolment still
+            # carries the old s1 stamp. A stale stamp alone must not delete it.
+            _enr("e_moved", contact_id="c_s2", school_id="s1"),
             _enr("e_s2", contact_id="c_s2", school_id="s2"),
         ])
         school = await db.schools.find_one({"school_id": "s1"}, {"_id": 0})
@@ -232,7 +284,7 @@ def test_the_school_cascade_takes_contact_only_enrolments_too(db):
         await audit_backup.snapshot_and_delete(plan, root_type="school", root_id="s1",
                                                root_label="DPS", deleted_by="t")
         left = {e["enrollment_id"] for e in await db.drip_enrollments.find({}).to_list(None)}
-        assert left == {"e_s2"}
+        assert left == {"e_moved", "e_s2"}
     _run(go())
 
 

@@ -2059,7 +2059,14 @@ async def run_db_integrity(request: Request):
 
     # ── 7. Orphaned followups/call_notes/tasks/physical_dispatches/drips ────
     valid_lead_list = [i for i in valid_lead_ids if i not in (None, "")]
-    valid_contact_list = [i for i in valid_contact_ids if i not in (None, "")]
+    # For the contact side of the drip / task / dispatch checks, EVERY contact
+    # document counts — archived (soft-deleted) ones included. An archive is
+    # reversible; if this sweep treated it as "gone", restoring the contact
+    # would find its drip history, drip tasks and dispatches deleted. Only a
+    # contact_id that points at no document at all is an orphan.
+    existing_contact_list = [
+        c["contact_id"] async for c in db.contacts.find({}, {"_id": 0, "contact_id": 1})
+        if c.get("contact_id") not in (None, "")]
     for coll_name, id_field in [
         ("followups", "lead_id"),
         ("call_notes", "lead_id"),
@@ -2069,9 +2076,17 @@ async def run_db_integrity(request: Request):
         coll = db[coll_name]
         orphan_q = {id_field: {"$nin": valid_lead_list, "$ne": None}}
         if coll_name in ("tasks", "physical_dispatches"):
-            # A contact-keyed drip's task / dispatch has no lead (D5); it is not
-            # an orphan while its contact is alive.
-            orphan_q["contact_id"] = {"$nin": valid_contact_list}
+            # A contact-keyed drip (D5) writes its task / dispatch with a null
+            # lead_id and a contact_id. Orphan when:
+            #  - its lead is set and dead, and it has no contact that exists; or
+            #  - its contact is set and exists nowhere, and its lead is null,
+            #    blank or dead.
+            orphan_q = {"$or": [
+                {id_field: {"$nin": valid_lead_list, "$ne": None},
+                 "contact_id": {"$nin": existing_contact_list}},
+                {"contact_id": {"$nin": existing_contact_list + [None, ""]},
+                 id_field: {"$nin": valid_lead_list}},
+            ]}
         orphan_count = await coll.count_documents(orphan_q)
         if orphan_count:
             await coll.delete_many(orphan_q)
@@ -2086,7 +2101,7 @@ async def run_db_integrity(request: Request):
     # malformed row with neither is left for the executor to cancel, not deleted.
     drip_orphan_q = {"$and": [
         {"lead_id": {"$nin": valid_lead_list}},
-        {"contact_id": {"$nin": valid_contact_list}},
+        {"contact_id": {"$nin": existing_contact_list}},
         {"$or": [{"lead_id": {"$nin": [None, ""]}},
                  {"contact_id": {"$nin": [None, ""]}}]},
     ]}
