@@ -1168,10 +1168,34 @@ async def export_users(request: Request):
                              headers={"Content-Disposition": "attachment; filename=users_export.csv"})
 
 
+async def _contact_export_query(user: dict) -> dict:
+    """Which contacts this user may export — the same visibility GET /contacts
+    grants (crm_routes.get_contacts), so the CSV can never contain a row the
+    caller could not already open in the CRM, and — crucially — never a row
+    their re-upload would be refused on.
+
+    Imported lazily for the same reason `_school_export_query` does it: main.py
+    loads both routers and a module-level import would couple them.
+    """
+    from routes.crm_routes import _contacts_visibility_or  # lazy: route-module coupling
+
+    query = {} if sees_all(user, "leads") else {
+        "$or": await _contacts_visibility_or(user["email"], dbh=db)}
+    # Archived contacts must never leave the building. Every matcher in the
+    # import engine excludes deleted rows, so re-uploading an exported archive
+    # row does not update it — it CREATES a second, live duplicate.
+    query["is_deleted"] = {"$ne": True}
+    return query
+
+
 @router.get("/export/contacts")
 async def export_contacts(request: Request):
-    await get_current_user(request)
-    contacts_list = await db.contacts.find({}, {"_id": 0}).sort("created_at", -1).to_list(10000)
+    user = await get_current_user(request)
+    if not can_read_crm(user):
+        raise HTTPException(status_code=403, detail="CRM access required")
+    contacts_list = await db.contacts.find(
+        await _contact_export_query(user), {"_id": 0}
+    ).sort("created_at", -1).to_list(10000)
     # Batch-fetch each contact's school's tag_ids for export — one query for
     # every school referenced, never one per contact row (see school_tag_map).
     all_school_ids = list({c["school_id"] for c in contacts_list if c.get("school_id")})
@@ -1253,32 +1277,20 @@ def _csv_cell(value) -> str:
 async def _school_export_query(user: dict) -> dict:
     """Which schools this user may export — the same visibility GET /schools
     grants (crm_routes.py get_schools), so the CSV can never contain a row the
-    caller could not already open in the CRM. Ownership itself is decided by
-    crm_routes._owner_clause, never re-implemented here.
+    caller could not already open in the CRM.
+
+    The clause itself now comes straight from `_schools_visibility_or`, the
+    single source of truth the list, the bulk-tag route and the single-school
+    write guard all use. It used to be re-implemented here line by line, which
+    is precisely how the contacts export ended up with no scope at all.
 
     Imported lazily: main.py loads both routers, and a module-level import
     would couple two large route modules for one helper.
     """
-    from routes.crm_routes import _owner_clause  # lazy: avoids route-module coupling
+    from routes.crm_routes import _schools_visibility_or  # lazy: route-module coupling
 
-    if sees_all(user, "leads"):
-        query = {}
-    else:
-        email = user["email"]
-        # A school is also visible when it holds one of my leads or quotations —
-        # without this a rep loses the school the moment it is owned elsewhere,
-        # even though her own deal still sits on it.
-        own_leads = await db.leads.find(
-            {"assigned_to": email}, {"_id": 0, "school_id": 1}).to_list(10000)
-        own_quotes = await db.quotations.find(
-            {"$or": [{"assigned_to": email}, {"created_by": email}],
-             "is_deleted": {"$ne": True}},
-            {"_id": 0, "school_id": 1}).to_list(10000)
-        linked = [r.get("school_id") for r in (own_leads + own_quotes) if r.get("school_id")]
-        query = {"$or": [
-            *_owner_clause(email)["$or"],
-            {"school_id": {"$in": linked}} if linked else {"school_id": "__none__"},
-        ]}
+    query = {} if sees_all(user, "leads") else {
+        "$or": await _schools_visibility_or(user["email"], dbh=db)}
     query["is_deleted"] = {"$ne": True}
     return query
 
