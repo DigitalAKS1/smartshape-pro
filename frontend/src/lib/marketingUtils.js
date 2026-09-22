@@ -131,6 +131,11 @@ export function mapSeq(s) {
         delay_days: st.delay_days,
         message_template: st.message_template,
         message_type: st.message_type,
+        // Carried through untouched: DripsTab.startEdit reads these straight back,
+        // so dropping them made opening Edit and saving wipe every physical step's
+        // item name and reset its material back to "brochure".
+        material_type: st.material_type || '',
+        material_name: st.material_name || '',
         attachment_id: st.attachment_id || null,
         attachment_url: st.attachment_url || null,
         attachment_name: st.attachment_name || null,
