@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { toast } from 'sonner';
 import { dripSequences } from '../../lib/api';
 import { X, Zap, Phone, MessageCircle, Mail, Truck, Plus, Trash2, Copy } from 'lucide-react';
@@ -22,6 +22,10 @@ export default function SequenceEnrollDialog({ open, onClose, schoolIds = [], on
   const [seqs, setSeqs] = useState([]);
   const [pick, setPick] = useState('');
   const [busy, setBusy] = useState(false);
+  // A ref, not `busy`: a second click in the same tick still sees the old render's
+  // `busy === false` and creates a second identical plan.
+  const busyRef = useRef(false);
+  const nameRef = useRef(null);
   const [mode, setMode] = useState('existing');            // 'existing' | 'new'
   const [form, setForm] = useState({ name: '', steps: [{ ...BLANK_STEP }] });
 
@@ -81,6 +85,8 @@ export default function SequenceEnrollDialog({ open, onClose, schoolIds = [], on
   };
 
   const submit = async () => {
+    if (busyRef.current) return;   // guard against double-submit creating duplicate plans
+    busyRef.current = true;
     setBusy(true);
     try {
       if (mode === 'new') {
@@ -112,7 +118,9 @@ export default function SequenceEnrollDialog({ open, onClose, schoolIds = [], on
       }
     } catch (e) {
       toast.error(e?.response?.data?.detail || (mode === 'new' ? 'Could not create the plan' : 'Enrolment failed'));
-    } finally { setBusy(false); }
+      // 409 = that name is taken. Put the cursor back where the fix is.
+      if (e?.response?.status === 409) nameRef.current?.focus();
+    } finally { busyRef.current = false; setBusy(false); }
   };
 
   const inp = 'h-10 w-full rounded-lg px-3 text-sm bg-[var(--bg-primary)] border border-[var(--border-color)] text-[var(--text-primary)]';
@@ -181,6 +189,7 @@ export default function SequenceEnrollDialog({ open, onClose, schoolIds = [], on
           <>
             <label className="text-[10px] uppercase tracking-wider font-semibold text-[var(--text-muted)]">Plan name</label>
             <input className={inp + ' mt-1'} placeholder="e.g. CBSE catalogue drop"
+              ref={nameRef}
               value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
               data-testid="seq-new-name" />
 
