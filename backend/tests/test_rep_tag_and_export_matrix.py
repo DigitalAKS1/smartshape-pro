@@ -301,6 +301,30 @@ def test_create_contact_accepts_tag_names_like_update_school_does(db, monkeypatc
     _run(go())
 
 
+def test_create_school_keeps_the_tags_picked_in_the_add_dialog(db, monkeypatch):
+    """The Add-School dialog now shows the tag picker; POST /schools used to
+    build its document field by field and never read `tag_ids`, so a tag
+    picked at creation vanished with a green 'School added' toast."""
+    _as(ADMIN, monkeypatch)
+
+    async def go():
+        await _seed(db)
+        created = await crm.create_school(FakeRequest({
+            "school_name": "Tagged At Birth", "city": "Rohini", "tag_ids": [TAG]}))
+        sid = created["school_id"]
+        assert (await db.schools.find_one({"school_id": sid}))["tag_ids"] == [TAG]
+    _run(go())
+
+
+def test_doc_matches_refuses_an_operator_it_cannot_judge():
+    """A clause the in-memory evaluator can't judge must fail LOUD, never
+    silently count as a match — that would widen access."""
+    import pytest as _pt
+    assert crm._doc_matches({"assigned_to": "a"}, {"assigned_to": {"$in": ["a"]}})
+    with _pt.raises(ValueError):
+        crm._doc_matches({"assigned_to": "a"}, {"assigned_to": {"$nin": ["a"]}})
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # 2. POST /contacts/{id}/tags — the single-chip route the Contacts tab uses
 # ═══════════════════════════════════════════════════════════════════════════

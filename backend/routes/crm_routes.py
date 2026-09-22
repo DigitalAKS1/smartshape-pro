@@ -3610,6 +3610,11 @@ def _doc_matches(doc: dict, clause: dict) -> bool:
             continue
         value = doc.get(key)
         if isinstance(cond, dict):
+            unknown = set(cond) - {"$exists", "$in", "$ne"}
+            if unknown:
+                # Fail loud, never open: a clause this evaluator can't judge
+                # must not silently count as a match (that would widen access).
+                raise ValueError(f"_doc_matches: unsupported operator(s) {sorted(unknown)} on {key!r}")
             if "$exists" in cond and (key in doc) != bool(cond["$exists"]):
                 return False
             if "$in" in cond and value not in cond["$in"]:
@@ -3968,6 +3973,11 @@ async def create_school(request: Request):
     _pm = body.get("portal_login_methods")
     if isinstance(_pm, dict):
         school_doc["portal_login_methods"] = {k: bool(_pm.get(k, False)) for k in ("email_link", "magic_link", "google")}
+    # Tags picked in the Add-School dialog — the same two lines create_contact
+    # and update_school use, so a tag chosen at creation is never dropped.
+    incoming_tags = body.get("tag_ids", body.get("tags"))
+    if incoming_tags is not None:
+        school_doc["tag_ids"] = await _resolve_tags(incoming_tags, user["email"])
     await db.schools.insert_one(school_doc)
     return await db.schools.find_one({"school_id": school_id}, {"_id": 0})
 
@@ -4134,10 +4144,12 @@ async def update_school(school_id: str, request: Request):
     if not school:
         raise HTTPException(status_code=404, detail="School not found")
     if not await _user_can_access_school(user, school):
+        owner = _owner_label(school)
         raise HTTPException(
             status_code=403,
-            detail=(f"This school is assigned to {_owner_label(school)} — ask an admin "
-                    f"to reassign it to you before editing."))
+            detail=(("This school is not assigned to anyone and is outside your territory — "
+                     "ask an admin to assign it to you.") if owner == "nobody" else
+                    f"This school is assigned to {owner} — ask an admin to reassign it to you before editing."))
     body = await request.json()
     allowed = {}
     for k in ("school_name", "school_type", "board", "group_id", "website", "email", "phone",
