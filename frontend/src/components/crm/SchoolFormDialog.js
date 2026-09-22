@@ -15,6 +15,7 @@ export default function SchoolFormDialog({
   editSchool, setEditSchool,
   editSchoolForm, setEditSchoolForm,
   groupsList, designationsList,
+  tagsList = [],
   handleSaveSchool,
   onCascadeDeleted,
 }) {
@@ -144,6 +145,34 @@ export default function SchoolFormDialog({
               <Input value={editSchoolForm.instagram_url || ''} onChange={e => setEditSchoolForm({...editSchoolForm, instagram_url: e.target.value})} placeholder="@handle or https://instagram.com/..." className={inputCls} />
             </div>
           </div>
+
+          {/* Tags. Schools could only ever be tagged in BULK, from the Schools
+              tab — so tagging one school meant selecting exactly one checkbox,
+              and nothing anywhere rendered the result. Same chip control as
+              ContactFormDialog; PUT /schools has always honoured tag_ids. */}
+          {tagsList.length > 0 && (
+            <div>
+              <Label className={`${textSec} text-xs`}>Tags</Label>
+              <div className="flex flex-wrap gap-1.5 mt-1" data-testid="school-tag-picker">
+                {tagsList.map(t => {
+                  const sel = (editSchoolForm.tag_ids || []).includes(t.tag_id);
+                  return (
+                    <button key={t.tag_id} type="button"
+                      onClick={() => setEditSchoolForm(prev => ({
+                        ...prev,
+                        tag_ids: sel ? (prev.tag_ids || []).filter(id => id !== t.tag_id) : [...(prev.tag_ids || []), t.tag_id],
+                      }))}
+                      className={`flex items-center gap-1 px-2 py-1 rounded-full text-xs border transition-all ${sel ? 'text-white border-transparent' : `${textMuted} border-[var(--border-color)]`}`}
+                      style={sel ? { backgroundColor: t.color } : {}}
+                      data-testid={`school-tag-${t.tag_id}`}>
+                      <span className="w-2 h-2 rounded-full" style={{ backgroundColor: t.color }} />
+                      {t.name}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
         <DialogFooter>
           {editSchool && (
