@@ -436,6 +436,14 @@ async def run_drip_executor():
                  "the running pass will look again for newly due steps")
         return
     async with _DRIP_LOCK:
+        # D2: un-park any mailer whose recipient has since gained a school. This
+        # runs before the passes and independently of whether anything is due —
+        # a parked envelope must not wait for the next enrolment to come round.
+        try:
+            from routes.crm_routes import repair_needs_address_touches
+            await repair_needs_address_touches(db)
+        except Exception as e:
+            log.warning("[drip] needs_address repair failed: %s", str(e)[:180])
         for _ in range(DRIP_MAX_PASSES):
             _DRIP_RERUN = False
             await _drip_executor_pass()

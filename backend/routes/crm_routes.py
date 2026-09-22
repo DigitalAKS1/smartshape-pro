@@ -198,6 +198,8 @@ async def create_physical_from_drip(lead: dict, material_type: str, seq_name: st
     who = ({"contact_id": lead["contact_id"]}
            if not lead.get("lead_id") and lead.get("contact_id") else {})
     dispatch_id = f"pd_{uuid.uuid4().hex[:12]}"
+    recipient = (lead.get("contact_name") or "").strip()
+    cid = lead.get("contact_id", "")
     await db.physical_dispatches.insert_one({
         "dispatch_id": dispatch_id,
         "lead_id": lead.get("lead_id", ""),
@@ -208,7 +210,13 @@ async def create_physical_from_drip(lead: dict, material_type: str, seq_name: st
         "description": f"Auto-queued by drip: {seq_name}",
         "courier_name": "", "tracking_number": "", "sent_date": "",
         "received_confirmed": False,
-        "auto_from_drip": True, "needs_dispatch": True,
+        "auto_from_drip": True,
+        # D4: `needs_dispatch` is DERIVED from the linked touch on read, never
+        # stored — a stored flag was written once here and read nowhere, so
+        # 39 of 40 production rows sat "true" forever with nothing watching.
+        "touch_id": "",                       # filled in below, same call
+        "enrollment_id": enrollment_id, "step_number": step_number,
+        "sequence_id": sequence_id,
         "created_by": "system", "created_at": now_iso,
     })
     await db.tasks.insert_one({
@@ -221,59 +229,127 @@ async def create_physical_from_drip(lead: dict, material_type: str, seq_name: st
         "status": "pending", "created_by": "system", "created_at": now_iso,
     })
 
-    # Physically send to the school: a printable, QR-tracked mailer (Offline Mail).
+    # A printable, QR-tracked mailer (Offline Mail). D2: this now runs even when
+    # the recipient has no school — the row is created flagged `needs_address`
+    # instead of silently not existing.
     sid = lead.get("school_id", "")
-    if sid:
-        try:
-            today = now.strftime("%Y-%m-%d")
-            piece = material_type or "brochure"
-            planned = planned_date or today
-            # One run per (sequence, piece, day), so a brochure step and a sample step
-            # from two sequences don't collapse into one unprintable pile.
+    try:
+        today = now.strftime("%Y-%m-%d")
+        piece = material_type or "brochure"
+        planned = planned_date or today
+        # One run per (sequence, piece, day), so a brochure step and a sample step
+        # from two sequences don't collapse into one unprintable pile.
+        run = await db.mail_runs.find_one(
+            {"is_drip_run": True, "send_date": today,
+             "sequence_id": sequence_id, "piece_type": piece},
+            {"_id": 0, "run_id": 1})
+        if not run:
+            # Mid-day deploy safety: reuse a run made by the older, coarser key
+            # rather than creating a second run and posting a school twice.
             run = await db.mail_runs.find_one(
-                {"is_drip_run": True, "send_date": today,
-                 "sequence_id": sequence_id, "piece_type": piece},
+                {"is_drip_run": True, "send_date": today, "piece_type": piece,
+                 "sequence_id": {"$exists": False}},
                 {"_id": 0, "run_id": 1})
-            if not run:
-                # Mid-day deploy safety: reuse a run made by the older, coarser key
-                # rather than creating a second run and posting a school twice.
-                run = await db.mail_runs.find_one(
-                    {"is_drip_run": True, "send_date": today, "piece_type": piece,
-                     "sequence_id": {"$exists": False}},
-                    {"_id": 0, "run_id": 1})
-            if not run:
-                run_id = f"run_{uuid.uuid4().hex[:10]}"
-                label = f"{seq_name} · {piece} — {today}" if seq_name else f"Drip Mailers — {today}"
-                await db.mail_runs.insert_one({
-                    "run_id": run_id, "name": label, "area_id": "",
-                    "piece_type": piece, "deal_type_target": "", "school_ids": [],
-                    "send_date": today, "courier": "", "tracking_no": "", "courier_cost": 0,
-                    "status": "planned", "is_drip_run": True,
-                    "sequence_id": sequence_id, "sequence_name": seq_name,
-                    "created_by": "system", "created_at": now_iso,
-                    "counts": {"sent": 0, "delivered": 0, "responded": 0, "appointments": 0}})
-            else:
-                run_id = run["run_id"]
-            # One mailer per school per day's drip run (no duplicates).
-            if not await db.mail_touches.find_one({"run_id": run_id, "school_id": sid}, {"_id": 0, "touch_id": 1}):
-                await db.mail_touches.insert_one({
-                    "touch_id": f"mt_{uuid.uuid4().hex[:10]}", "run_id": run_id, "school_id": sid,
-                    "lead_id": lead.get("lead_id", ""), **who, "piece_type": piece,
-                    "item_name": item, "posted_at": None,
-                    "qr_token": uuid.uuid4().hex[:16], "delivery_status": "pending",
-                    "responded": False, "responded_at": None, "response_channel": "",
-                    "appointment": False, "next_action_date": "", "outcome_note": "",
-                    "owner": lead.get("assigned_to", "") or "system", "created_at": now_iso,
-                    # lifecycle + drip back-links
-                    "planned_date": planned, "verify_status": "pending",
-                    "printed_at": None, "print_batch_id": "", "replan_count": 0,
-                    "source": "drip", "sequence_id": sequence_id,
-                    "enrollment_id": enrollment_id, "step_number": step_number})
+        if not run:
+            run_id = f"run_{uuid.uuid4().hex[:10]}"
+            label = f"{seq_name} · {piece} — {today}" if seq_name else f"Drip Mailers — {today}"
+            await db.mail_runs.insert_one({
+                "run_id": run_id, "name": label, "area_id": "",
+                "piece_type": piece, "deal_type_target": "", "school_ids": [],
+                "send_date": today, "courier": "", "tracking_no": "", "courier_cost": 0,
+                "status": "planned", "is_drip_run": True,
+                "sequence_id": sequence_id, "sequence_name": seq_name,
+                "created_by": "system", "created_at": now_iso,
+                "counts": {"sent": 0, "delivered": 0, "responded": 0, "appointments": 0}})
+        else:
+            run_id = run["run_id"]
+
+        # D1: one envelope per SCHOOL per run. With no school there is no envelope
+        # to share, so a school-less recipient gets its own row keyed by contact —
+        # otherwise every school-less contact in the run would collapse into one
+        # mailer addressed to nobody.
+        dedup = {"run_id": run_id, "school_id": sid} if sid \
+            else {"run_id": run_id, "school_id": "", "contact_ids": cid}
+        existing = await db.mail_touches.find_one(dedup, {"_id": 0, "touch_id": 1})
+        if existing:
+            touch_id = existing["touch_id"]
+            add = {"dispatch_ids": dispatch_id, "enrollment_ids": enrollment_id}
+            if cid:
+                add["contact_ids"] = cid
+            if recipient:
+                add["recipient_names"] = recipient
+            await db.mail_touches.update_one({"touch_id": touch_id}, {"$addToSet": add})
+        else:
+            touch_id = f"mt_{uuid.uuid4().hex[:10]}"
+            await db.mail_touches.insert_one({
+                "touch_id": touch_id, "run_id": run_id, "school_id": sid,
+                "lead_id": lead.get("lead_id", ""), **who, "piece_type": piece,
+                "item_name": item, "posted_at": None,
+                "qr_token": uuid.uuid4().hex[:16], "delivery_status": "pending",
+                "responded": False, "responded_at": None, "response_channel": "",
+                "appointment": False, "next_action_date": "", "outcome_note": "",
+                "owner": lead.get("assigned_to", "") or "system", "created_at": now_iso,
+                # lifecycle + drip back-links
+                "planned_date": planned,
+                "verify_status": "pending" if sid else "needs_address",
+                "printed_at": None, "print_batch_id": "", "replan_count": 0,
+                "source": "drip", "sequence_id": sequence_id,
+                "enrollment_id": enrollment_id, "step_number": step_number,
+                # D1 roll-up + D4 back-link
+                "contact_ids": [cid] if cid else [],
+                "recipient_names": [recipient] if recipient else [],
+                "dispatch_ids": [dispatch_id],
+                "enrollment_ids": [enrollment_id] if enrollment_id else []})
+            if sid:
                 await db.mail_runs.update_one(
-                    {"run_id": run_id}, {"$addToSet": {"school_ids": sid}, "$inc": {"counts.sent": 1}})
-        except Exception:
-            pass  # mailer is best-effort; the dispatch + task already exist
+                    {"run_id": run_id},
+                    {"$addToSet": {"school_ids": sid}, "$inc": {"counts.sent": 1}})
+            else:
+                await db.mail_runs.update_one(
+                    {"run_id": run_id}, {"$inc": {"counts.sent": 1}})
+        # D4: the dispatch points at its touch, written in the SAME call that
+        # created the touch — the two records for one posting never drift again.
+        await db.physical_dispatches.update_one(
+            {"dispatch_id": dispatch_id}, {"$set": {"touch_id": touch_id}})
+    except Exception:
+        pass  # mailer is best-effort; the dispatch + task already exist
     return dispatch_id
+
+
+async def repair_needs_address_touches(target_db=None) -> dict:
+    """D2: a `needs_address` mailer is parked, never cancelled. Once the contact
+    gains a school (or the school is created), the next executor pass moves the
+    row back to `pending` and attaches it to its run's school list, so it drops
+    into the ordinary To-post queue instead of staying flagged forever.
+
+    `target_db` lets the caller (the scheduler, a migration) pass its own handle;
+    it defaults to this module's `db`."""
+    _db = db if target_db is None else target_db
+    repaired = 0
+    stuck = await _db.mail_touches.find(
+        {"verify_status": "needs_address"}, {"_id": 0}).to_list(2000)
+    for t in stuck:
+        sid = ""
+        for cid in (t.get("contact_ids") or []):
+            c = await _db.contacts.find_one({"contact_id": cid}, {"_id": 0, "school_id": 1})
+            sid = (c or {}).get("school_id") or ""
+            if sid:
+                break
+        if not sid and t.get("lead_id"):
+            l = await _db.leads.find_one({"lead_id": t["lead_id"]}, {"_id": 0, "school_id": 1})
+            sid = (l or {}).get("school_id") or ""
+        if not sid:
+            continue
+        school = await _db.schools.find_one({"school_id": sid}, {"_id": 0, "school_id": 1})
+        if not school:
+            continue
+        await _db.mail_touches.update_one(
+            {"touch_id": t["touch_id"]},
+            {"$set": {"school_id": sid, "verify_status": "pending"}})
+        await _db.mail_runs.update_one(
+            {"run_id": t.get("run_id", "")}, {"$addToSet": {"school_ids": sid}})
+        repaired += 1
+    return {"repaired": repaired}
 
 
 import os as _os
@@ -1456,7 +1532,7 @@ def _require_master_admin(user):
                             detail="Only an admin can change or delete master data")
 
 
-VERIFY_STATUSES = ("pending", "sent", "not_sent", "skipped")
+VERIFY_STATUSES = ("pending", "needs_address", "sent", "not_sent", "skipped")
 
 
 async def _recompute_run_counts(run_id: str):
@@ -1474,9 +1550,13 @@ async def _recompute_run_counts(run_id: str):
         "counts.verified_sent": tally["sent"],
         "counts.not_sent": tally["not_sent"],
         "counts.pending": tally["pending"],
+        "counts.needs_address": tally["needs_address"],
     }
     if (run or {}).get("status") != "closed":
-        _set["status"] = "posted" if (touches and tally["pending"] == 0) else "planned"
+        # D2: a piece parked for a missing address is unresolved, so the run is
+        # still 'planned' — never "posted" with an envelope addressed to nobody.
+        unresolved = tally["pending"] + tally["needs_address"]
+        _set["status"] = "posted" if (touches and unresolved == 0) else "planned"
     await db.mail_runs.update_one({"run_id": run_id}, {"$set": _set})
     return await db.mail_runs.find_one({"run_id": run_id}, {"_id": 0})
 
@@ -7024,6 +7104,21 @@ async def get_physical_dispatches(request: Request, lead_id: Optional[str] = Non
     elif get_team(user) != "admin":
         query["created_by"] = user["email"]
     dispatches = await db.physical_dispatches.find(query, {"_id": 0}).sort("sent_date", -1).to_list(2000)
+    # D4: `needs_dispatch` is derived from the linked touch, never stored. A row
+    # with no touch (a manual dispatch) is never "owed to the post office".
+    tids = [d["touch_id"] for d in dispatches if d.get("touch_id")]
+    status_by_touch = {}
+    if tids:
+        async for t in db.mail_touches.find({"touch_id": {"$in": tids}},
+                                            {"_id": 0, "touch_id": 1, "verify_status": 1,
+                                             "posted_at": 1}):
+            status_by_touch[t["touch_id"]] = t
+    for d in dispatches:
+        t = status_by_touch.get(d.get("touch_id", ""))
+        d["verify_status"] = (t or {}).get("verify_status", "")
+        d["needs_dispatch"] = bool(t) and t.get("verify_status") in ("pending", "needs_address")
+        if t and t.get("posted_at") and not d.get("sent_date"):
+            d["sent_date"] = str(t["posted_at"])[:10]
     return dispatches
 
 

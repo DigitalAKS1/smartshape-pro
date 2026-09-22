@@ -246,6 +246,14 @@ async def connect_db():
     # reaches its school through `school_id`. Guarded: never crash startup.
     await _i(db.drip_enrollments.create_index([("contact_id", 1), ("status", 1)], background=True))
     await _i(db.drip_enrollments.create_index([("school_id", 1), ("status", 1)], background=True))
+    # To-post queue (B): the cross-run "everything owed to the post office" scan.
+    await _i(db.mail_touches.create_index([("verify_status", 1), ("planned_date", 1)],
+                                          background=True))
+    await _i(db.mail_touches.create_index("touch_id", background=True))
+    await _i(db.mail_touches.create_index([("sequence_id", 1), ("step_number", 1)],
+                                          background=True))
+    # D4: the dispatch -> touch back-link, read on every dispatch list.
+    await _i(db.physical_dispatches.create_index("touch_id", background=True))
     await db.greeting_logs.create_index([("contact_id", 1), ("sent_at", -1)], background=True)
     await db.greeting_logs.create_index([("phone", 1), ("year", 1)], background=True)
     await db.whatsapp_logs.create_index([("lead_id", 1), ("sent_at", -1)], background=True)

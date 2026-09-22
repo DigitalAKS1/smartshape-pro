@@ -79,5 +79,7 @@ def test_no_school_still_queues_dispatch(db):
         lead = {"lead_id": "L1", "company_name": "No School", "assigned_to": "r@x.in"}
         await crm.create_physical_from_drip(lead, "brochure", "Seq", material_name="Flyer")
         assert await db.physical_dispatches.count_documents({"lead_id": "L1"}) == 1
-        assert await db.mail_touches.count_documents({}) == 0   # no school → no mailer
+        # D2: no school no longer means no mailer — the row exists, flagged.
+        t = await db.mail_touches.find_one({}, {"_id": 0})
+        assert t is not None and t["verify_status"] == "needs_address"
     asyncio.run(go())
