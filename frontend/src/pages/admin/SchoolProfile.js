@@ -16,6 +16,7 @@ import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '../../components/ui/dialog';
 import { ExternalLink, Activity } from 'lucide-react';
+import { schoolSaveError } from '../../lib/crmErrors';
 import useSchoolProfile from '../../hooks/useSchoolProfile';
 import SchoolProfileHeader from '../../components/school/SchoolProfileHeader';
 import SchoolContactsSection from '../../components/school/SchoolContactsSection';
@@ -225,6 +226,7 @@ export default function SchoolProfile() {
       school_strength: school.school_strength || '', number_of_branches: school.number_of_branches ?? '',
       annual_budget_range: school.annual_budget_range || '', existing_vendor: school.existing_vendor || '',
       linkedin_url: school.linkedin_url || '', instagram_url: school.instagram_url || '', website: school.website || '',
+      tag_ids: school.tag_ids || [],
     });
     setEditTarget(school);
   };
@@ -235,7 +237,7 @@ export default function SchoolProfile() {
       setEditTarget(null);
       sp.reload();
     } catch (e) {
-      toast.error(e?.response?.data?.detail || 'Update failed');
+      toast.error(schoolSaveError(e));
     }
   };
 
@@ -264,7 +266,7 @@ export default function SchoolProfile() {
 
       <div className={`min-h-screen ${tk.page}`}>
 
-        <SchoolProfileHeader school={school} metrics={metrics} tk={tk} rv={rv} />
+        <SchoolProfileHeader school={school} metrics={metrics} tk={tk} rv={rv} tagsList={tagsList} />
 
         {/* Tab Bar */}
         <div className={`${tk.card} border-b ${tk.border} sticky top-0 z-20`}>
@@ -429,6 +431,7 @@ export default function SchoolProfile() {
         setEditSchoolForm={setEditForm}
         groupsList={groupsList}
         designationsList={designationsList}
+        tagsList={tagsList}
         handleSaveSchool={handleSaveSchool}
       />
 

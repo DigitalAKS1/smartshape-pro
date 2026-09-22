@@ -311,6 +311,13 @@ export default function ContactFormDialog({
                 <div className="bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-lg p-3 text-center">
                   <p className="text-2xl font-bold text-yellow-500">{importResult.skipped}</p>
                   <p className={`text-xs ${textMuted} mt-0.5`}>Skipped</p>
+                  {/* "12 skipped" reads like a broken file; "12 of them assigned
+                      to someone else" reads like a thing to ask an admin about. */}
+                  {importResult.not_authorized > 0 && (
+                    <p className="text-[10px] text-yellow-500/80 mt-1 leading-tight" data-testid="import-not-authorized">
+                      {importResult.not_authorized} assigned to someone else
+                    </p>
+                  )}
                 </div>
                 <div className="bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-lg p-3 text-center">
                   <p className={`text-2xl font-bold ${importResult.error_count ? 'text-red-500' : textMuted}`}>{importResult.error_count || 0}</p>

@@ -690,9 +690,14 @@ async def commit_row(db, row_keyed: dict, user: dict, create_leads: bool,
             if _inspect.isawaitable(allowed):
                 allowed = await allowed
             if not allowed:
+                # Carry the owner out with the refusal so the caller can say
+                # WHO to ask. "Skipped" with no name is why a rep concludes the
+                # upload simply did not work.
                 return {"action": res["action"], "school_id": sid,
                         "contact_id": existing.get("contact_id"), "lead_id": None,
-                        "warnings": warnings, "contact_action": "forbidden"}
+                        "warnings": warnings, "contact_action": "forbidden",
+                        "contact_owner_name": existing.get("assigned_name") or "",
+                        "contact_owner_email": existing.get("assigned_to") or ""}
 
         # Pop BEFORE cvals/custom_fields are built so the raw tag string never
         # lands in custom_fields.tags — resolution itself waits until cid exists.

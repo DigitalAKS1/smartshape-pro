@@ -161,7 +161,9 @@ export default function useQuotations() {
     }
   };
 
-  const handleExport = () => { exportData.download('quotations'); toast.success('Exporting…'); };
+  const handleExport = async () => {
+    if (await exportData.download('quotations')) toast.success('Quotations exported');
+  };
 
   const clearFilters = () => {
     setStatusFilter('all'); setAgentFilter('all'); setDateFrom(''); setDateTo(''); setSearchTerm('');

@@ -11,7 +11,7 @@ function AgingChip({ days }) {
   return <span className={`inline-flex px-2.5 py-0.5 rounded-full text-[11px] font-medium ${cls}`}>{days}d since contact</span>;
 }
 
-export default function SchoolProfileHeader({ school, metrics, tk, rv }) {
+export default function SchoolProfileHeader({ school, metrics, tk, rv, tagsList = [] }) {
   const navigate = useNavigate();
 
   return (
@@ -51,6 +51,20 @@ export default function SchoolProfileHeader({ school, metrics, tk, rv }) {
               </span>
             )}
           </div>
+          {/* Tags. Bulk-tagging a school wrote tag_ids correctly and NOTHING
+              rendered them anywhere, so the label a rep applied was invisible
+              and looked like a failed action. Same chip as contacts/leads. */}
+          {(school.tag_ids || []).length > 0 && (
+            <div className="flex items-center gap-1.5 mt-2 flex-wrap" data-testid="school-header-tags">
+              {(school.tag_ids || []).map(tid => {
+                const tg = tagsList.find(t => t.tag_id === tid);
+                return tg ? (
+                  <span key={tid} className="text-[10px] px-2 py-0.5 rounded-full text-white font-medium"
+                        style={{ backgroundColor: tg.color }}>{tg.name}</span>
+                ) : null;
+              })}
+            </div>
+          )}
           {(school.city || school.school_strength > 0 || school.estd_year) && (
             <div className={`flex items-center gap-4 mt-2.5 text-sm ${tk.tm} flex-wrap`}>
               {school.city && (

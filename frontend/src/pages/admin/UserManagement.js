@@ -79,7 +79,7 @@ export default function UserManagement() {
             <p className={`${textSec} mt-0.5 text-sm`}>{users.length} users • Manage access &amp; permissions</p>
           </div>
           <div className="flex items-center gap-2">
-            <Button onClick={() => { exportData.download('users'); toast.success('Exporting...'); }} variant="outline" size="sm" className={`border-[var(--border-color)] ${textSec}`}>
+            <Button onClick={async () => { if (await exportData.download('users')) toast.success('Users exported'); }} variant="outline" size="sm" className={`border-[var(--border-color)] ${textSec}`}>
               <Download className="mr-1.5 h-3.5 w-3.5" /> Export
             </Button>
             <Button onClick={openCreate} size="sm" className="bg-[#e94560] hover:bg-[#f05c75] text-white">

@@ -3447,17 +3447,23 @@ def _crm_write(user: dict) -> bool:
     return has_team(user, "sales") or has_module(user, "leads", "read_write")
 
 
-async def _owned_school_ids(email: str) -> list:
+async def _owned_school_ids(email: str, dbh=None) -> list:
     """School ids a sales user owns — assigned to them, or created by them while
-    still unassigned (see `_owner_clause`). Excludes deleted."""
-    cur = db.schools.find(
+    still unassigned (see `_owner_clause`). Excludes deleted.
+
+    `dbh` lets another route module (the exports in admin_routes) reuse this
+    without silently reading THIS module's `db` global instead of its own —
+    identical in production, but not under test, where exactly that mismatch
+    once made a scoped export come back empty."""
+    dbh = dbh if dbh is not None else db
+    cur = dbh.schools.find(
         {**_owner_clause(email), "is_deleted": {"$ne": True}},
         {"_id": 0, "school_id": 1},
     )
     return [s["school_id"] async for s in cur]
 
 
-async def _leads_visibility_or(email: str) -> list:
+async def _leads_visibility_or(email: str, dbh=None) -> list:
     """The exact `$or` clause a non-"all" caller's LEAD visibility is built from:
     leads assigned to me, OR any lead at a school I own (even when that lead's
     own `assigned_to` is someone else).
@@ -3469,7 +3475,7 @@ async def _leads_visibility_or(email: str) -> list:
     is deliberately NO created-by-while-unassigned fallback for leads — GET
     /leads never had one, and adding it here would widen what a rep can touch.
     """
-    owned = await _owned_school_ids(email)
+    owned = await _owned_school_ids(email, dbh)
     return [
         {"assigned_to": email},
         {"school_id": {"$in": owned}} if owned else {"lead_id": "__none__"},
@@ -3483,7 +3489,7 @@ async def _sales_lead_scope(email: str) -> list:
     return await _leads_visibility_or(email)
 
 
-async def _schools_visibility_or(email: str) -> list:
+async def _schools_visibility_or(email: str, dbh=None) -> list:
     """The exact `$or` clause a non-"all" caller's SCHOOL visibility is built
     from: schools I own (`_owner_clause`), OR any school holding one of my
     leads or quotations.
@@ -3493,11 +3499,12 @@ async def _schools_visibility_or(email: str) -> list:
     list is exactly a school a bulk action will reach — never a silent
     "skipped" — and nothing outside it is ever touched.
     """
-    own_leads = await db.leads.find({"assigned_to": email}, {"_id": 0, "school_id": 1}).to_list(10000)
+    dbh = dbh if dbh is not None else db
+    own_leads = await dbh.leads.find({"assigned_to": email}, {"_id": 0, "school_id": 1}).to_list(10000)
     # A quotation links a school exactly as a lead does. Without this, a rep
     # who quoted another rep's school could not see it again afterwards —
     # so her own quotation would vanish from her CRM the moment she saved it.
-    own_quotes = await db.quotations.find(
+    own_quotes = await dbh.quotations.find(
         {"$or": [{"assigned_to": email}, {"created_by": email}],
          "is_deleted": {"$ne": True}},
         {"_id": 0, "school_id": 1}).to_list(10000)
@@ -3576,11 +3583,60 @@ async def _apply_owner(body: dict, *, default_email: str, default_name: str):
     return default_email, default_name  # unresolvable name → default, never the name
 
 
+def _doc_matches(doc: dict, clause: dict) -> bool:
+    """Evaluate ONE visibility clause against a single document, in memory.
+
+    Single-document guards used to re-implement the list's `$or` by hand and
+    the two drifted: a rep could SEE a school reached through her own quotation
+    but got a 403 the moment she saved it. Running the list's own clause against
+    the document removes the possibility of drift.
+
+    In memory rather than as a second `find_one`, because these guards are also
+    called with documents that are NOT in the collection (a doc assembled by a
+    caller, or a fixture) — a re-query would answer "no" to all of them.
+    Supports exactly the operators `_owner_clause`, `_contacts_visibility_or`,
+    `_schools_visibility_or` and `_leads_visibility_or` actually produce:
+    equality, `$in`, `$exists`, `$ne`, `$and`, `$or`. A missing field reads as
+    None, the way Mongo treats it.
+    """
+    for key, cond in clause.items():
+        if key == "$and":
+            if not all(_doc_matches(doc, c) for c in cond):
+                return False
+            continue
+        if key == "$or":
+            if not any(_doc_matches(doc, c) for c in cond):
+                return False
+            continue
+        value = doc.get(key)
+        if isinstance(cond, dict):
+            unknown = set(cond) - {"$exists", "$in", "$ne"}
+            if unknown:
+                # Fail loud, never open: a clause this evaluator can't judge
+                # must not silently count as a match (that would widen access).
+                raise ValueError(f"_doc_matches: unsupported operator(s) {sorted(unknown)} on {key!r}")
+            if "$exists" in cond and (key in doc) != bool(cond["$exists"]):
+                return False
+            if "$in" in cond and value not in cond["$in"]:
+                return False
+            if "$ne" in cond and value == cond["$ne"]:
+                return False
+        elif value != cond:
+            return False
+    return True
+
+
+def _matches_visibility(doc: dict, or_clause: list) -> bool:
+    """True when `doc` satisfies the `$or` its LIST route is built from."""
+    return any(_doc_matches(doc, c) for c in or_clause)
+
+
 async def _user_can_access_school(user: dict, school: dict) -> bool:
     """Mirror GET /schools scope: admin sees all. Everyone else needs CRM access
     (`_crm_read` — a `leads` grant or sales-team membership); a `leads` grant
-    scoped "all" sees every school, an "own"-scoped one sees owned/created
-    schools + schools holding their leads. No CRM access at all -> nothing."""
+    scoped "all" sees every school, an "own"-scoped one sees exactly the schools
+    `_schools_visibility_or` puts in her list — owned/created, or holding one of
+    her leads OR her quotations. No CRM access at all -> nothing."""
     if not school:
         return False
     if has_team(user, "admin"):
@@ -3589,24 +3645,15 @@ async def _user_can_access_school(user: dict, school: dict) -> bool:
         return False
     if sees_all(user, "leads"):
         return True
-    email = user["email"]
-    if _owns(school, email):
-        return True
-    sid = school.get("school_id")
-    if sid:
-        lead = await db.leads.find_one(
-            {"school_id": sid, "assigned_to": email}, {"_id": 0, "lead_id": 1}
-        )
-        if lead:
-            return True
-    return False
+    return _matches_visibility(school, await _schools_visibility_or(user["email"]))
 
 
 async def _user_can_mutate_lead(user: dict, lead: dict) -> bool:
     """admin all; otherwise needs CRM write access (`_crm_write` — a `leads`
     read_write grant or sales-team membership). A "all"-scoped `leads` grant may
-    mutate any lead; an "own"-scoped one only if assigned or under an owned
-    school. No `leads` grant and not sales -> nothing."""
+    mutate any lead; an "own"-scoped one may mutate exactly the leads
+    `_leads_visibility_or` shows her in GET /leads. No `leads` grant and not
+    sales -> nothing."""
     if not lead:
         return False
     if has_team(user, "admin"):
@@ -3615,20 +3662,19 @@ async def _user_can_mutate_lead(user: dict, lead: dict) -> bool:
         return False
     if sees_all(user, "leads"):
         return True
-    email = user["email"]
-    if lead.get("assigned_to") == email:
-        return True
-    sid = lead.get("school_id")
-    if sid and sid in (await _owned_school_ids(email)):
-        return True
-    return False
+    return _matches_visibility(lead, await _leads_visibility_or(user["email"]))
 
 
 async def _user_can_mutate_contact(user: dict, contact: dict) -> bool:
     """admin all; otherwise needs CRM write access (`_crm_write` — a `leads`
     read_write grant or sales-team membership). A "all"-scoped `leads` grant may
-    mutate any contact; an "own"-scoped one only if creator/assignee or under an
-    owned school. No `leads` grant and not sales -> nothing."""
+    mutate any contact; an "own"-scoped one may mutate exactly the contacts
+    `_contacts_visibility_or` shows her in GET /contacts. No `leads` grant and
+    not sales -> nothing.
+
+    Ruling (owner, 2026-09-22): a rep may EDIT and TAG exactly what she can SEE.
+    An unassigned contact at a school nobody she can reach owns stays invisible
+    AND untouchable — that is deliberate, not an oversight."""
     if not contact:
         return False
     if has_team(user, "admin"):
@@ -3637,13 +3683,30 @@ async def _user_can_mutate_contact(user: dict, contact: dict) -> bool:
         return False
     if sees_all(user, "leads"):
         return True
-    email = user["email"]
-    if _owns(contact, email):
-        return True
-    sid = contact.get("school_id")
-    if sid and sid in (await _owned_school_ids(email)):
-        return True
-    return False
+    return _matches_visibility(contact, await _contacts_visibility_or(user["email"]))
+
+
+def _owner_label(doc: dict) -> str:
+    """How to refer to a record's owner in a message a sales person reads:
+    their name when we have one, their email otherwise, and "nobody" when the
+    record is unassigned (409 contacts and 398 schools really are)."""
+    name = (doc.get("assigned_name") or "").strip()
+    email = (doc.get("assigned_to") or "").strip()
+    if name and email:
+        return f"{name} ({email})"
+    return name or email or "nobody"
+
+
+def _contact_403_detail(contact: dict) -> str:
+    """A 403 a rep can act on. "Not authorized to edit this contact" told her
+    nothing; this names the person to ask, or says the record is unassigned
+    and out of her territory."""
+    owner = _owner_label(contact)
+    if owner == "nobody":
+        return ("This contact is not assigned to anyone and is not at one of your "
+                "schools — ask an admin to assign it to you.")
+    return (f"This contact is assigned to {owner} — ask an admin to reassign it "
+            f"to you before editing.")
 
 
 async def _assign_school_cascade(school_id: str, assigned_to: str, assigned_name: str, actor: dict) -> dict:
@@ -3910,6 +3973,11 @@ async def create_school(request: Request):
     _pm = body.get("portal_login_methods")
     if isinstance(_pm, dict):
         school_doc["portal_login_methods"] = {k: bool(_pm.get(k, False)) for k in ("email_link", "magic_link", "google")}
+    # Tags picked in the Add-School dialog — the same two lines create_contact
+    # and update_school use, so a tag chosen at creation is never dropped.
+    incoming_tags = body.get("tag_ids", body.get("tags"))
+    if incoming_tags is not None:
+        school_doc["tag_ids"] = await _resolve_tags(incoming_tags, user["email"])
     await db.schools.insert_one(school_doc)
     return await db.schools.find_one({"school_id": school_id}, {"_id": 0})
 
@@ -4076,7 +4144,12 @@ async def update_school(school_id: str, request: Request):
     if not school:
         raise HTTPException(status_code=404, detail="School not found")
     if not await _user_can_access_school(user, school):
-        raise HTTPException(status_code=403, detail="Not authorized to edit this school")
+        owner = _owner_label(school)
+        raise HTTPException(
+            status_code=403,
+            detail=(("This school is not assigned to anyone and is outside your territory — "
+                     "ask an admin to assign it to you.") if owner == "nobody" else
+                    f"This school is assigned to {owner} — ask an admin to reassign it to you before editing."))
     body = await request.json()
     allowed = {}
     for k in ("school_name", "school_type", "board", "group_id", "website", "email", "phone",
@@ -4560,14 +4633,14 @@ async def set_school_password(school_id: str, request: Request):
 
 # ==================== CONTACTS ====================
 
-async def _contacts_visibility_or(email: str) -> list:
+async def _contacts_visibility_or(email: str, dbh=None) -> list:
     """The exact `$or` clause a non-"all" caller's contact visibility is built
     from: own/assigned contacts, OR any contact at a school this user owns.
     GET /contacts and the bulk-tag/bulk-assign routes below must all use this
     same rule — a contact a rep can see in the list (because it sits at a
     school they own, even if `assigned_to` is someone else) must not come
     back from a bulk action as a silent "skipped"."""
-    owned = await _owned_school_ids(email)
+    owned = await _owned_school_ids(email, dbh)
     return [
         *_owner_clause(email)["$or"],
         {"school_id": {"$in": owned}} if owned else {"contact_id": "__none__"},
@@ -4686,6 +4759,12 @@ async def create_contact(request: Request):
         "created_by": user["email"],
         "created_at": now_iso,
     }
+    # Tags on create, for the same reason PUT /contacts now honours them: the
+    # School-Profile "Add Contact" dialog posts the whole form and its chips
+    # would otherwise be thrown away.
+    incoming_tags = body.get("tag_ids", body.get("tags"))
+    if incoming_tags is not None:
+        contact_doc["tag_ids"] = await _resolve_tags(incoming_tags, user["email"])
     await db.contacts.insert_one(contact_doc)
     return await db.contacts.find_one({"contact_id": contact_id}, {"_id": 0})
 
@@ -4697,12 +4776,22 @@ async def update_contact(contact_id: str, request: Request):
     if not existing_contact:
         raise HTTPException(status_code=404, detail="Contact not found")
     if not await _user_can_mutate_contact(user, existing_contact):
-        raise HTTPException(status_code=403, detail="Not authorized to edit this contact")
+        raise HTTPException(status_code=403, detail=_contact_403_detail(existing_contact))
     body = await request.json()
     allowed = {}
     for k in ("name", "phone", "email", "designation", "contact_role_id", "source", "source_id", "notes", "status", "birthday", "assigned_to"):
         if k in body:
             allowed[k] = body[k]
+
+    # Tags. The School-Profile contact dialog PUTs the WHOLE form (tag_ids
+    # included) — the CRM Contacts tab happens to hide the gap by calling
+    # POST/DELETE /contacts/{id}/tags separately, so the chips a rep clicked
+    # on a school profile were silently dropped and the save "worked" while
+    # changing nothing. Same shape as PUT /schools: absent means "leave as-is",
+    # an empty list means "clear", and a NAME is resolved (or minted) to an id.
+    incoming_tags = body.get("tag_ids", body.get("tags"))
+    if incoming_tags is not None:
+        allowed["tag_ids"] = await _resolve_tags(incoming_tags, user["email"])
 
     # school_id change: update FK, sync company, log previous school
     new_school_id = body.get("school_id")
@@ -4854,10 +4943,28 @@ async def cascade_delete_contact(contact_id: str, request: Request, reason: str 
     return {"message": "Contact and related data permanently deleted", **result}
 
 
+async def _contact_for_tagging(contact_id: str, request: Request) -> dict:
+    """Load a contact for a single-chip tag write, or raise.
+
+    Both routes below used to take only the id: any logged-in session could
+    tag — or untag — any contact in the database, including the 1193 a scoped
+    rep cannot even see. They now answer exactly like PUT /contacts: 404 when
+    it does not exist, 403 when it is outside what this user can see, and the
+    rep's own 409 unassigned contacts at her own schools stay reachable.
+    """
+    user = await get_current_user(request)
+    contact = await db.contacts.find_one({"contact_id": contact_id}, {"_id": 0})
+    if not contact:
+        raise HTTPException(404, "Contact not found")
+    if not await _user_can_mutate_contact(user, contact):
+        raise HTTPException(status_code=403, detail=_contact_403_detail(contact))
+    return contact
+
+
 @router.post("/contacts/{contact_id}/tags")
 async def add_contact_tag(contact_id: str, request: Request):
     """Add a tag to a contact. Body: {tag_id: str}"""
-    await get_current_user(request)
+    await _contact_for_tagging(contact_id, request)
     body = await request.json()
     tag_id = body.get("tag_id", "").strip()
     if not tag_id:
@@ -4874,7 +4981,7 @@ async def add_contact_tag(contact_id: str, request: Request):
 @router.delete("/contacts/{contact_id}/tags/{tag_id}")
 async def remove_contact_tag(contact_id: str, tag_id: str, request: Request):
     """Remove a tag from a contact."""
-    await get_current_user(request)
+    await _contact_for_tagging(contact_id, request)
     await db.contacts.update_one(
         {"contact_id": contact_id},
         {"$pull": {"tag_ids": tag_id}}
@@ -5205,6 +5312,10 @@ async def import_contacts_csv(
     user_sees_all = sees_all(user, "leads")
 
     async def _authorize_contact(existing_contact: dict) -> bool:
+        # The SAME visibility rule every other contact write uses — never a
+        # bare `_owns`. The 409 unassigned contacts that sit at a rep's own
+        # schools show in her list and come out in her export, so her
+        # re-upload of that very file must be able to write them back.
         if user_sees_all:
             return True
         return await _user_can_mutate_contact(user, existing_contact)
@@ -5223,6 +5334,10 @@ async def import_contacts_csv(
     keyed = _key_rows(headers, rows, mapping)
 
     created = updated = skipped = error_count = 0
+    # Rows refused on ownership are counted separately as well as in `skipped`:
+    # "12 skipped" reads like a broken file, "12 skipped, 12 of them assigned
+    # to someone else" reads like a thing to go and ask an admin about.
+    not_authorized = 0
     errors: list = []
 
     for idx, row_keyed in enumerate(keyed, start=2):   # row 1 is the header
@@ -5247,8 +5362,15 @@ async def import_contacts_csv(
             contact_action = res.get("contact_action")
             if contact_action == "forbidden":
                 skipped += 1
+                not_authorized += 1
+                owner = _owner_label({
+                    "assigned_name": res.get("contact_owner_name"),
+                    "assigned_to": res.get("contact_owner_email")})
+                where = (f"assigned to {owner}" if owner != "nobody"
+                         else "unassigned and not at one of your schools")
                 errors.append(
-                    f"Row {idx}: skipped — you do not own contact {res.get('contact_id')!r}")
+                    f"Row {idx}: skipped — contact {res.get('contact_id')!r} is "
+                    f"{where}; ask an admin to reassign it to you")
                 continue
 
             cid = res.get("contact_id")
@@ -5278,6 +5400,7 @@ async def import_contacts_csv(
             errors.append(f"Row {idx}: {e}")
 
     return {"created": created, "updated": updated, "skipped": skipped,
+            "not_authorized": not_authorized,
             "errors": errors[:50], "error_count": error_count}
 
 

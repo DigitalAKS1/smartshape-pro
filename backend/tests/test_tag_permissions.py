@@ -96,12 +96,32 @@ def test_a_rep_can_tag_leads_in_bulk(db, monkeypatch):
 
 
 def test_a_rep_can_tag_a_contact(db, monkeypatch):
+    # Ruling 2026-09-22: a rep may tag exactly what she can SEE. c1 sits at s1,
+    # so owning s1 is what puts it in her list — and therefore in her reach.
     _as(REP, monkeypatch)
 
     async def go():
         await _seed(db)
+        await db.schools.update_one({"school_id": "s1"},
+                                    {"$set": {"assigned_to": REP["email"]}})
         await crm.add_contact_tag("c1", FakeRequest({"tag_id": "tag_hot"}))
         assert (await db.contacts.find_one({"contact_id": "c1"}))["tag_ids"] == ["tag_hot"]
+    _run(go())
+
+
+def test_a_rep_cannot_tag_a_contact_she_cannot_see(db, monkeypatch):
+    """The counterpart, and the hole this closed: POST /contacts/{id}/tags took
+    only an id and no ownership check at all, so any logged-in session could
+    tag (or untag) any of the ~1600 contacts in the database by guessing ids."""
+    _as(REP, monkeypatch)
+
+    async def go():
+        await _seed(db)   # s1 is unowned, so c1 is not in the rep's list
+        with pytest.raises(HTTPException) as e:
+            await crm.add_contact_tag("c1", FakeRequest({"tag_id": "tag_hot"}))
+        assert e.value.status_code == 403
+        assert "reassign" in e.value.detail or "assign" in e.value.detail
+        assert not (await db.contacts.find_one({"contact_id": "c1"})).get("tag_ids")
     _run(go())
 
 

@@ -946,6 +946,17 @@ export default function LeadsCRM() {
                           {sch.linkedin_url && <a href={sch.linkedin_url.startsWith('http') ? sch.linkedin_url : `https://${sch.linkedin_url}`} target="_blank" rel="noopener noreferrer" className="text-[#0a66c2]" title="LinkedIn"><Linkedin className="h-3.5 w-3.5" /></a>}
                           {sch.instagram_url && <a href={sch.instagram_url.startsWith('http') ? sch.instagram_url : `https://instagram.com/${sch.instagram_url.replace('@','')}`} target="_blank" rel="noopener noreferrer" className="text-[#e1306c]" title="Instagram"><Instagram className="h-3.5 w-3.5" /></a>}
                         </div>
+                        {/* School tag chips — bulk-tagging wrote tag_ids and nothing ever
+                            showed them, so a rep saw no evidence the tag had landed. */}
+                        {(sch.tag_ids || []).length > 0 && (
+                          <div className="flex items-center gap-1 mt-1 flex-wrap" data-testid={`school-tags-${sch.school_id}`}>
+                            {(sch.tag_ids || []).slice(0, 3).map(tid => {
+                              const tg = crm.tagsList.find(t => t.tag_id === tid);
+                              return tg ? <span key={tid} className="text-[9px] px-1.5 py-0.5 rounded-full text-white font-medium" style={{ backgroundColor: tg.color }}>{tg.name}</span> : null;
+                            })}
+                            {(sch.tag_ids || []).length > 3 && <span className={`text-[9px] ${textMuted}`}>+{(sch.tag_ids || []).length - 3}</span>}
+                          </div>
+                        )}
                         <div className="mt-1.5 flex items-center gap-1.5">
                           <span className={`text-[10px] ${textMuted}`}>Owner:</span>
                           {renderOwnerControl(sch)}
@@ -992,6 +1003,18 @@ export default function LeadsCRM() {
                                 {sch.linkedin_url && <a href={sch.linkedin_url.startsWith('http') ? sch.linkedin_url : `https://${sch.linkedin_url}`} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} className="text-[#0a66c2] hover:opacity-75" title="LinkedIn"><Linkedin className="h-3 w-3" /></a>}
                                 {sch.instagram_url && <a href={sch.instagram_url.startsWith('http') ? sch.instagram_url : `https://instagram.com/${sch.instagram_url.replace('@','')}`} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} className="text-[#e1306c] hover:opacity-75" title="Instagram"><Instagram className="h-3 w-3" /></a>}
                               </div>
+                              {/* School tag chips, matching the contact and lead rows.
+                                  Until now nothing in the app rendered school.tag_ids,
+                                  so a bulk tag left no visible trace at all. */}
+                              {(sch.tag_ids || []).length > 0 && (
+                                <div className="flex items-center gap-1 mt-1 flex-wrap" data-testid={`school-row-tags-${sch.school_id}`}>
+                                  {(sch.tag_ids || []).slice(0, 3).map(tid => {
+                                    const tg = crm.tagsList.find(t => t.tag_id === tid);
+                                    return tg ? <span key={tid} className="text-[9px] px-1.5 py-0.5 rounded-full text-white font-medium" style={{ backgroundColor: tg.color }}>{tg.name}</span> : null;
+                                  })}
+                                  {(sch.tag_ids || []).length > 3 && <span className={`text-[9px] ${textMuted}`}>+{(sch.tag_ids || []).length - 3}</span>}
+                                </div>
+                              )}
                             </td>
                             <td className={`py-2.5 px-3 hidden sm:table-cell text-xs ${textSec}`}>{sch.school_type}</td>
                             <td className="py-2.5 px-3 hidden md:table-cell text-xs">
@@ -1319,6 +1342,7 @@ export default function LeadsCRM() {
           setEditSchoolForm={crm.setEditSchoolForm}
           groupsList={crm.groupsList}
           designationsList={crm.designationsList}
+          tagsList={crm.tagsList}
           handleSaveSchool={crm.handleSaveSchool}
           onCascadeDeleted={crm.fetchData}
         />
