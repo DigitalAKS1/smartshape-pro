@@ -218,6 +218,66 @@ def test_create_and_rename_keep_name_lower_true(db):
     _run(go())
 
 
+# ── The seeder (A3) ─────────────────────────────────────────────────────────
+
+def test_the_seeder_does_not_twin_a_hand_made_sequence_of_the_same_name(db):
+    # _seed_defaults runs on EVERY GET /drip/sequences. Its lookup used to be
+    # keyed on created_by: "system", so an owner-made sequence named like a stock
+    # one was invisible to it and a system twin appeared beside it on the next
+    # page load — under the same name, in the same list.
+    stock_name = drip._DEFAULT_SEQUENCES[0]["name"]
+
+    async def go():
+        mine = await drip.create_sequence(FakeRequest(dict(PAYLOAD, name=stock_name)))
+        await drip._seed_defaults()
+        await drip._seed_defaults()          # every page load, not just the first
+
+        same_name = await db.drip_sequences.find(
+            {"name": stock_name}, {"_id": 0}).to_list(10)
+        assert len(same_name) == 1, "the seeder twinned the owner's sequence"
+        assert same_name[0]["sequence_id"] == mine["sequence_id"]
+        assert same_name[0]["created_by"] == ADMIN["email"], \
+            "the seeder overwrote the owner's sequence with the stock one"
+        assert same_name[0]["steps"][0]["material_name"] == "2026 Die Catalogue"
+    _run(go())
+
+
+def test_the_seeder_still_seeds_and_still_updates_its_own_copies(db):
+    async def go():
+        await drip._seed_defaults()
+        assert await db.drip_sequences.count_documents({"created_by": "system"}) \
+            == len(drip._DEFAULT_SEQUENCES), "the stock sequences were not seeded"
+
+        # Running it again is a no-op, not a second set.
+        await drip._seed_defaults()
+        assert await db.drip_sequences.count_documents({}) == len(drip._DEFAULT_SEQUENCES)
+
+        # A stock copy the owner has NOT customised is still refreshed in place.
+        stock_name = drip._DEFAULT_SEQUENCES[0]["name"]
+        await db.drip_sequences.update_one({"name": stock_name},
+                                           {"$set": {"description": "drifted"}})
+        await drip._seed_defaults()
+        doc = await db.drip_sequences.find_one({"name": stock_name}, {"_id": 0})
+        assert doc["description"] == drip._DEFAULT_SEQUENCES[0]["description"]
+        assert doc.get("name_lower") == stock_name.lower(), \
+            "a seeded sequence has no dedupe key, so a hand-made twin could slip past"
+    _run(go())
+
+
+def test_a_customised_stock_sequence_is_left_alone(db):
+    async def go():
+        await drip._seed_defaults()
+        stock_name = drip._DEFAULT_SEQUENCES[0]["name"]
+        await db.drip_sequences.update_one(
+            {"name": stock_name},
+            {"$set": {"customised": True, "description": "the owner's words"}})
+        await drip._seed_defaults()
+        doc = await db.drip_sequences.find_one({"name": stock_name}, {"_id": 0})
+        assert doc["description"] == "the owner's words"
+        assert await db.drip_sequences.count_documents({"name": stock_name}) == 1
+    _run(go())
+
+
 # ── The index ───────────────────────────────────────────────────────────────
 
 def test_the_name_lower_index_is_registered_and_guarded():

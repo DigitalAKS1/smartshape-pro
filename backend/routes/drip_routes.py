@@ -270,7 +270,8 @@ async def _seed_defaults():
             continue                       # already migrated
         await db.drip_sequences.update_one(
             {"name": old_name, "created_by": "system", "customised": {"$ne": True}},
-            {"$set": {"name": new_name, "updated_at": now_iso}})
+            {"$set": {"name": new_name, "name_lower": new_name.lower(),
+                      "updated_at": now_iso}})
 
     for seq in _DEFAULT_SEQUENCES:
         # Fetch the whole document and test `is not None`. Projecting to
@@ -279,6 +280,13 @@ async def _seed_defaults():
         # this branch to the insert and duplicated every stock sequence on every load.
         existing = await db.drip_sequences.find_one(
             {"name": seq["name"], "created_by": "system"}, {"_id": 0})
+        if existing is None:
+            # A3: the name may already belong to a hand-made sequence. The lookup
+            # above only sees `created_by: "system"`, so without this the seeder
+            # would insert a system TWIN beside the owner's own sequence and both
+            # would sit in the list under the same name.
+            if await db.drip_sequences.find_one({"name": seq["name"]}, {"_id": 0}) is not None:
+                continue                      # the owner owns this name — hands off
         if existing is not None:
             if existing.get("customised"):
                 continue                      # the owner owns this one now — hands off
@@ -296,6 +304,7 @@ async def _seed_defaults():
             await db.drip_sequences.insert_one({
                 "sequence_id": f"drip_{uuid.uuid4().hex[:10]}",
                 **seq,
+                "name_lower": seq["name"].lower(),
                 "created_by": "system",
                 "customised": False,
                 "created_at": now_iso,
