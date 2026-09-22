@@ -8,6 +8,7 @@ import MailAddressSheet from '../../components/mail/MailAddressSheet';
 import ManualMailRunBuilder from '../../components/mail/ManualMailRunBuilder';
 import TodayPostQueue from '../../components/mail/TodayPostQueue';
 import GapReportPanel from '../../components/mail/GapReportPanel';
+import ToPostQueue from '../../components/mail/ToPostQueue';
 import { useDataSync } from '../../lib/dataSync';
 
 const inr = (n) => '₹' + Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 });
@@ -15,7 +16,14 @@ const inr = (n) => '₹' + Number(n || 0).toLocaleString('en-IN', { maximumFract
 const PIECES = ['brochure', 'sample', 'newsletter', 'other'];
 const STATUS_COLOR = { planned: '#9A6A15', posted: '#1E5AA8', closed: '#2E7D5B' };
 
+// The three jobs this page really holds: what has to go into the post today
+// (across every run and drip), the runs and areas that generate it, and the
+// materials both of them choose from. They were one long scroll; the posting
+// queue is the one with a deadline, so it leads.
+const TABS = [['to-post', 'To post'], ['runs', 'Runs & areas'], ['materials', 'Materials']];
+
 export default function OfflineMail() {
+  const [tab, setTab] = useState('to-post');
   const [areas, setAreas] = useState([]);
   const [runs, setRuns] = useState([]);
   const [analytics, setAnalytics] = useState({ runs: [], totals: {} });
@@ -169,7 +177,30 @@ export default function OfflineMail() {
           </button>
         </div>
 
-        {loading ? (
+        <div className="flex items-center gap-1 border-b border-[var(--border-color)] mb-6">
+          {TABS.map(([k, label]) => (
+            <button key={k} onClick={() => setTab(k)} data-testid={`offline-mail-tab-${k}`}
+              className={`h-9 px-3.5 text-[13px] font-semibold border-b-2 -mb-px transition-colors ${
+                tab === k ? 'border-[#e94560] text-[#e94560]'
+                  : 'border-transparent text-[var(--text-secondary)] hover:text-[#e94560]'}`}>
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {/* D5: the cross-run posting queue doesn't wait on the runs/areas load —
+            it fetches its own rows. */}
+        {tab === 'to-post' && (
+          <ToPostQueue onOpenSchool={(schoolId) => schoolId && navigate(`/school-profile/${schoolId}`)} />
+        )}
+
+        {tab === 'materials' && (
+          <div className={`${card} p-5 text-sm text-[var(--text-muted)]`} data-testid="offline-mail-materials-placeholder">
+            The shared Materials list lands here — drip steps and manual mail runs will both pick from it.
+          </div>
+        )}
+
+        {tab === 'runs' && (loading ? (
           <div className="py-16 text-center text-[var(--text-muted)]">Loading…</div>
         ) : (
           <div className="grid gap-6">
@@ -377,7 +408,7 @@ export default function OfflineMail() {
               </div>
             </div>
           </div>
-        )}
+        ))}
       </div>
 
       {/* NEW RUN MODAL */}

@@ -48,6 +48,17 @@ export default function DispatchTracking() {
   const textSec = 'text-[var(--text-secondary)]';
   const textMuted = 'text-[var(--text-muted)]';
 
+  // D4: whether a piece really went into the post is the mail TOUCH's fact, not
+  // the dispatch row's — the API derives `verify_status`/`needs_dispatch` from
+  // the linked touch and copies its posting date down. Receiving stays a
+  // dispatch-level fact (markReceived below is unchanged).
+  const sentLabel = (d) => (
+    d.verify_status === 'sent' ? `posted ${d.sent_date || ''}`.trim()
+      : d.verify_status === 'needs_address' ? 'needs address'
+        : d.verify_status === 'not_sent' ? `not posted${d.reason ? ` — ${d.reason}` : ''}`
+          : d.needs_dispatch ? 'to post'
+            : d.sent_date ? `sent ${d.sent_date}` : '—');
+
   const fetchDispatches = async () => {
     try {
       const res = await dispatchApi.getAll();
@@ -246,6 +257,11 @@ export default function DispatchTracking() {
                               {d.dispatched_without_payment && (
                                 <span className="text-[11px] px-2 py-0.5 rounded bg-amber-500/20 text-amber-500 font-medium whitespace-nowrap" title={d.payment_pending_reason || ''}>Unpaid</span>
                               )}
+                              <span className={`text-[10px] ${d.verify_status === 'needs_address' || d.needs_dispatch ? 'text-[#9A6A15]' : textMuted} whitespace-nowrap`}
+                                title="Posting state, from the mail touch this dispatch is linked to"
+                                data-testid={`dispatch-post-state-${d.dispatch_id}`}>
+                                {sentLabel(d)}
+                              </span>
                             </div>
                           )}
                         </td>
