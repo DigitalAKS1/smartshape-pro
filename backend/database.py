@@ -235,6 +235,10 @@ async def connect_db():
     await db.whatsapp_scheduled.create_index([("phone", 1), ("status", 1)], background=True)
     await db.email_campaigns.create_index([("status", 1), ("created_at", -1)], background=True)
     await db.email_scheduled.create_index([("campaign_id", 1), ("status", 1)], background=True)
+    # Sequence names are deduped case-insensitively on create (D7). Deliberately
+    # NOT unique: legacy rows written before `name_lower` existed, and the seeder's
+    # historical system twin, would make a unique index fail at startup.
+    await _i(db.drip_sequences.create_index("name_lower", background=True))
     await db.drip_enrollments.create_index([("lead_id", 1), ("status", 1)], background=True)
     await db.drip_enrollments.create_index([("sequence_id", 1), ("status", 1)], background=True)
     await db.drip_enrollments.create_index("next_step_at", background=True)

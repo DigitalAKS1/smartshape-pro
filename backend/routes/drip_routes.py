@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException, Request
 from datetime import datetime, timezone, timedelta
 import asyncio
+import re
 import uuid
 
 from database import db
@@ -354,16 +355,43 @@ async def create_sequence(request: Request):
     user = await get_current_user(request)
     require_module(user, "leads", "read_write")
     body = await request.json()
-    if not body.get("name"):
+    if not (body.get("name") or "").strip():
         raise HTTPException(400, "name is required")
+    name = body["name"].strip()
+    steps = _normalise_steps(body.get("steps", []))
+
+    # Duplicate guard (D7) — the same belt-and-braces shape as the quotation one
+    # (quotation_routes.py:506-518), because the owner ended up with 2-3 copies of
+    # the same sequence: Enter in the name box fires save() again while the first
+    # POST is still in flight, and this route used to insert unconditionally.
+    # `drip_sequences` has no soft delete (DELETE removes the document), so there
+    # is no is_deleted flag to exclude here.
+    # `name_lower` is written on create/update, but legacy documents predate it —
+    # the anchored case-insensitive regex catches those too.
+    existing = await db.drip_sequences.find_one(
+        {"$or": [{"name_lower": name.lower()},
+                 {"name": {"$regex": f"^{re.escape(name)}$", "$options": "i"}}]},
+        {"_id": 0})
+    if existing is not None:
+        # (b) Idempotency window: same creator + same name + same step count within
+        # 30s is one intent double-submitted — hand back the document we just made.
+        recent_cutoff = (datetime.now(timezone.utc) - timedelta(seconds=30)).isoformat()
+        if (existing.get("created_by") == user["email"]
+                and (existing.get("created_at") or "") >= recent_cutoff
+                and len(existing.get("steps") or []) == len(steps)):
+            return await _enrich(existing)
+        # (a) A deliberate second sequence under a name already in use.
+        raise HTTPException(409, f'A sequence called "{existing.get("name")}" already exists')
+
     now_iso = datetime.now(timezone.utc).isoformat()
     doc = {
         "sequence_id": f"drip_{uuid.uuid4().hex[:10]}",
-        "name": body["name"].strip(),
+        "name": name,
+        "name_lower": name.lower(),
         "description": body.get("description", "").strip(),
         "trigger": body.get("trigger", "manual"),
         "filter_designation": (body.get("filter_designation") or "").strip() or None,
-        "steps": _normalise_steps(body.get("steps", [])),
+        "steps": steps,
         "is_active": bool(body.get("is_active", True)),
         "created_by": user["email"],
         "created_at": now_iso,
@@ -385,6 +413,13 @@ async def update_sequence(sequence_id: str, request: Request):
     for field in ("name", "description", "trigger", "filter_designation", "is_active"):
         if field in body:
             updates[field] = body[field]
+    if "name" in body:
+        # Keep the dedupe key true after a rename, or the next create could twin it.
+        nm = (body.get("name") or "").strip()
+        if not nm:
+            raise HTTPException(400, "name is required")
+        updates["name"] = nm
+        updates["name_lower"] = nm.lower()
     if "steps" in body:
         updates["steps"] = _normalise_steps(body["steps"])
     # Editing the CONTENT makes this sequence the owner's, so the default seed stops

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   Zap, Plus, ChevronDown, Pencil, Trash2, Paperclip,
   RefreshCw, X, Upload, Loader2, FileText, Check, ChevronRight,
@@ -24,6 +24,11 @@ export default function DripsTab({ tk, drips, setDrips }) {
   const [deleting, setDeleting]      = useState(false);
   const [form, setForm]              = useState(BLANK_FORM);
   const [saving, setSaving]          = useState(false);
+  // A ref, not the `saving` state: a second Enter/click in the same tick reads the
+  // state from the render that is already on screen (still false) and posts again,
+  // which is exactly how the duplicate sequences were created.
+  const savingRef                    = useRef(false);
+  const nameRef                      = useRef(null);
   const [attachments, setAttachments]      = useState([]);
   const [pickingFor, setPickingFor]        = useState(null);
   const [loadingAttach, setLoadingAttach]  = useState(false);
@@ -154,8 +159,10 @@ export default function DripsTab({ tk, drips, setDrips }) {
   }
 
   async function save() {
+    if (savingRef.current) return;   // guard against double-submit creating duplicate sequences
     if (!form.name.trim()) { toast.error('Sequence name is required'); return; }
     if (form.steps.length === 0) { toast.error('Add at least one step'); return; }
+    savingRef.current = true;
     setSaving(true);
     try {
       const payload = {
@@ -191,9 +198,17 @@ export default function DripsTab({ tk, drips, setDrips }) {
         toast.success('Drip sequence created');
       }
       closeDialog();
-    } catch {
-      toast.error(editingSeq ? 'Failed to update sequence' : 'Failed to create sequence');
+    } catch (e) {
+      // 409 = a sequence by that name already exists. Say so and put the cursor
+      // back in the name box instead of a generic failure.
+      if (e?.response?.status === 409) {
+        toast.error(e?.response?.data?.detail || 'A sequence with that name already exists');
+        nameRef.current?.focus();
+      } else {
+        toast.error(editingSeq ? 'Failed to update sequence' : 'Failed to create sequence');
+      }
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
   }
@@ -415,9 +430,11 @@ export default function DripsTab({ tk, drips, setDrips }) {
             <div>
               <Label className={`${tk.t2} text-xs mb-1.5 block`}>Sequence Name <span className="text-red-400">*</span></Label>
               <Input className={`h-10 ${tk.inp}`} placeholder="e.g. Teacher Welcome Series"
+                ref={nameRef}
+                data-testid="seq-name"
                 value={form.name}
                 onChange={e => setForm(p => ({ ...p, name: e.target.value }))}
-                onKeyDown={e => { if (e.key === 'Enter') save(); }} />
+                onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); save(); } }} />
             </div>
             <div>
               <Label className={`${tk.t2} text-xs mb-1.5 block`}>Description <span className={`${tk.tm} font-normal`}>(optional)</span></Label>
