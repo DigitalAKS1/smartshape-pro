@@ -218,6 +218,22 @@ def test_create_and_rename_keep_name_lower_true(db):
     _run(go())
 
 
+def test_renaming_onto_another_sequences_name_is_a_409(db):
+    # The create guard alone is not enough: an Edit → rename could otherwise
+    # recreate the exact duplicate-in-the-list state it exists to prevent.
+    async def go():
+        first = await drip.create_sequence(FakeRequest(dict(PAYLOAD)))
+        second = await drip.create_sequence(FakeRequest({**PAYLOAD, "name": "Pitch v2"}))
+        with pytest.raises(HTTPException) as exc:
+            await drip.update_sequence(second["sequence_id"],
+                                       FakeRequest({"name": " principal PITCH "}))
+        assert exc.value.status_code == 409
+        # Untouched; and a no-op rename of itself is still fine.
+        assert (await db.drip_sequences.find_one({"sequence_id": second["sequence_id"]}))["name"] == "Pitch v2"
+        await drip.update_sequence(first["sequence_id"], FakeRequest({"name": "Principal Pitch"}))
+    _run(go())
+
+
 # ── The seeder (A3) ─────────────────────────────────────────────────────────
 
 def test_the_seeder_does_not_twin_a_hand_made_sequence_of_the_same_name(db):

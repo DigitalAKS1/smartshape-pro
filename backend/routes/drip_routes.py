@@ -427,6 +427,15 @@ async def update_sequence(sequence_id: str, request: Request):
         nm = (body.get("name") or "").strip()
         if not nm:
             raise HTTPException(400, "name is required")
+        # A rename must not land on ANOTHER sequence's name — that would recreate
+        # the duplicate-in-the-list state the create guard exists to prevent.
+        clash = await db.drip_sequences.find_one(
+            {"sequence_id": {"$ne": sequence_id},
+             "$or": [{"name_lower": nm.lower()},
+                     {"name": {"$regex": f"^{re.escape(nm)}$", "$options": "i"}}]},
+            {"_id": 0, "name": 1})
+        if clash is not None:
+            raise HTTPException(409, f'A sequence called "{clash.get("name")}" already exists')
         updates["name"] = nm
         updates["name_lower"] = nm.lower()
     if "steps" in body:
