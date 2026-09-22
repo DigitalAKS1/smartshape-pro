@@ -1034,8 +1034,16 @@ async def mail_queue_stickers(request: Request):
     await get_current_user(request)
     qp = request.query_params
     today = qp.get("date") or datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    touches = await _queued_touches(today)
-    ids = [t["school_id"] for t in touches]
+    # "Print stickers for selected": the To-post queue hands over exactly the
+    # envelopes that were ticked — which span runs and may not be due today —
+    # so an explicit selection replaces the day's queue rather than filtering it.
+    picked = [t for t in (qp.get("touch_ids") or "").split(",") if t.strip()]
+    if picked:
+        touches = await db.mail_touches.find(
+            {"touch_id": {"$in": [t.strip() for t in picked]}}, {"_id": 0}).to_list(None)
+    else:
+        touches = await _queued_touches(today)
+    ids = [t.get("school_id") for t in touches if t.get("school_id")]
     schools = await db.schools.find({"school_id": {"$in": ids}}, {"_id": 0}).to_list(None)
     schools_by_id = {s["school_id"]: s for s in schools}
     if qp.get("skip_incomplete") in ("1", "true", "yes"):
@@ -1287,6 +1295,200 @@ async def mail_gap_report(request: Request):
     return {"group_by": group_by, "rows": rows, "totals": totals,
             "reasons": sorted([{"reason": k, "count": v} for k, v in reasons.items()],
                               key=lambda x: -x["count"])}
+
+
+# ── The cross-run "To post" queue (D5) ───────────────────────────────────────
+# NOTE: this static path MUST stay above /mail-runs/{run_id} (below) or FastAPI
+# matches "to-post" as a run_id and this endpoint is never reached.
+_TO_POST_CAP = 2000
+
+
+def _addr_ok(school: dict) -> bool:
+    """A piece can only be posted if there is somewhere to post it to."""
+    return bool((school.get("address") or "").strip()
+                and ((school.get("pincode") or "").strip()
+                     or (school.get("city") or "").strip()))
+
+
+def _overdue_days(planned: str, as_of: str) -> int:
+    """Whole days a piece is past its planned posting date, never negative."""
+    if not planned:
+        return 0
+    try:
+        p = datetime.strptime(str(planned)[:10], "%Y-%m-%d")
+        a = datetime.strptime(str(as_of)[:10], "%Y-%m-%d")
+    except ValueError:
+        return 0
+    return max(0, (a - p).days)
+
+
+@router.get("/mail-runs/to-post")
+async def mail_to_post(request: Request):
+    """D5: everything owed to the post office, across every run and every drip.
+
+    One list, one tick. A rep sees only pieces going to schools she can see
+    (`_schools_visibility_or`) plus flagged pieces for her own contacts
+    (`_contacts_visibility_or`); an admin sees all. Sorted overdue-first because
+    that is the order the work actually matters in."""
+    user = await get_current_user(request)
+    qp = request.query_params
+    today = qp.get("as_of") or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    status = (qp.get("status") or "").strip()
+    filt = {}
+    if status == "overdue":
+        filt["verify_status"] = {"$in": ["pending", "needs_address"]}
+        filt["planned_date"] = {"$lt": today, "$ne": ""}
+    elif status:
+        filt["verify_status"] = status
+    else:
+        filt["verify_status"] = {"$in": ["pending", "needs_address"]}
+    d_from, d_to = qp.get("from"), qp.get("to")
+    if d_from or d_to:
+        rng = filt.get("planned_date") if isinstance(filt.get("planned_date"), dict) else {}
+        if d_from:
+            rng["$gte"] = d_from
+        if d_to:
+            rng["$lte"] = d_to
+        filt["planned_date"] = rng
+    if qp.get("owner"):
+        filt["owner"] = qp["owner"]
+
+    touches = await db.mail_touches.find(filt, {"_id": 0}).to_list(None)
+    runs = {r["run_id"]: r for r in await db.mail_runs.find({}, {"_id": 0}).to_list(None)}
+
+    if qp.get("sequence_id"):
+        want = qp["sequence_id"]
+        touches = [t for t in touches
+                   if (t.get("sequence_id")
+                       or runs.get(t.get("run_id"), {}).get("sequence_id", "")) == want]
+
+    school_ids = [t["school_id"] for t in touches if t.get("school_id")]
+    schools = {s["school_id"]: s for s in await db.schools.find(
+        {"school_id": {"$in": school_ids}}, {"_id": 0}).to_list(None)}
+
+    # Visibility. Reps are scoped by the SAME helpers the CRM lists use, so a
+    # piece a rep can tick here is exactly a piece she can see elsewhere - never
+    # a silent "skipped". A school-less (needs_address) piece is scoped by its
+    # contacts instead, since there is no school to scope it by.
+    if get_team(user) != "admin" and user.get("role") != "admin":
+        email = user["email"]
+        vis_schools = {s["school_id"] for s in await db.schools.find(
+            _merge_or({}, await _schools_visibility_or(email)),
+            {"_id": 0, "school_id": 1}).to_list(None)}
+        vis_contacts = {c["contact_id"] for c in await db.contacts.find(
+            _merge_or({}, await _contacts_visibility_or(email)),
+            {"_id": 0, "contact_id": 1}).to_list(None)}
+        touches = [t for t in touches
+                   if (t.get("school_id") and t["school_id"] in vis_schools)
+                   or (not t.get("school_id")
+                       and set(t.get("contact_ids") or []) & vis_contacts)]
+
+    q = (qp.get("q") or "").strip().lower()
+    rows = []
+    for t in touches:
+        run = runs.get(t.get("run_id"), {})
+        school = schools.get(t.get("school_id", ""), {})
+        row = {
+            "touch_id": t.get("touch_id", ""),
+            "run_id": t.get("run_id", ""),
+            "run_name": run.get("name", "(deleted run)"),
+            "sequence_id": t.get("sequence_id") or run.get("sequence_id", ""),
+            "sequence_name": run.get("sequence_name", ""),
+            "school_id": t.get("school_id", ""),
+            "school_name": school.get("school_name", "") if t.get("school_id") else "",
+            "address_ok": _addr_ok(school) if t.get("school_id") else False,
+            "contact_ids": t.get("contact_ids") or [],
+            "recipient_names": t.get("recipient_names") or [],
+            "item_name": t.get("item_name", "") or t.get("piece_type", ""),
+            "piece_type": t.get("piece_type", "") or run.get("piece_type", ""),
+            "planned_date": t.get("planned_date", "") or "",
+            "overdue_days": _overdue_days(t.get("planned_date", ""), today),
+            "verify_status": t.get("verify_status", "pending"),
+            "posted_at": t.get("posted_at"),
+            "reason": t.get("reason", ""),
+            "owner": t.get("owner", ""),
+        }
+        if q:
+            hay = " ".join([row["school_name"], row["item_name"], row["sequence_name"],
+                            row["run_name"], row["owner"], *row["recipient_names"]]).lower()
+            if q not in hay:
+                continue
+        rows.append(row)
+
+    rows.sort(key=lambda r: (-r["overdue_days"], r["planned_date"] or "9999-99-99",
+                             r["school_name"]))
+    capped = len(rows) > _TO_POST_CAP
+    shown = rows[:_TO_POST_CAP]
+
+    totals = {s: 0 for s in VERIFY_STATUSES}
+    for r in rows:
+        totals[r["verify_status"]] = totals.get(r["verify_status"], 0) + 1
+    totals["overdue"] = sum(1 for r in rows if r["overdue_days"] > 0)
+    totals["shown"] = len(shown)
+    totals["capped"] = capped
+    return {"rows": shown, "totals": totals, "as_of": today}
+
+
+# NOTE: static path — MUST stay above /mail-runs/{run_id} for the same reason.
+@router.post("/mail-runs/verify-touches")
+async def verify_touches(request: Request):
+    """Tick a cross-run selection in ONE call.
+
+    The To-post queue spans every run, so a selection usually does too, and
+    verification is still addressed per run (`_do_verify`). Rather than make the
+    browser fire one request per run — a half-applied batch the moment one of
+    them fails — the server groups the chosen touches by the run each one
+    ACTUALLY belongs to (never a run id supplied by the caller) and walks the
+    one verification path per group (D5: no second verification path).
+
+    Body: `{rows: [{touch_id, verify_status, posted_date?, reason?}], posted_date?}`
+    or `{undo: true, touch_ids: [...]}`.
+    """
+    user = await get_current_user(request)
+    body = await _parse_json_body(request)
+
+    if body.get("undo"):
+        wanted = [str(i) for i in (body.get("touch_ids") or []) if i]
+        rows_by_id = {}
+    else:
+        rows = body.get("rows") or []
+        # Validate the WHOLE batch before writing anything: a bad status must not
+        # leave half the selection ticked.
+        for r in rows:
+            if r.get("verify_status") not in VERIFY_STATUSES:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid verify_status: {r.get('verify_status')}")
+        rows_by_id = {str(r.get("touch_id")): r for r in rows if r.get("touch_id")}
+        wanted = list(rows_by_id.keys())
+
+    if not wanted:
+        return {"results": [], "updated": 0, "not_found": []}
+
+    found = await db.mail_touches.find(
+        {"touch_id": {"$in": wanted}}, {"_id": 0, "touch_id": 1, "run_id": 1}).to_list(None)
+    run_of = {t["touch_id"]: t.get("run_id", "") for t in found}
+    not_found = [tid for tid in wanted if tid not in run_of]
+
+    groups = {}
+    for tid in wanted:                      # keep the caller's order inside a run
+        rid = run_of.get(tid)
+        if not rid:
+            continue
+        groups.setdefault(rid, []).append(tid)
+
+    results, updated = [], 0
+    for run_id, ids in groups.items():
+        if body.get("undo"):
+            payload = {"undo": True, "touch_ids": ids}
+        else:
+            payload = {"posted_date": body.get("posted_date") or "",
+                       "rows": [rows_by_id[tid] for tid in ids]}
+        run = await _do_verify(run_id, user, payload)
+        results.append({"run_id": run_id, "touch_ids": ids, "run": run})
+        updated += len(ids)
+    return {"results": results, "updated": updated, "not_found": not_found}
 
 
 # NOTE: this static path MUST stay above /mail-runs/{run_id} or FastAPI matches
@@ -1574,6 +1776,9 @@ async def _do_verify(run_id: str, user: dict, body: dict):
             {"run_id": run_id, "touch_id": {"$in": ids}},
             {"$set": {"verify_status": "pending", "posted_at": None,
                       "verified_by": "", "verified_at": None, "reason": ""}})
+        # D4: the dispatch is updated FROM the touch, never the other way round.
+        await db.physical_dispatches.update_many(
+            {"touch_id": {"$in": ids}}, {"$set": {"sent_date": "", "courier_name": ""}})
         for tid in ids:
             await db.engagement_events.delete_many({"dedup_key": f"mailtouch:{tid}"})
         return await _recompute_run_counts(run_id)
@@ -1606,6 +1811,16 @@ async def _do_verify(run_id: str, user: dict, body: dict):
         _set["posted_at"] = (f"{actual}T00:00:00+00:00" if actual else posted_iso) \
             if status == "sent" else None
         await db.mail_touches.update_one({"touch_id": tid}, {"$set": _set})
+        # D4: one posting, one record of truth — every dispatch linked to this
+        # touch takes its posted state FROM the touch.
+        if status == "sent":
+            await db.physical_dispatches.update_many(
+                {"touch_id": tid},
+                {"$set": {"sent_date": str(_set["posted_at"] or "")[:10],
+                          "courier_name": run.get("courier", "") or ""}})
+        else:
+            await db.physical_dispatches.update_many(
+                {"touch_id": tid}, {"$set": {"sent_date": ""}})
         if status == "sent" and not was_sent:
             newly_sent.append({**touch, "posted_at": _set["posted_at"]})
 

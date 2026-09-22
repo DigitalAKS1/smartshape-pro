@@ -402,6 +402,14 @@ export const mailRuns = {
   undoVerify: (id, touch_ids) => API.post(`/mail-runs/${id}/verify`, { undo: true, touch_ids }),
   replan: (id, payload) => API.post(`/mail-runs/${id}/replan`, payload),
   gapReport: (params = {}) => API.get('/mail-runs/gap-report', { params }),
+  // D5: everything owed to the post office, across every run and every drip.
+  // params: {status, sequence_id, owner, from, to, q}
+  toPost: (params = {}) => API.get('/mail-runs/to-post', { params }),
+  // Tick a cross-run selection in ONE call: the server groups the touches by the
+  // run each one really belongs to and walks the same _do_verify path per run.
+  // rows: [{touch_id, verify_status, posted_date?, reason?}]
+  verifyTouches: (rows, posted_date = '') => API.post('/mail-runs/verify-touches', { rows, posted_date }),
+  undoTouches: (touch_ids) => API.post('/mail-runs/verify-touches', { undo: true, touch_ids }),
   bulkTagSchools: (data) => API.post('/schools/bulk-tag', data),
   // Thin cross-owner search for the lead and quotation pickers: name, city and
   // owner only. getAll() is own-scoped, which is right for the CRM list and is
