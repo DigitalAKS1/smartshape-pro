@@ -179,6 +179,158 @@ def test_repair_is_callable_with_an_explicit_db(db):
     _run(go())
 
 
+class _BoomDB:
+    """Real db everywhere except one collection, which explodes on access — a
+    forced failure of the mailer leg without stubbing half of mongomock."""
+
+    def __init__(self, real, boom_on):
+        object.__setattr__(self, "_real", real)
+        object.__setattr__(self, "_boom", boom_on)
+
+    def __getattr__(self, name):
+        if name == object.__getattribute__(self, "_boom"):
+            raise RuntimeError("mail_runs is unavailable")
+        return getattr(object.__getattribute__(self, "_real"), name)
+
+
+def test_a_failed_mailer_leg_is_logged_and_left_explainable(db, monkeypatch, caplog):
+    async def go():
+        monkeypatch.setattr(crm, "db", _BoomDB(db, "mail_runs"))
+        with caplog.at_level("WARNING", logger="crm"):
+            dispatch_id = await crm.create_physical_from_drip(
+                {"lead_id": "l1", "contact_id": "c1", "contact_name": "R Sharma",
+                 "company_name": "DPS", "school_id": "s1", "assigned_to": "p@x.in"},
+                "catalogue", "Principal Pitch", sequence_id="seq1",
+                enrollment_id="e1", step_number=3, planned_date=TODAY)
+        # The dispatch and task still exist — the mailer stays best-effort.
+        d = await db.physical_dispatches.find_one({"dispatch_id": dispatch_id}, {"_id": 0})
+        assert d is not None and not d.get("touch_id")
+        # ...but the failure is no longer silent.
+        assert d.get("touch_link_error"), "a derived needs_dispatch=False must be explainable"
+        assert "RuntimeError" in d["touch_link_error"]
+        assert d.get("touch_link_failed_at")
+        blob = " ".join(r.getMessage() for r in caplog.records)
+        assert "e1" in blob and "step=3" in blob and dispatch_id in blob
+    _run(go())
+
+
+def test_addresses_sheet_shows_the_person_not_a_deleted_school(db):
+    async def go():
+        await crm.create_physical_from_drip(
+            {"lead_id": "", "contact_id": "c9", "contact_name": "Asha Rao",
+             "company_name": "", "school_id": "", "assigned_to": "bde@smartshape.in"},
+            "brochure", "Quiz Engage", material_name="Quiz flyer",
+            sequence_id="seq2", enrollment_id="e9", step_number=1, planned_date=TODAY)
+        t = await db.mail_touches.find_one({}, {"_id": 0})
+        out = await crm.get_mail_run_addresses(t["run_id"], FakeRequest())
+        row = out["rows"][0]
+        assert row["school_name"] == "Asha Rao", "show who it is for"
+        assert row["recipient_names"] == ["Asha Rao"]
+        assert row["address"] == "No address"
+        assert "(deleted school)" not in row["school_name"]
+        assert row["missing"] is True
+        assert row["verify_status"] == "needs_address"
+    _run(go())
+
+
+def test_stickers_never_print_a_needs_address_piece(db, monkeypatch):
+    async def go():
+        await db.schools.insert_one({"school_id": "s1", "school_name": "DPS",
+                                     "address": "Rohini", "city": "Delhi",
+                                     "pincode": "110085", "is_deleted": False})
+        await crm.create_physical_from_drip(
+            {"lead_id": "l1", "contact_id": "c1", "contact_name": "R Sharma",
+             "company_name": "DPS", "school_id": "s1", "assigned_to": "p@x.in"},
+            "brochure", "Quiz Engage", sequence_id="seq2", enrollment_id="e1",
+            step_number=1, planned_date=TODAY)
+        await crm.create_physical_from_drip(
+            {"lead_id": "", "contact_id": "c9", "contact_name": "Asha Rao",
+             "company_name": "", "school_id": "", "assigned_to": "bde@smartshape.in"},
+            "brochure", "Quiz Engage", sequence_id="seq2", enrollment_id="e9",
+            step_number=1, planned_date=TODAY)
+        parked = await db.mail_touches.find_one({"school_id": ""}, {"_id": 0})
+
+        seen = {}
+
+        def _fake_pdf(touches, schools_by_id, company, base_url, **kw):
+            seen["touches"] = list(touches)
+            return b"%PDF-"
+        monkeypatch.setattr(crm, "_build_stickers_pdf", _fake_pdf)
+
+        # NO skip_incomplete: the parked piece must still be left out.
+        await crm.mail_run_stickers(parked["run_id"], FakeRequest())
+        ids = [t["touch_id"] for t in seen["touches"]]
+        assert parked["touch_id"] not in ids, "a needs_address piece has nothing to print"
+        assert len(ids) == 1
+        # ...and it must not be stamped as printed either.
+        again = await db.mail_touches.find_one({"touch_id": parked["touch_id"]}, {"_id": 0})
+        assert again["printed_at"] is None
+    _run(go())
+
+
+def test_undo_parks_a_school_less_piece_back_at_needs_address(db):
+    async def go():
+        await crm.create_physical_from_drip(
+            {"lead_id": "", "contact_id": "c9", "contact_name": "Asha Rao",
+             "company_name": "", "school_id": "", "assigned_to": "bde@smartshape.in"},
+            "brochure", "Quiz Engage", sequence_id="seq2", enrollment_id="e9",
+            step_number=1, planned_date=TODAY)
+        t = await db.mail_touches.find_one({}, {"_id": 0})
+        await db.mail_touches.update_one(
+            {"touch_id": t["touch_id"]},
+            {"$set": {"verify_status": "sent", "posted_at": "2026-09-20T00:00:00+00:00"}})
+
+        run = await crm._do_verify(t["run_id"], ADMIN,
+                                   {"undo": True, "touch_ids": [t["touch_id"]]})
+        back = await db.mail_touches.find_one({"touch_id": t["touch_id"]}, {"_id": 0})
+        assert back["verify_status"] == "needs_address", \
+            "undo must not drop an unaddressable envelope into the To-post queue"
+        assert back["posted_at"] is None
+        assert run["counts"]["needs_address"] == 1 and run["counts"]["pending"] == 0
+    _run(go())
+
+
+def test_repair_recomputes_the_counts_of_the_runs_it_changed(db):
+    async def go():
+        await crm.create_physical_from_drip(
+            {"lead_id": "", "contact_id": "c9", "contact_name": "Asha Rao",
+             "company_name": "", "school_id": "", "assigned_to": "bde@smartshape.in"},
+            "brochure", "Quiz Engage", sequence_id="seq2", enrollment_id="e9",
+            step_number=1, planned_date=TODAY)
+        t = await db.mail_touches.find_one({}, {"_id": 0})
+        run = await crm._recompute_run_counts(t["run_id"])
+        assert run["counts"]["needs_address"] == 1
+
+        await db.schools.insert_one({"school_id": "s5", "school_name": "Lotus",
+                                     "address": "Noida", "is_deleted": False})
+        await db.contacts.insert_one({"contact_id": "c9", "name": "Asha Rao",
+                                      "school_id": "s5"})
+        out = await crm.repair_needs_address_touches(db)
+        assert out["repaired"] == 1 and out["runs_recounted"] == 1
+        run = await db.mail_runs.find_one({"run_id": t["run_id"]}, {"_id": 0})
+        assert run["counts"]["needs_address"] == 0, "a stale tally strands the run"
+        assert run["counts"]["pending"] == 1
+    _run(go())
+
+
+def test_repair_ignores_a_soft_deleted_school(db):
+    async def go():
+        await crm.create_physical_from_drip(
+            {"lead_id": "", "contact_id": "c9", "contact_name": "Asha Rao",
+             "company_name": "", "school_id": "", "assigned_to": "bde@smartshape.in"},
+            "brochure", "Quiz Engage", sequence_id="seq2", enrollment_id="e9",
+            step_number=1, planned_date=TODAY)
+        await db.schools.insert_one({"school_id": "s6", "school_name": "Closed",
+                                     "address": "X", "is_deleted": True})
+        await db.contacts.insert_one({"contact_id": "c9", "name": "Asha Rao",
+                                      "school_id": "s6"})
+        out = await crm.repair_needs_address_touches(db)
+        assert out["repaired"] == 0
+        t = await db.mail_touches.find_one({}, {"_id": 0})
+        assert t["verify_status"] == "needs_address"
+    _run(go())
+
+
 def test_dispatch_list_derives_needs_dispatch_from_its_touch(db):
     async def go():
         await db.schools.insert_one({"school_id": "s1", "school_name": "DPS",
