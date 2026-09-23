@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { toast } from 'sonner';
 import { Printer, Undo2, MapPinOff, Search } from 'lucide-react';
 import { mailRuns } from '../../lib/api';
@@ -21,6 +21,9 @@ import useBulkSelect from '../../hooks/useBulkSelect';
  * are shown flagged rather than hidden, and the badge opens the school (or the
  * contact) so the gap can be filled — the next executor pass moves the row
  * back to `pending` by itself.
+ *
+ * Props: `onOpenSchool(schoolId, contactIds)` — `schoolId` is `""` for a
+ * school-less piece, and the caller falls back to the first contact.
  */
 const CHIPS = [
   ['', 'To post'],
@@ -32,11 +35,14 @@ const CHIPS = [
 ];
 
 const today = () => new Date().toISOString().slice(0, 10);
+const touchId = (r) => r.touch_id;
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 export default function ToPostQueue({ onOpenSchool }) {
   const { isDark } = useTheme();
   const [rows, setRows] = useState([]);
   const [totals, setTotals] = useState({});
+  const [totalsAll, setTotalsAll] = useState({});
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState('');
@@ -54,21 +60,40 @@ export default function ToPostQueue({ onOpenSchool }) {
     return () => clearTimeout(id);
   }, [q]);
 
+  // Every row this session has SEEN, keyed by touch id. It is the universe
+  // `useBulkSelect` prunes against: passing the current page's rows would drop
+  // a ticked envelope the moment a filter stopped matching it, so a search
+  // typed after ticking would silently shrink the batch. With the union, a
+  // selection hidden by a filter stays selected and is counted in
+  // `hiddenCount` — while every action still sends `visibleIds` only, so
+  // nothing is ever acted on out of sight. Reset when the selection is.
+  const seenRef = useRef(new Map());
+  const [seenRows, setSeenRows] = useState([]);
+  const forgetSeen = useCallback(() => {
+    seenRef.current = new Map();
+    setSeenRows([]);
+  }, []);
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
       const r = await mailRuns.toPost({
         status, sequence_id: sequenceId, owner, from, to, q: debouncedQ,
       });
-      setRows(r.data?.rows || []);
+      const fresh = r.data?.rows || [];
+      setRows(fresh);
       setTotals(r.data?.totals || {});
+      setTotalsAll(r.data?.totals_all || r.data?.totals || {});
+      fresh.forEach(row => seenRef.current.set(row.touch_id, row));
+      setSeenRows(Array.from(seenRef.current.values()));
     } catch { toast.error('Could not load the posting queue'); }
     finally { setLoading(false); }
   }, [status, sequenceId, owner, from, to, debouncedQ]);
   useEffect(() => { load(); }, [load]);
   useDataSync('mail', load);
 
-  const sel = useBulkSelect(rows, (r) => r.touch_id, rows);
+  const sel = useBulkSelect(rows, touchId, seenRows);
+  const clearSelection = useCallback(() => { sel.clear(); forgetSeen(); }, [sel, forgetSeen]);
 
   // Every distinct sequence / owner currently in the queue, for the filters.
   // A filter that is already applied keeps its own option, so choosing
@@ -85,19 +110,39 @@ export default function ToPostQueue({ onOpenSchool }) {
     return Array.from(s);
   }, [rows, owner]);
 
+  // What the SERVER did, not what we asked for: it silently drops an id that
+  // has since been deleted or that this user cannot see, and a toast claiming
+  // "12 marked posted" when 9 landed is how a piece goes missing unnoticed.
+  const reportResult = (data, ids, label) => {
+    const done = data?.updated ?? ids.length;
+    const skipped = (data?.not_found?.length || 0) + (data?.not_visible?.length || 0);
+    const msg = `${plural(done, 'piece')} marked ${label}`
+      + (skipped ? ` · ${skipped} skipped — not found or not yours` : '');
+    if (done === 0 && skipped) toast.error(msg); else toast.success(msg);
+  };
+
   const apply = async (verify_status) => {
     const ids = sel.visibleIds;
     if (!ids.length) { toast.error('Tick the envelopes you posted first'); return; }
+    const label = verify_status === 'sent' ? 'posted' : 'not posted';
+    if (verify_status === 'not_sent' && !reason.trim()) {
+      toast.error('Say why it did not go out'); return;
+    }
+    // Posting is the fact the whole report hangs off, and a mis-click here is
+    // only findable by hand — so it asks once, with the count and the date.
+    if (verify_status === 'sent'
+        && !window.confirm(`Mark ${plural(ids.length, 'piece')} as posted on ${postedDate}?`)) {
+      return;
+    }
     setBusy(true);
     try {
       // ONE call: the server groups these by run and walks _do_verify per run.
-      await mailRuns.verifyTouches(ids.map(touch_id => ({
+      const res = await mailRuns.verifyTouches(ids.map(touch_id => ({
         touch_id, verify_status,
         ...(verify_status === 'not_sent' ? { reason: reason.trim() } : {}),
       })), postedDate);
-      toast.success(`${ids.length} piece${ids.length === 1 ? '' : 's'} marked `
-        + (verify_status === 'sent' ? 'posted' : 'not posted'));
-      sel.clear();
+      reportResult(res?.data, ids, label);
+      clearSelection();
       setReason('');
       await load();
     } catch (e) { toast.error(e?.response?.data?.detail || 'Could not record that'); }
@@ -109,9 +154,9 @@ export default function ToPostQueue({ onOpenSchool }) {
     if (!ids.length) { toast.error('Tick the rows to undo first'); return; }
     setBusy(true);
     try {
-      await mailRuns.undoTouches(ids);
-      toast.success('Reverted to pending');
-      sel.clear();
+      const res = await mailRuns.undoTouches(ids);
+      reportResult(res?.data, ids, 'back to pending');
+      clearSelection();
       await load();
     } catch { toast.error('Undo failed'); }
     finally { setBusy(false); }
@@ -177,7 +222,7 @@ export default function ToPostQueue({ onOpenSchool }) {
             className={`h-7 px-2.5 rounded-full text-[11px] font-semibold border transition-colors ${
               status === v ? 'bg-[#e94560] text-white border-[#e94560]'
                 : `border-[var(--border-color)] ${textSec} hover:text-[#e94560]`}`}>
-            {label}{v && totals[v] != null ? ` · ${totals[v]}` : ''}
+            {label}{v && totalsAll[v] != null ? ` · ${totalsAll[v]}` : ''}
           </button>
         ))}
       </div>
@@ -211,7 +256,7 @@ export default function ToPostQueue({ onOpenSchool }) {
           <span className={`text-[12px] font-semibold ${textPri}`} data-testid="to-post-count">
             {sel.count} selected{sel.hiddenCount ? ` (${sel.hiddenCount} hidden by filter)` : ''}
           </span>
-          <button className={`text-[11px] ${textMuted} hover:text-[#e94560]`} onClick={sel.clear}
+          <button className={`text-[11px] ${textMuted} hover:text-[#e94560]`} onClick={clearSelection}
             data-testid="to-post-clear">Clear</button>
           <input type="date" className={inp} value={postedDate} data-testid="to-post-posted-date"
             onChange={e => setPostedDate(e.target.value)} aria-label="Posted on" />
@@ -220,8 +265,11 @@ export default function ToPostQueue({ onOpenSchool }) {
           <input className={`${inp} w-44`} placeholder="Reason (if not posted)" value={reason}
             onChange={e => setReason(e.target.value)} data-testid="to-post-reason"
             aria-label="Reason it was not posted" />
-          <button className={actBtn} disabled={busy} onClick={() => apply('not_sent')}
-            data-testid="to-post-not-posted">Not posted</button>
+          {/* Disabled until there is a reason: "not posted" with no why is a
+              dead end for whoever reads the gap report next week. */}
+          <button className={actBtn} disabled={busy || !reason.trim()}
+            onClick={() => apply('not_sent')} data-testid="to-post-not-posted"
+            title={reason.trim() ? '' : 'Type a reason first'}>Not posted</button>
           <button className={actBtn} disabled={busy} onClick={undo} data-testid="to-post-undo">
             <Undo2 className="h-3.5 w-3.5" /> Undo
           </button>

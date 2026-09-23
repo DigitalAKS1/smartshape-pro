@@ -6,6 +6,7 @@ import { createRoot } from 'react-dom/client';
 import { act } from 'react';
 import ToPostQueue from '../ToPostQueue';
 import { mailRuns } from '../../../lib/api';
+import { toast } from 'sonner';
 
 global.IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -43,14 +44,26 @@ const ROWS = [
 const TOTALS = { pending: 2, needs_address: 1, sent: 0, not_sent: 0, skipped: 0,
                  overdue: 2, shown: 3, capped: false };
 
+// "Mark posted" asks before it writes; every test that gets that far answers
+// yes unless it is the test about saying no.
+let confirmAnswer = true;
+
 beforeEach(() => {
   jest.clearAllMocks();
+  confirmAnswer = true;
+  window.confirm = jest.fn(() => confirmAnswer);
   mailRuns.toPost.mockImplementation(() =>
-    Promise.resolve({ data: { rows: ROWS, totals: TOTALS, as_of: '2026-09-22' } }));
-  mailRuns.verifyTouches.mockImplementation(() => Promise.resolve({ data: { updated: 0 } }));
-  mailRuns.undoTouches.mockImplementation(() => Promise.resolve({ data: { updated: 0 } }));
+    Promise.resolve({ data: { rows: ROWS, totals: TOTALS, totals_all: TOTALS,
+                              as_of: '2026-09-22' } }));
+  mailRuns.verifyTouches.mockImplementation((rows) =>
+    Promise.resolve({ data: { updated: rows.length, not_found: [], not_visible: [] } }));
+  mailRuns.undoTouches.mockImplementation((ids) =>
+    Promise.resolve({ data: { updated: ids.length, not_found: [], not_visible: [] } }));
   mailRuns.queueStickers.mockImplementation(() => Promise.resolve({ data: new Blob(['x']) }));
 });
+
+// The reason box gates "Not posted", so every not-posted path fills it first.
+const typeReason = (v, text) => act(() => { setInputValue(v.q('to-post-reason'), text); });
 
 async function render(props = {}) {
   const container = document.createElement('div');
@@ -145,7 +158,7 @@ test('the posted date defaults to today and is sent as picked', async () => {
 test('not posted sends the reason with the rows', async () => {
   const v = await render();
   act(() => { v.q('to-post-check-t1').click(); });
-  act(() => { setInputValue(v.q('to-post-reason'), 'no envelopes left'); });
+  typeReason(v, 'no envelopes left');
   await act(async () => {
     v.q('to-post-not-posted').click();
     for (let i = 0; i < 5; i++) await Promise.resolve();
@@ -153,6 +166,128 @@ test('not posted sends the reason with the rows', async () => {
   const [rows] = mailRuns.verifyTouches.mock.calls[0];
   expect(rows[0].verify_status).toBe('not_sent');
   expect(rows[0].reason).toBe('no envelopes left');
+  v.unmount();
+});
+
+test('marking posted asks first, with the count and the date', async () => {
+  const v = await render();
+  act(() => { v.q('to-post-check-t1').click(); });
+  act(() => { v.q('to-post-check-t2').click(); });
+  await act(async () => {
+    v.q('to-post-mark-posted').click();
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+  });
+  expect(window.confirm).toHaveBeenCalledTimes(1);
+  const asked = window.confirm.mock.calls[0][0];
+  expect(asked).toContain('2 pieces');
+  expect(asked).toContain(new Date().toISOString().slice(0, 10));
+});
+
+test('saying no to the confirm writes nothing and keeps the selection', async () => {
+  confirmAnswer = false;
+  const v = await render();
+  act(() => { v.q('to-post-check-t1').click(); });
+  await act(async () => {
+    v.q('to-post-mark-posted').click();
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+  });
+  expect(mailRuns.verifyTouches).not.toHaveBeenCalled();
+  expect(v.q('to-post-bar').textContent).toContain('1 selected');
+  v.unmount();
+});
+
+test('"Not posted" is disabled until a reason is typed', async () => {
+  const v = await render();
+  act(() => { v.q('to-post-check-t1').click(); });
+  expect(v.q('to-post-not-posted').disabled).toBe(true);
+  await act(async () => {
+    v.q('to-post-not-posted').click();
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+  });
+  expect(mailRuns.verifyTouches).not.toHaveBeenCalled();
+  typeReason(v, 'no envelopes left');
+  expect(v.q('to-post-not-posted').disabled).toBe(false);
+  v.unmount();
+});
+
+test('the toast reports what the SERVER did, not what was asked', async () => {
+  mailRuns.verifyTouches.mockImplementation(() =>
+    Promise.resolve({ data: { updated: 1, not_found: ['t2'], not_visible: ['t3'] } }));
+  const v = await render();
+  act(() => { v.q('to-post-check-all').click(); });
+  await act(async () => {
+    v.q('to-post-mark-posted').click();
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+  });
+  const msg = toast.success.mock.calls.concat(toast.error.mock.calls).map(c => c[0]).join(' | ');
+  expect(msg).toContain('1 piece marked posted');
+  expect(msg).toContain('2 skipped');
+  v.unmount();
+});
+
+test('a selection survives a filter change and is counted as hidden', async () => {
+  jest.useFakeTimers();
+  const v = await render();
+  act(() => { v.q('to-post-check-t1').click(); });
+  act(() => { v.q('to-post-check-t2').click(); });
+  expect(v.q('to-post-bar').textContent).toContain('2 selected');
+
+  // The server narrows to one row; the other stays ticked, just hidden.
+  mailRuns.toPost.mockImplementation(() => Promise.resolve({
+    data: { rows: [ROWS[0]], totals: TOTALS, totals_all: TOTALS, as_of: '2026-09-22' } }));
+  await act(async () => {
+    setInputValue(v.q('to-post-search'), 'sharma');
+    jest.advanceTimersByTime(400);
+    for (let i = 0; i < 40; i++) await Promise.resolve();
+  });
+  expect(v.rowIds()).toEqual(['t1']);
+  expect(v.q('to-post-bar').textContent).toContain('2 selected');
+  expect(v.q('to-post-bar').textContent).toContain('1 hidden by filter');
+
+  // Clearing the search brings it back, still ticked.
+  mailRuns.toPost.mockImplementation(() => Promise.resolve({
+    data: { rows: ROWS, totals: TOTALS, totals_all: TOTALS, as_of: '2026-09-22' } }));
+  await act(async () => {
+    setInputValue(v.q('to-post-search'), '');
+    jest.advanceTimersByTime(400);
+    for (let i = 0; i < 40; i++) await Promise.resolve();
+  });
+  expect(v.q('to-post-check-t1').checked).toBe(true);
+  expect(v.q('to-post-check-t2').checked).toBe(true);
+  expect(v.q('to-post-bar').textContent).toContain('2 selected');
+  expect(v.q('to-post-bar').textContent).not.toContain('hidden by filter');
+  v.unmount();
+  jest.useRealTimers();
+});
+
+test('only the visible part of a selection is ever acted on', async () => {
+  jest.useFakeTimers();
+  const v = await render();
+  act(() => { v.q('to-post-check-all').click(); });
+  mailRuns.toPost.mockImplementation(() => Promise.resolve({
+    data: { rows: [ROWS[0]], totals: TOTALS, totals_all: TOTALS, as_of: '2026-09-22' } }));
+  await act(async () => {
+    setInputValue(v.q('to-post-search'), 'sharma');
+    jest.advanceTimersByTime(400);
+    for (let i = 0; i < 40; i++) await Promise.resolve();
+  });
+  await act(async () => {
+    v.q('to-post-mark-posted').click();
+    for (let i = 0; i < 40; i++) await Promise.resolve();
+  });
+  expect(mailRuns.verifyTouches.mock.calls[0][0].map(r => r.touch_id)).toEqual(['t1']);
+  v.unmount();
+  jest.useRealTimers();
+});
+
+test('the chips read the status-independent totals', async () => {
+  mailRuns.toPost.mockImplementation(() => Promise.resolve({
+    data: { rows: [ROWS[2]], totals: { needs_address: 1, shown: 1 },
+            totals_all: { pending: 2, needs_address: 1, sent: 4, not_sent: 0,
+                          skipped: 0, overdue: 2 }, as_of: '2026-09-22' } }));
+  const v = await render();
+  expect(v.q('to-post-chip-pending').textContent).toContain('2');
+  expect(v.q('to-post-chip-sent').textContent).toContain('4');
   v.unmount();
 });
 

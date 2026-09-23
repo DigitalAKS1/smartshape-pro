@@ -191,7 +191,14 @@ export default function OfflineMail() {
         {/* D5: the cross-run posting queue doesn't wait on the runs/areas load —
             it fetches its own rows. */}
         {tab === 'to-post' && (
-          <ToPostQueue onOpenSchool={(schoolId) => schoolId && navigate(`/school-profile/${schoolId}`)} />
+          // A flagged piece has no school to open — that is exactly why it is
+          // flagged — so fall back to the contact it was addressed to, which is
+          // where the missing school (and therefore the address) gets filled in.
+          <ToPostQueue onOpenSchool={(schoolId, contactIds) => {
+            if (schoolId) navigate(`/school-profile/${schoolId}`);
+            else if (contactIds && contactIds[0]) navigate(`/leads?contact=${contactIds[0]}`);
+            else toast.error('This piece has neither a school nor a contact yet');
+          }} />
         )}
 
         {tab === 'materials' && (

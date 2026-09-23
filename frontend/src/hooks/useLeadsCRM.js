@@ -147,20 +147,27 @@ export default function useLeadsCRM() {
   }, []);
 
 
-  // Open lead detail or switch tab from URL params
+  // Open lead detail, open a contact, or switch tab from URL params.
+  // `?contact=` is what sends someone here from elsewhere to FIX a contact —
+  // the To-post queue's "Needs address" badge, for one, where the piece has no
+  // school yet and the contact is the only thing to open.
   useEffect(() => {
     const leadParam = searchParams.get('lead');
+    const contactParam = searchParams.get('contact');
     const tabParam  = searchParams.get('tab');
     if (!loading) {
       if (leadParam && leadsList.length > 0) {
         const lead = leadsList.find(l => l.lead_id === leadParam);
         if (lead) { setActiveTab('pipeline'); openDetail(lead); }
+      } else if (contactParam && contactsList.length > 0) {
+        const contact = contactsList.find(c => c.contact_id === contactParam);
+        if (contact) { setActiveTab('contacts'); openContactPanel(contact); }
       } else if (tabParam) {
         setActiveTab(tabParam);
       }
-      if (leadParam || tabParam) setSearchParams({}, { replace: true });
+      if (leadParam || contactParam || tabParam) setSearchParams({}, { replace: true });
     }
-  }, [loading, leadsList, searchParams]); // eslint-disable-line
+  }, [loading, leadsList, contactsList, searchParams]); // eslint-disable-line
 
   // ─────────────────────────────────────────────────────────────────────────────
   // LEAD HANDLERS
