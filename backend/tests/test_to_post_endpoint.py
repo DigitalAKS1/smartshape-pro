@@ -142,6 +142,48 @@ def test_status_sequence_owner_and_search_filters(db, monkeypatch):
     _run(go())
 
 
+def test_the_chip_counts_survive_the_status_filter(db, monkeypatch):
+    """`totals_all` is independent of the status filter, so a chip never reads 0
+    merely because a different chip is the one currently selected."""
+    async def go():
+        await _seed(db)
+        _as(monkeypatch, ADMIN)
+        out = await crm.mail_to_post(FakeRequest(params={"status": "needs_address",
+                                                         "as_of": "2026-09-22"}))
+        assert [r["touch_id"] for r in out["rows"]] == ["t3"]
+        assert out["totals"]["needs_address"] == 1        # what is shown
+        assert out["totals_all"]["pending"] == 2          # what the chips read
+        assert out["totals_all"]["needs_address"] == 1
+        assert out["totals_all"]["overdue"] == 2
+    _run(go())
+
+
+def test_the_chip_counts_still_obey_the_other_filters(db, monkeypatch):
+    async def go():
+        await _seed(db)
+        _as(monkeypatch, ADMIN)
+        out = await crm.mail_to_post(FakeRequest(params={"owner": "parul@smartshape.in"}))
+        assert out["totals_all"]["pending"] == 1
+        assert out["totals_all"]["needs_address"] == 0
+    _run(go())
+
+
+def test_a_sent_piece_is_reachable_by_its_own_chip(db, monkeypatch):
+    async def go():
+        await _seed(db)
+        _as(monkeypatch, ADMIN)
+        await crm._do_verify("r1", ADMIN, {"rows": [
+            {"touch_id": "t1", "verify_status": "sent", "posted_date": "2026-09-20"}]})
+        out = await crm.mail_to_post(FakeRequest(params={"status": "sent",
+                                                         "as_of": "2026-09-22"}))
+        assert [r["touch_id"] for r in out["rows"]] == ["t1"]
+        assert out["totals_all"]["sent"] == 1
+        assert out["totals_all"]["overdue"] == 1, "a posted piece is no longer overdue"
+        default = await crm.mail_to_post(FakeRequest(params={"as_of": "2026-09-22"}))
+        assert {r["touch_id"] for r in default["rows"]} == {"t2", "t3"}
+    _run(go())
+
+
 def test_the_date_range_narrows_the_queue(db, monkeypatch):
     async def go():
         await _seed(db)
@@ -189,7 +231,7 @@ def test_ticking_in_the_queue_sets_the_touch_and_the_dispatch(db, monkeypatch):
     _run(go())
 
 
-def test_marking_not_sent_clears_the_dispatch_sent_date(db, monkeypatch):
+def test_marking_not_sent_clears_the_dispatch_sent_date_and_courier(db, monkeypatch):
     async def go():
         await _seed(db)
         _as(monkeypatch, ADMIN)
@@ -199,6 +241,23 @@ def test_marking_not_sent_clears_the_dispatch_sent_date(db, monkeypatch):
             {"touch_id": "t1", "verify_status": "not_sent", "reason": "no envelopes"}]})
         d = await db.physical_dispatches.find_one({"dispatch_id": "pd_1"}, {"_id": 0})
         assert d["sent_date"] == ""
+        assert d["courier_name"] == "", "a piece that never went out has no courier"
+    _run(go())
+
+
+def test_the_dispatch_list_carries_the_reason_from_the_touch(db, monkeypatch):
+    """Dispatch Tracking can only say 'not posted - <why>' if the why comes
+    down with the row (D4: the touch is the record of truth)."""
+    async def go():
+        await _seed(db)
+        _as(monkeypatch, ADMIN)
+        await crm._do_verify("r1", ADMIN, {"rows": [
+            {"touch_id": "t1", "verify_status": "not_sent", "reason": "school shut"}]})
+        rows = await crm.get_physical_dispatches(FakeRequest(params={}))
+        by = {d["dispatch_id"]: d for d in rows}
+        assert by["pd_1"]["verify_status"] == "not_sent"
+        assert by["pd_1"]["reason"] == "school shut"
+        assert by["pd_2"]["reason"] == "", "a pending piece has no reason"
     _run(go())
 
 
@@ -281,7 +340,80 @@ def test_verify_touches_reports_an_unknown_touch_instead_of_failing(db, monkeypa
             "rows": [{"touch_id": "t1", "verify_status": "sent"},
                      {"touch_id": "ghost", "verify_status": "sent"}]}))
         assert out["not_found"] == ["ghost"]
+        assert out["not_visible"] == []
         assert out["updated"] == 1
+    _run(go())
+
+
+# ── A caller may only tick what she can see ──────────────────────────────────
+
+def test_a_rep_cannot_tick_a_colleagues_envelope(db, monkeypatch):
+    """The write path is scoped exactly like the read path: an id a rep could
+    only reach by guessing is reported, never written."""
+    async def go():
+        await _seed(db)
+        _as(monkeypatch, REP)
+        out = await crm.verify_touches(FakeRequest(body={
+            "posted_date": "2026-09-20",
+            "rows": [{"touch_id": "t1", "verify_status": "sent"},
+                     {"touch_id": "t2", "verify_status": "sent"},
+                     {"touch_id": "t3", "verify_status": "sent"}]}))
+        assert out["not_visible"] == ["t2", "t3"]
+        assert out["updated"] == 1
+        assert [r["run_id"] for r in out["results"]] == ["r1"]
+        for tid in ("t2", "t3"):
+            t = await db.mail_touches.find_one({"touch_id": tid}, {"_id": 0})
+            assert t["verify_status"] != "sent", f"{tid} written by someone who cannot see it"
+        t1 = await db.mail_touches.find_one({"touch_id": "t1"}, {"_id": 0})
+        assert t1["verify_status"] == "sent"
+        d = await db.physical_dispatches.find_one({"dispatch_id": "pd_2"}, {"_id": 0})
+        assert d["sent_date"] == "", "the out-of-scope dispatch was not mirrored either"
+    _run(go())
+
+
+def test_a_rep_cannot_undo_a_colleagues_envelope(db, monkeypatch):
+    async def go():
+        await _seed(db)
+        _as(monkeypatch, ADMIN)
+        await crm.verify_touches(FakeRequest(body={
+            "posted_date": "2026-09-20",
+            "rows": [{"touch_id": "t2", "verify_status": "sent"}]}))
+        _as(monkeypatch, REP)
+        out = await crm.verify_touches(FakeRequest(body={"undo": True, "touch_ids": ["t2"]}))
+        assert out["not_visible"] == ["t2"]
+        assert out["updated"] == 0
+        t = await db.mail_touches.find_one({"touch_id": "t2"}, {"_id": 0})
+        assert t["verify_status"] == "sent", "undone by someone who cannot see it"
+    _run(go())
+
+
+def test_an_admin_still_ticks_everything(db, monkeypatch):
+    async def go():
+        await _seed(db)
+        _as(monkeypatch, ADMIN)
+        out = await crm.verify_touches(FakeRequest(body={
+            "posted_date": "2026-09-20",
+            "rows": [{"touch_id": t, "verify_status": "sent"} for t in ("t1", "t2", "t3")]}))
+        assert out["not_visible"] == []
+        assert out["updated"] == 3
+    _run(go())
+
+
+def test_a_rep_cannot_print_a_colleagues_sticker(db, monkeypatch):
+    seen = {}
+
+    def _fake_pdf(touches, *a, **kw):
+        seen["ids"] = [t["touch_id"] for t in touches]
+        return b"%PDF-1.4 fake"
+
+    async def go():
+        await _seed(db)
+        _as(monkeypatch, REP)
+        monkeypatch.setattr(crm, "_build_stickers_pdf", _fake_pdf)
+        await crm.mail_queue_stickers(FakeRequest(params={"touch_ids": "t1,t2,t3"}))
+        assert seen["ids"] == ["t1"]
+        t2 = await db.mail_touches.find_one({"touch_id": "t2"}, {"_id": 0})
+        assert not t2.get("printed_at"), "a colleague's piece was stamped printed"
     _run(go())
 
 

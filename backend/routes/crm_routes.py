@@ -1070,16 +1070,20 @@ async def mail_today_queue(request: Request):
 async def mail_queue_stickers(request: Request):
     """One combined sticker PDF for the whole day's queue — the printer gets loaded
     once, not once per run."""
-    await get_current_user(request)
+    user = await get_current_user(request)
     qp = request.query_params
     today = qp.get("date") or datetime.now(timezone.utc).strftime("%Y-%m-%d")
     # "Print stickers for selected": the To-post queue hands over exactly the
     # envelopes that were ticked — which span runs and may not be due today —
     # so an explicit selection replaces the day's queue rather than filtering it.
-    picked = [t for t in (qp.get("touch_ids") or "").split(",") if t.strip()]
+    # A selection is scoped exactly as the queue is, so a rep cannot print (and
+    # stamp `printed_at` on) a colleague's envelope by passing its id.
+    picked = [t.strip() for t in (qp.get("touch_ids") or "").split(",") if t.strip()]
     if picked:
         touches = await db.mail_touches.find(
-            {"touch_id": {"$in": [t.strip() for t in picked]}}, {"_id": 0}).to_list(None)
+            {"touch_id": {"$in": picked}}, {"_id": 0}).to_list(None)
+        scope = await _to_post_scope(user)
+        touches = [t for t in touches if _touch_in_scope(t, scope)]
     else:
         touches = await _queued_touches(today)
     ids = [t.get("school_id") for t in touches if t.get("school_id")]
@@ -1349,6 +1353,41 @@ def _addr_ok(school: dict) -> bool:
                      or (school.get("city") or "").strip()))
 
 
+async def _to_post_scope(user: dict):
+    """Which mail touches this caller may SEE — and therefore tick or print.
+
+    `None` means unscoped (an admin). Otherwise the two id sets the queue filters
+    on: a piece going to a school the rep can see (`_schools_visibility_or`), or,
+    for a school-less `needs_address` piece, one addressed to one of her own
+    contacts (`_contacts_visibility_or`) — there is no school to scope that one
+    by, and the rep who must supply the address is the one who has to see it.
+
+    Read and write share this helper on purpose: a piece a rep cannot see in the
+    queue is a piece she cannot tick, print or undo by posting a touch id at the
+    API directly.
+    """
+    if get_team(user) == "admin" or user.get("role") == "admin":
+        return None
+    email = user["email"]
+    vis_schools = {s["school_id"] for s in await db.schools.find(
+        _merge_or({}, await _schools_visibility_or(email)),
+        {"_id": 0, "school_id": 1}).to_list(None)}
+    vis_contacts = {c["contact_id"] for c in await db.contacts.find(
+        _merge_or({}, await _contacts_visibility_or(email)),
+        {"_id": 0, "contact_id": 1}).to_list(None)}
+    return vis_schools, vis_contacts
+
+
+def _touch_in_scope(touch: dict, scope) -> bool:
+    """One touch against the pair `_to_post_scope` returned (None = admin)."""
+    if scope is None:
+        return True
+    vis_schools, vis_contacts = scope
+    if touch.get("school_id"):
+        return touch["school_id"] in vis_schools
+    return bool(set(touch.get("contact_ids") or []) & vis_contacts)
+
+
 def _overdue_days(planned: str, as_of: str) -> int:
     """Whole days a piece is past its planned posting date, never negative."""
     if not planned:
@@ -1374,17 +1413,13 @@ async def mail_to_post(request: Request):
     today = qp.get("as_of") or datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     status = (qp.get("status") or "").strip()
+    # The status filter is applied LAST, in memory, so the chips can show what
+    # each status holds under the other filters — a chip reading "0" only
+    # because that chip is the one currently selected is a lie.
     filt = {}
-    if status == "overdue":
-        filt["verify_status"] = {"$in": ["pending", "needs_address"]}
-        filt["planned_date"] = {"$lt": today, "$ne": ""}
-    elif status:
-        filt["verify_status"] = status
-    else:
-        filt["verify_status"] = {"$in": ["pending", "needs_address"]}
     d_from, d_to = qp.get("from"), qp.get("to")
     if d_from or d_to:
-        rng = filt.get("planned_date") if isinstance(filt.get("planned_date"), dict) else {}
+        rng = {}
         if d_from:
             rng["$gte"] = d_from
         if d_to:
@@ -1394,7 +1429,9 @@ async def mail_to_post(request: Request):
         filt["owner"] = qp["owner"]
 
     touches = await db.mail_touches.find(filt, {"_id": 0}).to_list(None)
-    runs = {r["run_id"]: r for r in await db.mail_runs.find({}, {"_id": 0}).to_list(None)}
+    run_ids = sorted({t.get("run_id", "") for t in touches if t.get("run_id")})
+    runs = {r["run_id"]: r for r in await db.mail_runs.find(
+        {"run_id": {"$in": run_ids}}, {"_id": 0}).to_list(None)}
 
     if qp.get("sequence_id"):
         want = qp["sequence_id"]
@@ -1406,22 +1443,11 @@ async def mail_to_post(request: Request):
     schools = {s["school_id"]: s for s in await db.schools.find(
         {"school_id": {"$in": school_ids}}, {"_id": 0}).to_list(None)}
 
-    # Visibility. Reps are scoped by the SAME helpers the CRM lists use, so a
+    # Visibility. Reps are scoped by the SAME helper every write path uses, so a
     # piece a rep can tick here is exactly a piece she can see elsewhere - never
-    # a silent "skipped". A school-less (needs_address) piece is scoped by its
-    # contacts instead, since there is no school to scope it by.
-    if get_team(user) != "admin" and user.get("role") != "admin":
-        email = user["email"]
-        vis_schools = {s["school_id"] for s in await db.schools.find(
-            _merge_or({}, await _schools_visibility_or(email)),
-            {"_id": 0, "school_id": 1}).to_list(None)}
-        vis_contacts = {c["contact_id"] for c in await db.contacts.find(
-            _merge_or({}, await _contacts_visibility_or(email)),
-            {"_id": 0, "contact_id": 1}).to_list(None)}
-        touches = [t for t in touches
-                   if (t.get("school_id") and t["school_id"] in vis_schools)
-                   or (not t.get("school_id")
-                       and set(t.get("contact_ids") or []) & vis_contacts)]
+    # a silent "skipped", and never a piece she could only reach by guessing an id.
+    scope = await _to_post_scope(user)
+    touches = [t for t in touches if _touch_in_scope(t, scope)]
 
     q = (qp.get("q") or "").strip().lower()
     rows = []
@@ -1455,6 +1481,22 @@ async def mail_to_post(request: Request):
                 continue
         rows.append(row)
 
+    # What every chip would show, under the current sequence/owner/date/search
+    # filters but INDEPENDENT of the status filter — this is what the chips read.
+    unresolved = ("pending", "needs_address")
+    totals_all = {s: 0 for s in VERIFY_STATUSES}
+    for r in rows:
+        totals_all[r["verify_status"]] = totals_all.get(r["verify_status"], 0) + 1
+    totals_all["overdue"] = sum(1 for r in rows
+                                if r["overdue_days"] > 0 and r["verify_status"] in unresolved)
+
+    if status == "overdue":
+        rows = [r for r in rows if r["verify_status"] in unresolved and r["overdue_days"] > 0]
+    elif status:
+        rows = [r for r in rows if r["verify_status"] == status]
+    else:
+        rows = [r for r in rows if r["verify_status"] in unresolved]
+
     rows.sort(key=lambda r: (-r["overdue_days"], r["planned_date"] or "9999-99-99",
                              r["school_name"]))
     capped = len(rows) > _TO_POST_CAP
@@ -1466,7 +1508,7 @@ async def mail_to_post(request: Request):
     totals["overdue"] = sum(1 for r in rows if r["overdue_days"] > 0)
     totals["shown"] = len(shown)
     totals["capped"] = capped
-    return {"rows": shown, "totals": totals, "as_of": today}
+    return {"rows": shown, "totals": totals, "totals_all": totals_all, "as_of": today}
 
 
 # NOTE: static path — MUST stay above /mail-runs/{run_id} for the same reason.
@@ -1480,6 +1522,10 @@ async def verify_touches(request: Request):
     them fails — the server groups the chosen touches by the run each one
     ACTUALLY belongs to (never a run id supplied by the caller) and walks the
     one verification path per group (D5: no second verification path).
+
+    A caller may only tick what she can see: every requested id is run through
+    the SAME scope `GET /mail-runs/to-post` applies (`_to_post_scope`), and one
+    outside it comes back in `not_visible` with nothing written for it.
 
     Body: `{rows: [{touch_id, verify_status, posted_date?, reason?}], posted_date?}`
     or `{undo: true, touch_ids: [...]}`.
@@ -1503,12 +1549,19 @@ async def verify_touches(request: Request):
         wanted = list(rows_by_id.keys())
 
     if not wanted:
-        return {"results": [], "updated": 0, "not_found": []}
+        return {"results": [], "updated": 0, "not_found": [], "not_visible": []}
 
     found = await db.mail_touches.find(
-        {"touch_id": {"$in": wanted}}, {"_id": 0, "touch_id": 1, "run_id": 1}).to_list(None)
-    run_of = {t["touch_id"]: t.get("run_id", "") for t in found}
-    not_found = [tid for tid in wanted if tid not in run_of]
+        {"touch_id": {"$in": wanted}},
+        {"_id": 0, "touch_id": 1, "run_id": 1, "school_id": 1, "contact_ids": 1}).to_list(None)
+    by_id = {t["touch_id"]: t for t in found}
+    not_found = [tid for tid in wanted if tid not in by_id]
+
+    # Scope before grouping: an id the caller cannot see is reported, never written.
+    scope = await _to_post_scope(user)
+    not_visible = [tid for tid, t in by_id.items() if not _touch_in_scope(t, scope)]
+    run_of = {tid: t.get("run_id", "") for tid, t in by_id.items()
+              if tid not in not_visible}
 
     groups = {}
     for tid in wanted:                      # keep the caller's order inside a run
@@ -1527,7 +1580,8 @@ async def verify_touches(request: Request):
         run = await _do_verify(run_id, user, payload)
         results.append({"run_id": run_id, "touch_ids": ids, "run": run})
         updated += len(ids)
-    return {"results": results, "updated": updated, "not_found": not_found}
+    return {"results": results, "updated": updated,
+            "not_found": not_found, "not_visible": sorted(not_visible)}
 
 
 # NOTE: this static path MUST stay above /mail-runs/{run_id} or FastAPI matches
@@ -1886,7 +1940,7 @@ async def _do_verify(run_id: str, user: dict, body: dict):
                           "courier_name": run.get("courier", "") or ""}})
         else:
             await db.physical_dispatches.update_many(
-                {"touch_id": tid}, {"$set": {"sent_date": ""}})
+                {"touch_id": tid}, {"$set": {"sent_date": "", "courier_name": ""}})
         if status == "sent" and not was_sent:
             newly_sent.append({**touch, "posted_at": _set["posted_at"]})
 
@@ -7396,11 +7450,14 @@ async def get_physical_dispatches(request: Request, lead_id: Optional[str] = Non
     if tids:
         async for t in db.mail_touches.find({"touch_id": {"$in": tids}},
                                             {"_id": 0, "touch_id": 1, "verify_status": 1,
-                                             "posted_at": 1}):
+                                             "posted_at": 1, "reason": 1}):
             status_by_touch[t["touch_id"]] = t
     for d in dispatches:
         t = status_by_touch.get(d.get("touch_id", ""))
         d["verify_status"] = (t or {}).get("verify_status", "")
+        # Why a piece did NOT go out belongs to the touch too — without it the
+        # tracking screen can only say "not posted" and not "not posted — why".
+        d["reason"] = (t or {}).get("reason", "") or ""
         d["needs_dispatch"] = bool(t) and t.get("verify_status") in ("pending", "needs_address")
         if t and t.get("posted_at") and not d.get("sent_date"):
             d["sent_date"] = str(t["posted_at"])[:10]
