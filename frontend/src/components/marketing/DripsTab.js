@@ -13,6 +13,7 @@ import RichMessageEditor from '../RichMessageEditor';
 import { dripSequences as dripApi, whatsApp as waApi, mailRuns } from '../../lib/api';
 import { useNavigate } from 'react-router-dom';
 import { mapSeq } from '../../lib/marketingUtils';
+import useMailMaterials from '../../hooks/useMailMaterials';
 
 const BLANK_FORM = { name: '', description: '', trigger: 'lead_created', filter_designation: '', steps: [{ message_type: 'whatsapp', message_template: '', delay_days: 0, attachment_id: null, material_type: 'brochure' }] };
 
@@ -35,6 +36,9 @@ export default function DripsTab({ tk, drips, setDrips }) {
   const [uploadingAttach, setUploadingAttach] = useState(false);
 
   const navigate = useNavigate();
+  // D3: the step editor's material list is the shared catalogue, not a literal
+  // list that disagreed with the mail-run builder's.
+  const { materials } = useMailMaterials();
   const [pending, setPending]         = useState({});   // { sequence_id: pieces waiting to print }
   const [deliveries, setDeliveries]   = useState(null); // { id, loading, rows, totals }
 
@@ -532,28 +536,66 @@ export default function DripsTab({ tk, drips, setDrips }) {
                         <option value="physical_material">Physical material</option>
                         <option value="call_task">Call task (rep reminder)</option>
                       </select>
-                      {s.message_type === 'physical_material' && (
-                        <>
-                          <select
-                            value={s.material_type || 'brochure'}
-                            onChange={e => setForm(p => ({ ...p, steps: p.steps.map((ss, ii) => ii === i ? { ...ss, material_type: e.target.value } : ss) }))}
-                            className="h-9 px-2 rounded text-sm bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]"
-                            data-testid={`step-material-${i}`}>
-                            <option value="brochure">Brochure</option>
-                            <option value="sample">Sample</option>
-                            <option value="catalogue">Catalogue</option>
-                            <option value="kit">Kit</option>
-                            <option value="gift">Gift</option>
-                          </select>
-                          <input
-                            value={s.material_name || ''}
-                            onChange={e => setForm(p => ({ ...p, steps: p.steps.map((ss, ii) => ii === i ? { ...ss, material_name: e.target.value } : ss) }))}
-                            className="h-9 px-2 rounded text-sm bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)] flex-1 min-w-[160px]"
-                            placeholder="Item name — what are you sending? (e.g. 2026 Die Catalogue + Sample Kit)"
-                            data-testid={`step-material-name-${i}`} />
-                        </>
-                      )}
+                      {s.message_type === 'physical_material' && (() => {
+                        // D3: the shared catalogue. A legacy free-text value is
+                        // kept selected and flagged rather than being silently
+                        // rewritten to "brochure" the moment the dialog opens.
+                        // An empty `material_type` is deliberate — it is what
+                        // picking "Other…" leaves behind — so it must NOT fall
+                        // back to "brochure", or the free-text box never opens.
+                        const chosen = (s.material_type === undefined || s.material_type === null)
+                          ? 'brochure' : s.material_type;
+                        const known = chosen !== '' && materials.some(m => m.piece_type === chosen);
+                        return (
+                          <>
+                            <select
+                              value={known ? chosen : (chosen === '' ? '__other__' : chosen)}
+                              onChange={e => {
+                                const v = e.target.value;
+                                setForm(p => ({ ...p, steps: p.steps.map((ss, ii) => ii === i ? { ...ss, material_type: v === '__other__' ? '' : v } : ss) }));
+                              }}
+                              className="h-9 px-2 rounded text-sm bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]"
+                              data-testid={`step-material-${i}`}>
+                              {materials.map(m => (
+                                <option key={m.material_id} value={m.piece_type}>{m.name}</option>
+                              ))}
+                              {!known && s.material_type ? (
+                                <option value={s.material_type}>{s.material_type} (not in Materials)</option>
+                              ) : null}
+                              <option value="__other__">Other…</option>
+                            </select>
+                            {!known && s.material_type ? (
+                              <span data-testid={`step-material-legacy-${i}`}
+                                className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-[#9A6A15]/15 text-[#9A6A15]">
+                                not in Materials
+                              </span>
+                            ) : null}
+                            {!known && (
+                              <input
+                                value={s.material_type || ''}
+                                onChange={e => setForm(p => ({ ...p, steps: p.steps.map((ss, ii) => ii === i ? { ...ss, material_type: e.target.value } : ss) }))}
+                                className="h-9 px-2 rounded text-sm bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)] w-32"
+                                placeholder="Piece type"
+                                data-testid={`step-material-other-${i}`} />
+                            )}
+                            <input
+                              value={s.material_name || ''}
+                              onChange={e => setForm(p => ({ ...p, steps: p.steps.map((ss, ii) => ii === i ? { ...ss, material_name: e.target.value } : ss) }))}
+                              className="h-9 px-2 rounded text-sm bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)] flex-1 min-w-[160px]"
+                              placeholder="Item name — what are you sending? (e.g. 2026 Die Catalogue + Sample Kit)"
+                              data-testid={`step-material-name-${i}`} />
+                          </>
+                        );
+                      })()}
                     </div>
+                    {/* Where the envelope actually shows up. Nothing in this
+                        dialog used to say a mailer would be created at all. */}
+                    {s.message_type === 'physical_material' && (
+                      <p className={`px-3 pb-2 text-[11px] ${tk.tm}`} data-testid={`step-mailer-note-${i}`}>
+                        On day {s.delay_days ?? 0} this creates a mailer in <b>Offline Mail → To post</b>.
+                        Post it and tick it there.
+                      </p>
+                    )}
                     {s.message_type !== 'physical_material' && (
                     <RichMessageEditor
                       value={s.message_template}

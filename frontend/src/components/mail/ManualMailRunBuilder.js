@@ -2,8 +2,10 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { toast } from 'sonner';
 import { schools as schoolsApi, mailRuns } from '../../lib/api';
 import { X, Search, Plus, Check, Trash2 } from 'lucide-react';
+import useMailMaterials from '../../hooks/useMailMaterials';
 
-const PIECES = ['brochure', 'sample', 'newsletter', 'other'];
+// D3: the hard-coded PIECES list is gone — the piece type comes from the shared
+// Materials catalogue, so catalogue/kit/gift can now be posted by hand too.
 
 /**
  * Hand-pick a mail run: search the school directory, add schools one by one,
@@ -18,6 +20,7 @@ export default function ManualMailRunBuilder({ onClose, onCreated }) {
   const [form, setForm] = useState({ name: `Manual list — ${new Date().toLocaleDateString()}`, piece_type: 'brochure', send_date: '' });
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const { materials } = useMailMaterials();
 
   const load = useCallback(async () => {
     try {
@@ -133,8 +136,9 @@ export default function ManualMailRunBuilder({ onClose, onCreated }) {
         <div className="px-5 py-4 border-t border-[var(--border-color)] grid gap-3">
           <div className="grid sm:grid-cols-3 gap-3">
             <input className={inp + ' sm:col-span-1'} placeholder="Run name" value={form.name} onChange={e => setForm(p => ({ ...p, name: e.target.value }))} />
-            <select className={inp} value={form.piece_type} onChange={e => setForm(p => ({ ...p, piece_type: e.target.value }))}>
-              {PIECES.map(x => <option key={x} value={x}>{x}</option>)}
+            <select className={inp} value={form.piece_type} data-testid="manual-run-piece"
+              onChange={e => setForm(p => ({ ...p, piece_type: e.target.value }))}>
+              {materials.map(m => <option key={m.material_id} value={m.piece_type}>{m.name}</option>)}
             </select>
             <input className={inp} type="date" value={form.send_date} onChange={e => setForm(p => ({ ...p, send_date: e.target.value }))} />
           </div>

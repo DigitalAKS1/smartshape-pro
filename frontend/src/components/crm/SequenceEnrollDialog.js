@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { toast } from 'sonner';
 import { dripSequences } from '../../lib/api';
+import useMailMaterials from '../../hooks/useMailMaterials';
 import { X, Zap, Phone, MessageCircle, Mail, Truck, Plus, Trash2, Copy } from 'lucide-react';
 
 const STEP_ICON = { whatsapp: MessageCircle, email: Mail, physical_material: Truck, call_task: Phone };
@@ -28,6 +29,10 @@ export default function SequenceEnrollDialog({ open, onClose, schoolIds = [], on
   const nameRef = useRef(null);
   const [mode, setMode] = useState('existing');            // 'existing' | 'new'
   const [form, setForm] = useState({ name: '', steps: [{ ...BLANK_STEP }] });
+  // D3: "Post something" picks from the same shared catalogue as the drip step
+  // editor and the mail-run builder — one list, so the plan you write here is
+  // a plan Offline Mail can actually post.
+  const { materials } = useMailMaterials();
 
   useEffect(() => {
     if (!open) return;
@@ -224,9 +229,30 @@ export default function SequenceEnrollDialog({ open, onClose, schoolIds = [], on
                       )}
                     </div>
                     {isPost ? (
-                      <input className={sm + ' w-full mt-2'} placeholder="What are you posting? e.g. 2026 Die Catalogue"
-                        value={s.material_name} onChange={e => setStep(i, { material_name: e.target.value })}
-                        data-testid={`seq-step-material-${i}`} />
+                      <>
+                        <select className={sm + ' w-full mt-2'}
+                          value={materials.some(m => m.piece_type === (s.material_type || 'brochure'))
+                            ? (s.material_type || 'brochure') : (s.material_type || '')}
+                          onChange={e => setStep(i, { material_type: e.target.value })}
+                          data-testid={`seq-step-material-${i}`}>
+                          {materials.map(m => (
+                            <option key={m.material_id} value={m.piece_type}>{m.name}</option>
+                          ))}
+                          {/* D3: a legacy free-text value keeps working — it is
+                              shown as-is, not quietly rewritten to "brochure". */}
+                          {!materials.some(m => m.piece_type === (s.material_type || 'brochure')) && s.material_type ? (
+                            <option value={s.material_type}>{s.material_type} (not in Materials)</option>
+                          ) : null}
+                        </select>
+                        <input className={sm + ' w-full mt-2'} placeholder="What are you posting? e.g. 2026 Die Catalogue"
+                          value={s.material_name} onChange={e => setStep(i, { material_name: e.target.value })}
+                          data-testid={`seq-step-material-name-${i}`} />
+                        <p className="mt-1.5 text-[11px] text-[var(--text-muted)]"
+                          data-testid={`seq-step-mailer-note-${i}`}>
+                          On day {s.delay_days || 0} this creates a mailer in <b>Offline Mail → To post</b>.
+                          Post it and tick it there.
+                        </p>
+                      </>
                     ) : (
                       <textarea className={sm + ' w-full mt-2 h-auto py-2 resize-y'} rows={2}
                         placeholder={isCall ? 'What should the rep do on this call?' : 'Message — {name} and {school_name} are filled in'}

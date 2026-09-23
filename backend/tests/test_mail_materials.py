@@ -187,3 +187,25 @@ def test_a_broken_seed_never_crashes_startup(db, monkeypatch):
         monkeypatch.setattr(crm, "db", _DB(), raising=False)
         await crm._seed_materials()  # must not raise
     _run(go())
+
+
+def test_a_step_with_a_legacy_material_value_still_fires(db, monkeypatch):
+    """D3: `material_type: "poster"` is not in the catalogue and never will be —
+    it must still produce a mailer, not a crash or a silent skip."""
+    async def go():
+        _as(monkeypatch, ADMIN)
+        await db.schools.insert_one({"school_id": "s1", "school_name": "DPS",
+                                     "is_deleted": False})
+        await crm.create_physical_from_drip(
+            {"lead_id": "l1", "contact_name": "R Sharma", "company_name": "DPS",
+             "school_id": "s1", "assigned_to": "parul@smartshape.in"},
+            "poster", "Legacy plan", material_name="Old poster",
+            sequence_id="seqL", enrollment_id="eL", step_number=1,
+            planned_date="2026-09-01")
+        t = await db.mail_touches.find_one({"school_id": "s1"}, {"_id": 0})
+        assert t is not None and t["piece_type"] == "poster"
+        assert t["item_name"] == "Old poster"
+        # And the catalogue is not polluted by it: a free-text value stays free
+        # text, it does not quietly become a seventh-and-a-half material.
+        assert await db.mail_materials.count_documents({"piece_type": "poster"}) == 0
+    _run(go())
