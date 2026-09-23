@@ -130,8 +130,12 @@ async def _postable_school(db, sid):
         return ""
     s = await db.schools.find_one(
         {"school_id": sid, "is_deleted": {"$ne": True}},
-        {"_id": 0, "school_id": 1, "address": 1})
-    if not s or not str(s.get("address") or "").strip():
+        {"_id": 0, "school_id": 1, "address": 1, "pincode": 1, "city": 1})
+    # Same rule the sticker printer uses (_addr_missing): street AND pincode
+    # AND city — a piece we could not print a label for is not postable.
+    if not s or not (str(s.get("address") or "").strip()
+                     and str(s.get("pincode") or "").strip()
+                     and str(s.get("city") or "").strip()):
         return ""
     return sid
 

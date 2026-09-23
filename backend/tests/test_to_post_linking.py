@@ -135,7 +135,7 @@ def test_giving_the_contact_a_school_moves_the_touch_back_to_pending(db):
             "brochure", "Quiz Engage", material_name="Quiz flyer",
             sequence_id="seq2", enrollment_id="e9", step_number=1, planned_date=TODAY)
         await db.schools.insert_one({"school_id": "s5", "school_name": "Lotus",
-                                     "address": "Noida", "is_deleted": False})
+                                     "address": "Noida", "pincode": "201301", "city": "Noida", "is_deleted": False})
         await db.contacts.insert_one({"contact_id": "c9", "name": "No School", "school_id": "s5"})
 
         out = await crm.repair_needs_address_touches()
@@ -171,6 +171,7 @@ def test_repair_is_callable_with_an_explicit_db(db):
             "brochure", "Quiz Engage", sequence_id="seq2", enrollment_id="e7",
             step_number=1, planned_date=TODAY)
         await db.schools.insert_one({"school_id": "s8", "school_name": "Ryan",
+                                     "address": "MG Road", "pincode": "560001", "city": "Bengaluru",
                                      "is_deleted": False})
         await db.contacts.insert_one({"contact_id": "c7", "name": "Later School",
                                       "school_id": "s8"})
@@ -302,7 +303,7 @@ def test_repair_recomputes_the_counts_of_the_runs_it_changed(db):
         assert run["counts"]["needs_address"] == 1
 
         await db.schools.insert_one({"school_id": "s5", "school_name": "Lotus",
-                                     "address": "Noida", "is_deleted": False})
+                                     "address": "Noida", "pincode": "201301", "city": "Noida", "is_deleted": False})
         await db.contacts.insert_one({"contact_id": "c9", "name": "Asha Rao",
                                       "school_id": "s5"})
         out = await crm.repair_needs_address_touches(db)
@@ -359,4 +360,22 @@ def test_dispatch_list_derives_needs_dispatch_from_its_touch(db):
         row = {r["dispatch_id"]: r for r in rows}[linked]
         assert row["needs_dispatch"] is False
         assert row["sent_date"] == "2026-09-20"
+    _run(go())
+
+
+def test_a_street_without_pincode_or_city_does_not_unpark_the_piece(db):
+    # "pending" must always mean "printable": the repair applies the sticker
+    # printer's own rule (_addr_missing), not a bare street check.
+    async def go():
+        await db.contacts.insert_one({"contact_id": "c9", "name": "Half Addr", "school_id": "s9",
+                                      "is_deleted": False})
+        await db.schools.insert_one({"school_id": "s9", "school_name": "Half",
+                                     "address": "Sector 5", "is_deleted": False})
+        await db.mail_touches.insert_one({"touch_id": "t9", "run_id": "", "school_id": "",
+                                          "contact_ids": ["c9"], "verify_status": "needs_address"})
+        await crm.repair_needs_address_touches(db)
+        assert (await db.mail_touches.find_one({"touch_id": "t9"}))["verify_status"] == "needs_address"
+        await db.schools.update_one({"school_id": "s9"}, {"$set": {"pincode": "110001", "city": "Delhi"}})
+        await crm.repair_needs_address_touches(db)
+        assert (await db.mail_touches.find_one({"touch_id": "t9"}))["verify_status"] == "pending"
     _run(go())

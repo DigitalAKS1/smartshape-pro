@@ -239,16 +239,19 @@ async def create_physical_from_drip(lead: dict, material_type: str, seq_name: st
         planned = planned_date or today
         # One run per (sequence, piece, day), so a brochure step and a sample step
         # from two sequences don't collapse into one unprintable pile.
+        # Never append to a run the team has already posted/closed — that would
+        # flip it back to "planned" and re-open verified work.
+        open_run = {"status": {"$nin": ["posted", "completed", "cancelled"]}}
         run = await db.mail_runs.find_one(
             {"is_drip_run": True, "send_date": today,
-             "sequence_id": sequence_id, "piece_type": piece},
+             "sequence_id": sequence_id, "piece_type": piece, **open_run},
             {"_id": 0, "run_id": 1})
         if not run:
             # Mid-day deploy safety: reuse a run made by the older, coarser key
             # rather than creating a second run and posting a school twice.
             run = await db.mail_runs.find_one(
                 {"is_drip_run": True, "send_date": today, "piece_type": piece,
-                 "sequence_id": {"$exists": False}},
+                 "sequence_id": {"$exists": False}, **open_run},
                 {"_id": 0, "run_id": 1})
         if not run:
             run_id = f"run_{uuid.uuid4().hex[:10]}"
@@ -362,8 +365,11 @@ async def repair_needs_address_touches(target_db=None) -> dict:
         if not sid:
             continue
         school = await _db.schools.find_one(
-            {"school_id": sid, "is_deleted": {"$ne": True}}, {"_id": 0, "school_id": 1})
-        if not school:
+            {"school_id": sid, "is_deleted": {"$ne": True}},
+            {"_id": 0, "school_id": 1, "address": 1, "pincode": 1, "city": 1})
+        # Only a courier-complete address un-parks the piece — the same rule
+        # the sticker printer applies, so "pending" always means "printable".
+        if not school or _addr_missing(school):
             continue
         await _db.mail_touches.update_one(
             {"touch_id": t["touch_id"]},
