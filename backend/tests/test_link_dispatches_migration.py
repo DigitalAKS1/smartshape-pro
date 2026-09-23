@@ -141,21 +141,177 @@ def test_a_sent_school_less_touch_is_never_reopened(db):
     _run(go())
 
 
-def test_a_dispatch_with_a_school_but_no_touch_is_skipped_not_guessed(db):
+def test_a_dispatch_with_a_school_but_no_touch_gets_a_pending_touch(db):
+    """Nothing is left un-linked: a live school with an address means the piece is
+    postable, so it becomes an ordinary `pending` envelope, not a dropped row."""
     async def go():
         await db.schools.insert_one({"school_id": "s2", "school_name": "Ryan",
-                                     "is_deleted": False})
+                                     "address": "Sector 21", "city": "Noida",
+                                     "pincode": "201301", "is_deleted": False})
         await db.contacts.insert_one({"contact_id": "c4", "name": "Has School",
                                       "school_id": "s2"})
         await db.physical_dispatches.insert_one({
             "dispatch_id": "pd_9", "lead_id": "", "contact_id": "c4",
             "lead_name": "Has School", "material_type": "sample",
-            "auto_from_drip": True, "created_at": "2026-09-05T06:00:00+00:00"})
+            "auto_from_drip": True, "needs_dispatch": True,
+            "created_at": "2026-09-05T06:00:00+00:00"})
         out = await link_dispatches_to_touches(db, apply=True)
-        assert out["skipped_no_match"] == 1
-        assert out["touches_created"] == 0
+        assert out["skipped_no_match"] == 0 and out["skipped_orphan"] == 0
+        assert out["touches_created"] == 1 and out["created_pending"] == 1
         d = await db.physical_dispatches.find_one({"dispatch_id": "pd_9"}, {"_id": 0})
-        assert not d.get("touch_id"), "the migration must not invent a link"
+        assert d.get("touch_id"), "the dispatch must end up linked to something"
+        assert "needs_dispatch" not in d
+        t = await db.mail_touches.find_one({"touch_id": d["touch_id"]}, {"_id": 0})
+        assert t["verify_status"] == "pending" and t["school_id"] == "s2"
+        run = await db.mail_runs.find_one({"run_id": t["run_id"]}, {"_id": 0})
+        assert run["counts"]["sent"] == 1, "a backfilled envelope counts on its run"
+        assert "s2" in run["school_ids"]
+    _run(go())
+
+
+def test_a_school_without_an_address_still_parks_at_needs_address(db):
+    async def go():
+        await db.schools.insert_one({"school_id": "s3", "school_name": "Blank",
+                                     "address": "", "is_deleted": False})
+        await db.contacts.insert_one({"contact_id": "c5", "name": "No Addr",
+                                      "school_id": "s3"})
+        await db.physical_dispatches.insert_one({
+            "dispatch_id": "pd_10", "contact_id": "c5", "lead_name": "No Addr",
+            "material_type": "sample", "auto_from_drip": True,
+            "created_at": "2026-09-05T06:00:00+00:00"})
+        await link_dispatches_to_touches(db, apply=True)
+        d = await db.physical_dispatches.find_one({"dispatch_id": "pd_10"}, {"_id": 0})
+        t = await db.mail_touches.find_one({"touch_id": d["touch_id"]}, {"_id": 0})
+        assert t["verify_status"] == "needs_address"
+    _run(go())
+
+
+def test_an_orphan_keeps_its_flag_and_is_reported(db):
+    """Lead AND contact gone: there is nothing to address, so the stored flag is
+    the only handle left on the row and the migration must not strip it."""
+    async def go():
+        await db.physical_dispatches.insert_one({
+            "dispatch_id": "pd_gone", "lead_id": "l_dead", "contact_id": "c_dead",
+            "lead_name": "Deleted", "material_type": "brochure",
+            "auto_from_drip": True, "needs_dispatch": True,
+            "created_at": "2026-09-05T06:00:00+00:00"})
+        out = await link_dispatches_to_touches(db, apply=True)
+        assert out["skipped_orphan"] == 1 and out["skipped_no_match"] == 1
+        assert out["touches_created"] == 0
+        assert out["unset_needs_dispatch"] == 0
+        d = await db.physical_dispatches.find_one({"dispatch_id": "pd_gone"}, {"_id": 0})
+        assert d["needs_dispatch"] is True, "an orphan must stay findable"
+        assert not d.get("touch_id")
+    _run(go())
+
+
+def test_a_soft_deleted_contact_counts_as_gone(db):
+    async def go():
+        await db.contacts.insert_one({"contact_id": "c_del", "name": "Removed",
+                                      "school_id": "", "is_deleted": True})
+        await db.physical_dispatches.insert_one({
+            "dispatch_id": "pd_del", "contact_id": "c_del", "lead_name": "Removed",
+            "material_type": "brochure", "auto_from_drip": True,
+            "needs_dispatch": True, "created_at": "2026-09-05T06:00:00+00:00"})
+        out = await link_dispatches_to_touches(db, apply=True)
+        assert out["skipped_orphan"] == 1
+        d = await db.physical_dispatches.find_one({"dispatch_id": "pd_del"}, {"_id": 0})
+        assert d["needs_dispatch"] is True
+    _run(go())
+
+
+def test_a_pre_b1_scalar_contact_id_touch_still_matches(db):
+    """Historical touches store `contact_id` as a SCALAR - matching only the B1+
+    `contact_ids` array would miss the entire population being backfilled."""
+    async def go():
+        await db.contacts.insert_one({"contact_id": "c_old", "name": "Old Shape",
+                                      "school_id": ""})
+        await db.mail_touches.insert_one({
+            "touch_id": "mt_scalar", "run_id": "run_old", "school_id": "s1",
+            "contact_id": "c_old", "piece_type": "brochure",
+            "verify_status": "pending", "planned_date": "2026-09-04",
+            "created_at": "2026-09-04T06:00:00+00:00"})
+        await db.physical_dispatches.insert_one({
+            "dispatch_id": "pd_old", "lead_id": "", "contact_id": "c_old",
+            "lead_name": "Old Shape", "material_type": "brochure",
+            "auto_from_drip": True, "needs_dispatch": True,
+            "created_at": "2026-09-04T06:00:00+00:00"})
+        out = await link_dispatches_to_touches(db, apply=True)
+        assert out["linked"] == 1 and out["touches_created"] == 0
+        d = await db.physical_dispatches.find_one({"dispatch_id": "pd_old"}, {"_id": 0})
+        assert d["touch_id"] == "mt_scalar"
+        t = await db.mail_touches.find_one({"touch_id": "mt_scalar"}, {"_id": 0})
+        assert "pd_old" in t["dispatch_ids"]
+    _run(go())
+
+
+def test_an_already_delivered_dispatch_is_never_re_queued(db):
+    """`sent_date` / `received_confirmed` mean the envelope left months ago. Its
+    touch is born (or closed) `sent`, so it never appears as work owed."""
+    async def go():
+        await db.contacts.insert_one({"contact_id": "c_done", "name": "Posted",
+                                      "school_id": ""})
+        await db.physical_dispatches.insert_one({
+            "dispatch_id": "pd_sent", "contact_id": "c_done", "lead_name": "Posted",
+            "material_type": "brochure", "auto_from_drip": True,
+            "needs_dispatch": True, "received_confirmed": True,
+            "sent_date": "2026-07-04", "created_at": "2026-07-01T06:00:00+00:00"})
+        out = await link_dispatches_to_touches(db, apply=True)
+        assert out["marked_sent"] == 1
+        d = await db.physical_dispatches.find_one({"dispatch_id": "pd_sent"}, {"_id": 0})
+        t = await db.mail_touches.find_one({"touch_id": d["touch_id"]}, {"_id": 0})
+        assert t["verify_status"] == "sent"
+        assert t["posted_at"] == "2026-07-04T00:00:00+00:00"
+        assert t["verified_by"] == "migration"
+        run = await db.mail_runs.find_one({"run_id": t["run_id"]}, {"_id": 0})
+        assert run["counts"]["verified_sent"] == 1
+    _run(go())
+
+
+def test_a_delivered_dispatch_that_links_closes_its_existing_touch(db):
+    async def go():
+        await db.mail_runs.insert_one({"run_id": "run_j", "is_drip_run": True,
+                                       "send_date": "2026-08-01",
+                                       "piece_type": "brochure", "school_ids": [],
+                                       "status": "planned", "counts": {"sent": 1}})
+        await db.mail_touches.insert_one({
+            "touch_id": "mt_j", "run_id": "run_j", "school_id": "s1",
+            "lead_id": "l5", "piece_type": "brochure", "verify_status": "pending",
+            "created_at": "2026-08-01T06:00:00+00:00"})
+        await db.physical_dispatches.insert_one({
+            "dispatch_id": "pd_j", "lead_id": "l5", "lead_name": "Gone Out",
+            "material_type": "brochure", "auto_from_drip": True,
+            "needs_dispatch": True, "sent_date": "2026-08-02",
+            "created_at": "2026-08-01T06:00:00+00:00"})
+        out = await link_dispatches_to_touches(db, apply=True)
+        assert out["linked"] == 1 and out["marked_sent"] == 1
+        t = await db.mail_touches.find_one({"touch_id": "mt_j"}, {"_id": 0})
+        assert t["verify_status"] == "sent"
+        assert t["posted_at"] == "2026-08-02T00:00:00+00:00"
+        run = await db.mail_runs.find_one({"run_id": "run_j"}, {"_id": 0})
+        assert run["counts"]["verified_sent"] == 1
+    _run(go())
+
+
+def test_a_posted_run_is_never_reused_for_a_backfill(db):
+    async def go():
+        await db.contacts.insert_one({"contact_id": "c_b", "name": "Backfill",
+                                      "school_id": ""})
+        await db.mail_runs.insert_one({
+            "run_id": "run_done", "name": "Drip - brochure", "is_drip_run": True,
+            "send_date": "2026-06-06", "piece_type": "brochure", "status": "posted",
+            "school_ids": [], "counts": {"sent": 3, "verified_sent": 3}})
+        await db.physical_dispatches.insert_one({
+            "dispatch_id": "pd_b", "contact_id": "c_b", "lead_name": "Backfill",
+            "material_type": "brochure", "auto_from_drip": True,
+            "created_at": "2026-06-06T06:00:00+00:00"})
+        await link_dispatches_to_touches(db, apply=True)
+        d = await db.physical_dispatches.find_one({"dispatch_id": "pd_b"}, {"_id": 0})
+        t = await db.mail_touches.find_one({"touch_id": d["touch_id"]}, {"_id": 0})
+        assert t["run_id"] != "run_done", "a finished run must not be re-opened"
+        run = await db.mail_runs.find_one({"run_id": t["run_id"]}, {"_id": 0})
+        assert "backfill" in run["name"]
+        assert run["status"] == "planned" and run["counts"]["sent"] == 1
     _run(go())
 
 

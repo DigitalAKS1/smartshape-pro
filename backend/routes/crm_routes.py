@@ -239,16 +239,19 @@ async def create_physical_from_drip(lead: dict, material_type: str, seq_name: st
         planned = planned_date or today
         # One run per (sequence, piece, day), so a brochure step and a sample step
         # from two sequences don't collapse into one unprintable pile.
+        # Never append to a run the team has already posted/closed — that would
+        # flip it back to "planned" and re-open verified work.
+        open_run = {"status": {"$nin": ["posted", "completed", "cancelled"]}}
         run = await db.mail_runs.find_one(
             {"is_drip_run": True, "send_date": today,
-             "sequence_id": sequence_id, "piece_type": piece},
+             "sequence_id": sequence_id, "piece_type": piece, **open_run},
             {"_id": 0, "run_id": 1})
         if not run:
             # Mid-day deploy safety: reuse a run made by the older, coarser key
             # rather than creating a second run and posting a school twice.
             run = await db.mail_runs.find_one(
                 {"is_drip_run": True, "send_date": today, "piece_type": piece,
-                 "sequence_id": {"$exists": False}},
+                 "sequence_id": {"$exists": False}, **open_run},
                 {"_id": 0, "run_id": 1})
         if not run:
             run_id = f"run_{uuid.uuid4().hex[:10]}"
@@ -311,8 +314,22 @@ async def create_physical_from_drip(lead: dict, material_type: str, seq_name: st
         # created the touch — the two records for one posting never drift again.
         await db.physical_dispatches.update_one(
             {"dispatch_id": dispatch_id}, {"$set": {"touch_id": touch_id}})
-    except Exception:
-        pass  # mailer is best-effort; the dispatch + task already exist
+    except Exception as e:
+        # The mailer stays best-effort — the dispatch + task already exist — but it
+        # is now load-bearing for the To-post queue, so a failure is no longer
+        # silent. `needs_dispatch` derives False for a dispatch with no touch;
+        # `touch_link_error` is what makes that False explainable instead of
+        # looking like "nothing was owed".
+        logging.getLogger("crm").warning(
+            "[drip-mailer] touch link failed enrollment=%s step=%s dispatch=%s: %s: %s",
+            enrollment_id, step_number, dispatch_id, type(e).__name__, str(e)[:240])
+        try:
+            await db.physical_dispatches.update_one(
+                {"dispatch_id": dispatch_id},
+                {"$set": {"touch_link_error": f"{type(e).__name__}: {str(e)[:240]}",
+                          "touch_link_failed_at": now_iso}})
+        except Exception:
+            pass  # the breadcrumb is itself best-effort; never lose the dispatch
     return dispatch_id
 
 
@@ -323,33 +340,55 @@ async def repair_needs_address_touches(target_db=None) -> dict:
     into the ordinary To-post queue instead of staying flagged forever.
 
     `target_db` lets the caller (the scheduler, a migration) pass its own handle;
-    it defaults to this module's `db`."""
+    it defaults to this module's `db`.
+
+    A deleted contact/lead/school is not a repair: a soft-deleted record is gone
+    as far as the post office is concerned, so the piece stays parked."""
     _db = db if target_db is None else target_db
     repaired = 0
+    touched_runs = set()
     stuck = await _db.mail_touches.find(
         {"verify_status": "needs_address"}, {"_id": 0}).to_list(2000)
     for t in stuck:
         sid = ""
         for cid in (t.get("contact_ids") or []):
-            c = await _db.contacts.find_one({"contact_id": cid}, {"_id": 0, "school_id": 1})
+            c = await _db.contacts.find_one(
+                {"contact_id": cid, "is_deleted": {"$ne": True}}, {"_id": 0, "school_id": 1})
             sid = (c or {}).get("school_id") or ""
             if sid:
                 break
         if not sid and t.get("lead_id"):
-            l = await _db.leads.find_one({"lead_id": t["lead_id"]}, {"_id": 0, "school_id": 1})
+            l = await _db.leads.find_one(
+                {"lead_id": t["lead_id"], "is_deleted": {"$ne": True}},
+                {"_id": 0, "school_id": 1})
             sid = (l or {}).get("school_id") or ""
         if not sid:
             continue
-        school = await _db.schools.find_one({"school_id": sid}, {"_id": 0, "school_id": 1})
-        if not school:
+        school = await _db.schools.find_one(
+            {"school_id": sid, "is_deleted": {"$ne": True}},
+            {"_id": 0, "school_id": 1, "address": 1, "pincode": 1, "city": 1})
+        # Only a courier-complete address un-parks the piece — the same rule
+        # the sticker printer applies, so "pending" always means "printable".
+        if not school or _addr_missing(school):
             continue
         await _db.mail_touches.update_one(
             {"touch_id": t["touch_id"]},
             {"$set": {"school_id": sid, "verify_status": "pending"}})
         await _db.mail_runs.update_one(
             {"run_id": t.get("run_id", "")}, {"$addToSet": {"school_ids": sid}})
+        if t.get("run_id"):
+            touched_runs.add(t["run_id"])
         repaired += 1
-    return {"repaired": repaired}
+    # The repair moves pieces between tallies, so the runs it changed must be
+    # re-counted — otherwise a run keeps a stale `counts.needs_address` and can
+    # never reach "posted" even once every piece is resolved.
+    for rid in sorted(touched_runs):
+        try:
+            await _recompute_run_counts(rid, target_db=_db)
+        except Exception as e:
+            logging.getLogger("crm").warning(
+                "[mail] recount after repair failed run=%s: %s", rid, str(e)[:180])
+    return {"repaired": repaired, "runs_recounted": len(touched_runs)}
 
 
 import os as _os
@@ -1571,22 +1610,36 @@ async def get_mail_run_addresses(run_id: str, request: Request):
     if not run:
         raise HTTPException(status_code=404, detail="Mail run not found")
     touches = await db.mail_touches.find({"run_id": run_id}, {"_id": 0}).to_list(None)
-    ids = [t["school_id"] for t in touches]
+    ids = [t["school_id"] for t in touches if t.get("school_id")]
     schools = await db.schools.find({"school_id": {"$in": ids}}, {"_id": 0}).to_list(None)
     by_id = {s["school_id"]: s for s in schools}
     rows = []
     for t in touches:
-        sid = t["school_id"]
-        s = by_id.get(sid, {"school_id": sid, "school_name": "(deleted school)"})
+        sid = t.get("school_id") or ""
+        names = [n for n in (t.get("recipient_names") or []) if str(n or "").strip()]
+        if not sid:
+            # D2: a school-less piece is a real envelope for a real person whose
+            # address we don't have yet. Show WHO it is for and say "No address" —
+            # falling through to "(deleted school)" reads as data corruption and
+            # sends the user hunting for a school that never existed.
+            s = {"school_id": "", "school_name": ", ".join(names) or "(no recipient)",
+                 "primary_contact_name": ", ".join(names),
+                 "address": "No address", "city": "", "state": "",
+                 "pincode": "", "phone": ""}
+            missing = True
+        else:
+            s = by_id.get(sid, {"school_id": sid, "school_name": "(deleted school)"})
+            missing = _addr_missing(s)
         rows.append({
             "school_id": sid,
             "touch_id": t.get("touch_id", ""),
             "school_name": s.get("school_name", ""),
+            "recipient_names": names,
             "primary_contact_name": s.get("primary_contact_name", ""),
             "address": s.get("address", ""), "city": s.get("city", ""),
             "state": s.get("state", ""), "pincode": s.get("pincode", ""),
             "phone": s.get("phone", ""),
-            "missing": _addr_missing(s),
+            "missing": missing,
             # Lifecycle — drives the Verify & post tab.
             "verify_status": t.get("verify_status", "pending"),
             "planned_date": t.get("planned_date", ""),
@@ -1737,17 +1790,21 @@ def _require_master_admin(user):
 VERIFY_STATUSES = ("pending", "needs_address", "sent", "not_sent", "skipped")
 
 
-async def _recompute_run_counts(run_id: str):
+async def _recompute_run_counts(run_id: str, target_db=None):
     """Run status is DERIVED from its touches, never set blind: 'planned' while any
     piece is unresolved, 'posted' once every piece is sent or deliberately skipped.
-    'closed' is only ever set by an explicit user action."""
-    touches = await db.mail_touches.find({"run_id": run_id},
-                                         {"_id": 0, "verify_status": 1}).to_list(None)
+    'closed' is only ever set by an explicit user action.
+
+    `target_db` mirrors `repair_needs_address_touches`: a caller holding its own
+    handle (scheduler, migration, test) recounts on that handle."""
+    _db = db if target_db is None else target_db
+    touches = await _db.mail_touches.find({"run_id": run_id},
+                                          {"_id": 0, "verify_status": 1}).to_list(None)
     tally = {s: 0 for s in VERIFY_STATUSES}
     for t in touches:
         st = t.get("verify_status", "pending")
         tally[st] = tally.get(st, 0) + 1
-    run = await db.mail_runs.find_one({"run_id": run_id}, {"_id": 0, "status": 1})
+    run = await _db.mail_runs.find_one({"run_id": run_id}, {"_id": 0, "status": 1})
     _set = {
         "counts.verified_sent": tally["sent"],
         "counts.not_sent": tally["not_sent"],
@@ -1759,8 +1816,8 @@ async def _recompute_run_counts(run_id: str):
         # still 'planned' — never "posted" with an envelope addressed to nobody.
         unresolved = tally["pending"] + tally["needs_address"]
         _set["status"] = "posted" if (touches and unresolved == 0) else "planned"
-    await db.mail_runs.update_one({"run_id": run_id}, {"$set": _set})
-    return await db.mail_runs.find_one({"run_id": run_id}, {"_id": 0})
+    await _db.mail_runs.update_one({"run_id": run_id}, {"$set": _set})
+    return await _db.mail_runs.find_one({"run_id": run_id}, {"_id": 0})
 
 
 async def _do_verify(run_id: str, user: dict, body: dict):
@@ -1772,10 +1829,19 @@ async def _do_verify(run_id: str, user: dict, body: dict):
 
     if body.get("undo"):
         ids = body.get("touch_ids") or []
-        await db.mail_touches.update_many(
+        # D2: undo puts a piece back where it came FROM. A school-less piece was
+        # never postable, so it parks at `needs_address` again — un-ticking it
+        # into `pending` would drop an envelope addressed to nobody straight back
+        # into the To-post queue.
+        undone = await db.mail_touches.find(
             {"run_id": run_id, "touch_id": {"$in": ids}},
-            {"$set": {"verify_status": "pending", "posted_at": None,
-                      "verified_by": "", "verified_at": None, "reason": ""}})
+            {"_id": 0, "touch_id": 1, "school_id": 1}).to_list(None)
+        for t in undone:
+            back = "pending" if str(t.get("school_id") or "").strip() else "needs_address"
+            await db.mail_touches.update_one(
+                {"touch_id": t["touch_id"]},
+                {"$set": {"verify_status": back, "posted_at": None,
+                          "verified_by": "", "verified_at": None, "reason": ""}})
         # D4: the dispatch is updated FROM the touch, never the other way round.
         await db.physical_dispatches.update_many(
             {"touch_id": {"$in": ids}}, {"$set": {"sent_date": "", "courier_name": ""}})
@@ -2267,7 +2333,11 @@ async def mail_run_stickers(run_id: str, request: Request):
     if not run:
         raise HTTPException(status_code=404, detail="Mail run not found")
     touches = await db.mail_touches.find({"run_id": run_id}, {"_id": 0}).to_list(None)
-    ids = [t["school_id"] for t in touches]
+    # D2: a `needs_address` piece has no address to print — it is NEVER a label,
+    # with or without ?skip_incomplete. Printing it wastes a sticker, and worse,
+    # stamps `printed_at` on a piece that cannot go anywhere.
+    touches = [t for t in touches if t.get("verify_status") != "needs_address"]
+    ids = [t["school_id"] for t in touches if t.get("school_id")]
     schools = await db.schools.find({"school_id": {"$in": ids}}, {"_id": 0}).to_list(None)
     schools_by_id = {s["school_id"]: s for s in schools}
     company = await db.settings.find_one({"type": "company"}, {"_id": 0}) or {}

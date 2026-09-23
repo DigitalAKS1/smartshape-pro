@@ -254,6 +254,9 @@ async def connect_db():
                                           background=True))
     # D4: the dispatch -> touch back-link, read on every dispatch list.
     await _i(db.physical_dispatches.create_index("touch_id", background=True))
+    # The exact join key the backfill migration (and any re-link) uses.
+    await _i(db.physical_dispatches.create_index([("enrollment_id", 1), ("step_number", 1)],
+                                                 background=True))
     await db.greeting_logs.create_index([("contact_id", 1), ("sent_at", -1)], background=True)
     await db.greeting_logs.create_index([("phone", 1), ("year", 1)], background=True)
     await db.whatsapp_logs.create_index([("lead_id", 1), ("sent_at", -1)], background=True)
