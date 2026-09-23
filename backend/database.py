@@ -254,6 +254,11 @@ async def connect_db():
                                           background=True))
     # D4: the dispatch -> touch back-link, read on every dispatch list.
     await _i(db.physical_dispatches.create_index("touch_id", background=True))
+    # D3: the one shared Materials catalogue. `piece_type` is what a drip step's
+    # `material_type` and a run/touch's `piece_type` store, and it is what the
+    # idempotent seed matches on, so it is the lookup that matters.
+    await _i(db.mail_materials.create_index("material_id", unique=True, background=True))
+    await _i(db.mail_materials.create_index("piece_type", background=True))
     await db.greeting_logs.create_index([("contact_id", 1), ("sent_at", -1)], background=True)
     await db.greeting_logs.create_index([("phone", 1), ("year", 1)], background=True)
     await db.whatsapp_logs.create_index([("lead_id", 1), ("sent_at", -1)], background=True)

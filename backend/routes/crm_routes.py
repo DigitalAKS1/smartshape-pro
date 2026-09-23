@@ -807,6 +807,120 @@ def _area_school_query(area):
     return {"area_id_never_matches": True}  # misconfigured area matches nothing
 
 
+# ==================== MAIL MATERIALS (D3) ====================
+# One shared list behind BOTH the drip step editor's `material_type` (was a
+# literal list in DripsTab.js) and the mail run's `piece_type` (was a DIFFERENT
+# literal list in OfflineMail.js / ManualMailRunBuilder.js). The two disagreed:
+# catalogue|kit|gift could not be chosen on a manual run and newsletter could
+# not be chosen on a drip step. Seeded with the union of both.
+#
+# `piece_type` is the value a drip step's `material_type` and a run/touch's
+# `piece_type` actually store; `name` is only the label a human reads.
+# `material_name` (what is actually in the envelope) stays free text.
+_DEFAULT_MATERIALS = [
+    ("Brochure", "brochure"),
+    ("Sample", "sample"),
+    ("Catalogue", "catalogue"),
+    ("Kit", "kit"),
+    ("Newsletter", "newsletter"),
+    ("Gift", "gift"),
+    ("Other", "other"),
+]
+
+
+async def _seed_materials() -> None:
+    """Idempotent: matched on `piece_type`, so renaming a seeded material in the
+    UI does not resurrect a twin on the next read.
+
+    Guarded like every other startup seed — it runs both at boot and on the
+    first read, and a database that refuses the insert must never stop the app
+    coming up or turn a plain list request into a 500.
+    """
+    try:
+        for name, piece in _DEFAULT_MATERIALS:
+            if await db.mail_materials.find_one({"piece_type": piece},
+                                                {"_id": 0, "material_id": 1}):
+                continue
+            await db.mail_materials.insert_one({
+                "material_id": f"mm_{uuid.uuid4().hex[:10]}",
+                "name": name, "piece_type": piece, "active": True,
+                "created_by": "system",
+                "created_at": datetime.now(timezone.utc).isoformat()})
+    except Exception as e:
+        logging.warning(f"[mail_materials] seed skipped: {e}")
+
+
+@router.get("/mail-materials")
+async def get_mail_materials(request: Request):
+    """The catalogue both authoring surfaces read. Active only, unless `?all=1`
+    (`?include_inactive=1` means the same) — the admin editor must still show,
+    and be able to bring back, a retired material that old drip steps name."""
+    await get_current_user(request)
+    await _seed_materials()
+    show_all = bool(request.query_params.get("all")
+                    or request.query_params.get("include_inactive"))
+    q = {} if show_all else {"active": True}
+    return await db.mail_materials.find(q, {"_id": 0}).sort("name", 1).to_list(500)
+
+
+@router.post("/mail-materials")
+async def create_mail_material(request: Request):
+    user = await get_current_user(request)
+    require_module(user, "leads", "read_write")
+    body = await request.json()
+    name = (body.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Give the material a name")
+    clash = await db.mail_materials.find_one(
+        {"name": {"$regex": f"^{re.escape(name)}$", "$options": "i"}},
+        {"_id": 0, "material_id": 1})
+    if clash:
+        raise HTTPException(status_code=409, detail=f'A material called "{name}" already exists')
+    material_id = f"mm_{uuid.uuid4().hex[:10]}"
+    await db.mail_materials.insert_one({
+        "material_id": material_id, "name": name,
+        "piece_type": (body.get("piece_type") or "other").strip().lower(),
+        "active": True, "created_by": user.get("email", ""),
+        "created_at": datetime.now(timezone.utc).isoformat()})
+    return await db.mail_materials.find_one({"material_id": material_id}, {"_id": 0})
+
+
+@router.put("/mail-materials/{material_id}")
+async def update_mail_material(material_id: str, request: Request):
+    user = await get_current_user(request)
+    require_module(user, "leads", "read_write")
+    body = await request.json()
+    _set = {}
+    if "name" in body:
+        name = (body.get("name") or "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Give the material a name")
+        _set["name"] = name
+    if "piece_type" in body:
+        _set["piece_type"] = (body.get("piece_type") or "other").strip().lower()
+    if "active" in body:
+        _set["active"] = bool(body["active"])
+    if not _set:
+        raise HTTPException(status_code=400, detail="Nothing to update")
+    res = await db.mail_materials.update_one({"material_id": material_id}, {"$set": _set})
+    if not res.matched_count:
+        raise HTTPException(status_code=404, detail="Material not found")
+    return await db.mail_materials.find_one({"material_id": material_id}, {"_id": 0})
+
+
+@router.delete("/mail-materials/{material_id}")
+async def delete_mail_material(material_id: str, request: Request):
+    """Deactivate, never delete. D3: a drip step whose `material_type` names this
+    material must keep firing, and its history must keep reading back."""
+    user = await get_current_user(request)
+    require_module(user, "leads", "read_write")
+    res = await db.mail_materials.update_one({"material_id": material_id},
+                                             {"$set": {"active": False}})
+    if not res.matched_count:
+        raise HTTPException(status_code=404, detail="Material not found")
+    return {"message": "Material deactivated", "material_id": material_id}
+
+
 @router.get("/mail-areas")
 async def get_mail_areas(request: Request):
     await get_current_user(request)
