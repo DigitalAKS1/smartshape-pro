@@ -1015,10 +1015,12 @@ async def sequence_deliveries(sequence_id: str, request: Request):
             sid = lead.get("school_id", "")
             school_name = schools.get(sid, {}).get("school_name") or lead.get("company_name", "")
             owner = lead.get("assigned_to", "")
+            recipient_kind, recipient_name = "lead", lead.get("contact_name", "")
         else:
             sid = contact.get("school_id") or enr.get("school_id") or ""
             school_name = schools.get(sid, {}).get("school_name") or contact.get("company", "")
             owner = contact.get("assigned_to") or schools.get(sid, {}).get("assigned_to", "")
+            recipient_kind, recipient_name = "contact", contact.get("name", "")
         for n, step in steps.items():
             log = logs.get((enr["enrollment_id"], n))
             touch = touches.get((enr["enrollment_id"], n))
@@ -1041,7 +1043,13 @@ async def sequence_deliveries(sequence_id: str, request: Request):
                 "enrollment_id": enr["enrollment_id"], "lead_id": enr.get("lead_id"),
                 "contact_id": enr.get("contact_id"),
                 "school_id": sid, "school_name": school_name or "(no school)",
-                "owner": owner, "step_number": n,
+                "owner": owner,
+                # The drill-down is the "who did we actually reach" screen; a
+                # school name alone cannot answer it once contacts are enrolled
+                # directly (a contact-keyed drip has no lead at all).
+                "recipient_kind": recipient_kind,
+                "recipient_name": recipient_name,
+                "step_number": n,
                 "channel": _CHANNEL_OF.get(step.get("message_type", ""), step.get("message_type", "")),
                 "item": step.get("material_name") or step.get("material_type") or "",
                 "planned_date": planned, "actual_date": actual, "status": status,
@@ -1054,6 +1062,8 @@ async def sequence_deliveries(sequence_id: str, request: Request):
         rows = [r for r in rows if r["status"] == qp["status"]]
     if qp.get("channel"):
         rows = [r for r in rows if r["channel"] == qp["channel"]]
+    if qp.get("owner"):
+        rows = [r for r in rows if r["owner"] == qp["owner"]]
     if qp.get("step"):
         rows = [r for r in rows if str(r["step_number"]) == str(qp["step"])]
     rows.sort(key=lambda r: (r["school_name"], r["step_number"]))

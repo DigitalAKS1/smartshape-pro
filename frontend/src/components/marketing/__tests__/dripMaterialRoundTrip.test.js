@@ -190,3 +190,63 @@ test('Enter in the name box goes through the same guarded save', async () => {
   expect(dripApi.update).toHaveBeenCalledTimes(1);
   await act(async () => { release(); });
 });
+
+// D3 — the drill-down is the "who did we actually reach" screen: a school name
+// alone cannot answer it once contacts are enrolled directly.
+test('the deliveries drill-down names the contact and the owner, and can export', async () => {
+  dripApi.deliveries.mockResolvedValue({ data: {
+    rows: [{ enrollment_id: 'e1', school_id: 's1', school_name: 'DPS',
+             recipient_name: 'R Sharma', recipient_kind: 'lead',
+             owner: 'parul@smartshape.in', step_number: 1, channel: 'mail',
+             item: '2026 Catalogue', planned_date: '2026-09-10', actual_date: '',
+             status: 'queued' }],
+    totals: { queued: 1 } } });
+  await render([mapSeq(API_SEQ)]);
+
+  click(document.querySelector('[data-testid="expand-seq1"]'));
+  await act(async () => {
+    document.querySelector('[data-testid="deliveries-seq1"]')
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+  });
+
+  const table = document.querySelector('[data-testid="deliveries-table"]').textContent;
+  expect(table).toContain('R Sharma');
+  expect(table).toContain('parul@smartshape.in');
+  expect(document.querySelector('[data-testid="deliveries-export-seq1"]')).not.toBeNull();
+});
+
+test('exporting the drill-down writes the rows on screen, contact and owner included', async () => {
+  // jsdom's Blob has no .text(), so the CSV text is captured as it is built.
+  const made = [];
+  const RealBlob = global.Blob;
+  global.Blob = function (bits, opts) { made.push(bits.join('')); return new RealBlob(bits, opts); };
+  global.URL.createObjectURL = jest.fn(() => 'blob:x');
+  global.URL.revokeObjectURL = jest.fn();
+  dripApi.deliveries.mockResolvedValue({ data: {
+    rows: [{ enrollment_id: 'e2', school_id: 's1', school_name: 'DPS',
+             recipient_name: 'A Menon', recipient_kind: 'contact',
+             owner: 'bde@smartshape.in', step_number: 1, channel: 'mail',
+             item: '2026 Catalogue', planned_date: '2026-09-10', actual_date: '',
+             status: 'queued' }],
+    totals: { queued: 1 } } });
+  await render([mapSeq(API_SEQ)]);
+
+  click(document.querySelector('[data-testid="expand-seq1"]'));
+  await act(async () => {
+    document.querySelector('[data-testid="deliveries-seq1"]')
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+  });
+  act(() => {
+    document.querySelector('[data-testid="deliveries-export-seq1"]')
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  });
+
+  global.Blob = RealBlob;
+  expect(global.URL.createObjectURL).toHaveBeenCalled();
+  const text = made[0];
+  expect(text.split('\n')[0]).toBe('school,contact,owner,step,channel,item,planned,actual,status');
+  expect(text).toContain('"A Menon"');
+  expect(text).toContain('"bde@smartshape.in"');
+});

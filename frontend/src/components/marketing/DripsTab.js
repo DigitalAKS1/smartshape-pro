@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
 import {
   Zap, Plus, ChevronDown, Pencil, Trash2, Paperclip,
-  RefreshCw, X, Upload, Loader2, FileText, Check, ChevronRight,
+  RefreshCw, X, Upload, Loader2, FileText, Check, ChevronRight, Download,
 } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
@@ -61,6 +61,28 @@ export default function DripsTab({ tk, drips, setDrips }) {
       toast.error('Could not load deliveries');
       setDeliveries(null);
     }
+  }
+
+  // Client-side CSV of exactly the rows on screen — the drill-down is already
+  // filtered, so exporting anything else would not match what was asked for.
+  function exportDeliveries(d) {
+    const rows = deliveries?.rows || [];
+    const head = ['school', 'contact', 'owner', 'step', 'channel', 'item',
+                  'planned', 'actual', 'status'];
+    const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const csv = [head.join(',')].concat(rows.map(r => [
+      r.school_name, r.recipient_name, r.owner, r.step_number, r.channel,
+      r.item, r.planned_date, r.actual_date, r.status,
+    ].map(esc).join(','))).join('\n');
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${(d.name || 'sequence').replace(/[^\w-]+/g, '-')}-deliveries.csv`;
+    a.rel = 'noopener'; a.style.display = 'none';
+    document.body.appendChild(a);      // must be in the DOM for .click() in Firefox/Safari
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
   }
 
   async function toggle(d) {
@@ -296,6 +318,7 @@ export default function DripsTab({ tk, drips, setDrips }) {
                   <Trash2 className="h-3.5 w-3.5 text-red-400" />
                 </button>
                 <button onClick={() => setExpanded(expanded === d.id ? null : d.id)}
+                  data-testid={`expand-${d.id}`} title="Show steps"
                   className={`h-7 w-7 rounded-lg ${tk.hov} flex items-center justify-center`}>
                   <ChevronDown className={`h-4 w-4 ${tk.tm} transition-transform duration-200 ${expanded === d.id ? 'rotate-180' : ''}`} />
                 </button>
@@ -354,18 +377,27 @@ export default function DripsTab({ tk, drips, setDrips }) {
                       <p className={`text-xs ${tk.tm} py-4 text-center`}>Loading…</p>
                     ) : (
                       <>
-                        <div className="flex flex-wrap gap-1.5 mb-2">
-                          {Object.entries(deliveries.totals).map(([k, v]) => (
-                            <span key={k} className={`text-[10px] px-2 py-0.5 rounded-full ${k === 'sent' ? 'bg-green-500/15 text-green-500' : (k === 'not_sent' || k === 'failed') ? 'bg-red-500/15 text-red-400' : 'bg-[var(--accent)]/10 text-[var(--accent)]'}`}>
-                              {k.replace('_', ' ')} · {v}
-                            </span>
-                          ))}
+                        <div className="flex items-center gap-1.5 mb-2">
+                          <div className="flex flex-wrap gap-1.5">
+                            {Object.entries(deliveries.totals).map(([k, v]) => (
+                              <span key={k} className={`text-[10px] px-2 py-0.5 rounded-full ${k === 'sent' ? 'bg-green-500/15 text-green-500' : (k === 'not_sent' || k === 'failed') ? 'bg-red-500/15 text-red-400' : 'bg-[var(--accent)]/10 text-[var(--accent)]'}`}>
+                                {k.replace('_', ' ')} · {v}
+                              </span>
+                            ))}
+                          </div>
+                          <button onClick={() => exportDeliveries(d)} data-testid={`deliveries-export-${d.id}`}
+                            className={`ml-auto h-7 px-2.5 rounded-lg border ${tk.bdr} text-[11px] ${tk.tm} ${tk.hov} inline-flex items-center gap-1`}>
+                            <Download className="h-3 w-3" /> Export
+                          </button>
                         </div>
                         <div className="overflow-x-auto max-h-72 overflow-y-auto">
                           <table className="w-full text-xs">
                             <thead className="sticky top-0 bg-[var(--bg-primary)]">
                               <tr className={`text-[10px] uppercase tracking-wide ${tk.tm} text-left`}>
-                                <th className="py-1.5 pr-2">School</th><th className="py-1.5 pr-2">Step</th>
+                                <th className="py-1.5 pr-2">School</th>
+                                <th className="py-1.5 pr-2">Contact</th>
+                                <th className="py-1.5 pr-2">Owner</th>
+                                <th className="py-1.5 pr-2">Step</th>
                                 <th className="py-1.5 pr-2">Channel</th><th className="py-1.5 pr-2">Item</th>
                                 <th className="py-1.5 pr-2">Planned</th><th className="py-1.5 pr-2">Actual</th>
                                 <th className="py-1.5 pr-2">Status</th>
@@ -382,6 +414,8 @@ export default function DripsTab({ tk, drips, setDrips }) {
                                       </button>
                                     ) : <span className={tk.tm}>{r.school_name}</span>}
                                   </td>
+                                  <td className={`py-1.5 pr-2 ${tk.t1}`}>{r.recipient_name || '—'}</td>
+                                  <td className={`py-1.5 pr-2 text-[10px] ${tk.tm}`}>{r.owner || '—'}</td>
                                   <td className={`py-1.5 pr-2 font-mono ${tk.tm}`}>{r.step_number}</td>
                                   <td className={`py-1.5 pr-2 capitalize ${tk.tm}`}>{r.channel}</td>
                                   <td className={`py-1.5 pr-2 ${tk.tm}`}>{r.item || '—'}</td>
@@ -395,7 +429,7 @@ export default function DripsTab({ tk, drips, setDrips }) {
                                 </tr>
                               ))}
                               {deliveries.rows.length === 0 && (
-                                <tr><td colSpan="7" className={`py-6 text-center ${tk.tm}`}>Nobody is enrolled in this sequence yet.</td></tr>
+                                <tr><td colSpan="9" className={`py-6 text-center ${tk.tm}`}>Nobody is enrolled in this sequence yet.</td></tr>
                               )}
                             </tbody>
                           </table>
