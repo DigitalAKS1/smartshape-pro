@@ -1117,6 +1117,9 @@ REPORT_CATALOGUE = [
     ("marketing", "Marketing", [
         ("drip", "Drip sequences", "Who is enrolled, what fired, and what stalled.",
          "/marketing", False),
+        ("marketing_sent", "Marketing sent",
+         "Every school, contact and sequence we have actually reached.",
+         "/reports/marketing-sent", False),
         ("mail_gap", "Post: plan vs actual", "What you planned to post against what really went out.",
          "/offline-mail", False),
         ("mail_roi", "Postage ROI", "Response, appointments and cost per reply for each run.",
@@ -1163,6 +1166,9 @@ async def reports_hub(request: Request):
     tasks_due = await _safe(db.tasks.count_documents(
         {"status": "pending", "due_date": {"$lte": today, "$ne": ""}}), "—")
     touches = await _safe(db.engagement_events.count_documents({}), "—")
+    # "Schools reached" is VERIFIED postings only (D6) — a queued piece is not a reach.
+    reached = await _safe(db.mail_touches.distinct("school_id", {"verify_status": "sent"}), [])
+    schools_reached = len([s for s in reached if s]) if isinstance(reached, list) else 0
 
     def _n(v):
         return v if isinstance(v, int) else "—"
@@ -1181,6 +1187,8 @@ async def reports_hub(request: Request):
             "value": overdue_post if overdue_post else posted,
             "tone": "warn" if overdue_post else "neutral",
         },
+        "marketing_sent": {"label": "schools reached", "value": schools_reached,
+                           "tone": "neutral"},
         "mail_roi":    {"label": "pieces posted", "value": posted, "tone": "neutral"},
         "engagement":  {"label": "touches logged", "value": _n(touches), "tone": "neutral"},
         "orders":      {"label": "orders open", "value": _n(open_orders), "tone": "neutral"},

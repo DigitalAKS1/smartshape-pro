@@ -220,3 +220,16 @@ def test_csv_has_the_same_rows_as_json(db, monkeypatch):
         assert int(first["qr_scans"]) == js["rows"][0]["responses"]["qr_scans"]
         assert "attachment" in resp.headers.get("content-disposition", "")
     _run(go())
+
+
+def test_the_report_appears_in_the_hub_catalogue(db, monkeypatch):
+    async def go():
+        await _seed(db)
+        _as(monkeypatch, ADMIN)
+        hub = await crm.reports_hub(FakeRequest())
+        marketing = next(s for s in hub["sections"] if s["key"] == "marketing")
+        row = next(r for r in marketing["reports"] if r["key"] == "marketing_sent")
+        assert row["title"] == "Marketing sent"
+        assert row["route"] == "/reports/marketing-sent"
+        assert row["metric"]["value"] == 1, "one school has a verified-sent piece"
+    _run(go())
