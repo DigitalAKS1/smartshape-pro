@@ -2141,6 +2141,15 @@ async def update_mail_run_status(run_id: str, request: Request):
         # through verification — keeping the per-school truth (and the follow-up
         # cadence) honest instead of blind-stamping the whole run.
         return await _do_verify(run_id, user, {"select_all": True, "verify_status": "sent"})
+    # Re-opening or closing a run is a whole-run act, like deleting it: the
+    # builder's call or an admin's. A drip run is created_by "system", so it is
+    # admin-only — a rep closes her own pieces by ticking them, not the run.
+    run = await db.mail_runs.find_one({"run_id": run_id}, {"_id": 0})
+    if not run:
+        raise HTTPException(status_code=404, detail="Mail run not found")
+    if not _owns_run(user, run):
+        raise HTTPException(status_code=403,
+                            detail="Only an admin or the person who built this run can change its status")
     await db.mail_runs.update_one({"run_id": run_id}, {"$set": {"status": status}})
     return await db.mail_runs.find_one({"run_id": run_id}, {"_id": 0})
 

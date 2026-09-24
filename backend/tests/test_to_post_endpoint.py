@@ -570,6 +570,42 @@ def test_the_summary_overdue_count_ignores_resolved_pieces(db, monkeypatch):
     _run(go())
 
 
+# ── Micro-round: a run's status is the builder's or an admin's call ──────────
+
+def test_only_an_admin_or_the_builder_can_change_a_runs_status(db, monkeypatch):
+    async def go():
+        await _seed(db)
+        await db.mail_runs.update_one({"run_id": "r1"}, {"$set": {"created_by": "system"}})
+        await db.mail_runs.update_one({"run_id": "r2"},
+                                      {"$set": {"created_by": "bde@smartshape.in"}})
+        await db.mail_runs.insert_one({"run_id": "r3", "name": "Parul list", "status": "planned",
+                                       "created_by": "parul@smartshape.in", "school_ids": []})
+        _as(monkeypatch, REP)
+        for rid in ("r1", "r2"):                 # a drip run, and a colleague's run
+            for status in ("closed", "planned"):
+                with pytest.raises(crm.HTTPException) as e:
+                    await crm.update_mail_run_status(rid, FakeRequest(body={"status": status}))
+                assert e.value.status_code == 403, (rid, status)
+        assert (await db.mail_runs.find_one({"run_id": "r2"})).get("status") != "closed"
+        out = await crm.update_mail_run_status("r3", FakeRequest(body={"status": "closed"}))
+        assert out["status"] == "closed", "the builder closes her own run"
+        _as(monkeypatch, ADMIN)
+        for rid in ("r1", "r2"):
+            out = await crm.update_mail_run_status(rid, FakeRequest(body={"status": "closed"}))
+            assert out["status"] == "closed", rid
+    _run(go())
+
+
+def test_a_status_change_on_a_missing_run_is_a_404(db, monkeypatch):
+    async def go():
+        await _seed(db)
+        _as(monkeypatch, ADMIN)
+        with pytest.raises(crm.HTTPException) as e:
+            await crm.update_mail_run_status("nope", FakeRequest(body={"status": "closed"}))
+        assert e.value.status_code == 404
+    _run(go())
+
+
 # ── Fix round 3: every mail-run route honours the caller's scope ─────────────
 
 async def _colleague_piece_in_r1(db, status="pending"):
