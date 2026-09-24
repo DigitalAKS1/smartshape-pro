@@ -68,9 +68,12 @@ export default function ManualMailRunBuilder({ onClose, onCreated }) {
     if (!picked.length) { toast.error('Add at least one school'); return; }
     setBusy(true);
     try {
-      await mailRuns.create({ name: form.name || 'Manual list', piece_type: form.piece_type,
+      const r = await mailRuns.create({ name: form.name || 'Manual list', piece_type: form.piece_type,
         send_date: form.send_date, school_ids: picked.map(p => p.school_id) });
-      toast.success(`Mail run created for ${picked.length} schools`);
+      // The server drops schools that are not the caller's; say what it KEPT.
+      const skipped = (r?.data?.skipped_not_visible || []).length;
+      toast.success(`Mail run created for ${picked.length - skipped} schools`
+        + (skipped ? ` · ${skipped} skipped — not yours` : ''));
       onCreated && onCreated();
       onClose();
     } catch (e) { toast.error(e?.response?.data?.detail || 'Failed to create run'); }

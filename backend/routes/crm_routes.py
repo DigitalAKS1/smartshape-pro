@@ -1075,7 +1075,7 @@ async def get_mail_area_schools(area_id: str, request: Request):
 
 
 # ── Mail Runs (Territory & Offline-Mail engine, sub-project A2) ───────────────
-async def _upsert_direct_mail_lead(school_id, deal_type, owner, now_iso):
+async def _upsert_direct_mail_lead(school_id, deal_type, owner, now_iso, *, viewer=None):
     """Tag a mailed school as a Direct-Mail lead — reuse its open deal OF THE SAME
     DEAL TYPE if present, else create one — so mailed schools become filterable
     pipeline.
@@ -1086,16 +1086,31 @@ async def _upsert_direct_mail_lead(school_id, deal_type, owner, now_iso):
     type, so the annuity had nowhere of its own to live. An untyped touch still
     matches an untyped deal, which is how everything behaved before deal types
     existed.
+
+    `viewer` (the signed-in user building a mail run) scopes the reuse: a
+    non-admin only ever re-stamps a lead she can see (`_leads_visibility_or`).
+    If the matching open deal belongs to someone she cannot see, it is left
+    exactly as it is AND no second deal is opened beside it — a duplicate lead
+    for the same school and motion is worse than a touch with no lead — and ""
+    is returned. With no `viewer` (the drip enrol path, which scopes its own
+    schools) behaviour is unchanged.
     """
     sch = await db.schools.find_one({"school_id": school_id}, {"_id": 0})
     if not sch:
         return None
     dt = (deal_type or "").strip()
-    existing = await db.leads.find_one(
-        {"school_id": school_id, "stage": {"$nin": ["won", "lost"]},
-         "is_deleted": {"$ne": True},
-         "deal_type": dt if dt else {"$in": ["", None]}},
-        {"_id": 0, "lead_id": 1})
+    match = {"school_id": school_id, "stage": {"$nin": ["won", "lost"]},
+             "is_deleted": {"$ne": True},
+             "deal_type": dt if dt else {"$in": ["", None]}}
+    existing = await db.leads.find_one(match, {"_id": 0, "lead_id": 1})
+    if existing and viewer is not None and get_team(viewer) != "admin" \
+            and viewer.get("role") != "admin":
+        mine = await db.leads.find_one(
+            _merge_or(dict(match), await _leads_visibility_or(viewer["email"])),
+            {"_id": 0, "lead_id": 1})
+        if not mine:
+            return ""
+        existing = mine
     if existing:
         _set = {"last_activity_date": now_iso, "source": "Direct Mail"}
         if deal_type:
@@ -1136,7 +1151,8 @@ async def _make_mail_run(user, *, name, piece_type="brochure", school_ids=None, 
         "counts": {"sent": len(school_ids), "delivered": 0, "responded": 0, "appointments": 0},
     })
     for sid in school_ids:
-        lead_id = await _upsert_direct_mail_lead(sid, deal_type, user["email"], now_iso)
+        lead_id = await _upsert_direct_mail_lead(sid, deal_type, user["email"], now_iso,
+                                                 viewer=user)
         await db.mail_touches.insert_one({
             "touch_id": f"mt_{uuid.uuid4().hex[:10]}", "run_id": run_id, "school_id": sid,
             "lead_id": lead_id, "piece_type": piece_type, "posted_at": None,
@@ -1148,16 +1164,41 @@ async def _make_mail_run(user, *, name, piece_type="brochure", school_ids=None, 
     return await db.mail_runs.find_one({"run_id": run_id}, {"_id": 0})
 
 
+async def _schools_i_can_mail(user: dict, school_ids: list):
+    """Split requested school ids into (kept, skipped_not_visible), order kept.
+
+    A rep may only build a run from schools she can see (`_schools_visibility_or`):
+    a run over a colleague's school would let her re-stamp that school's lead and,
+    as its builder, push addresses onto that school's master record through
+    sync-schools. An admin is unscoped."""
+    seen, ids = set(), []
+    for sid in school_ids or []:
+        if sid and sid not in seen:
+            seen.add(sid)
+            ids.append(sid)
+    if get_team(user) == "admin" or user.get("role") == "admin" or not ids:
+        return ids, []
+    visible = {s["school_id"] for s in await db.schools.find(
+        _merge_or({"school_id": {"$in": ids}}, await _schools_visibility_or(user["email"])),
+        {"_id": 0, "school_id": 1}).to_list(None)}
+    return [s for s in ids if s in visible], [s for s in ids if s not in visible]
+
+
 @router.post("/mail-runs")
 async def create_mail_run(request: Request):
     user = await get_current_user(request)
     body = await request.json()
-    return await _make_mail_run(
+    requested = body.get("school_ids", []) or []
+    school_ids, skipped = await _schools_i_can_mail(user, requested)
+    if requested and not school_ids:
+        raise HTTPException(status_code=400, detail="None of those schools are yours to mail")
+    run = await _make_mail_run(
         user, name=body.get("name", ""), area_id=body.get("area_id", ""),
         piece_type=body.get("piece_type", "brochure"), deal_type=body.get("deal_type_target", ""),
-        school_ids=body.get("school_ids", []) or [], send_date=body.get("send_date", ""),
+        school_ids=school_ids, send_date=body.get("send_date", ""),
         courier=body.get("courier", ""), tracking_no=body.get("tracking_no", ""),
         courier_cost=body.get("courier_cost", 0))
+    return {**run, "skipped_not_visible": skipped}
 
 
 @router.post("/mail-runs/import")
@@ -1212,11 +1253,19 @@ async def get_mail_runs(request: Request):
     scope = await _to_post_scope(user)
     if scope is None:
         return await db.mail_runs.find({}, {"_id": 0}).sort("created_at", -1).to_list(500)
-    mine = await db.mail_touches.distinct("run_id", _scope_touch_filter(scope))
-    return await db.mail_runs.find(
-        {"$or": [{"run_id": {"$in": [r for r in mine if r]}},
-                 {"created_by": user["email"]}]},
+    my_touches = await db.mail_touches.find(
+        _scope_touch_filter(scope),
+        {"_id": 0, "run_id": 1, "school_id": 1, "verify_status": 1, "delivery_status": 1,
+         "responded": 1, "appointment": 1}).to_list(None)
+    by_run = {}
+    for t in my_touches:
+        if t.get("run_id"):
+            by_run.setdefault(t["run_id"], []).append(t)
+    runs = await db.mail_runs.find(
+        {"$or": [{"run_id": {"$in": list(by_run)}}, {"created_by": user["email"]}]},
         {"_id": 0}).sort("created_at", -1).to_list(500)
+    # Her pieces' schools and counts only — never the run's full arrays.
+    return [_scoped_run_view(r, by_run.get(r["run_id"], [])) for r in runs]
 
 
 async def _queued_touches(date_str: str):
@@ -1992,6 +2041,29 @@ def _owns_run(user: dict, run: dict) -> bool:
     return bool(run.get("created_by")) and run.get("created_by") == user.get("email")
 
 
+def _scoped_run_view(run: dict, touches: list) -> dict:
+    """A run as a rep may see it: `school_ids` and `counts` rebuilt from HER
+    pieces only, so the run's full school list and totals (a colleague's
+    campaign) do not ride along on a run she merely shares a piece of."""
+    tally = {s: 0 for s in VERIFY_STATUSES}
+    for t in touches:
+        st = t.get("verify_status", "pending")
+        tally[st] = tally.get(st, 0) + 1
+    school_ids = []
+    for t in touches:
+        sid = t.get("school_id")
+        if sid and sid not in school_ids:
+            school_ids.append(sid)
+    return {**run, "school_ids": school_ids, "counts": {
+        "sent": len(touches),
+        "delivered": sum(1 for t in touches if t.get("delivery_status") == "delivered"),
+        "responded": sum(1 for t in touches if t.get("responded")),
+        "appointments": sum(1 for t in touches if t.get("appointment")),
+        "verified_sent": tally["sent"], "not_sent": tally["not_sent"],
+        "pending": tally["pending"], "needs_address": tally["needs_address"],
+    }}
+
+
 async def _run_for_reader(run_id: str, user: dict):
     """A run plus the caller's in-scope touches of it — every per-run read goes
     through here, so a rep sees in a run exactly the pieces the To-post queue
@@ -2008,6 +2080,8 @@ async def _run_for_reader(run_id: str, user: dict):
                if _touch_in_scope(t, scope)]
     if scope is not None and not touches and run.get("created_by") != user.get("email"):
         raise HTTPException(status_code=404, detail="Mail run not found")
+    if scope is not None:
+        run = _scoped_run_view(run, touches)
     return run, touches
 
 
@@ -8243,14 +8317,54 @@ async def complete_contact_followup(contact_id: str, followup_id: str, request: 
 
 # ==================== PHYSICAL DISPATCHES ====================
 
+def _is_admin(user: dict) -> bool:
+    return get_team(user) == "admin" or user.get("role") == "admin"
+
+
+async def _visible_dispatch_filter(user: dict):
+    """Which physical dispatches a caller may see: `None` for an admin, else a
+    Mongo filter — a dispatch whose LEAD she can see (`_leads_visibility_or`) or,
+    for a contact-keyed drip dispatch with no lead, whose CONTACT she can see
+    (`_contacts_visibility_or`). The same rule as the CRM lists, so a dispatch
+    follows its lead: reassign the lead and the dispatch goes with it."""
+    if _is_admin(user):
+        return None
+    email = user["email"]
+    lead_ids = [x for x in await db.leads.distinct(
+        "lead_id", _merge_or({}, await _leads_visibility_or(email))) if x]
+    contact_ids = [x for x in await db.contacts.distinct(
+        "contact_id", _merge_or({}, await _contacts_visibility_or(email))) if x]
+    return {"$or": [{"lead_id": {"$in": lead_ids}},
+                    {"contact_id": {"$in": contact_ids}}]}
+
+
+async def _dispatch_for(user: dict, dispatch_id: str) -> dict:
+    """One dispatch the caller may act on, else 404 — 'exists but not yours'
+    would let anyone probe dispatch ids."""
+    q = {"dispatch_id": dispatch_id}
+    scope = await _visible_dispatch_filter(user)
+    if scope is not None:
+        q = _merge_or(q, scope["$or"])
+    d = await db.physical_dispatches.find_one(q, {"_id": 0})
+    if not d:
+        raise HTTPException(status_code=404, detail="Dispatch not found")
+    return d
+
+
 @router.get("/physical-dispatches")
 async def get_physical_dispatches(request: Request, lead_id: Optional[str] = None):
+    """Admins see every dispatch; anyone else sees the dispatches of the leads
+    and contacts she can see — `?lead_id=` narrows that, it never widens it.
+    (It used to return ANY lead's dispatches to anyone who named the lead id,
+    while the unfiltered list showed a rep only the rows she had created — which
+    hid every drip dispatch for her own leads.)"""
     user = await get_current_user(request)
     query = {}
     if lead_id:
         query["lead_id"] = lead_id
-    elif get_team(user) != "admin":
-        query["created_by"] = user["email"]
+    scope = await _visible_dispatch_filter(user)
+    if scope is not None:
+        query = _merge_or(query, scope["$or"])
     dispatches = await db.physical_dispatches.find(query, {"_id": 0}).sort("sent_date", -1).to_list(2000)
     # D4: `needs_dispatch` is derived from the linked touch, never stored. A row
     # with no touch (a manual dispatch) is never "owed to the post office".
@@ -8279,6 +8393,15 @@ async def create_physical_dispatch(request: Request):
     body = await request.json()
     if not body.get("lead_id"):
         raise HTTPException(status_code=400, detail="lead_id is required")
+    # A dispatch is created against a lead the caller can see — it assigns a
+    # delegation task to that lead's rep and WhatsApps the lead's contact, so it
+    # is not something to fire at a colleague's lead by naming its id.
+    if not _is_admin(user):
+        visible = await db.leads.find_one(
+            _merge_or({"lead_id": body["lead_id"]}, await _leads_visibility_or(user["email"])),
+            {"_id": 0, "lead_id": 1})
+        if not visible:
+            raise HTTPException(status_code=404, detail="Lead not found")
     dispatch_id = f"pd_{uuid.uuid4().hex[:12]}"
     now_iso = datetime.now(timezone.utc).isoformat()
     doc = {
@@ -8388,18 +8511,38 @@ async def create_physical_dispatch(request: Request):
     return await db.physical_dispatches.find_one({"dispatch_id": dispatch_id}, {"_id": 0})
 
 
+_DISPATCH_POSTING_FIELDS = ("sent_date", "courier_name")
+
+
 @router.put("/physical-dispatches/{dispatch_id}")
 async def update_physical_dispatch(dispatch_id: str, request: Request):
-    await get_current_user(request)
+    user = await get_current_user(request)
     body = await request.json()
+    d = await _dispatch_for(user, dispatch_id)
     allowed = {k: body[k] for k in ("courier_name", "tracking_number", "sent_date", "received_confirmed", "description", "material_type", "dispatched_without_payment", "payment_pending_reason") if k in body}
-    await db.physical_dispatches.update_one({"dispatch_id": dispatch_id}, {"$set": allowed})
+    # D4: for a dispatch linked to a mail touch, WHETHER and WHEN it was posted
+    # (and by which courier) is the touch's fact, mirrored down by _do_verify.
+    # Writing it here would make the two disagree. Re-sending the value it
+    # already holds is not a change (the edit form round-trips every field), so
+    # only an actual change is refused.
+    if d.get("touch_id"):
+        changed = [k for k in _DISPATCH_POSTING_FIELDS
+                   if k in allowed and (allowed[k] or "") != (d.get(k) or "")]
+        if changed:
+            raise HTTPException(
+                status_code=409,
+                detail="This piece's posting comes from Offline Mail — mark it posted in To post")
+        for k in _DISPATCH_POSTING_FIELDS:
+            allowed.pop(k, None)
+    if allowed:
+        await db.physical_dispatches.update_one({"dispatch_id": dispatch_id}, {"$set": allowed})
     return await db.physical_dispatches.find_one({"dispatch_id": dispatch_id}, {"_id": 0})
 
 
 @router.delete("/physical-dispatches/{dispatch_id}")
 async def delete_physical_dispatch(dispatch_id: str, request: Request):
-    await get_current_user(request)
+    user = await get_current_user(request)
+    await _dispatch_for(user, dispatch_id)          # 404 unless she can see it
     result = await db.physical_dispatches.delete_one({"dispatch_id": dispatch_id})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Dispatch not found")

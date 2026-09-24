@@ -241,8 +241,12 @@ export default function LeadsCRM() {
     if (name === null) return;
     setMailRunBusy(true);
     try {
-      await mailRunsApi.create({ name: name || fallbackName, piece_type: defaultPiece, school_ids: ids });
-      toast.success(`Mail run created for ${ids.length} schools — opening Offline Mail to print stickers`);
+      const r = await mailRunsApi.create({ name: name || fallbackName, piece_type: defaultPiece, school_ids: ids });
+      // The server drops schools that are not the caller's; say what it KEPT.
+      const skipped = (r?.data?.skipped_not_visible || []).length;
+      toast.success(`Mail run created for ${ids.length - skipped} schools`
+        + (skipped ? ` (${skipped} skipped — not yours)` : '')
+        + ' — opening Offline Mail to print stickers');
       schoolSel.clear();
       navigate('/offline-mail');
     } catch (err) { toast.error(err?.response?.data?.detail || 'Could not create mail run'); }
