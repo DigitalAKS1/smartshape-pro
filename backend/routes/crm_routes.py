@@ -191,7 +191,19 @@ async def create_physical_from_drip(lead: dict, material_type: str, seq_name: st
     a slipped brochure apart from a slipped sample."""
     now = datetime.now(timezone.utc)
     now_iso = now.isoformat()
-    item = (material_name or "").strip() or (material_type or "brochure")
+    # D3: every step authored since the shared catalogue landed carries a
+    # material type, and `_normalise_steps` refuses a post step without one. A
+    # blank here can now only come from a legacy row — it still falls back to a
+    # brochure so the send is not lost, but it says so instead of quietly
+    # posting the wrong thing.
+    piece = (material_type or "").strip().lower()
+    if not piece:
+        piece = "brochure"
+        logging.warning(
+            "[mail] post step has no material_type (sequence=%s enrolment=%s step=%s) "
+            "- defaulting to a brochure; fix the step in the sequence editor",
+            sequence_id or "?", enrollment_id or "?", step_number)
+    item = (material_name or "").strip() or piece
     # A contact-keyed drip (D5) has no lead: carry the contact instead, so the
     # dispatch, the task and the mailer still point at a person. Lead-keyed
     # sends are written exactly as before.
@@ -205,7 +217,7 @@ async def create_physical_from_drip(lead: dict, material_type: str, seq_name: st
         "lead_id": lead.get("lead_id", ""),
         **who,
         "lead_name": lead.get("contact_name", ""),
-        "material_type": material_type or "brochure",
+        "material_type": piece,
         "material_name": (material_name or "").strip(),
         "description": f"Auto-queued by drip: {seq_name}",
         "courier_name": "", "tracking_number": "", "sent_date": "",
@@ -235,7 +247,6 @@ async def create_physical_from_drip(lead: dict, material_type: str, seq_name: st
     sid = lead.get("school_id", "")
     try:
         today = now.strftime("%Y-%m-%d")
-        piece = material_type or "brochure"
         planned = planned_date or today
         # One run per (sequence, piece, day), so a brochure step and a sample step
         # from two sequences don't collapse into one unprintable pile.
@@ -829,34 +840,81 @@ _DEFAULT_MATERIALS = [
 
 
 async def _seed_materials() -> None:
-    """Idempotent: matched on `piece_type`, so renaming a seeded material in the
-    UI does not resurrect a twin on the next read.
+    """Idempotent: keyed on `piece_type`, which is the identity of a material —
+    so renaming a seeded material in the UI does not resurrect a twin.
 
-    Guarded like every other startup seed — it runs both at boot and on the
-    first read, and a database that refuses the insert must never stop the app
-    coming up or turn a plain list request into a 500.
+    An upsert rather than check-then-insert, so two workers booting together
+    cannot both lose the race and write the same piece type twice, which is
+    exactly what the uniqueness rule below exists to prevent.
+
+    Guarded like every other startup seed: a database that refuses the write
+    must never stop the app coming up.
     """
     try:
         for name, piece in _DEFAULT_MATERIALS:
-            if await db.mail_materials.find_one({"piece_type": piece},
-                                                {"_id": 0, "material_id": 1}):
-                continue
-            await db.mail_materials.insert_one({
-                "material_id": f"mm_{uuid.uuid4().hex[:10]}",
-                "name": name, "piece_type": piece, "active": True,
-                "created_by": "system",
-                "created_at": datetime.now(timezone.utc).isoformat()})
+            await db.mail_materials.update_one(
+                {"piece_type": piece},
+                {"$setOnInsert": {
+                    "material_id": f"mm_{uuid.uuid4().hex[:10]}",
+                    "name": name, "piece_type": piece, "active": True,
+                    "created_by": "system",
+                    "created_at": datetime.now(timezone.utc).isoformat()}},
+                upsert=True)
     except Exception as e:
         logging.warning(f"[mail_materials] seed skipped: {e}")
+
+
+async def _material_clash(name: str, piece_type: str, exclude_id: str = "") -> None:
+    """Refuse a material that would collide with an existing one.
+
+    `name` is what a human reads, so it is unique case-insensitively across the
+    whole list, retired rows included — a second row by the same name is never
+    what was wanted, so the message says the first one is retired and can be
+    restored instead.
+
+    `piece_type` is the IDENTITY: it is the value a drip step's `material_type`
+    and a run's `piece_type` actually store. Two ACTIVE materials may never
+    share one, or the picker offers the same stored value twice under two
+    labels and no report can tell them apart. A retired row may keep its piece
+    type — it is bringing it back that has to be refused.
+    """
+    skip = {"material_id": {"$ne": exclude_id}} if exclude_id else {}
+    if name:
+        clash = await db.mail_materials.find_one(
+            {"name": {"$regex": f"^{re.escape(name)}$", "$options": "i"}, **skip},
+            {"_id": 0, "material_id": 1, "active": 1})
+        if clash:
+            if clash.get("active") is False:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f'A material called "{name}" already exists (retired) — '
+                           f'restore it instead of adding a second one')
+            raise HTTPException(
+                status_code=409, detail=f'A material called "{name}" already exists')
+    if piece_type:
+        clash = await db.mail_materials.find_one(
+            {"piece_type": piece_type, "active": True, **skip},
+            {"_id": 0, "material_id": 1})
+        if clash:
+            raise HTTPException(
+                status_code=409,
+                detail=f'A material with type "{piece_type}" already exists')
 
 
 @router.get("/mail-materials")
 async def get_mail_materials(request: Request):
     """The catalogue both authoring surfaces read. Active only, unless `?all=1`
     (`?include_inactive=1` means the same) — the admin editor must still show,
-    and be able to bring back, a retired material that old drip steps name."""
+    and be able to bring back, a retired material that old drip steps name.
+
+    Seeding belongs to startup. This only seeds when the collection is EMPTY
+    (a brand-new or test database that has not booted through `main.startup`),
+    so a list read is a list read and cannot resurrect a material the owner
+    deliberately removed rows for.
+    """
     await get_current_user(request)
-    await _seed_materials()
+    if not await db.mail_materials.count_documents({}):
+        await _seed_materials()
     show_all = bool(request.query_params.get("all")
                     or request.query_params.get("include_inactive"))
     q = {} if show_all else {"active": True}
@@ -871,15 +929,11 @@ async def create_mail_material(request: Request):
     name = (body.get("name") or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="Give the material a name")
-    clash = await db.mail_materials.find_one(
-        {"name": {"$regex": f"^{re.escape(name)}$", "$options": "i"}},
-        {"_id": 0, "material_id": 1})
-    if clash:
-        raise HTTPException(status_code=409, detail=f'A material called "{name}" already exists')
+    piece_type = (body.get("piece_type") or "other").strip().lower()
+    await _material_clash(name, piece_type)
     material_id = f"mm_{uuid.uuid4().hex[:10]}"
     await db.mail_materials.insert_one({
-        "material_id": material_id, "name": name,
-        "piece_type": (body.get("piece_type") or "other").strip().lower(),
+        "material_id": material_id, "name": name, "piece_type": piece_type,
         "active": True, "created_by": user.get("email", ""),
         "created_at": datetime.now(timezone.utc).isoformat()})
     return await db.mail_materials.find_one({"material_id": material_id}, {"_id": 0})
@@ -890,6 +944,9 @@ async def update_mail_material(material_id: str, request: Request):
     user = await get_current_user(request)
     require_module(user, "leads", "read_write")
     body = await request.json()
+    current = await db.mail_materials.find_one({"material_id": material_id}, {"_id": 0})
+    if not current:
+        raise HTTPException(status_code=404, detail="Material not found")
     _set = {}
     if "name" in body:
         name = (body.get("name") or "").strip()
@@ -902,9 +959,15 @@ async def update_mail_material(material_id: str, request: Request):
         _set["active"] = bool(body["active"])
     if not _set:
         raise HTTPException(status_code=400, detail="Nothing to update")
-    res = await db.mail_materials.update_one({"material_id": material_id}, {"$set": _set})
-    if not res.matched_count:
-        raise HTTPException(status_code=404, detail="Material not found")
+    # The same gate as POST, against what the row would look like afterwards —
+    # otherwise a rename or a restore walks straight past the rule POST enforces.
+    # A piece type is only contested once the row is (or stays) active.
+    after_active = _set.get("active", current.get("active", True))
+    await _material_clash(
+        _set.get("name", ""),
+        _set.get("piece_type", current.get("piece_type", "")) if after_active else "",
+        exclude_id=material_id)
+    await db.mail_materials.update_one({"material_id": material_id}, {"$set": _set})
     return await db.mail_materials.find_one({"material_id": material_id}, {"_id": 0})
 
 
