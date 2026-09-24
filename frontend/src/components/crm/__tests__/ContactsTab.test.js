@@ -69,6 +69,10 @@ const sortData = (rows) => rows;
 // implementations are (re)installed here, freshly, before each test (same
 // pattern as BulkDeleteSchoolsDialog.test.js / DataCleanupPanel.test.js).
 beforeEach(() => {
+  // crmFilter is now session-persisted (so a real "Back" button retraces the
+  // user's filter, not just the URL) — clear between tests so it doesn't
+  // leak from one test into the next.
+  window.sessionStorage.clear();
   contactsApi.bulkTag.mockImplementation(() => Promise.resolve({ data: { requested: 2, updated: 2, skipped: 0 } }));
   contactsApi.bulkAssign.mockImplementation(() => Promise.resolve({ data: { requested: 2, updated: 2, skipped: 0 } }));
   const { dripSequences } = jest.requireMock('../../../lib/api');

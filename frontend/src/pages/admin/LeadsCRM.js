@@ -21,6 +21,7 @@ import EmptyState, { EMPTY_STATES } from '../../components/ui/EmptyState';
 import { leads as leadsApiObj, quotations as quotationsApi2, adminApi, schools as schoolsApiObj, mailRuns as mailRunsApi } from '../../lib/api';
 
 import useLeadsCRM from '../../hooks/useLeadsCRM';
+import useSessionState from '../../hooks/useSessionState';
 import LeadDetailPanel from '../../components/crm/LeadDetailPanel';
 import LeadFormDialog from '../../components/crm/LeadFormDialog';
 import ForecastBar from '../../components/crm/ForecastBar';
@@ -74,7 +75,8 @@ export default function LeadsCRM() {
   const leadsPerm = usePermission('leads');   // called unconditionally — Rules of Hooks
   const isAdmin = crm.user?.role === 'admin';
   const canTagSchools = isAdmin || leadsPerm.canWrite;
-  const [leadsFilter, setLeadsFilter] = React.useState({});
+  // Session-persisted so it survives navigating to a school/quotation and back.
+  const [leadsFilter, setLeadsFilter] = useSessionState('crm.leadsFilter', {});
   // Bulk delete on the current Schools-tab selection (O20) — superadmin only;
   // shares BulkDeleteSchoolsDialog with DataCleanupPanel's "childless" flow.
   const [bulkDeleteOpen, setBulkDeleteOpen] = React.useState(false);
@@ -163,7 +165,7 @@ export default function LeadsCRM() {
   // business that previously only got chased if a rep happened to remember.
   // Derived server-side from order history, so there is nothing to keep in sync.
   const [reorderDue, setReorderDue] = React.useState([]);
-  const [reorderOnly, setReorderOnly] = React.useState(false);
+  const [reorderOnly, setReorderOnly] = useSessionState('crm.reorderOnly', false);
   React.useEffect(() => {
     if (crm.activeTab !== 'schools') return;
     let live = true;
@@ -176,7 +178,7 @@ export default function LeadsCRM() {
     () => new Map(reorderDue.map(r => [r.school_id, r])), [reorderDue]);
   const [planActivityOpen, setPlanActivityOpen] = React.useState(false);
   const [seqEnrollOpen, setSeqEnrollOpen] = React.useState(false);
-  const [unassignedOnly, setUnassignedOnly] = React.useState(false);
+  const [unassignedOnly, setUnassignedOnly] = useSessionState('crm.unassignedOnly', false);
 
   // The Schools tab's rows: masterFiltered.schools already applies the search
   // box + the left FilterRail (Owner/City/Type/Source/Stage/Tag — O17)

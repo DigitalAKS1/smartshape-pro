@@ -23,6 +23,7 @@ import { useDataSync, useAutoRefresh } from '../lib/dataSync';
 import useCrmData from './useCrmData';
 import useCrmFilters from './useCrmFilters';
 import useLeadSelection from './useLeadSelection';
+import useSessionState from './useSessionState';
 import { useAuth } from '../contexts/AuthContext';
 import { toast } from 'sonner';
 
@@ -45,13 +46,16 @@ export default function useLeadsCRM() {
 
 
   // ── UI state ─────────────────────────────────────────────────────────────────
-  const [activeTab, setActiveTab] = useState('schools');
-  const [filterRole, setFilterRole] = useState('');
+  // Session-persisted: this page unmounts when the user navigates to a school
+  // profile or quotation, so a plain useState here would reset the tab/filter/
+  // page the moment "Back" tried to retrace that journey.
+  const [activeTab, setActiveTab] = useSessionState('crm.activeTab', 'schools');
+  const [filterRole, setFilterRole] = useSessionState('crm.filterRole', '');
   // Master filter (left FilterRail, O4): applies to schools/contacts/leads alike,
   // across every tab. Detail filters (filterType/filterTag/filterRole/MultiFilterBar
   // above) stay as per-tab refinements layered on top of this.
   const [sortConfig, setSortConfig] = useState({ key: '', dir: 'asc' });
-  const [contactPage, setContactPage] = useState(1);
+  const [contactPage, setContactPage] = useSessionState('crm.contactPage', 1);
   const contactsPerPage = 10;
 
   // ── View / selection ─────────────────────────────────────────────────────────
