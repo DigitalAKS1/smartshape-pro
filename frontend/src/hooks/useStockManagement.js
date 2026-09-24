@@ -24,6 +24,29 @@ export const MOVEMENT_COLORS = {
   returnable_out: 'text-red-400',
 };
 
+// Client-side grouping for the "stock by machine category" view — dies is
+// already fetched in full via GET /dies (fetchData below), so no separate
+// backend endpoint is needed. Missing or blank machine_category both fall
+// into the "general" bucket.
+export function groupDiesByMachineCategory(dies) {
+  const groups = {};
+  for (const die of dies) {
+    const key = die.machine_category || 'general';
+    if (!groups[key]) {
+      groups[key] = { dieCount: 0, stockQty: 0, reservedQty: 0, lowStock: [] };
+    }
+    const g = groups[key];
+    g.dieCount += 1;
+    g.stockQty += die.stock_qty || 0;
+    g.reservedQty += die.reserved_qty || 0;
+    const available = (die.stock_qty || 0) - (die.reserved_qty || 0);
+    if (available <= (die.min_level ?? 0)) {
+      g.lowStock.push(die);
+    }
+  }
+  return groups;
+}
+
 export function useStockManagement() {
   const [movements, setMovements] = useState([]);
   const [diesList, setDiesList] = useState([]);
