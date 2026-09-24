@@ -1090,6 +1090,10 @@ export const modules = {
 // Designations
 export const reports = {
   hub: () => API.get('/reports/hub'),
+  // D6: one endpoint, three roll-ups. params: {group_by, from, to, sequence_id, owner, channel}
+  marketingSent: (params = {}) => API.get('/reports/marketing-sent', { params }),
+  marketingSentCsv: (params = {}) => API.get('/reports/marketing-sent',
+    { params: { ...params, format: 'csv' }, responseType: 'blob' }),
 };
 
 export const designations = {

@@ -7,7 +7,9 @@ import uuid
 from database import db
 from auth_utils import get_current_user
 from rbac import get_team, require_module, sees_all
-from routes.crm_routes import create_physical_from_drip
+from routes.crm_routes import (create_physical_from_drip, _merge_or,
+                               _schools_visibility_or, _contacts_visibility_or,
+                               _leads_visibility_or)
 from services.tag_scope import resolve_tag_scope
 from services.drip_recipient import (CONTACT_DELETED_REASON, RECIPIENT_GONE_REASON,
                                      contacts_already_enrolled, find_active_duplicate)
@@ -990,6 +992,40 @@ async def sequence_deliveries(sequence_id: str, request: Request):
 
     enrolments = await db.drip_enrollments.find({"sequence_id": sequence_id},
                                                 {"_id": 0}).to_list(2000)
+
+    # Visibility. This drill-down now names the PERSON and their owner, so it is
+    # scoped by exactly the helpers the CRM lists use (and the marketing-sent
+    # report uses) — an admin sees everything, a rep sees only enrolments whose
+    # school, contact or lead she can already open. `?owner=` filters INSIDE that
+    # scope and can never widen it.
+    if get_team(user) != "admin" and user.get("role") != "admin":
+        email = user["email"]
+        vis_schools = {s["school_id"] for s in await db.schools.find(
+            _merge_or({}, await _schools_visibility_or(email)),
+            {"_id": 0, "school_id": 1}).to_list(None)}
+        vis_contacts = {c["contact_id"] for c in await db.contacts.find(
+            _merge_or({}, await _contacts_visibility_or(email)),
+            {"_id": 0, "contact_id": 1}).to_list(None)}
+        vis_leads = {l["lead_id"] for l in await db.leads.find(
+            _merge_or({}, await _leads_visibility_or(email)),
+            {"_id": 0, "lead_id": 1}).to_list(None)}
+        # Scope by the ENROLLED RECORD, never by its school: a school is "visible"
+        # to a rep who merely quoted there, which does not let her open its
+        # contacts or leads. The school is only the fallback for an enrolment
+        # that names neither.
+        scoped = []
+        for e in enrolments:
+            lid, cid = e.get("lead_id") or "", e.get("contact_id") or ""
+            if lid:
+                ok = lid in vis_leads
+            elif cid:
+                ok = cid in vis_contacts
+            else:
+                ok = bool(e.get("school_id")) and e["school_id"] in vis_schools
+            if ok:
+                scoped.append(e)
+        enrolments = scoped
+
     lead_ids = [e["lead_id"] for e in enrolments if e.get("lead_id")]
     leads = {l["lead_id"]: l for l in await db.leads.find(
         {"lead_id": {"$in": lead_ids}}, {"_id": 0}).to_list(None)}
@@ -1025,10 +1061,12 @@ async def sequence_deliveries(sequence_id: str, request: Request):
             sid = lead.get("school_id", "")
             school_name = schools.get(sid, {}).get("school_name") or lead.get("company_name", "")
             owner = lead.get("assigned_to", "")
+            recipient_kind, recipient_name = "lead", lead.get("contact_name", "")
         else:
             sid = contact.get("school_id") or enr.get("school_id") or ""
             school_name = schools.get(sid, {}).get("school_name") or contact.get("company", "")
             owner = contact.get("assigned_to") or schools.get(sid, {}).get("assigned_to", "")
+            recipient_kind, recipient_name = "contact", contact.get("name", "")
         for n, step in steps.items():
             log = logs.get((enr["enrollment_id"], n))
             touch = touches.get((enr["enrollment_id"], n))
@@ -1051,7 +1089,13 @@ async def sequence_deliveries(sequence_id: str, request: Request):
                 "enrollment_id": enr["enrollment_id"], "lead_id": enr.get("lead_id"),
                 "contact_id": enr.get("contact_id"),
                 "school_id": sid, "school_name": school_name or "(no school)",
-                "owner": owner, "step_number": n,
+                "owner": owner,
+                # The drill-down is the "who did we actually reach" screen; a
+                # school name alone cannot answer it once contacts are enrolled
+                # directly (a contact-keyed drip has no lead at all).
+                "recipient_kind": recipient_kind,
+                "recipient_name": recipient_name,
+                "step_number": n,
                 "channel": _CHANNEL_OF.get(step.get("message_type", ""), step.get("message_type", "")),
                 "item": step.get("material_name") or step.get("material_type") or "",
                 "planned_date": planned, "actual_date": actual, "status": status,
@@ -1064,6 +1108,8 @@ async def sequence_deliveries(sequence_id: str, request: Request):
         rows = [r for r in rows if r["status"] == qp["status"]]
     if qp.get("channel"):
         rows = [r for r in rows if r["channel"] == qp["channel"]]
+    if qp.get("owner"):
+        rows = [r for r in rows if r["owner"] == qp["owner"]]
     if qp.get("step"):
         rows = [r for r in rows if str(r["step_number"]) == str(qp["step"])]
     rows.sort(key=lambda r: (r["school_name"], r["step_number"]))

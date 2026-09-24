@@ -1358,6 +1358,9 @@ REPORT_CATALOGUE = [
     ("marketing", "Marketing", [
         ("drip", "Drip sequences", "Who is enrolled, what fired, and what stalled.",
          "/marketing", False),
+        ("marketing_sent", "Marketing sent",
+         "Every school, contact and sequence we have actually reached.",
+         "/reports/marketing-sent", False),
         ("mail_gap", "Post: plan vs actual", "What you planned to post against what really went out.",
          "/offline-mail", False),
         ("mail_roi", "Postage ROI", "Response, appointments and cost per reply for each run.",
@@ -1404,6 +1407,9 @@ async def reports_hub(request: Request):
     tasks_due = await _safe(db.tasks.count_documents(
         {"status": "pending", "due_date": {"$lte": today, "$ne": ""}}), "—")
     touches = await _safe(db.engagement_events.count_documents({}), "—")
+    # "Schools reached" is VERIFIED postings only (D6) — a queued piece is not a reach.
+    reached = await _safe(db.mail_touches.distinct("school_id", {"verify_status": "sent"}), [])
+    schools_reached = len([s for s in reached if s]) if isinstance(reached, list) else 0
 
     def _n(v):
         return v if isinstance(v, int) else "—"
@@ -1422,6 +1428,8 @@ async def reports_hub(request: Request):
             "value": overdue_post if overdue_post else posted,
             "tone": "warn" if overdue_post else "neutral",
         },
+        "marketing_sent": {"label": "schools reached", "value": schools_reached,
+                           "tone": "neutral"},
         "mail_roi":    {"label": "pieces posted", "value": posted, "tone": "neutral"},
         "engagement":  {"label": "touches logged", "value": _n(touches), "tone": "neutral"},
         "orders":      {"label": "orders open", "value": _n(open_orders), "tone": "neutral"},
@@ -1445,6 +1453,381 @@ async def reports_hub(request: Request):
             sections.append({"key": key, "title": title, "reports": rows})
 
     return {"sections": sections, "needs_attention": attention, "as_of": today}
+
+
+# ── D6: Marketing sent ────────────────────────────────────────────────────────
+# ONE endpoint with a group_by. School / contact / sequence roll-ups are the same
+# query grouped differently — so the three views can never disagree about how much
+# marketing actually went out. No new collection: everything comes from
+# drip_step_logs + mail_touches, which already carry sequence_id, enrollment_id,
+# step_number, school_id, contact_id and touch_id.
+_MS_CHANNELS = ("whatsapp", "email", "call", "post")
+# `drip_step_logs.message_type` -> report channel. Mirrors drip_routes._CHANNEL_OF;
+# duplicated deliberately, because drip_routes imports FROM this module.
+_MS_CHANNEL_OF = {"whatsapp": "whatsapp", "email": "email",
+                  "physical_material": "post", "call_task": "call"}
+_MS_CSV_FIELDS = ["key", "name", "owner", "sequences", "whatsapp", "email", "call", "post",
+                  "post_verified_sent", "post_pending", "post_not_sent", "post_needs_address",
+                  "post_closed_unposted", "last_sent_at", "qr_scans", "interest"]
+# Deliveries scanned per collection, and rows handed back ON SCREEN. Totals are
+# computed over EVERY group before the cap is applied, and the CSV streams every
+# group uncapped — groups can never outnumber the schools, so the export is
+# bounded anyway, and an export that silently dropped rows would be worse than
+# a slow one. `totals.scan_capped` says when a scan itself hit its ceiling.
+_MS_SCAN_CAP = 50000
+_MS_ROW_CAP = 2000
+# Manual (non-drip) mail runs have no sequence at all. They are real postings, so
+# they get their own bucket instead of being filed under "(deleted sequence)".
+_MS_MANUAL_KEY = "manual"
+_MS_MANUAL_NAME = "Manual mail runs"
+
+
+def _ms_blank(key, name, owner):
+    return {"key": key, "name": name, "owner": owner, "sequences": [],
+            "sent_by_channel": {c: 0 for c in _MS_CHANNELS},
+            "post": {"verified_sent": 0, "pending": 0, "not_sent": 0, "needs_address": 0,
+                     "closed_unposted": 0},
+            "last_sent_at": "", "responses": {"qr_scans": 0, "interest": 0}}
+
+
+@router.get("/reports/marketing-sent")
+async def marketing_sent_report(request: Request):
+    """Every school / contact / sequence we have actually reached, and by what.
+
+    A POST send is counted from `mail_touches`, NOT from `drip_step_logs`: a fired
+    physical step writes both rows, so counting both would double every posted
+    piece and make the three group_by modes disagree. "Sent" for post means
+    VERIFIED sent — a piece the drip queued but nobody carried to the counter is
+    `post.pending`, not a send.
+
+    ENVELOPES vs PEOPLE. One envelope goes to a school and lists every recipient on
+    it (D1). In `group_by=school` and `group_by=sequence` that envelope counts ONCE.
+    In `group_by=contact` it counts once for EVERY contact named on it, because
+    there "post" answers "did we post to this person", and a shared envelope did
+    reach all of them — but only the names the CALLER can see
+    (`_contacts_visibility_or`), each under its own owner, so a shared envelope
+    never shows a rival rep's contact. So `totals.sent_by_channel.post` is
+    deliberately larger in contact mode; whatsapp / email / call agree across all three modes, and
+    `totals.post_envelopes` carries the school-level envelope count in every mode
+    so a screen can show both numbers side by side. Responses are credited once per
+    envelope (to its first named contact), so `totals.responses` also agrees
+    everywhere.
+
+    LEGACY TOUCHES. A manual mail run written before verification existed has no
+    `verify_status`: it is read as `sent` only when its run is `posted` or carries a
+    `posted_at` (dated from those, else `send_date`); a `closed` run that was never
+    posted is `post.closed_unposted` (visible, neither sent nor still to post); any
+    other run is `pending`, dated from the run's `send_date` when the touch has no
+    `planned_date`.
+
+    SCOPING. A step-log delivery is judged by the record it went to (lead, else
+    contact, else school); an envelope, as in To post, by its school or people. Such touches roll up
+    under the synthetic sequence `manual` ("Manual mail runs")."""
+    user = await get_current_user(request)
+    qp = request.query_params
+    group_by = qp.get("group_by") or "school"
+    if group_by not in ("school", "contact", "sequence"):
+        raise HTTPException(status_code=400, detail="group_by must be school, contact or sequence")
+    d_from, d_to = (qp.get("from") or "").strip(), (qp.get("to") or "").strip()
+    want_seq = (qp.get("sequence_id") or "").strip()
+    want_owner = (qp.get("owner") or "").strip()
+    want_channel = (qp.get("channel") or "").strip()
+    if want_channel and want_channel not in _MS_CHANNELS:
+        raise HTTPException(status_code=400,
+                            detail="channel must be whatsapp, email, call or post")
+
+    def _in_range(day: str) -> bool:
+        if not day:
+            return not (d_from or d_to)
+        if d_from and day < d_from:
+            return False
+        if d_to and day > d_to:
+            return False
+        return True
+
+    # ── Deliveries first, then ONE batched lookup per referenced collection.
+    # Never a per-row find(): a year of drips is tens of thousands of rows.
+    log_q = {"status": "sent",
+             "message_type": {"$in": [m for m, c in _MS_CHANNEL_OF.items() if c != "post"]}}
+    if want_seq:
+        log_q["sequence_id"] = want_seq
+    if d_from:
+        log_q["fired_at"] = {"$gte": d_from}
+    if d_to:
+        log_q.setdefault("fired_at", {})["$lte"] = d_to + "￿"
+    if want_channel and want_channel != "post":
+        log_q["message_type"] = {"$in": [m for m, c in _MS_CHANNEL_OF.items()
+                                         if c == want_channel]}
+    step_logs = ([] if (want_channel and want_channel == "post") else
+                 await db.drip_step_logs.find(log_q, {"_id": 0}).to_list(_MS_SCAN_CAP))
+    # A legacy manual-run touch carries NO sequence_id, so the sequence filter can
+    # only be pushed into Mongo for a real sequence — "manual" is matched in Python.
+    touch_q = {"sequence_id": want_seq} if (want_seq and want_seq != _MS_MANUAL_KEY) else {}
+    touches = ([] if (want_channel and want_channel != "post") else
+               await db.mail_touches.find(touch_q, {"_id": 0}).to_list(_MS_SCAN_CAP))
+    scan_capped = len(step_logs) >= _MS_SCAN_CAP or len(touches) >= _MS_SCAN_CAP
+
+    lead_ids = {lg.get("lead_id") for lg in step_logs if lg.get("lead_id")}
+    lead_ids |= {t.get("lead_id") for t in touches if t.get("lead_id")}
+    contact_ids = {lg.get("contact_id") for lg in step_logs if lg.get("contact_id")}
+    contact_ids |= {t.get("contact_id") for t in touches if t.get("contact_id")}
+    for t in touches:
+        contact_ids |= {c for c in (t.get("contact_ids") or []) if c}
+
+    leads = {l["lead_id"]: l for l in await db.leads.find(
+        {"lead_id": {"$in": list(lead_ids)}},
+        {"_id": 0, "lead_id": 1, "contact_id": 1, "school_id": 1,
+         "contact_name": 1, "assigned_to": 1}).to_list(None)} if lead_ids else {}
+    contact_ids |= {l.get("contact_id") for l in leads.values() if l.get("contact_id")}
+    contacts = {c["contact_id"]: c for c in await db.contacts.find(
+        {"contact_id": {"$in": list(contact_ids)}},
+        {"_id": 0, "contact_id": 1, "name": 1, "school_id": 1,
+         "assigned_to": 1}).to_list(None)} if contact_ids else {}
+    school_ids = {t.get("school_id") for t in touches if t.get("school_id")}
+    school_ids |= {l.get("school_id") for l in leads.values() if l.get("school_id")}
+    school_ids |= {c.get("school_id") for c in contacts.values() if c.get("school_id")}
+    schools = {s["school_id"]: s for s in await db.schools.find(
+        {"school_id": {"$in": list(school_ids)}},
+        {"_id": 0, "school_id": 1, "school_name": 1, "assigned_to": 1}).to_list(None)} \
+        if school_ids else {}
+    # Runs and sequences are looked up only for the deliveries actually fetched.
+    run_ids = {t.get("run_id") for t in touches if t.get("run_id")}
+    runs = {r["run_id"]: r for r in await db.mail_runs.find(
+        {"run_id": {"$in": list(run_ids)}},
+        {"_id": 0, "run_id": 1, "sequence_id": 1, "status": 1, "send_date": 1,
+         "posted_at": 1}).to_list(None)} if run_ids else {}
+    seq_ids = {lg.get("sequence_id") for lg in step_logs if lg.get("sequence_id")}
+    seq_ids |= {t.get("sequence_id") for t in touches if t.get("sequence_id")}
+    seq_ids |= {r.get("sequence_id") for r in runs.values() if r.get("sequence_id")}
+    seqs = {s["sequence_id"]: s.get("name", "") for s in await db.drip_sequences.find(
+        {"sequence_id": {"$in": list(seq_ids)}},
+        {"_id": 0, "sequence_id": 1, "name": 1}).to_list(None)} if seq_ids else {}
+    seqs[_MS_MANUAL_KEY] = _MS_MANUAL_NAME
+
+    # Visibility — the SAME helpers the CRM lists use, so a rep's report agrees
+    # with the rows she can open. Admins are unscoped.
+    vis_schools = vis_contacts = vis_leads = None
+    if get_team(user) != "admin" and user.get("role") != "admin":
+        email = user["email"]
+        vis_schools = {s["school_id"] for s in await db.schools.find(
+            _merge_or({}, await _schools_visibility_or(email)),
+            {"_id": 0, "school_id": 1}).to_list(None)}
+        vis_contacts = {c["contact_id"] for c in await db.contacts.find(
+            _merge_or({}, await _contacts_visibility_or(email)),
+            {"_id": 0, "contact_id": 1}).to_list(None)}
+        vis_leads = {l["lead_id"] for l in await db.leads.find(
+            _merge_or({}, await _leads_visibility_or(email)),
+            {"_id": 0, "lead_id": 1}).to_list(None)}
+
+    def _resolve(lead_id, contact_id, touch=None):
+        """(school_id, contact_id, owner) for one delivery row, whichever key it has."""
+        lead = leads.get(lead_id or "", {})
+        cid = contact_id or lead.get("contact_id") or ""
+        if touch and not cid:
+            cid = ((touch.get("contact_ids") or [""]) or [""])[0]
+        contact = contacts.get(cid, {})
+        sid = lead.get("school_id") or contact.get("school_id") or \
+            (touch or {}).get("school_id") or ""
+        owner = lead.get("assigned_to") or contact.get("assigned_to") \
+            or schools.get(sid, {}).get("assigned_to", "") or (touch or {}).get("owner", "")
+        return sid, cid, owner
+
+    def _visible(sid, cid, lead_id=""):
+        """An ENVELOPE (school-level, as in To post): visible via its school or any
+        of its people."""
+        if vis_schools is None:
+            return True
+        return bool((sid and sid in vis_schools) or (cid and cid in vis_contacts)
+                    or (lead_id and lead_id in vis_leads))
+
+    def _visible_record(sid, cid, lead_id=""):
+        """A step-log delivery went to ONE record: judge it by that record, never
+        by its school — a school is "visible" to a rep who merely quoted there,
+        which does not let her open its contacts or leads."""
+        if vis_schools is None:
+            return True
+        if lead_id:
+            return lead_id in vis_leads
+        if cid:
+            return cid in vis_contacts
+        return bool(sid and sid in vis_schools)
+
+    def _key_of(sid, cid, sequence_id):
+        if group_by == "school":
+            return (sid or "_none",
+                    schools.get(sid, {}).get("school_name") or "(no school)")
+        if group_by == "contact":
+            return (cid or "_none", contacts.get(cid, {}).get("name") or "(no contact)")
+        return (sequence_id or "_none", seqs.get(sequence_id) or "(deleted sequence)")
+
+    groups = {}
+
+    def _bucket(sid, cid, sequence_id, owner):
+        key, name = _key_of(sid, cid, sequence_id)
+        g = groups.get(key)
+        if g is None:
+            g = groups[key] = _ms_blank(key, name, owner)
+        elif not g["owner"] and owner:
+            g["owner"] = owner
+        seq_name = seqs.get(sequence_id)
+        if seq_name and seq_name not in g["sequences"]:
+            g["sequences"].append(seq_name)
+        return g
+
+    # ── Non-post channels: the step log is the record ──────────────────────
+    for lg in step_logs:
+        ch = _MS_CHANNEL_OF.get(lg.get("message_type", ""), "")
+        if ch in ("", "post"):
+            continue                      # post is counted from mail_touches
+        if lg.get("status") != "sent":
+            continue                      # failed / skipped is not a send
+        sequence_id = lg.get("sequence_id", "")
+        day = str(lg.get("fired_at") or "")[:10]
+        if not _in_range(day):
+            continue
+        sid, cid, owner = _resolve(lg.get("lead_id"), lg.get("contact_id"))
+        if want_owner and owner != want_owner:
+            continue
+        if not _visible_record(sid, lg.get("contact_id") or "", lg.get("lead_id") or ""):
+            continue
+        g = _bucket(sid, cid, sequence_id, owner)
+        g["sent_by_channel"][ch] += 1
+        if day > g["last_sent_at"]:
+            g["last_sent_at"] = day
+
+    # ── Post: the mail touch is the record of truth (D4) ───────────────────
+    post_envelopes = pending_envelopes = 0
+    for t in touches:
+        run = runs.get(t.get("run_id"), {})
+        sequence_id = t.get("sequence_id") or run.get("sequence_id") or _MS_MANUAL_KEY
+        if want_seq and sequence_id != want_seq:
+            continue
+        # Legacy manual-run touches predate verification: their run says whether
+        # the envelope went out, and dates it.
+        status = t.get("verify_status")
+        posted_day = str(t.get("posted_at") or "")[:10]
+        if not status:
+            # Sent ONLY on real evidence of posting. A run can be `closed` without
+            # ever being posted (PUT /mail-runs/{id}/status), so `closed` alone is
+            # neither sent nor still-to-post: it is reported as closed_unposted.
+            run_st = str(run.get("status") or "").lower()
+            if run_st == "posted" or run.get("posted_at"):
+                status = "sent"
+                posted_day = posted_day or \
+                    str(run.get("posted_at") or run.get("send_date") or "")[:10]
+            elif run_st == "closed":
+                status = "closed_unposted"
+            else:
+                status = "pending"
+        day = posted_day or (t.get("planned_date") or "") or \
+            str(run.get("send_date") or "")[:10]
+        if not _in_range(day):
+            continue
+        sid, cid, owner = _resolve(t.get("lead_id"), t.get("contact_id"), t)
+
+        # Who this envelope is credited to: [(contact_id, owner)].
+        named = list(dict.fromkeys(
+            c for c in (t.get("contact_ids") or []) if c and c in contacts))
+        if group_by == "contact" and named:
+            # One envelope, every name on it ("did we post to this person") — but
+            # ONLY the names the caller may see, each under THEIR OWN owner, so a
+            # shared envelope never leaks a rival rep's contact or owner.
+            credits = []
+            for c in named:
+                if vis_contacts is not None and c not in vis_contacts:
+                    continue
+                c_owner = contacts[c].get("assigned_to") \
+                    or schools.get(sid, {}).get("assigned_to", "") or t.get("owner", "")
+                if want_owner and c_owner != want_owner:
+                    continue
+                credits.append((c, c_owner))
+            if not credits:
+                continue
+        else:
+            # School / sequence mode: the envelope counts once, scoped the way the
+            # To-post queue scopes it.
+            if want_owner and owner != want_owner:
+                continue
+            if not _visible(sid, cid, t.get("lead_id") or ""):
+                continue
+            credits = [(cid, owner)]
+        if status == "sent":
+            post_envelopes += 1
+        elif status in ("pending", "needs_address"):
+            pending_envelopes += 1
+        for i, (target, target_owner) in enumerate(credits):
+            g = _bucket(sid, target, sequence_id, target_owner)
+            if status == "sent":
+                g["sent_by_channel"]["post"] += 1
+                g["post"]["verified_sent"] += 1
+                if posted_day > g["last_sent_at"]:
+                    g["last_sent_at"] = posted_day
+            elif status == "not_sent":
+                g["post"]["not_sent"] += 1
+            elif status == "needs_address":
+                g["post"]["needs_address"] += 1
+            elif status == "closed_unposted":
+                g["post"]["closed_unposted"] += 1
+            elif status != "skipped":
+                g["post"]["pending"] += 1
+            # A response is one response, however many names shared the envelope —
+            # so `totals.responses` still agrees across all three modes.
+            if i == 0:
+                if t.get("responded"):
+                    g["responses"]["qr_scans"] += 1
+                if t.get("interested"):
+                    g["responses"]["interest"] += 1
+
+    every = sorted(groups.values(),
+                   key=lambda r: (-sum(r["sent_by_channel"].values()), r["name"]))
+    # Totals span EVERY group, not just the ones handed back — a capped page must
+    # not quietly shrink the grand total the three modes are compared on.
+    totals = {
+        "rows": len(every),
+        "sent_by_channel": {c: sum(r["sent_by_channel"][c] for r in every) for c in _MS_CHANNELS},
+        "post": {k: sum(r["post"][k] for r in every)
+                 for k in ("verified_sent", "pending", "not_sent", "needs_address",
+                           "closed_unposted")},
+        "responses": {k: sum(r["responses"][k] for r in every) for k in ("qr_scans", "interest")},
+        # Verified-sent envelopes, counted school-level and so identical in every
+        # mode — pair it with contact mode's larger `sent_by_channel.post` to read
+        # "N envelopes reached M people".
+        "post_envelopes": post_envelopes,
+        # Envelopes still owed to the post office (pending + needs_address), also
+        # school-level — contact mode's post.pending counts the PEOPLE on them.
+        "pending_envelopes": pending_envelopes,
+    }
+    rows = every[:_MS_ROW_CAP]
+    totals["shown"] = len(rows)
+    totals["capped"] = len(every) > _MS_ROW_CAP
+    totals["scan_capped"] = scan_capped
+
+    if (qp.get("format") or "").lower() == "csv":
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(_MS_CSV_FIELDS)
+        # The export is NOT capped at _MS_ROW_CAP: groups can never outnumber the
+        # schools, so the file is bounded, and an export missing rows the screen
+        # warned about would be the worse failure.
+        for r in every:
+            writer.writerow([
+                r["key"], r["name"], r["owner"], "|".join(r["sequences"]),
+                r["sent_by_channel"]["whatsapp"], r["sent_by_channel"]["email"],
+                r["sent_by_channel"]["call"], r["sent_by_channel"]["post"],
+                r["post"]["verified_sent"], r["post"]["pending"],
+                r["post"]["not_sent"], r["post"]["needs_address"],
+                r["post"]["closed_unposted"],
+                r["last_sent_at"], r["responses"]["qr_scans"], r["responses"]["interest"],
+            ])
+        # utf-8-sig, like every other export here: without the BOM Excel mangles
+        # school names the moment one carries a non-ASCII character.
+        return StreamingResponse(
+            iter([output.getvalue().encode("utf-8-sig")]), media_type="text/csv",
+            headers={"Content-Disposition":
+                     f"attachment; filename=marketing_sent_{group_by}.csv"})
+
+    return {"group_by": group_by, "rows": rows, "totals": totals,
+            "from": d_from, "to": d_to}
 
 
 # NOTE: this static path MUST stay above /mail-runs/{run_id} or FastAPI matches
