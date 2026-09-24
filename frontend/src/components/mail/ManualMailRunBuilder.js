@@ -17,10 +17,20 @@ export default function ManualMailRunBuilder({ onClose, onCreated }) {
   const [all, setAll] = useState([]);
   const [q, setQ] = useState('');
   const [picked, setPicked] = useState([]);        // [{school_id, school_name, city}]
-  const [form, setForm] = useState({ name: `Manual list — ${new Date().toLocaleDateString()}`, piece_type: 'brochure', send_date: '' });
+  // No hardcoded 'brochure': the piece type comes from the catalogue, filled in
+  // by the effect below as soon as the first ACTIVE material is known.
+  const [form, setForm] = useState({ name: `Manual list — ${new Date().toLocaleDateString()}`, piece_type: '', send_date: '' });
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
-  const { materials } = useMailMaterials();
+  const { materials, loading: materialsLoading } = useMailMaterials();
+
+  // Wait for the REAL catalogue. The hook shows its seeded fallback while it
+  // loads, so defaulting any earlier would lock the run onto 'brochure' even
+  // when the catalogue does not offer it.
+  useEffect(() => {
+    if (materialsLoading || !materials.length) return;
+    setForm(p => (p.piece_type ? p : { ...p, piece_type: materials[0].piece_type }));
+  }, [materials, materialsLoading]);
 
   const load = useCallback(async () => {
     try {
@@ -139,6 +149,11 @@ export default function ManualMailRunBuilder({ onClose, onCreated }) {
             <select className={inp} value={form.piece_type} data-testid="manual-run-piece"
               onChange={e => setForm(p => ({ ...p, piece_type: e.target.value }))}>
               {materials.map(m => <option key={m.material_id} value={m.piece_type}>{m.name}</option>)}
+              {/* A retired or legacy value stays selectable, so re-opening the
+                  builder on one does not silently change what gets posted. */}
+              {form.piece_type && !materials.some(m => m.piece_type === form.piece_type) ? (
+                <option value={form.piece_type}>{form.piece_type} (not in Materials)</option>
+              ) : null}
             </select>
             <input className={inp} type="date" value={form.send_date} onChange={e => setForm(p => ({ ...p, send_date: e.target.value }))} />
           </div>

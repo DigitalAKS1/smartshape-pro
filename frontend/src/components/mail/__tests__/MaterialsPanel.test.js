@@ -119,3 +119,25 @@ test('a retired material can be brought back', async () => {
   await click(q('material-restore-mm2'));
   expect(mailMaterials.update).toHaveBeenCalledWith('mm2', { active: true });
 });
+
+test('a name taken by a RETIRED material offers to bring it back', async () => {
+  mailMaterials.create.mockRejectedValue({ response: { status: 409,
+    data: { detail: 'A material called "Retired thing" already exists (retired) — restore it instead of adding a second one' } } });
+  window.confirm = jest.fn(() => true);
+  await render();
+  type(q('material-new-name'), 'retired thing');
+  await click(q('material-add'));
+  expect(window.confirm).toHaveBeenCalled();
+  expect(mailMaterials.update).toHaveBeenCalledWith('mm2', { active: true });
+});
+
+test('a plain name clash does not offer a restore', async () => {
+  mailMaterials.create.mockRejectedValue({ response: { status: 409,
+    data: { detail: 'A material called "Brochure" already exists' } } });
+  window.confirm = jest.fn(() => true);
+  await render();
+  type(q('material-new-name'), 'Brochure');
+  await click(q('material-add'));
+  expect(window.confirm).not.toHaveBeenCalled();
+  expect(mailMaterials.update).not.toHaveBeenCalled();
+});

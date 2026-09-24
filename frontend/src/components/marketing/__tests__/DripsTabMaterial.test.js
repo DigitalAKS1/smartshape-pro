@@ -99,7 +99,6 @@ test('the material dropdown lists the shared catalogue, newsletter included', as
   await openEdit();
   const opts = Array.from(q('step-material-0').querySelectorAll('option')).map(o => o.value);
   expect(opts).toEqual(expect.arrayContaining(['brochure', 'newsletter', 'catalogue']));
-  expect(opts).toContain('__other__');
 });
 
 test('a legacy value not in the catalogue stays selected and is flagged', async () => {
@@ -127,16 +126,53 @@ test('a catalogue material in the list is not flagged', async () => {
   expect(q('step-material-legacy-0')).toBeNull();
 });
 
-test('picking Other clears the value so a free-text piece type can be typed', async () => {
+// The bug this replaced: "Other…" set `material_type` to '' and the backend's
+// `material_type or "brochure"` then posted a BROCHURE. The seeded "Other"
+// material is the catch-all now, and `material_name` is the free text.
+test('there is no free-text escape hatch that can leave the material blank', async () => {
   await render([mapSeq(POST_SEQ)]);
   await openEdit();
+  const opts = Array.from(q('step-material-0').querySelectorAll('option')).map(o => o.value);
+  expect(opts).not.toContain('__other__');
+  expect(opts).not.toContain('');
+  expect(q('step-material-other-0')).toBeNull();
+});
+
+const BLANK_MATERIAL_SEQ = {
+  ...POST_SEQ, sequence_id: 'seqB', name: 'Blank',
+  steps: [{ ...POST_SEQ.steps[0], material_type: '', material_name: 'Something' }],
+};
+
+test('a legacy post step with no material at all cannot be saved until one is picked', async () => {
+  await render([mapSeq(BLANK_MATERIAL_SEQ)]);
+  await openEdit();
+  expect(q('step-material-0').value).toBe('');
+  const save = byText('button', 'Save Changes');
+  expect(save.disabled).toBe(true);
+
   await act(async () => {
     const sel = q('step-material-0');
-    sel.value = '__other__';
+    sel.value = 'newsletter';
     sel.dispatchEvent(new Event('change', { bubbles: true }));
     for (let i = 0; i < 5; i++) await Promise.resolve();
   });
-  expect(q('step-material-other-0')).not.toBeNull();
+  expect(byText('button', 'Save Changes').disabled).toBe(false);
+
+  await act(async () => {
+    byText('button', 'Save Changes').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+  });
+  expect(dripApi.update.mock.calls[0][1].steps[0].material_type).toBe('newsletter');
+});
+
+test('a blank material is never silently sent as a brochure', async () => {
+  await render([mapSeq(BLANK_MATERIAL_SEQ)]);
+  await openEdit();
+  await act(async () => {
+    byText('button', 'Save Changes').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+  });
+  expect(dripApi.update).not.toHaveBeenCalled();
 });
 
 test('a post step says where the mailer will appear, and on which day', async () => {

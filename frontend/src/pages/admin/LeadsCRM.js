@@ -41,6 +41,7 @@ import BulkDeleteSchoolsDialog from '../../components/crm/BulkDeleteSchoolsDialo
 import LeadsBulkBar from '../../components/crm/LeadsBulkBar';
 import SchoolsBulkBar from '../../components/crm/SchoolsBulkBar';
 import useBulkSelect from '../../hooks/useBulkSelect';
+import useMailMaterials from '../../hooks/useMailMaterials';
 import { toggleAllVisible, allVisibleSelected } from '../../lib/leadSelection';
 import { useIsOwner, usePermission } from '../../hooks/usePermission';
 import { deriveFilterOptions, matchesCrmFilter, hasActiveFilters } from '../../lib/crmFilter';
@@ -224,17 +225,23 @@ export default function LeadsCRM() {
       : [...prev, tag].sort((a, b) => (a.name || '').localeCompare(b.name || ''))));
   }, [setTagsList]);
 
-  // Turn the current filtered school selection into a physical mail run (brochure
-  // by default), then jump to Offline Mail to review addresses + print stickers.
+  // Turn the current filtered school selection into a physical mail run, then
+  // jump to Offline Mail to review addresses + print stickers. D3: the piece
+  // type is the first ACTIVE material in the shared catalogue, not a hardcoded
+  // 'brochure' the catalogue may no longer even offer.
+  const { materials: mailMaterialsList } = useMailMaterials();
+  const defaultPiece = mailMaterialsList[0]?.piece_type || 'brochure';
+  const defaultPieceLabel = mailMaterialsList[0]?.name || 'Brochure';
   const [mailRunBusy, setMailRunBusy] = React.useState(false);
   const createMailRunFromSelection = async () => {
     const ids = schoolSel.visibleIds;
     if (ids.length === 0) return;
-    const name = window.prompt(`Name this mail run (${ids.length} schools):`, `Brochure drop — ${new Date().toLocaleDateString()}`);
+    const fallbackName = `${defaultPieceLabel} drop — ${new Date().toLocaleDateString()}`;
+    const name = window.prompt(`Name this mail run (${ids.length} schools):`, fallbackName);
     if (name === null) return;
     setMailRunBusy(true);
     try {
-      await mailRunsApi.create({ name: name || 'Brochure drop', piece_type: 'brochure', school_ids: ids });
+      await mailRunsApi.create({ name: name || fallbackName, piece_type: defaultPiece, school_ids: ids });
       toast.success(`Mail run created for ${ids.length} schools — opening Offline Mail to print stickers`);
       schoolSel.clear();
       navigate('/offline-mail');

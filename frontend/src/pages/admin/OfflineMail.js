@@ -29,6 +29,9 @@ const TABS = [['to-post', 'To post'], ['runs', 'Runs & areas'], ['materials', 'M
 export default function OfflineMail() {
   const [tab, setTab] = useState('to-post');
   const { materials } = useMailMaterials();
+  // What a new run starts on: the first ACTIVE material, not a hardcoded
+  // 'brochure' that the catalogue may no longer even offer.
+  const defaultPiece = materials[0]?.piece_type || 'brochure';
   const [areas, setAreas] = useState([]);
   const [runs, setRuns] = useState([]);
   const [analytics, setAnalytics] = useState({ runs: [], totals: {} });
@@ -52,7 +55,7 @@ export default function OfflineMail() {
     if (!file) return;
     setUploading(true);
     try {
-      const r = await mailRuns.import(file, { piece_type: 'brochure' });
+      const r = await mailRuns.import(file, { piece_type: defaultPiece });
       const c = r.data.counts || {};
       toast.success(`${r.data.schools_added} schools added to this run — ${c.create || 0} new, ${c.update || 0} synced. Review addresses & print.`);
       await load();
@@ -121,7 +124,7 @@ export default function OfflineMail() {
         school_ids: (s.data || []).map(x => x.school_id),
         count: (s.data || []).length,
         name: `${area.name} — ${new Date().toLocaleDateString()}`,
-        piece_type: 'brochure', courier: '', tracking_no: '', send_date: '',
+        piece_type: defaultPiece, courier: '', tracking_no: '', send_date: '',
       });
     } catch { toast.error('Could not load area schools'); }
   };

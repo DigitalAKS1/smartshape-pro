@@ -22,18 +22,34 @@ export default function MaterialsPanel() {
   useEffect(() => { load(); }, [load]);
 
   const add = async () => {
-    if (!form.name.trim()) { toast.error('Give the material a name'); return; }
+    const name = form.name.trim();
+    if (!name) { toast.error('Give the material a name'); return; }
     setBusy(true);
     try {
-      await mailMaterials.create({
-        name: form.name.trim(),
-        piece_type: (form.piece_type || 'other').trim(),
-      });
+      await mailMaterials.create({ name, piece_type: (form.piece_type || 'other').trim() });
       toast.success('Material added');
       setForm({ name: '', piece_type: 'other' });
       await load();
-    } catch (e) { toast.error(e?.response?.data?.detail || 'Could not add it'); }
-    finally { setBusy(false); }
+    } catch (e) {
+      const detail = e?.response?.data?.detail || '';
+      // The name belongs to a RETIRED material. A second row by the same name
+      // is never what was wanted, so offer what was: bring the original back.
+      const retired = e?.response?.status === 409 && detail.includes('(retired)')
+        ? rows.find(r => r.active === false
+            && (r.name || '').toLowerCase() === name.toLowerCase())
+        : null;
+      if (retired && window.confirm(
+        `"${retired.name}" already exists but is retired.\n\nBring it back instead?`)) {
+        try {
+          await mailMaterials.update(retired.material_id, { active: true });
+          toast.success('Material restored');
+          setForm({ name: '', piece_type: 'other' });
+          await load();
+        } catch (e2) { toast.error(e2?.response?.data?.detail || 'Could not restore it'); }
+      } else {
+        toast.error(detail || 'Could not add it');
+      }
+    } finally { setBusy(false); }
   };
 
   const saveName = async () => {
