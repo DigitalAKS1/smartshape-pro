@@ -10,6 +10,11 @@ services:
     env_file: ./backend/.env
     environment:
       - PORT=8000
+      # cache.py reads REDIS_HOST (default "localhost", which inside the container
+      # is the container itself, not the redis service) — every cache write was
+      # failing with "Cache set error: ... localhost:6379" and falling back.
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
     ports:
       - "8000:8000"
     depends_on:
