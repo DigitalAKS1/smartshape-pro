@@ -157,7 +157,7 @@ export default function ManualMailRunBuilder({ onClose, onCreated }) {
             </select>
             <input className={inp} type="date" value={form.send_date} onChange={e => setForm(p => ({ ...p, send_date: e.target.value }))} />
           </div>
-          <button className={btnP} disabled={busy || picked.length === 0} onClick={create} data-testid="create-manual-run">
+          <button className={btnP} disabled={busy || picked.length === 0 || !form.piece_type} onClick={create} data-testid="create-manual-run">
             <Check className="h-4 w-4" /> {busy ? 'Creating…' : `Create mail run (${picked.length})`}
           </button>
         </div>

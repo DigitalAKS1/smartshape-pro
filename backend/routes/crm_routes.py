@@ -1081,6 +1081,10 @@ async def _make_mail_run(user, *, name, piece_type="brochure", school_ids=None, 
                          area_id="", send_date="", courier="", tracking_no="", courier_cost=0):
     """Shared run builder: one mail_runs doc + one mail_touches (with QR) per school
     + a Direct-Mail lead. Used by the normal create path and the file-import path."""
+    # piece_type is the catalogue identity (D3): store it the way the catalogue
+    # does — trimmed, lowercase — and never blank (a client that fires before
+    # the catalogue loads sends ""; that must not become an unlabelled run).
+    piece_type = (str(piece_type or "").strip().lower()) or "brochure"
     school_ids = school_ids or []
     now_iso = datetime.now(timezone.utc).isoformat()
     run_id = f"run_{uuid.uuid4().hex[:10]}"
