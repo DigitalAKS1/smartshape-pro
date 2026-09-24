@@ -681,3 +681,45 @@ def test_send_message_ignores_groups_status_and_numbers_not_connected(env, remot
             "key": {"id": "G1", "fromMe": True, "remoteJid": remote}, "message": {"conversation": "x"}}})
         assert await db.wa_messages.count_documents({}) == 0
     _run(go())
+
+
+
+# Task 7 fix round 1: a close while in `qr` is never a ban or a disconnect
+
+@pytest.mark.parametrize("code", [0, 428, 408])
+def test_a_close_during_qr_keeps_the_state_and_the_cached_qr(env, code):
+    db = env.db
+
+    async def go():
+        await seed_instance(db, "rep_parul", owner_email=PARUL, state="qr", qr_base64="data:image/png;base64,Q1")
+        await _hook("rep_parul", {"event": "connection.update", "data": {"state": "close", "statusReason": code}})
+        i = await _inst(db, "rep_parul")
+        assert i["state"] == "qr" and i["qr_base64"] == "data:image/png;base64,Q1"
+        assert i["evolution_state"] == "close" and i["last_close_reason"] == str(code)
+        assert await db.notifications.count_documents({}) == 0
+    _run(go())
+
+
+@pytest.mark.parametrize("code", [401, 403, 440])
+def test_a_terminal_close_during_qr_is_recorded_not_paused(env, code):
+    db = env.db
+
+    async def go():
+        await seed_instance(db, "rep_parul", owner_email=PARUL, state="qr")
+        await _hook("rep_parul", {"event": "connection.update", "data": {"state": "close", "statusReason": code}})
+        i = await _inst(db, "rep_parul")
+        assert i["state"] == "qr" and i["paused_reason"] == "" and i["last_close_reason"] == str(code)
+        assert await db.notifications.count_documents({}) == 0
+    _run(go())
+
+
+def test_the_close_from_our_own_relink_logout_is_logout_requested(env):
+    db = env.db
+
+    async def go():
+        await seed_instance(db, "rep_parul", owner_email=PARUL, state="qr",
+                            logout_requested_at=(env.clock["now"] - timedelta(seconds=5)).isoformat())
+        await _hook("rep_parul", {"event": "connection.update", "data": {"state": "close", "statusReason": 401}})
+        i = await _inst(db, "rep_parul")
+        assert i["state"] == "qr" and i["last_close_reason"] == "logout_requested"
+    _run(go())

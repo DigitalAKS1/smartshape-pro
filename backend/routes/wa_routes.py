@@ -6,6 +6,7 @@ import os
 import re
 import uuid
 from datetime import timedelta
+from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
 
@@ -196,8 +197,18 @@ async def _on_close(inst: dict, data: dict) -> None:
         return
     raw = str(data.get("statusReason") or "0")
     code = int(raw) if raw.isdigit() else 0
-    if code in _TERMINAL_CLOSE and inst.get("state") != "qr":
-        # (In `qr` the number was not linked: a 401 there is our own relink's logout, not a ban.)
+    if inst.get("state") == "qr":
+        # Not linked yet: a close here is our own relink's logout or a QR that expired — never a
+        # ban and never `disconnected`. The state and the cached QR stay; only the reason is kept.
+        try:
+            ours = bool(inst.get("logout_requested_at")) and (
+                wa_send._parse(inst["logout_requested_at"]) > wa_send._now() - timedelta(minutes=2))
+        except Exception:
+            ours = False
+        await db.wa_instances.update_one({"instance_name": name}, {"$set": {
+            "evolution_state": "close", "last_close_reason": "logout_requested" if ours else str(code)}})
+        return
+    if code in _TERMINAL_CLOSE:
         # Permanent: pause (only an admin resumes) and alert the owner + admins.
         await db.wa_instances.update_one({"instance_name": name}, {"$set": {"evolution_state": "close"}})
         await wa_send.pause_instance(db, inst, reason=_TERMINAL_CLOSE[code])
@@ -407,6 +418,13 @@ def _notice_accepted(body: dict) -> bool:
     return body.get("notice_accepted") is True or body.get("accept_notice") is True
 
 
+def _as_bool(v) -> bool:
+    """A real boolean from JSON or a form: "false", "0", "no", "off", "" and 0 are False."""
+    if isinstance(v, str):
+        return v.strip().lower() in ("true", "1", "yes", "on")
+    return bool(v)
+
+
 def _require_secret() -> None:
     if not os.getenv("WA_WEBHOOK_SECRET"):
         raise HTTPException(500, "WA_WEBHOOK_SECRET is not set on the server, so replies and receipts "
@@ -552,9 +570,11 @@ async def _default_proxy() -> dict:
     return {k: d.get(k, "") for k in ("host", "port", "protocol", "username", "password")}
 
 
-async def _provision(name: str, *, kind: str, owner_email: str, label: str, accepted_by: str) -> dict:
+async def _provision(name: str, *, kind: str, owner_email: str, label: str,
+                     accepted_by: Optional[str]) -> dict:
     """Create (or reuse) the Evolution instance, point its webhook at us, apply its proxy, and
-    return a QR to scan. The number becomes `connected` when CONNECTION_UPDATE: open arrives."""
+    return a QR to scan. The number becomes `connected` when CONNECTION_UPDATE: open arrives.
+    `accepted_by=None` (a relink re-creating a vanished instance) keeps the recorded notice."""
     _require_secret()
     existing = await db.wa_instances.find_one({"instance_name": name}, {"_id": 0}) or {}
     token = existing.get("instance_token") or ""
@@ -585,7 +605,9 @@ async def _provision(name: str, *, kind: str, owner_email: str, label: str, acce
     now = _now_iso()
     sets = {"kind": kind, "owner_email": owner_email, "label": label, "state": "qr", "state_at": now,
             "qr_base64": b64, "qr_at": now, "instance_token": token, "proxy": proxy,
-            "consecutive_failures": 0, "notice_accepted_at": now, "notice_accepted_by": accepted_by}
+            "consecutive_failures": 0}
+    if accepted_by is not None:
+        sets.update({"notice_accepted_at": now, "notice_accepted_by": accepted_by})
     if not existing.get("paused_before_unlink"):
         sets["paused_reason"] = ""          # an admin's pause survives an unlink/relink (Task 6)
     await db.wa_instances.update_one({"instance_name": name}, {
@@ -598,16 +620,22 @@ async def _provision(name: str, *, kind: str, owner_email: str, label: str, acce
     return {"instance_name": name, "state": "qr", "qr_base64": b64}
 
 
-def _admin_paused(inst: dict) -> bool:
-    return inst.get("state") == "paused" and inst.get("paused_by") not in (None, "", "system")
+def _needs_admin_resume(inst: dict) -> bool:
+    """Any pause - an admin's or the system's (failure streak, 401/403/440 close) - is cleared
+    ONLY by an admin's resume. A rep's relink/unlink never clears it."""
+    return inst.get("state") == "paused" or bool(inst.get("paused_before_unlink"))
 
 
 async def _relink(inst: dict) -> dict:
     """Log the old session out and show a fresh QR. The state moves to `qr` BEFORE the logout, so
-    the CONNECTION_UPDATE close that the logout triggers is not read as a ban or a disconnect."""
+    the CONNECTION_UPDATE close that the logout triggers is not read as a ban or a disconnect
+    (_on_close records it as `logout_requested`). When Evolution no longer has the instance
+    (404), it is created again (_provision). Never called on a paused number."""
     _require_secret()
     name, tok = inst["instance_name"], inst.get("instance_token") or None
-    sets = {"state": "qr", "state_at": _now_iso(), "qr_base64": "", "consecutive_failures": 0}
+    now = _now_iso()
+    sets = {"state": "qr", "state_at": now, "qr_base64": "", "consecutive_failures": 0,
+            "logout_requested_at": now}
     if not inst.get("paused_before_unlink"):
         sets.update({"paused_reason": "", "paused_by": ""})
     await db.wa_instances.update_one({"instance_name": name}, {
@@ -623,6 +651,12 @@ async def _relink(inst: dict) -> dict:
         log.warning("[wa] webhook re-register for %s failed: %s", name, str(e)[:120])
     try:
         qr = await evo.get_qr(name, token=tok)             # /instance/connect: starts a new session
+    except EvolutionError as e:
+        if e.status_code == 404:                           # the instance is gone on Evolution
+            return await _provision(name, kind=inst.get("kind") or "rep",
+                                    owner_email=inst.get("owner_email") or "",
+                                    label=inst.get("label") or name, accepted_by=None)
+        raise HTTPException(502, f"The WhatsApp server could not prepare the QR code: {str(e)[:120]}")
     except Exception as e:
         raise HTTPException(502, f"The WhatsApp server could not prepare the QR code: {str(e)[:120]}")
     b64 = str((qr or {}).get("base64") or "")
@@ -631,10 +665,10 @@ async def _relink(inst: dict) -> dict:
 
 
 async def _unlink(inst: dict, by: str) -> dict:
-    """Frees the slot. The state moves to `unlinked` BEFORE the logout (see _relink). An admin's
-    pause survives: the next link comes back `paused` (Task 6 paused_before_unlink)."""
+    """Frees the slot. The state moves to `unlinked` BEFORE the logout (see _relink). Any pause
+    survives: the next link comes back `paused` (Task 6 paused_before_unlink) until an admin resumes."""
     name = inst["instance_name"]
-    keep_pause = _admin_paused(inst) or bool(inst.get("paused_before_unlink"))
+    keep_pause = _needs_admin_resume(inst)
     sets = {"state": "unlinked", "state_at": _now_iso(), "qr_base64": "", "unlinked_by": by,
             "consecutive_failures": 0}
     if keep_pause:
@@ -661,8 +695,10 @@ async def wa_me(request: Request):
                 "instance_name": (inst or {}).get("instance_name", ""),
                 "slots_full": await _used_slots() >= int(cfg["max_instances"]),
                 "paused_reason": (inst or {}).get("paused_reason", ""),
+                "needs_admin_resume": bool(inst) and _needs_admin_resume(inst),
                 "unlinked_detail": (inst or {}).get("unlinked_detail", "")}
     out = {"linked": True, **await _view(inst, cfg), "notice": PRIVACY_NOTICE,
+           "needs_admin_resume": _needs_admin_resume(inst),
            "looks_personal": await _looks_personal(inst, user["email"])}
     if inst.get("state") == "qr":
         out["qr_base64"] = await _fresh_qr(inst)
@@ -696,8 +732,10 @@ async def wa_me_relink(request: Request):
     inst = await _my_instance(user["email"])
     if not inst:
         raise HTTPException(404, "You have no linked number yet.")
-    if _admin_paused(inst):
-        raise HTTPException(409, "An admin paused this number. Ask them to resume it.")
+    if inst.get("state") == "paused":
+        why = inst.get("paused_reason") or "it was paused"
+        raise HTTPException(409, f"This number is paused ({why}). Only an admin can resume it "
+                                 "in Settings -> WhatsApp; then relink here.")
     if inst.get("state") == "unlinked":
         await _require_capacity(await get_wa_settings(db))
     return await _relink(inst)
@@ -767,17 +805,23 @@ async def wa_link_company(request: Request):
         except Exception as e:
             raise HTTPException(502, f"Could not point the company number's webhook at the app: {str(e)[:120]}")
         now = _now_iso()
-        new_state = "paused" if existing.get("state") == "paused" else "connected"
+        stay_paused = existing.get("state") == "paused" or bool(existing.get("paused_before_unlink"))
+        new_state = "paused" if stay_paused else "connected"
         sets = {"kind": "company", "owner_email": user["email"], "label": existing.get("label") or "Company",
                 "state": new_state, "state_at": now, "qr_base64": "", "evolution_state": "open",
                 "instance_token": str(info.get("token") or "") or existing.get("instance_token") or "",
                 "notice_accepted_at": now, "notice_accepted_by": user["email"]}
         if phone:
             sets.update({"phone_e164": phone, "jid": f"{phone}@s.whatsapp.net"})
-        if not existing.get("warmup_started_at") or (phone and phone != existing.get("phone_e164")):
-            sets["warmup_started_at"] = now
+        if phone and existing.get("phone_e164") and phone != existing["phone_e164"]:
+            sets["warmup_started_at"] = now              # a different SIM starts its own warm-up (D5)
+        elif not existing.get("warmup_started_at"):
+            # Already connected and sending before the upgrade: treat it as warmed, not day 1.
+            sets["warmup_started_at"] = wa_send._iso(
+                wa_send._now() - timedelta(days=int(cfg.get("warmup_days") or 14)))
         await db.wa_instances.update_one({"instance_name": name}, {
             "$set": sets,
+            "$unset": {"paused_before_unlink": "", "unlinked_reason": "", "unlinked_detail": ""},
             "$setOnInsert": {"proxy": {}, "daily_cap_override": None, "consecutive_failures": 0,
                              "paused_reason": "", "last_seen_at": None, "created_at": now}},
             upsert=True)
@@ -910,7 +954,7 @@ async def wa_proxy_config_save(request: Request):
     body = await _body(request)
     saved = await db.settings.find_one({"type": "wa_proxy_default"}, {"_id": 0}) or {}
     proxy = _clean_proxy(body, saved)
-    doc = {"type": "wa_proxy_default", "enabled": bool(body.get("enabled", True)) and bool(proxy),
+    doc = {"type": "wa_proxy_default", "enabled": _as_bool(body.get("enabled", True)) and bool(proxy),
            **(proxy or {"host": "", "port": "", "protocol": "socks5", "username": "", "password": ""}),
            "updated_by": user["email"], "updated_at": _now_iso()}
     await db.settings.update_one({"type": "wa_proxy_default"}, {"$set": doc}, upsert=True)

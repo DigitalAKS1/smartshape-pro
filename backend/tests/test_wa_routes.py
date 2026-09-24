@@ -237,7 +237,7 @@ def test_a_rep_cannot_relink_past_an_admin_pause(env, monkeypatch):
         await seed_instance(db, "rep_parul", owner_email=PARUL["email"], state="paused", paused_by=OWNER["email"])
         with pytest.raises(HTTPException) as e:
             await wr.wa_me_relink(FakeRequest())
-        assert e.value.status_code == 409
+        assert e.value.status_code == 409 and "Only an admin can resume it" in e.value.detail
     _run(go())
 
 
@@ -383,6 +383,104 @@ def test_company_link_adopts_an_instance_that_is_already_open(env, monkeypatch):
         inst = await db.wa_instances.find_one({"instance_name": COMPANY}, {"_id": 0})
         assert inst["kind"] == "company" and inst["state"] == "connected"
         assert inst["owner_email"] == OWNER["email"] and inst["warmup_started_at"]
+        # Fix round 1: an already-connected number is treated as warmed — full cap on day one.
+        listed = await wr.wa_instances_list(FakeRequest())
+        comp = next(i for i in listed["instances"] if i["instance_name"] == COMPANY)
+        assert comp["cap_today"] == 200 and comp["warmup"]["today_cap"] == 200
+        assert comp["warmup_day"] == 15
+    _run(go())
+
+
+def test_company_adopt_with_a_new_sim_restarts_warmup(env, monkeypatch):
+    db = env.db
+    _as(OWNER, monkeypatch)
+    env.evo.state[COMPANY] = "open"
+    env.evo.owner_jid[COMPANY] = "919818950815@s.whatsapp.net"
+
+    async def go():
+        await seed_instance(db, COMPANY, kind="company", state="unlinked", phone="919000000001")
+        await wr.wa_link_company(FakeRequest({"notice_accepted": True}))
+        comp = (await wr.wa_instances_list(FakeRequest()))["instances"][0]
+        assert comp["warmup_day"] == 1 and comp["cap_today"] == 20
+    _run(go())
+
+
+def test_company_adopt_of_an_unlinked_row_paused_before_unlink_comes_back_paused(env, monkeypatch):
+    db = env.db
+    _as(OWNER, monkeypatch)
+    env.evo.state[COMPANY] = "open"
+    env.evo.owner_jid[COMPANY] = "919000000001@s.whatsapp.net"
+
+    async def go():
+        await seed_instance(db, COMPANY, kind="company", state="unlinked", phone="919000000001",
+                            paused_before_unlink=True, paused_reason="Complaint")
+        out = await wr.wa_link_company(FakeRequest({"notice_accepted": True}))
+        assert out["state"] == "paused"
+        inst = await db.wa_instances.find_one({"instance_name": COMPANY}, {"_id": 0})
+        assert inst["state"] == "paused" and inst["paused_reason"] == "Complaint"
+        assert "paused_before_unlink" not in inst
+    _run(go())
+
+
+@pytest.mark.parametrize("raw", ["false", False, 0, "0", "off"])
+def test_proxy_config_enabled_is_a_real_boolean(env, monkeypatch, raw):
+    _as(OWNER, monkeypatch)
+    out = _run(wr.wa_proxy_config_save(FakeRequest({"enabled": raw, "host": "gate.decodo.com", "port": 10001})))
+    assert out["enabled"] is False
+    assert _run(wr.wa_proxy_config_get(FakeRequest()))["enabled"] is False
+
+
+def test_a_system_pause_is_cleared_only_by_an_admin_resume(env, monkeypatch):
+    db = env.db
+
+    async def go():
+        await seed_instance(db, "rep_parul", owner_email=PARUL["email"], state="paused", paused_by="system",
+                            paused_reason="5 sends in a row failed.")
+        _as(PARUL, monkeypatch)
+        with pytest.raises(HTTPException) as e:
+            await wr.wa_me_relink(FakeRequest())
+        assert e.value.status_code == 409 and "Only an admin can resume it" in e.value.detail
+        me = await wr.wa_me(FakeRequest())
+        assert me["state"] == "paused" and me["needs_admin_resume"] is True
+        assert me["paused_reason"] == "5 sends in a row failed."
+        await wr.wa_me_unlink(FakeRequest())
+        inst = await db.wa_instances.find_one({"instance_name": "rep_parul"}, {"_id": 0})
+        assert inst["state"] == "unlinked" and inst["paused_before_unlink"] is True
+        me = await wr.wa_me(FakeRequest())
+        assert me["needs_admin_resume"] is True and me["paused_reason"] == "5 sends in a row failed."
+        _as(OWNER, monkeypatch)
+        await wr.wa_instance_resume("rep_parul", FakeRequest())
+        _as(PARUL, monkeypatch)
+        me = await wr.wa_me(FakeRequest())
+        assert me["needs_admin_resume"] is False and me["paused_reason"] == ""
+        assert (await wr.wa_me_relink(FakeRequest()))["state"] == "qr"
+    _run(go())
+
+
+def test_relink_recreates_an_instance_evolution_no_longer_has(env, monkeypatch):
+    db = env.db
+    _as(PARUL, monkeypatch)
+    real = env.evo.request
+
+    async def gone_once(method, path, json=None, token=None):
+        if path == "/instance/connect/rep_parul" and not any(
+                c["path"] == "/instance/create" for c in env.evo.calls):
+            env.evo.calls.append({"method": method, "path": path, "json": json, "token": token})
+            from services.evolution_client import EvolutionError
+            raise EvolutionError(404, "The instance does not exist")
+        return await real(method, path, json=json, token=token)
+    monkeypatch.setattr(env.evo, "request", gone_once)
+
+    async def go():
+        await seed_instance(db, "rep_parul", owner_email=PARUL["email"], state="disconnected",
+                            notice_accepted_at="2026-09-01T00:00:00+00:00")
+        out = await wr.wa_me_relink(FakeRequest())
+        assert out == {"instance_name": "rep_parul", "state": "qr", "qr_base64": "data:image/png;base64,QR"}
+        paths = [c["path"] for c in env.evo.calls]
+        assert paths[-3:] == ["/instance/create", "/webhook/set/rep_parul", "/instance/connect/rep_parul"]
+        inst = await db.wa_instances.find_one({"instance_name": "rep_parul"}, {"_id": 0})
+        assert inst["state"] == "qr" and inst["qr_base64"] == "data:image/png;base64,QR"
+        assert inst["notice_accepted_at"] == "2026-09-01T00:00:00+00:00"       # kept
     _run(go())
 
 
