@@ -9,11 +9,15 @@ import ManualMailRunBuilder from '../../components/mail/ManualMailRunBuilder';
 import TodayPostQueue from '../../components/mail/TodayPostQueue';
 import GapReportPanel from '../../components/mail/GapReportPanel';
 import ToPostQueue from '../../components/mail/ToPostQueue';
+import MaterialsPanel from '../../components/mail/MaterialsPanel';
+import useMailMaterials from '../../hooks/useMailMaterials';
 import { useDataSync } from '../../lib/dataSync';
 
 const inr = (n) => '₹' + Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 });
 
-const PIECES = ['brochure', 'sample', 'newsletter', 'other'];
+// D3: the hard-coded PIECES list is gone. A run's piece type now comes from the
+// shared Materials catalogue — the same list the drip step editor reads, so a
+// kit can be posted by hand and a newsletter can be dripped.
 const STATUS_COLOR = { planned: '#9A6A15', posted: '#1E5AA8', closed: '#2E7D5B' };
 
 // The three jobs this page really holds: what has to go into the post today
@@ -24,6 +28,10 @@ const TABS = [['to-post', 'To post'], ['runs', 'Runs & areas'], ['materials', 'M
 
 export default function OfflineMail() {
   const [tab, setTab] = useState('to-post');
+  const { materials } = useMailMaterials();
+  // What a new run starts on: the first ACTIVE material, not a hardcoded
+  // 'brochure' that the catalogue may no longer even offer.
+  const defaultPiece = materials[0]?.piece_type || 'brochure';
   const [areas, setAreas] = useState([]);
   const [runs, setRuns] = useState([]);
   const [analytics, setAnalytics] = useState({ runs: [], totals: {} });
@@ -47,7 +55,7 @@ export default function OfflineMail() {
     if (!file) return;
     setUploading(true);
     try {
-      const r = await mailRuns.import(file, { piece_type: 'brochure' });
+      const r = await mailRuns.import(file, { piece_type: defaultPiece });
       const c = r.data.counts || {};
       toast.success(`${r.data.schools_added} schools added to this run — ${c.create || 0} new, ${c.update || 0} synced. Review addresses & print.`);
       await load();
@@ -116,7 +124,7 @@ export default function OfflineMail() {
         school_ids: (s.data || []).map(x => x.school_id),
         count: (s.data || []).length,
         name: `${area.name} — ${new Date().toLocaleDateString()}`,
-        piece_type: 'brochure', courier: '', tracking_no: '', send_date: '',
+        piece_type: defaultPiece, courier: '', tracking_no: '', send_date: '',
       });
     } catch { toast.error('Could not load area schools'); }
   };
@@ -201,11 +209,7 @@ export default function OfflineMail() {
           }} />
         )}
 
-        {tab === 'materials' && (
-          <div className={`${card} p-5 text-sm text-[var(--text-muted)]`} data-testid="offline-mail-materials-placeholder">
-            The shared Materials list lands here — drip steps and manual mail runs will both pick from it.
-          </div>
-        )}
+        {tab === 'materials' && <MaterialsPanel />}
 
         {tab === 'runs' && (loading ? (
           <div className="py-16 text-center text-[var(--text-muted)]">Loading…</div>
@@ -431,8 +435,14 @@ export default function OfflineMail() {
             <div className="grid gap-3">
               <input className={inp} placeholder="Run name" value={runForm.name} onChange={e => setRunForm(p => ({ ...p, name: e.target.value }))} />
               <div className="grid grid-cols-2 gap-3">
-                <select className={inp} value={runForm.piece_type} onChange={e => setRunForm(p => ({ ...p, piece_type: e.target.value }))}>
-                  {PIECES.map(x => <option key={x} value={x}>{x}</option>)}
+                <select className={inp} value={runForm.piece_type} data-testid="run-piece-type"
+                  onChange={e => setRunForm(p => ({ ...p, piece_type: e.target.value }))}>
+                  {materials.map(m => <option key={m.material_id} value={m.piece_type}>{m.name}</option>)}
+                  {/* A run made before this material was retired keeps its own
+                      value selectable, so re-saving does not silently change it. */}
+                  {runForm.piece_type && !materials.some(m => m.piece_type === runForm.piece_type) ? (
+                    <option value={runForm.piece_type}>{runForm.piece_type} (not in Materials)</option>
+                  ) : null}
                 </select>
                 <input className={inp} type="date" value={runForm.send_date} onChange={e => setRunForm(p => ({ ...p, send_date: e.target.value }))} />
               </div>

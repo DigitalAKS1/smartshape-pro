@@ -503,6 +503,16 @@ async def startup():
             "gst_number": "",
         })
 
+    # D3: seed the one shared Materials catalogue that the drip step editor and
+    # the mail-run builder both read. Idempotent (matched on `piece_type`) and
+    # guarded inside itself, so a database having a bad moment can never stop
+    # the app booting — the first GET /mail-materials seeds it anyway.
+    try:
+        from routes.crm_routes import _seed_materials
+        await _seed_materials()
+    except Exception as e:
+        logging.warning(f"mail_materials seed skipped: {e}")
+
 
     # (Removed) Previously wrote the live admin password to /app/memory/test_credentials.md,
     # leaking the master credential into a file inside the container. The credential is no

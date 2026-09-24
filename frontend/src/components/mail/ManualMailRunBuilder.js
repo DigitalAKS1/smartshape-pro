@@ -2,8 +2,10 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { toast } from 'sonner';
 import { schools as schoolsApi, mailRuns } from '../../lib/api';
 import { X, Search, Plus, Check, Trash2 } from 'lucide-react';
+import useMailMaterials from '../../hooks/useMailMaterials';
 
-const PIECES = ['brochure', 'sample', 'newsletter', 'other'];
+// D3: the hard-coded PIECES list is gone — the piece type comes from the shared
+// Materials catalogue, so catalogue/kit/gift can now be posted by hand too.
 
 /**
  * Hand-pick a mail run: search the school directory, add schools one by one,
@@ -15,9 +17,20 @@ export default function ManualMailRunBuilder({ onClose, onCreated }) {
   const [all, setAll] = useState([]);
   const [q, setQ] = useState('');
   const [picked, setPicked] = useState([]);        // [{school_id, school_name, city}]
-  const [form, setForm] = useState({ name: `Manual list — ${new Date().toLocaleDateString()}`, piece_type: 'brochure', send_date: '' });
+  // No hardcoded 'brochure': the piece type comes from the catalogue, filled in
+  // by the effect below as soon as the first ACTIVE material is known.
+  const [form, setForm] = useState({ name: `Manual list — ${new Date().toLocaleDateString()}`, piece_type: '', send_date: '' });
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const { materials, loading: materialsLoading } = useMailMaterials();
+
+  // Wait for the REAL catalogue. The hook shows its seeded fallback while it
+  // loads, so defaulting any earlier would lock the run onto 'brochure' even
+  // when the catalogue does not offer it.
+  useEffect(() => {
+    if (materialsLoading || !materials.length) return;
+    setForm(p => (p.piece_type ? p : { ...p, piece_type: materials[0].piece_type }));
+  }, [materials, materialsLoading]);
 
   const load = useCallback(async () => {
     try {
@@ -133,12 +146,18 @@ export default function ManualMailRunBuilder({ onClose, onCreated }) {
         <div className="px-5 py-4 border-t border-[var(--border-color)] grid gap-3">
           <div className="grid sm:grid-cols-3 gap-3">
             <input className={inp + ' sm:col-span-1'} placeholder="Run name" value={form.name} onChange={e => setForm(p => ({ ...p, name: e.target.value }))} />
-            <select className={inp} value={form.piece_type} onChange={e => setForm(p => ({ ...p, piece_type: e.target.value }))}>
-              {PIECES.map(x => <option key={x} value={x}>{x}</option>)}
+            <select className={inp} value={form.piece_type} data-testid="manual-run-piece"
+              onChange={e => setForm(p => ({ ...p, piece_type: e.target.value }))}>
+              {materials.map(m => <option key={m.material_id} value={m.piece_type}>{m.name}</option>)}
+              {/* A retired or legacy value stays selectable, so re-opening the
+                  builder on one does not silently change what gets posted. */}
+              {form.piece_type && !materials.some(m => m.piece_type === form.piece_type) ? (
+                <option value={form.piece_type}>{form.piece_type} (not in Materials)</option>
+              ) : null}
             </select>
             <input className={inp} type="date" value={form.send_date} onChange={e => setForm(p => ({ ...p, send_date: e.target.value }))} />
           </div>
-          <button className={btnP} disabled={busy || picked.length === 0} onClick={create} data-testid="create-manual-run">
+          <button className={btnP} disabled={busy || picked.length === 0 || !form.piece_type} onClick={create} data-testid="create-manual-run">
             <Check className="h-4 w-4" /> {busy ? 'Creating…' : `Create mail run (${picked.length})`}
           </button>
         </div>

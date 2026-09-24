@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { toast } from 'sonner';
 import { dripSequences } from '../../lib/api';
+import useMailMaterials from '../../hooks/useMailMaterials';
 import { X, Zap, Phone, MessageCircle, Mail, Truck, Plus, Trash2, Copy } from 'lucide-react';
 
 const STEP_ICON = { whatsapp: MessageCircle, email: Mail, physical_material: Truck, call_task: Phone };
@@ -12,7 +13,10 @@ const CHANNELS = [
   { v: 'call_task', label: 'Call task (for the rep)' },
 ];
 
-const BLANK_STEP = { delay_days: 0, message_type: 'whatsapp', message_template: '', material_type: 'brochure', material_name: '' };
+// `material_type` starts blank: it is filled from the shared catalogue the moment
+// a step becomes a post step (see the channel select), never from a hardcoded
+// 'brochure' the catalogue may not even offer.
+const BLANK_STEP = { delay_days: 0, message_type: 'whatsapp', message_template: '', material_type: '', material_name: '' };
 
 // Start a marketing plan on selected schools — enrol each school's lead into a
 // saved multi-channel sequence (Call / Mail / WhatsApp / Email), or build a new
@@ -28,6 +32,10 @@ export default function SequenceEnrollDialog({ open, onClose, schoolIds = [], on
   const nameRef = useRef(null);
   const [mode, setMode] = useState('existing');            // 'existing' | 'new'
   const [form, setForm] = useState({ name: '', steps: [{ ...BLANK_STEP }] });
+  // D3: "Post something" picks from the same shared catalogue as the drip step
+  // editor and the mail-run builder — one list, so the plan you write here is
+  // a plan Offline Mail can actually post.
+  const { materials } = useMailMaterials();
 
   useEffect(() => {
     if (!open) return;
@@ -40,6 +48,10 @@ export default function SequenceEnrollDialog({ open, onClose, schoolIds = [], on
 
   if (!open) return null;
   const chosen = seqs.find(s => s.sequence_id === pick);
+  // A post step with no material used to be sent as "brochure". It is now an
+  // unsubmittable state instead — the backend refuses it too.
+  const postStepMissingMaterial = form.steps.some(
+    s => s.message_type === 'physical_material' && !(s.material_type || '').trim());
 
   const setStep = (i, patch) =>
     setForm(f => ({ ...f, steps: f.steps.map((s, ii) => ii === i ? { ...s, ...patch } : s) }));
@@ -60,7 +72,9 @@ export default function SequenceEnrollDialog({ open, onClose, schoolIds = [], on
         delay_days: s.delay_days ?? 0,
         message_type: s.message_type || 'whatsapp',
         message_template: s.message_template || '',
-        material_type: s.material_type || 'brochure',
+        // A blank stays blank (and blocks submit) rather than quietly
+        // becoming a brochure.
+        material_type: s.material_type || '',
         material_name: s.material_name || '',
       })),
     });
@@ -97,6 +111,9 @@ export default function SequenceEnrollDialog({ open, onClose, schoolIds = [], on
             ? (s.material_name || '').trim() || (s.message_template || '').trim()
             : (s.message_template || '').trim());
         if (!steps.length) { toast.error('Add at least one step with something in it'); return; }
+        if (postStepMissingMaterial) {
+          toast.error('Pick a material for every step that posts something'); return;
+        }
         const created = await dripSequences.create({
           name: form.name.trim(),
           description: 'Created from the Schools tab',
@@ -107,7 +124,7 @@ export default function SequenceEnrollDialog({ open, onClose, schoolIds = [], on
             message_type: s.message_type,
             message_template: s.message_template || '',
             ...(s.message_type === 'physical_material'
-              ? { material_type: s.material_type || 'brochure', material_name: (s.material_name || '').trim() }
+              ? { material_type: (s.material_type || '').trim().toLowerCase(), material_name: (s.material_name || '').trim() }
               : {}),
           })),
         });
@@ -210,7 +227,13 @@ export default function SequenceEnrollDialog({ open, onClose, schoolIds = [], on
                     <div className="flex items-center gap-2">
                       <span className="text-[10px] font-mono text-[var(--text-muted)] w-7">#{i + 1}</span>
                       <select className={sm + ' flex-1 min-w-0'} value={s.message_type}
-                        onChange={e => setStep(i, { message_type: e.target.value })}
+                        onChange={e => {
+                          const mt = e.target.value;
+                          // Becoming a post step: start on the first ACTIVE material.
+                          setStep(i, mt === 'physical_material' && !s.material_type
+                            ? { message_type: mt, material_type: materials[0]?.piece_type || '' }
+                            : { message_type: mt });
+                        }}
                         data-testid={`seq-step-channel-${i}`}>
                         {CHANNELS.map(c => <option key={c.v} value={c.v}>{c.label}</option>)}
                       </select>
@@ -224,9 +247,30 @@ export default function SequenceEnrollDialog({ open, onClose, schoolIds = [], on
                       )}
                     </div>
                     {isPost ? (
-                      <input className={sm + ' w-full mt-2'} placeholder="What are you posting? e.g. 2026 Die Catalogue"
-                        value={s.material_name} onChange={e => setStep(i, { material_name: e.target.value })}
-                        data-testid={`seq-step-material-${i}`} />
+                      <>
+                        <select className={sm + ' w-full mt-2'}
+                          value={(s.material_type || '').trim()}
+                          onChange={e => setStep(i, { material_type: e.target.value })}
+                          data-testid={`seq-step-material-${i}`}>
+                          {!(s.material_type || '').trim() ? <option value="">Pick a material…</option> : null}
+                          {materials.map(m => (
+                            <option key={m.material_id} value={m.piece_type}>{m.name}</option>
+                          ))}
+                          {/* D3: a legacy free-text value keeps working — it is
+                              shown as-is, not quietly rewritten to "brochure". */}
+                          {!materials.some(m => m.piece_type === (s.material_type || '').trim()) && (s.material_type || '').trim() ? (
+                            <option value={s.material_type}>{s.material_type} (not in Materials)</option>
+                          ) : null}
+                        </select>
+                        <input className={sm + ' w-full mt-2'} placeholder="What are you posting? e.g. 2026 Die Catalogue"
+                          value={s.material_name} onChange={e => setStep(i, { material_name: e.target.value })}
+                          data-testid={`seq-step-material-name-${i}`} />
+                        <p className="mt-1.5 text-[11px] text-[var(--text-muted)]"
+                          data-testid={`seq-step-mailer-note-${i}`}>
+                          On day {s.delay_days || 0} this creates a mailer in <b>Offline Mail → To post</b>.
+                          Post it and tick it there.
+                        </p>
+                      </>
                     ) : (
                       <textarea className={sm + ' w-full mt-2 h-auto py-2 resize-y'} rows={2}
                         placeholder={isCall ? 'What should the rep do on this call?' : 'Message — {name} and {school_name} are filled in'}
@@ -250,7 +294,7 @@ export default function SequenceEnrollDialog({ open, onClose, schoolIds = [], on
         )}
 
         <button className="mt-4 h-10 w-full rounded-lg bg-[#e94560] hover:bg-[#f05c75] text-white text-sm font-semibold disabled:opacity-60 flex items-center justify-center gap-2"
-          disabled={busy || (mode === 'existing' ? !pick : !form.name.trim())} onClick={submit} data-testid="seq-enroll-submit">
+          disabled={busy || (mode === 'existing' ? !pick : (!form.name.trim() || postStepMissingMaterial))} onClick={submit} data-testid="seq-enroll-submit">
           <Zap className="h-4 w-4" />
           {busy ? 'Working…' : mode === 'new'
             ? `Create & start for ${schoolIds.length} school(s)`

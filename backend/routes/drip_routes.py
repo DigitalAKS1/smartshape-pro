@@ -325,13 +325,23 @@ async def _seed_defaults():
 def _normalise_steps(raw_steps: list) -> list:
     steps = []
     for i, s in enumerate(raw_steps):
+        message_type = s.get("message_type", "whatsapp")
+        # D3: `material_type` is the STORED piece type, matched against the
+        # `mail_materials` catalogue, so it is normalised to lowercase here —
+        # a legacy "Poster" and a `poster` material are the same thing.
+        material_type = (s.get("material_type") or "").strip().lower()
+        # A post step with no material used to sail through and become a
+        # brochure at fire time, silently posting the wrong item. Refuse it
+        # where it is authored instead.
+        if message_type == "physical_material" and not material_type:
+            raise HTTPException(400, f"Step {i + 1}: pick a material to post")
         step = {
             "step_number": i + 1,
             "delay_days": max(0, int(s.get("delay_days", 0))),
-            "message_type": s.get("message_type", "whatsapp"),
+            "message_type": message_type,
             "message_template": s.get("message_template", ""),
             "message_plain": s.get("message_plain", ""),
-            "material_type": s.get("material_type", ""),
+            "material_type": material_type,
             "material_name": s.get("material_name", ""),
         }
         if s.get("attachment_id"):

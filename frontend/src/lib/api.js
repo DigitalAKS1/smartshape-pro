@@ -384,6 +384,20 @@ export const mailAreas = {
   schools: (id) => API.get(`/mail-areas/${id}/schools`),
 };
 
+// D3: one shared Materials list behind the drip step editor AND the mail-run
+// piece picker. `remove` is a soft delete — legacy steps keep working. Pass
+// `{ all: 1 }` to `list` for the admin editor, which must also show retired
+// materials so they can be brought back.
+export const mailMaterials = {
+  list: (params = {}) => API.get('/mail-materials', { params }),
+  create: (data) => API.post('/mail-materials', data),
+  update: (id, data) => API.put(`/mail-materials/${id}`, data),
+  remove: (id) => API.delete(`/mail-materials/${id}`),
+};
+// Plan-era aliases: the same calls under the names the plan and its tests use.
+mailMaterials.getAll = mailMaterials.list;
+mailMaterials.deactivate = mailMaterials.remove;
+
 export const mailRuns = {
   getAll: () => API.get('/mail-runs'),
   get: (id) => API.get(`/mail-runs/${id}`),

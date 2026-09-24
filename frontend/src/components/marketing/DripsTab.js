@@ -13,8 +13,11 @@ import RichMessageEditor from '../RichMessageEditor';
 import { dripSequences as dripApi, whatsApp as waApi, mailRuns } from '../../lib/api';
 import { useNavigate } from 'react-router-dom';
 import { mapSeq } from '../../lib/marketingUtils';
+import useMailMaterials from '../../hooks/useMailMaterials';
 
-const BLANK_FORM = { name: '', description: '', trigger: 'lead_created', filter_designation: '', steps: [{ message_type: 'whatsapp', message_template: '', delay_days: 0, attachment_id: null, material_type: 'brochure' }] };
+const BLANK_FORM = { name: '', description: '', trigger: 'lead_created', filter_designation: '', steps: [{ message_type: 'whatsapp', message_template: '', delay_days: 0, attachment_id: null, material_type: '' }] };
+// ^ `material_type` starts blank and is filled from the shared catalogue when a
+//   step becomes a post step (the Type select) — never a hardcoded 'brochure'.
 
 export default function DripsTab({ tk, drips, setDrips }) {
   const [expanded, setExpanded]     = useState(null);
@@ -35,6 +38,9 @@ export default function DripsTab({ tk, drips, setDrips }) {
   const [uploadingAttach, setUploadingAttach] = useState(false);
 
   const navigate = useNavigate();
+  // D3: the step editor's material list is the shared catalogue, not a literal
+  // list that disagreed with the mail-run builder's.
+  const { materials } = useMailMaterials();
   const [pending, setPending]         = useState({});   // { sequence_id: pieces waiting to print }
   const [deliveries, setDeliveries]   = useState(null); // { id, loading, rows, totals }
 
@@ -74,7 +80,7 @@ export default function DripsTab({ tk, drips, setDrips }) {
 
   function addStep() {
     const nextDay = form.steps.length === 0 ? 0 : (parseInt(form.steps[form.steps.length - 1].delay_days) || 0) + 3;
-    setForm(p => ({ ...p, steps: [...p.steps, { message_type: 'whatsapp', message_template: '', delay_days: nextDay, attachment_id: null, material_type: 'brochure' }] }));
+    setForm(p => ({ ...p, steps: [...p.steps, { message_type: 'whatsapp', message_template: '', delay_days: nextDay, attachment_id: null, material_type: '' }] }));
   }
 
   function removeStep(i) {
@@ -98,7 +104,9 @@ export default function DripsTab({ tk, drips, setDrips }) {
         message_template: s.message_template || '',
         delay_days: s.delay_days,
         attachment_id: s.attachment_id || null,
-        material_type: s.material_type || 'brochure',
+        // Blank stays blank — and blocks Save — instead of silently becoming a
+        // brochure the moment the dialog opens.
+        material_type: s.material_type || '',
         material_name: s.material_name || '',
       })),
     });
@@ -158,10 +166,20 @@ export default function DripsTab({ tk, drips, setDrips }) {
     }
   }
 
+  // D3: a post step with no material used to be saved as "" and then posted a
+  // BROCHURE at fire time. The catalogue always has something to pick, so a
+  // blank can only be a legacy step — it has to be fixed before saving.
+  const stepsMissingMaterial = form.steps.some(
+    s => s.message_type === 'physical_material' && !(s.material_type || '').trim());
+
   async function save() {
     if (savingRef.current) return;   // guard against double-submit creating duplicate sequences
     if (!form.name.trim()) { toast.error('Sequence name is required'); return; }
     if (form.steps.length === 0) { toast.error('Add at least one step'); return; }
+    if (stepsMissingMaterial) {
+      toast.error('Pick a material for every step that posts something');
+      return;
+    }
     savingRef.current = true;
     setSaving(true);
     try {
@@ -182,7 +200,9 @@ export default function DripsTab({ tk, drips, setDrips }) {
             message_type: s.message_type || 'whatsapp',
             message_template: isPhysical ? '' : (s.message_template || `Step ${i + 1}`),
             message_plain: isPhysical ? '' : plain,
-            ...(isPhysical ? { material_type: s.material_type || 'brochure', material_name: (s.material_name || '').trim() } : {}),
+            // No `|| 'brochure'`: the guard above means it is always set, and a
+            // silent fallback here is exactly how a blank became a brochure.
+            ...(isPhysical ? { material_type: (s.material_type || '').trim().toLowerCase(), material_name: (s.material_name || '').trim() } : {}),
             ...(s.attachment_id ? { attachment_id: s.attachment_id } : {}),
           };
         }),
@@ -524,7 +544,14 @@ export default function DripsTab({ tk, drips, setDrips }) {
                       <span className={`text-[11px] ${tk.tm} flex-shrink-0`}>Type:</span>
                       <select
                         value={s.message_type || 'whatsapp'}
-                        onChange={e => setForm(p => ({ ...p, steps: p.steps.map((ss, ii) => ii === i ? { ...ss, message_type: e.target.value } : ss) }))}
+                        onChange={e => {
+                          const mt = e.target.value;
+                          // Becoming a post step: start on the first ACTIVE material.
+                          setForm(p => ({ ...p, steps: p.steps.map((ss, ii) => ii !== i ? ss
+                            : (mt === 'physical_material' && !(ss.material_type || '').trim()
+                              ? { ...ss, message_type: mt, material_type: materials[0]?.piece_type || '' }
+                              : { ...ss, message_type: mt })) }));
+                        }}
                         className={`h-7 px-2 rounded text-xs ${tk.inp} border`}
                         data-testid={`step-type-${i}`}>
                         <option value="whatsapp">WhatsApp</option>
@@ -532,28 +559,57 @@ export default function DripsTab({ tk, drips, setDrips }) {
                         <option value="physical_material">Physical material</option>
                         <option value="call_task">Call task (rep reminder)</option>
                       </select>
-                      {s.message_type === 'physical_material' && (
-                        <>
-                          <select
-                            value={s.material_type || 'brochure'}
-                            onChange={e => setForm(p => ({ ...p, steps: p.steps.map((ss, ii) => ii === i ? { ...ss, material_type: e.target.value } : ss) }))}
-                            className="h-9 px-2 rounded text-sm bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]"
-                            data-testid={`step-material-${i}`}>
-                            <option value="brochure">Brochure</option>
-                            <option value="sample">Sample</option>
-                            <option value="catalogue">Catalogue</option>
-                            <option value="kit">Kit</option>
-                            <option value="gift">Gift</option>
-                          </select>
-                          <input
-                            value={s.material_name || ''}
-                            onChange={e => setForm(p => ({ ...p, steps: p.steps.map((ss, ii) => ii === i ? { ...ss, material_name: e.target.value } : ss) }))}
-                            className="h-9 px-2 rounded text-sm bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)] flex-1 min-w-[160px]"
-                            placeholder="Item name — what are you sending? (e.g. 2026 Die Catalogue + Sample Kit)"
-                            data-testid={`step-material-name-${i}`} />
-                        </>
-                      )}
+                      {s.message_type === 'physical_material' && (() => {
+                        // D3: the shared catalogue, and nothing else. There is no
+                        // "Other…" free-text escape hatch — the seeded "Other"
+                        // material IS the catch-all and `material_name` below is
+                        // the free text. An empty `material_type` used to mean
+                        // "Other" and then posted a BROCHURE at fire time, so a
+                        // blank is now an unsaveable state rather than a choice.
+                        const chosen = (s.material_type || '').trim();
+                        const known = chosen !== '' && materials.some(m => m.piece_type === chosen);
+                        return (
+                          <>
+                            <select
+                              value={chosen}
+                              onChange={e => setForm(p => ({ ...p, steps: p.steps.map((ss, ii) => ii === i ? { ...ss, material_type: e.target.value } : ss) }))}
+                              className="h-9 px-2 rounded text-sm bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]"
+                              data-testid={`step-material-${i}`}>
+                              {/* Only ever reached by a legacy step with no
+                                  material at all — and Save stays disabled
+                                  until it has been given one. */}
+                              {chosen === '' ? <option value="">Pick a material…</option> : null}
+                              {materials.map(m => (
+                                <option key={m.material_id} value={m.piece_type}>{m.name}</option>
+                              ))}
+                              {!known && chosen ? (
+                                <option value={chosen}>{chosen} (not in Materials)</option>
+                              ) : null}
+                            </select>
+                            {!known && chosen ? (
+                              <span data-testid={`step-material-legacy-${i}`}
+                                className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-[#9A6A15]/15 text-[#9A6A15]">
+                                not in Materials
+                              </span>
+                            ) : null}
+                            <input
+                              value={s.material_name || ''}
+                              onChange={e => setForm(p => ({ ...p, steps: p.steps.map((ss, ii) => ii === i ? { ...ss, material_name: e.target.value } : ss) }))}
+                              className="h-9 px-2 rounded text-sm bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)] flex-1 min-w-[160px]"
+                              placeholder="Item name — what are you sending? (e.g. 2026 Die Catalogue + Sample Kit)"
+                              data-testid={`step-material-name-${i}`} />
+                          </>
+                        );
+                      })()}
                     </div>
+                    {/* Where the envelope actually shows up. Nothing in this
+                        dialog used to say a mailer would be created at all. */}
+                    {s.message_type === 'physical_material' && (
+                      <p className={`px-3 pb-2 text-[11px] ${tk.tm}`} data-testid={`step-mailer-note-${i}`}>
+                        On day {s.delay_days ?? 0} this creates a mailer in <b>Offline Mail → To post</b>.
+                        Post it and tick it there.
+                      </p>
+                    )}
                     {s.message_type !== 'physical_material' && (
                     <RichMessageEditor
                       value={s.message_template}
@@ -570,7 +626,9 @@ export default function DripsTab({ tk, drips, setDrips }) {
             <Button variant="outline" size="sm" className={`border-[var(--border-color)] ${tk.t2}`}
               onClick={closeDialog}>Cancel</Button>
             <Button size="sm" className="bg-[var(--accent)] hover:bg-[var(--accent)]/90 text-white"
-              onClick={save} disabled={saving}>
+              onClick={save} disabled={saving || stepsMissingMaterial}
+              title={stepsMissingMaterial ? 'Pick a material for every step that posts something' : undefined}
+              data-testid="seq-save">
               {saving ? (editingSeq ? 'Saving…' : 'Creating…') : (editingSeq ? 'Save Changes' : 'Create Sequence')}
             </Button>
           </DialogFooter>
