@@ -53,11 +53,74 @@ def _no_outbound_network(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _no_real_evolution(monkeypatch):
-    def _make(name):
-        async def _blocked(self, *a, **k):
-            raise NetworkBlocked(f"EvolutionClient.{name} called without the fake_evolution fixture")
-        return _blocked
-    for name in _REAL_EVO:
-        if name == "is_connected":      # only calls get_status, and swallows its error by design
-            continue
-        monkeypatch.setattr(_ec.EvolutionClient, name, _make(name))
+    """Every EvolutionClient method funnels through _request, so blocking it blocks them all."""
+    async def _blocked(self, method, path, **k):
+        raise NetworkBlocked(f"EvolutionClient {method} {path} called without the fake_evolution fixture")
+    monkeypatch.setattr(_ec.EvolutionClient, "_request", _blocked)
+
+
+class FakeEvolution:
+    """Stands in for the Evolution server. `calls` holds every request; `sends` the
+    sendText/sendMedia ones as {instance, number, text, media, mediatype, token}."""
+
+    def __init__(self):
+        self.calls, self.sends = [], []
+        self.fail_sends = False
+        self.fail_with = "provider rejected the message"
+        self.not_on_whatsapp = set()
+        self.check_raises = False
+        self.state = {}
+        self.owner_jid = {}
+        self.on_send = None
+        self.fail_if = None
+        self.create_status = None
+        self._n = 0
+
+    async def request(self, method, path, json=None, token=None):
+        self.calls.append({"method": method, "path": path, "json": json, "token": token})
+        tail = path.split("?")[0].rstrip("/").split("/")[-1]
+        if path.startswith("/message/send"):
+            if self.fail_sends or (self.fail_if and self.fail_if()):
+                raise _ec.EvolutionError(500, self.fail_with)
+            self._n += 1
+            rec = {"instance": tail, "number": json.get("number"),
+                   "text": json.get("text", json.get("caption", "")),
+                   "media": json.get("media"), "mediatype": json.get("mediatype"), "token": token}
+            self.sends.append(rec)
+            if self.on_send:
+                await self.on_send(rec)          # may raise to simulate a provider error
+            return {"key": {"id": f"PMID{self._n}", "fromMe": True,
+                            "remoteJid": f"{json.get('number')}@s.whatsapp.net"}, "status": "PENDING"}
+        if path.startswith("/chat/whatsappNumbers/"):
+            if self.check_raises:
+                raise _ec.EvolutionError(500, "check failed")
+            return [{"number": n, "exists": n not in self.not_on_whatsapp, "jid": f"{n}@s.whatsapp.net"}
+                    for n in json.get("numbers", [])]
+        if path == "/instance/create":
+            if self.create_status:
+                raise _ec.EvolutionError(self.create_status, "This name is already in use.")
+            name = json["instanceName"]
+            self.state.setdefault(name, "connecting")
+            return {"instance": {"instanceName": name, "status": "created"}, "hash": f"tok_{name}"}
+        if path.startswith("/instance/connect/"):
+            return {"code": "2@abc", "base64": "data:image/png;base64,QR", "count": 1}
+        if path.startswith("/instance/connectionState/"):
+            return {"instance": {"instanceName": tail, "state": self.state.get(tail, "close")}}
+        if path.startswith("/instance/fetchInstances"):
+            name = path.split("instanceName=")[-1]
+            return [{"name": name, "connectionStatus": self.state.get(name, "close"),
+                     "ownerJid": self.owner_jid.get(name)}]
+        if path.startswith("/instance/logout/"):
+            self.state[tail] = "close"
+            return {"status": "SUCCESS"}
+        return {}
+
+
+@pytest.fixture()
+def fake_evolution(monkeypatch):
+    fake = FakeEvolution()
+
+    async def _request(self, method, path, *, json=None, token=None, timeout=None):
+        return await fake.request(method, path, json=json, token=token)
+    monkeypatch.setattr(_ec.EvolutionClient, "_request", _request)
+    return fake
