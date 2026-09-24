@@ -43,7 +43,7 @@ def db(monkeypatch):
 
     def _no_smtp(*a, **k):
         raise AssertionError("test tried to send email")
-    monkeypatch.setattr(sched, "_send_wa", _no_wa, raising=False)
+    monkeypatch.setattr(sched, "send_whatsapp", _no_wa)
     monkeypatch.setattr(sched, "_smtp_send", _no_smtp, raising=False)
     return d
 

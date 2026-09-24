@@ -27,7 +27,8 @@ from database import db
 from notify import notify_user
 import services.account_lifecycle as al
 import services.fit as fit
-from services.evolution_client import evolution
+from services.wa_send import send_whatsapp, wa_available
+from services.wa_config import get_wa_settings
 from routes.fms_routes import get_fms_settings, render_template, pct_remaining
 from routes.crm_routes import (
     get_crm_settings, compute_attention, resolve_lead_value,
@@ -52,10 +53,10 @@ async def _email_cfg():
 
 
 async def _wa_cfg():
-    cfg = await db.settings.find_one({"type": "whatsapp_provider"}, {"_id": 0})
-    if not cfg or cfg.get("provider") in (None, "none", "") or not cfg.get("api_key"):
-        return None
-    return cfg
+    """Truthy when WhatsApp can send right now (a connected number, or the AutoSender fallback).
+    Kept under its old name for the digest / orders-report gates and admin_routes' digest test
+    route. The WABA provider document it used to read no longer drives any send (W1, D3)."""
+    return {"provider": "evolution"} if await wa_available(db) else None
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -162,69 +163,6 @@ def _smtp_send_attachment(sender_email, app_password, sender_name, to_email,
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# WA PROVIDER DISPATCH
-# ══════════════════════════════════════════════════════════════════════════════
-
-async def _send_via_gupshup(cfg: dict, to_phone: str, message: str):
-    headers = {"apikey": cfg["api_key"], "Content-Type": "application/x-www-form-urlencoded"}
-    data = {
-        "channel": "whatsapp",
-        "source": cfg["from_number"],
-        "destination": to_phone,
-        "message": f'{{"type":"text","text":"{message}"}}',
-        "src.name": cfg.get("app_name", "SmartShape"),
-    }
-    async with httpx.AsyncClient(timeout=15) as client:
-        r = await client.post("https://api.gupshup.io/sm/api/v1/msg", data=data, headers=headers)
-        if r.status_code >= 400:
-            raise Exception(f"Gupshup {r.status_code}: {r.text[:200]}")
-
-
-async def _send_via_360dialog(cfg: dict, to_phone: str, message: str):
-    headers = {"D360-API-KEY": cfg["api_key"], "Content-Type": "application/json"}
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": to_phone.lstrip("+"),
-        "type": "text",
-        "text": {"body": message},
-    }
-    async with httpx.AsyncClient(timeout=15) as client:
-        r = await client.post("https://waba.360dialog.io/v1/messages", json=payload, headers=headers)
-        if r.status_code >= 400:
-            raise Exception(f"360dialog {r.status_code}: {r.text[:200]}")
-
-
-async def _send_via_meta(cfg: dict, to_phone: str, message: str):
-    """Meta Cloud API (official WABA)."""
-    phone_number_id = cfg["phone_number_id"]
-    token = cfg["api_key"]
-    url = f"https://graph.facebook.com/v19.0/{phone_number_id}/messages"
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": to_phone.lstrip("+"),
-        "type": "text",
-        "text": {"body": message},
-    }
-    async with httpx.AsyncClient(timeout=15) as client:
-        r = await client.post(url, json=payload, headers=headers)
-        if r.status_code >= 400:
-            raise Exception(f"Meta {r.status_code}: {r.text[:200]}")
-
-
-async def _send_wa(cfg: dict, to_phone: str, message: str):
-    provider = cfg.get("provider", "")
-    if provider == "gupshup":
-        await _send_via_gupshup(cfg, to_phone, message)
-    elif provider == "360dialog":
-        await _send_via_360dialog(cfg, to_phone, message)
-    elif provider == "meta":
-        await _send_via_meta(cfg, to_phone, message)
-    else:
-        raise Exception(f"unknown_provider:{provider}")
-
-
-# ══════════════════════════════════════════════════════════════════════════════
 # JOB 1 — Email Queue Processor
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -317,88 +255,51 @@ async def process_email_queue():
 # JOB 2 — WhatsApp Queue Processor
 # ══════════════════════════════════════════════════════════════════════════════
 
+_QUEUE_KIND = {"daily_digest": "digest", "daily_orders_report": "digest", "reminder": "alert"}
+
+
+def _queue_kind(row: dict) -> str:
+    cid = str(row.get("campaign_id") or "")
+    if cid in _QUEUE_KIND:
+        return _QUEUE_KIND[cid]
+    if cid.startswith("form_"):
+        return "form"
+    return "scheduled"
+
+
 async def process_wa_queue():
-    cfg = await _wa_cfg()
+    """Hand queued rows (daily digest, orders report, delegation reminders, form/webinar stages) to
+    send_whatsapp. Campaign rows are sent by their own background task and schedule_id rows by
+    run_auto_reminders — neither is touched here (a schedule_id row used to raise KeyError and
+    abort the cycle). A row scheduled for later now waits for its time (it used to fire early)."""
     now_iso = datetime.now(timezone.utc).isoformat()
-
-    if not cfg:
-        count = await db.whatsapp_scheduled.count_documents({"status": "pending"})
-        if count:
-            log.debug(f"[wa] {count} pending — WA provider not configured")
-        return
-
-    pending = await db.whatsapp_scheduled.find(
-        {"status": "pending"}, {"_id": 0}
-    ).limit(20).to_list(20)
-
-    if not pending:
-        return
-
-    log.info(f"[wa] processing {len(pending)} messages")
-
-    for msg in pending:
-        # field stored by whatsapp_routes is "phone"; legacy records may use "to_phone"
-        to_phone = (msg.get("phone") or msg.get("to_phone") or "").strip()
-        if not to_phone:
-            await db.whatsapp_scheduled.update_one(
-                {"scheduled_id": msg["scheduled_id"]},
-                {"$set": {"status": "failed", "error": "no_phone", "sent_at": now_iso}},
-            )
-            await db.whatsapp_campaigns.update_one(
-                {"campaign_id": msg["campaign_id"]}, {"$inc": {"failed_count": 1}}
-            )
+    rows = await db.whatsapp_scheduled.find({
+        "status": "pending", "scheduled_id": {"$exists": True}, "type": {"$ne": "campaign"},
+        "$or": [{"scheduled_at": {"$exists": False}}, {"scheduled_at": None}, {"scheduled_at": {"$lte": now_iso}}],
+    }, {"_id": 0}).limit(50).to_list(50)
+    for msg in rows:
+        claim = await db.whatsapp_scheduled.update_one(
+            {"scheduled_id": msg["scheduled_id"], "status": "pending"},
+            {"$set": {"status": "sending", "claimed_at": now_iso}})
+        if getattr(claim, "modified_count", 0) != 1:
             continue
-
+        kind = _queue_kind(msg)
         try:
-            await _send_wa(cfg, to_phone, msg.get("message", ""))
-            await db.whatsapp_scheduled.update_one(
-                {"scheduled_id": msg["scheduled_id"]},
-                {"$set": {"status": "sent", "sent_at": now_iso}},
-            )
-            await db.whatsapp_campaigns.update_one(
-                {"campaign_id": msg["campaign_id"]}, {"$inc": {"sent_count": 1}}
-            )
-            log.info(f"[wa] sent → {to_phone}")
+            res = await send_whatsapp(
+                db, to=(msg.get("phone") or msg.get("to_phone") or ""), text=msg.get("message", ""), kind=kind,
+                ref={"scheduled_id": msg["scheduled_id"], "campaign_id": msg.get("campaign_id")},
+                channel="company" if kind in ("digest", "alert") else "auto",
+                contact_id=msg.get("contact_id") or "", enforce_consent=False)
         except Exception as exc:
-            err = str(exc)[:250]
-            log.warning(f"[wa] failed → {to_phone}: {err}")
-            await db.whatsapp_scheduled.update_one(
-                {"scheduled_id": msg["scheduled_id"]},
-                {"$set": {"status": "failed", "error": err, "sent_at": now_iso}},
-            )
-            await db.whatsapp_campaigns.update_one(
-                {"campaign_id": msg["campaign_id"]}, {"$inc": {"failed_count": 1}}
-            )
-
-        await asyncio.sleep(1.0)  # WA rate limiting — 1 msg/sec
+            res = {"status": "failed", "message_id": "", "reason": str(exc)[:200]}
+        await db.whatsapp_scheduled.update_one({"scheduled_id": msg["scheduled_id"]}, {"$set": {
+            "status": res["status"], "wa_msg_id": res.get("message_id", ""), "error": res.get("reason", ""),
+            "sent_at": now_iso}})
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # JOB 3 — Drip Step Executor
 # ══════════════════════════════════════════════════════════════════════════════
-
-async def _wa_consent_ok(lead: dict) -> bool:
-    """May we send a MARKETING WhatsApp to this lead?
-
-    Meta requires prior opt-in for marketing-category templates; sending without it
-    risks the whole number being suspended, not just one message. Consent is read
-    from the lead, falling back to the school — opt-in is given by the school, not
-    by a row in our CRM. The rule itself is a setting (`require_wa_consent`, in
-    App Settings -> Notifications) but it defaults to ON, because the safe default
-    for a policy whose downside is a permanent ban is to refuse.
-    """
-    cfg = await db.settings.find_one({"type": "notifications"}, {"_id": 0}) or {}
-    if not cfg.get("require_wa_consent", True):
-        return True
-    if lead.get("wa_consent"):
-        return True
-    sid = lead.get("school_id")
-    if sid:
-        sch = await db.schools.find_one({"school_id": sid}, {"_id": 0, "wa_consent": 1})
-        if (sch or {}).get("wa_consent"):
-            return True
-    return False
-
 
 # Consecutive send failures on one step before the enrolment pauses and the owner
 # is told. Retries happen on the loop's own 1-hour cadence.
@@ -424,6 +325,17 @@ _DRIP_LOCK = asyncio.Lock()
 _DRIP_RERUN = False
 DRIP_MAX_PASSES = 3             # the first pass + up to two re-runs asked for meanwhile
 DRIP_CLAIM_MINUTES = 10
+
+
+_WA_SKIP_TEXT = {
+    "no_consent": "no WhatsApp consent on record for this school",
+    "opt_out": "this person opted out of WhatsApp",
+    "not_on_whatsapp": "this number is not on WhatsApp",
+    "no_sender": "no WhatsApp number is connected (owner's or company)",
+    "bad_phone": "no usable mobile number",
+    "empty_message": "the step has no message",
+    "number_warming_up": "the sending number is still warming up",
+}
 
 
 async def run_drip_executor():
@@ -483,7 +395,7 @@ async def _drip_executor_pass():
 
     log.info(f"[drip] {len(active)} enrollments ready for step")
     email_cfg = await _email_cfg()
-    wa_cfg = await _wa_cfg()
+    wa_settings = await get_wa_settings(db)
 
     for enr in active:
         try:
@@ -531,6 +443,15 @@ async def _drip_executor_pass():
 
             fire_idx, step = step_to_fire
 
+            # Rollout step 2: WhatsApp drip steps are HELD — not failed, not skipped — until the owner
+            # turns them on in Settings -> WhatsApp. Pushed an hour so held rows do not crowd the
+            # 500-row window; nothing else about the enrolment changes.
+            if step.get("message_type", "whatsapp") == "whatsapp" and not wa_settings.get("drip_wa_enabled"):
+                await db.drip_enrollments.update_one(
+                    {"enrollment_id": enr["enrollment_id"], "next_step_at": enr.get("next_step_at")},
+                    {"$set": {"next_step_at": (now + timedelta(hours=1)).isoformat()}})
+                continue
+
             # Claim the step before anything can send it. Lost the race -> some
             # other pass or worker owns this step; leave it to them.
             if not await _claim_enrollment(enr, now):
@@ -577,20 +498,24 @@ async def _drip_executor_pass():
                 except Exception as e:
                     err_detail = str(e)[:200]
 
-            elif msg_type == "whatsapp" and wa_cfg:
-                phone = lead.get("contact_phone", "")
-                if not await _wa_consent_ok(lead):
-                    # Not a failure — a refusal. Retrying would stall the school on a
-                    # step that can never send, so it is skipped and the sequence
-                    # carries on to the post and call steps, which need no opt-in.
+            elif msg_type == "whatsapp":
+                res = await send_whatsapp(
+                    db, to=lead.get("contact_phone", ""), text=text, kind="drip",
+                    ref={"sequence_id": enr["sequence_id"], "enrollment_id": enr["enrollment_id"],
+                         "step_number": step["step_number"],
+                         "dedup_key": f"drip:{enr['enrollment_id']}:{step['step_number']}"},
+                    owner_email=lead.get("assigned_to") or None,
+                    contact_id=lead.get("contact_id") or "", lead_id=enr.get("lead_id") or "",
+                    school_id=lead.get("school_id") or "")
+                if res["status"] in ("sent", "queued"):
+                    sent = True                      # queued = accepted; the drainer sends it in hours
+                elif res["status"] == "skipped":
+                    # A refusal (consent, opt-out, not on WhatsApp, no number) is not a failure:
+                    # retrying would stall the school on a step that cannot send (spec W3).
                     skipped = True
-                    err_detail = "no WhatsApp consent on record for this school"
-                elif phone:
-                    try:
-                        await _send_wa(wa_cfg, phone, text)
-                        sent = True
-                    except Exception as e:
-                        err_detail = str(e)[:200]
+                    err_detail = _WA_SKIP_TEXT.get(res["reason"], res["reason"])
+                else:
+                    err_detail = res.get("reason") or "WhatsApp send failed"
 
             elif msg_type == "email" and email_cfg:
                 email_addr = lead.get("contact_email", "")
@@ -630,8 +555,9 @@ async def _drip_executor_pass():
                     err_detail = str(e)[:200]
 
             # Mirror every fired step onto the engagement ledger so it shows on
-            # the school's unified Timeline (Phase 0), tagged by channel.
-            if sent:
+            # the school's unified Timeline (Phase 0), tagged by channel. A WhatsApp step is
+            # written by send_whatsapp itself, on the actual send, under the same dedup key.
+            if sent and msg_type != "whatsapp":
                 try:
                     from services.engagement import log_engagement_event
                     _ch = {"whatsapp": "whatsapp", "email": "email",
@@ -755,11 +681,12 @@ async def run_greeting_sender():
 
     log.info(f"[greet] {len(rules)} rules match {today_mmdd}")
     email_cfg = await _email_cfg()
-    wa_cfg = await _wa_cfg()
+    # Rollout step 2: greetings stay off WhatsApp until the owner turns them on (wa.greetings_enabled).
+    wa_on = (await get_wa_settings(db)).get("greetings_enabled")
 
     contacts = await db.contacts.find(
         {"is_deleted": {"$ne": True}},
-        {"_id": 0, "first_name": 1, "name": 1, "phone": 1, "email": 1},
+        {"_id": 0, "contact_id": 1, "first_name": 1, "name": 1, "phone": 1, "email": 1},
     ).to_list(None)
 
     for rule in rules:
@@ -780,12 +707,16 @@ async def run_greeting_sender():
             text = rule.get("template_body", "").replace("{name}", first_name)
 
             delivered = False
-            if wa_cfg and contact.get("phone"):
+            if wa_on and contact.get("phone"):
                 try:
-                    await _send_wa(wa_cfg, contact["phone"], text)
-                    sent_count += 1
-                    delivered = True
-                    await asyncio.sleep(0.8)
+                    res = await send_whatsapp(
+                        db, to=contact["phone"], text=text, kind="greeting",
+                        ref={"rule_id": rule_id,
+                             "dedup_key": f"greet:{rule_id}:{today_key}:{contact.get('contact_id', '')}"},
+                        contact_id=contact.get("contact_id") or "")
+                    if res["status"] in ("sent", "queued"):
+                        sent_count += 1
+                        delivered = True
                 except Exception as exc:
                     log.warning(f"[greet] WA → {contact['phone']}: {exc}")
             # Always fall back to email if WA not delivered and contact has email
@@ -1108,17 +1039,24 @@ CRM_DIGEST_DRY_RUN = os.getenv("CRM_DIGEST_DRY_RUN", "0") == "1"
 DAILY_DIGEST_DRY_RUN = os.getenv("DAILY_DIGEST_DRY_RUN", "0") == "1"
 
 
-async def _fms_send_wa(phone: str, text: str) -> tuple[bool, str]:
+async def _fms_send_wa(phone: str, text: str, *, kind: str = "alert",
+                       owner_email: str | None = None) -> tuple[bool, str]:
+    """FMS / digest WhatsApp through the one door. `alert`/`digest` (our staff) go from the company
+    number; `fms` (a customer) from the record owner's. Queued counts as accepted."""
     if not phone:
         return False, "no_phone"
     if FMS_DRY_RUN:
         log.info(f"[fms][dry] WA -> {phone}: {text[:60]}")
         return True, ""
     try:
-        await evolution.send_text(phone, text)
-        return True, ""
+        res = await send_whatsapp(db, to=phone, text=text, kind=kind, owner_email=owner_email,
+                                  channel="company" if kind in ("alert", "digest") else "auto",
+                                  enforce_consent=False)
     except Exception as e:
         return False, str(e)[:200]
+    if res["status"] in ("sent", "queued"):
+        return True, ""
+    return False, res.get("reason") or res["status"]
 
 
 async def _fms_send_email(to_email: str, subject: str, body: str) -> tuple[bool, str]:
@@ -1387,7 +1325,7 @@ async def run_crm_digest():
         if CRM_DIGEST_DRY_RUN:
             log.info(f"[digest][dry] -> {rep_email}\n{text}")
             continue
-        await _fms_send_wa(recipient.get("phone", ""), text)
+        await _fms_send_wa(recipient.get("phone", ""), text, kind="digest")
         await _fms_send_email(recipient.get("email", ""),
                               "SmartShape CRM — leads needing attention", text)
     admins = await db.users.find({"role": "admin"}, {"_id": 0, "email": 1}).to_list(20)
@@ -1401,7 +1339,7 @@ async def run_crm_digest():
             log.info(f"[digest][dry] admin -> {a['email']}\n{summary}")
             continue
         r = await _resolve_recipient(a["email"])
-        await _fms_send_wa(r.get("phone", ""), summary)
+        await _fms_send_wa(r.get("phone", ""), summary, kind="digest")
         await _fms_send_email(a["email"], "SmartShape CRM — daily summary", summary)
 
 
@@ -1563,12 +1501,19 @@ async def _cert_send_one(channel: str, it: dict, batch: dict):
         if CERT_DRY_RUN:
             log.info(f"[cert][dry] WA doc -> {it['phone']}: {fname}")
             return True, None
+        full_url = f"{_PUBLIC_BASE}{pdf_url}" if _PUBLIC_BASE else pdf_url
         try:
-            full_url = f"{_PUBLIC_BASE}{pdf_url}" if _PUBLIC_BASE else pdf_url
-            await evolution.send_document(it["phone"], full_url, fname, caption)
-            return True, None
+            res = await send_whatsapp(
+                db, to=it["phone"], text=caption, kind="certificate", channel="company", enforce_consent=False,
+                media={"type": "document", "url": full_url, "filename": fname, "mime": "application/pdf"},
+                ref={"cert_batch_id": batch.get("batch_id"), "item_id": it.get("item_id")})
         except Exception as e:
             return False, str(e)[:200]
+        if res["status"] in ("sent", "queued"):
+            return True, None
+        if res["status"] == "skipped":
+            return None, res["reason"]
+        return False, res["reason"]
     if channel == "email":
         if not it.get("email") or "@" not in it["email"]:
             return None, "no_email"

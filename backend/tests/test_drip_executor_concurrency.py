@@ -12,7 +12,7 @@ guards in scheduler.py, each tested here on its own and together:
     workers, two processes) cannot both send one step.
 
 Contact-keyed AND lead-keyed enrolments. No outward side effects: mongomock,
-senders replaced by recorders that yield to the loop (so passes really
+SMTP replaced by a recorder, WhatsApp sent to the `fake_evolution` recorder; both yield to the loop (so passes really
 interleave), smtplib / httpx booby-trapped.
 
 Run:
@@ -42,19 +42,25 @@ PAST = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
 
 
 @pytest.fixture()
-def env(monkeypatch):
+def env(monkeypatch, fake_evolution):
     d = AsyncMongoMockClient()["smartshape_test"]
     for mod in (crm, drip, sched, engagement):
         monkeypatch.setattr(mod, "db", d, raising=False)
+    from wa_fixtures import wire_wa
+    wire_wa(monkeypatch, d, fake_evolution)
     monkeypatch.setattr(rbac, "MODULE_RBAC_MODE", "enforce", raising=False)
     monkeypatch.setattr(sched, "_DRIP_RERUN", False)
     sent = {"wa": [], "email": [], "errors": [], "on_send": None}
 
-    async def _fake_wa(cfg, to_phone, message):
-        sent["wa"].append(to_phone)
+    # WhatsApp goes through send_whatsapp to the fake Evolution server. A raising
+    # sent["on_send"] propagates as the provider error, exactly as before.
+    async def _rec(s):
+        num = s["number"][2:]
+        sent["wa"].append(num)
         if sent["on_send"]:
-            await sent["on_send"](to_phone)
+            await sent["on_send"](num)
         await asyncio.sleep(0)            # let an overlapping pass run in between
+    fake_evolution.on_send = _rec
 
     def _fake_smtp(*a, **k):
         sent["email"].append(a[3])
@@ -62,7 +68,6 @@ def env(monkeypatch):
     async def _fake_notify(*a, **k):
         return None
 
-    monkeypatch.setattr(sched, "_send_wa", _fake_wa)
     monkeypatch.setattr(sched, "_smtp_send", _fake_smtp)
     monkeypatch.setattr(sched, "notify_user", _fake_notify)
 
@@ -86,7 +91,8 @@ def _run(coro):
 
 
 async def _seed(db, *, kind, n=5, delays=(0, 7)):
-    await db.settings.insert_one({"type": "whatsapp_provider", "provider": "meta", "api_key": "k"})
+    from wa_fixtures import seed_wa
+    await seed_wa(db, settings={"drip_wa_enabled": True})
     await db.schools.insert_one({"school_id": "s1", "school_name": "DPS", "wa_consent": True,
                                  "assigned_to": "o@x.in", "is_deleted": False})
     await db.drip_sequences.insert_one({
