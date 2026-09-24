@@ -124,3 +124,12 @@ def fake_evolution(monkeypatch):
         return await fake.request(method, path, json=json, token=token)
     monkeypatch.setattr(_ec.EvolutionClient, "_request", _request)
     return fake
+
+
+@pytest.fixture()
+def wa_env(monkeypatch, fake_evolution):
+    """A fresh mongomock db wired into the WhatsApp service, the clock at 11:00 IST on
+    Thu 24 Sep 2026, and recorders for Evolution, sleeps and pushes."""
+    from mongomock_motor import AsyncMongoMockClient
+    from wa_fixtures import wire_wa
+    return wire_wa(monkeypatch, AsyncMongoMockClient()["smartshape_test"], fake_evolution)
