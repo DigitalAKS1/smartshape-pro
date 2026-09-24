@@ -1603,7 +1603,10 @@ async def get_catalogue(token: str):
     pkg_machine_category = (package or {}).get("machine_category")
     if pkg_machine_category:
         die_filter["machine_category"] = pkg_machine_category
-        # Never quote a die the school couldn't actually be fulfilled with.
+        # Hide out-of-stock small-machine dies from the catalogue view. This only
+        # governs what's shown here — /catalogue/{token}/submit still accepts any
+        # die_id and quantity; over-selection is caught by the existing purchase-alert
+        # check there, not by this filter.
         die_filter["$expr"] = {"$gt": [
             {"$subtract": ["$stock_qty", {"$ifNull": ["$reserved_qty", 0]}]}, 0]}
     dies = await db.dies.find(die_filter, {"_id": 0}).to_list(1000)
