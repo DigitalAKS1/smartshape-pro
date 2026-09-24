@@ -164,5 +164,6 @@ export function useStockManagement() {
     handleDeleteMovement,
     bulkDeleteMovements,
     fetchData,
+    machineCategoryGroups: groupDiesByMachineCategory(diesList),
   };
 }

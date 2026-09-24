@@ -23,6 +23,7 @@ export default function StockManagement() {
     handleCreateMovement,
     handleDeleteMovement,
     bulkDeleteMovements,
+    machineCategoryGroups,
   } = useStockManagement();
 
   const { user } = useAuth();
@@ -200,6 +201,26 @@ export default function StockManagement() {
         {/* ── Sales Team Holdings ── */}
         {activeTab === 'holdings' && (
           <div className="space-y-3" data-testid="sales-holdings">
+            {machineCategoryGroups.small_machine && (
+              <div className={`${card} border rounded-xl p-4`} data-testid="small-machine-stock-section">
+                <h3 className={`font-semibold text-sm ${textPri} mb-2`}>Small Machine Stock</h3>
+                <p className={`text-xs ${textMuted} mb-3`}>
+                  {machineCategoryGroups.small_machine.dieCount} dies · {machineCategoryGroups.small_machine.stockQty} in stock · {machineCategoryGroups.small_machine.reservedQty} reserved
+                </p>
+                {machineCategoryGroups.small_machine.lowStock.length > 0 ? (
+                  <ul className="space-y-1">
+                    {machineCategoryGroups.small_machine.lowStock.map(die => (
+                      <li key={die.die_id} className={`text-xs ${textSec} flex justify-between`}>
+                        <span>{die.code} — {die.name}</span>
+                        <span className="text-red-400">{(die.stock_qty || 0) - (die.reserved_qty || 0)} available (min {die.min_level})</span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="text-xs text-green-500">All small-machine dies above reorder level.</p>
+                )}
+              </div>
+            )}
             {holdingsLoading ? (
               <div className="flex items-center justify-center h-64">
                 <div className="animate-spin rounded-full h-12 w-12 border-4 border-[#e94560] border-t-transparent" />
