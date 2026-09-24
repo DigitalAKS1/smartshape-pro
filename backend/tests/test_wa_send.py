@@ -773,4 +773,67 @@ def test_a_write_failure_after_a_successful_send_still_returns_sent(wa_env, monk
         await seed_wa(db)
         res = await send_whatsapp(db, to="9811111111", text="x", kind="dispatch")
         assert res["status"] == "sent" and len(wa_env.evo.sends) == 1
+        row = await _row(db, res["message_id"])          # the minimal retry landed
+        assert row["status"] == "sent" and row["provider_msg_id"] == "PMID1" and row["provider"] == "evolution"
+        assert [h["status"] for h in row["status_history"]] == ["sending", "sent"]
+    _run(go())
+
+
+# ── Fix round 2 ──────────────────────────────────────────────────────────────
+
+def test_both_post_send_writes_failing_still_returns_sent_and_logs_error(wa_env, monkeypatch, caplog):
+    db = wa_env.db
+
+    async def _broken(*a, **k):
+        raise RuntimeError("mongo went away")
+    monkeypatch.setattr(ws, "_write_row", _broken)
+    monkeypatch.setattr(ws, "_mark_sent_minimal", _broken)
+
+    async def go():
+        await seed_wa(db)
+        with caplog.at_level("ERROR", logger="wa_send"):
+            res = await send_whatsapp(db, to="9811111111", text="x", kind="dispatch")
+        assert res["status"] == "sent"
+        assert (await _row(db, res["message_id"]))["status"] == "sending"
+        errs = [r for r in caplog.records if r.levelname == "ERROR" and res["message_id"] in r.getMessage()]
+        assert errs and "PMID1" in errs[0].getMessage()
+    _run(go())
+
+
+def test_mark_sending_stamps_sending_at(wa_env):
+    db = wa_env.db
+    _run(seed_wa(db))
+    _raise_on_send(wa_env, _Crash())
+    with pytest.raises(_Crash):
+        _run(send_whatsapp(db, to="9811111111", text="x", kind="dispatch"))
+    row = _run(db.wa_messages.find_one({}, {"_id": 0}))
+    assert row["status"] == "sending" and row["sending_at"] == "2026-09-24T05:30:00+00:00"
+    assert row["status_history"][-1]["at"] == row["sending_at"]
+
+
+def test_a_failed_merge_update_loses_nothing(wa_env, monkeypatch):
+    """The survivor is updated before our row is deleted: if that update fails, our 'sending'
+    row is still there and the webhook row is untouched."""
+    db = wa_env.db
+    coll_cls = type(db.wa_messages)
+    real_update = coll_cls.update_one
+
+    async def _update(self, flt, *a, **k):
+        if flt.get("message_id") == "wam_hook":
+            raise RuntimeError("update of the survivor failed")
+        return await real_update(self, flt, *a, **k)
+    monkeypatch.setattr(coll_cls, "update_one", _update)
+
+    async def go():
+        await seed_wa(db)
+        await db.wa_messages.create_index([("instance_name", 1), ("provider_msg_id", 1)], unique=True,
+                                          partialFilterExpression={"provider_msg_id": {"$type": "string"}})
+        await db.wa_messages.insert_one({"message_id": "wam_hook", "instance_name": COMPANY,
+                                         "provider_msg_id": "PMID1", "source": "phone", "status": "delivered"})
+        res = await send_whatsapp(db, to="9811111111", text="x", kind="dispatch")
+        assert res["status"] == "sent" and res["message_id"] != "wam_hook"
+        ours = await _row(db, res["message_id"])
+        hook = await _row(db, "wam_hook")
+        assert ours is not None and ours["status"] == "sending"     # minimal retry hits the same unique key
+        assert hook["source"] == "phone" and "app_message_id" not in hook
     _run(go())

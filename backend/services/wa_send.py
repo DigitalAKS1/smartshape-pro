@@ -479,9 +479,16 @@ async def _merge_into_existing(db, row: dict) -> None:
               if k not in ("message_id", "status", "status_history", "provider_ts", "created_at")}
     merged.update({"source": "app", "status": status, "app_message_id": ours,
                    "status_history": list(existing.get("status_history") or []) + list(row["status_history"])})
-    await db.wa_messages.delete_one({"message_id": ours})
+    # Update the survivor FIRST: if that fails, our 'sending' row is still there and nothing is lost.
     await db.wa_messages.update_one({"message_id": existing["message_id"]}, {"$set": merged})
     row["message_id"] = existing["message_id"]
+    try:
+        await db.wa_messages.delete_one({"message_id": ours})
+    except Exception as e:
+        # The survivor already holds everything; our leftover row is a harmless duplicate that a
+        # sweeper can recognise by `app_message_id` on the survivor.
+        log.error("[wa] merged %s into %s but could not delete %s: %s",
+                  ours, existing["message_id"], ours, str(e)[:160])
 
 
 async def _write_row(db, row: dict) -> None:
@@ -496,9 +503,19 @@ async def _write_row(db, row: dict) -> None:
 
 async def _mark_sending(db, row: dict) -> None:
     """Written BEFORE the provider call: a crash mid-send leaves a `sending` row, never nothing."""
+    now = _iso(_now())
     row["status"] = "sending"
-    row.setdefault("status_history", []).append({"status": "sending", "at": _iso(_now()), "reason": ""})
+    row["sending_at"] = now          # the ACTUAL send attempt (a queued row's created_at is older)
+    row.setdefault("status_history", []).append({"status": "sending", "at": now, "reason": ""})
     await db.wa_messages.update_one({"message_id": row["message_id"]}, {"$set": row}, upsert=True)
+
+
+async def _mark_sent_minimal(db, message_id: str, row: dict) -> None:
+    """The fallback write after a successful send whose full row write failed: just enough that
+    the row no longer reads `sending` (which a sweeper would treat as undelivered)."""
+    await db.wa_messages.update_one({"message_id": message_id}, {"$set": {
+        "status": "sent", "provider_msg_id": row.get("provider_msg_id"), "provider": row.get("provider") or "",
+        "status_history": row.get("status_history") or [], "sent_at": row.get("sent_at")}})
 
 
 async def _finish(db, row: dict, status: str, reason: str) -> dict:
@@ -510,14 +527,20 @@ async def _finish(db, row: dict, status: str, reason: str) -> dict:
     if status == "sent":
         row["sent_at"] = _iso(now)
         row["sent_day"] = ist_day(now)
+    ours = row["message_id"]
     try:
         await _write_row(db, row)
     except Exception as e:
         if status != "sent":
             raise
         # The message is out. A bookkeeping failure must not make the caller think otherwise
-        # (and retry → a double send).
-        log.error("[wa] row write after a successful send failed for %s: %s", row["message_id"], str(e)[:160])
+        # (and retry → a double send), and must not leave the row reading `sending`.
+        log.warning("[wa] row write after a successful send failed for %s: %s", ours, str(e)[:160])
+        try:
+            await _mark_sent_minimal(db, ours, row)
+        except Exception as e2:
+            log.error("[wa] message %s WAS SENT (provider id %s) but its row could not be updated and "
+                      "still reads 'sending': %s", ours, row.get("provider_msg_id"), str(e2)[:160])
     if status == "sent":
         await _log_event(row)
     return {"status": status, "message_id": row["message_id"],
