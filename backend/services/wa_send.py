@@ -108,6 +108,54 @@ def jid_for(e164: str) -> str:
     return f"{e164}@s.whatsapp.net" if e164 else ""
 
 
+# ── D5: warm-up, caps and business hours (all IST — RF5) ──────────────────────
+
+def _hm(s: str):
+    h, m = str(s).split(":")
+    return int(h), int(m)
+
+
+def warmup_day(inst: dict, now: datetime) -> int:
+    """1-based: day 1 is the IST date the number first connected."""
+    started = inst.get("warmup_started_at")
+    if not started:
+        return 1
+    return max(0, (now.astimezone(IST).date() - _parse(started).astimezone(IST).date()).days) + 1
+
+
+def daily_cap(inst: dict, cfg: dict, now: datetime) -> int:
+    """D5 warm-up: 20/day, doubling every 3 days, capped at 200 — or the admin's override."""
+    if inst.get("daily_cap_override"):
+        return int(inst["daily_cap_override"])
+    if not inst.get("warmup_started_at"):
+        return int(cfg["warmup_start_cap"])
+    doublings = (warmup_day(inst, now) - 1) // int(cfg["warmup_double_every_days"])
+    return int(min(int(cfg["daily_cap"]), int(cfg["warmup_start_cap"]) * (2 ** min(doublings, 20))))
+
+
+def next_business_open(now: datetime, cfg: dict) -> Optional[datetime]:
+    """None inside business hours (IST); otherwise the next opening instant, in UTC."""
+    loc = now.astimezone(IST)
+    sh, sm = _hm(cfg["business_start"])
+    eh, em = _hm(cfg["business_end"])
+    start = loc.replace(hour=sh, minute=sm, second=0, microsecond=0)
+    end = loc.replace(hour=eh, minute=em, second=0, microsecond=0)
+    if start <= loc < end:
+        return None
+    return (start if loc < start else start + timedelta(days=1)).astimezone(timezone.utc)
+
+
+def _tomorrow_open(now: datetime, cfg: dict) -> datetime:
+    loc = now.astimezone(IST)
+    sh, sm = _hm(cfg["business_start"])
+    return (loc.replace(hour=sh, minute=sm, second=0, microsecond=0) + timedelta(days=1)).astimezone(timezone.utc)
+
+
+def _next_hour(now: datetime) -> datetime:
+    loc = now.astimezone(IST)
+    return (loc.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)).astimezone(timezone.utc)
+
+
 def _clean_media(media: Optional[dict]) -> Optional[dict]:
     if not media or not media.get("url"):
         return None
@@ -340,22 +388,89 @@ async def wa_available(db) -> bool:
     return cfg["fallback_provider"] == "autosender" and await _autosender_ready(db)
 
 
-# ── Policy (Task 5 extends with hours and caps) ───────────────────────────────
+# ── Per-number ledger (wa_send_ledger, one row per instance per IST day) ──────
+
+async def _ledger(db, name: str, now: datetime) -> dict:
+    day = ist_day(now)                                  # RF5: the IST date, never the UTC one
+    await db.wa_send_ledger.update_one(
+        {"instance_name": name, "day": day},
+        {"$setOnInsert": {"instance_name": name, "day": day, "sent_count": 0, "hour_bucket": {},
+                          "last_sent_at": None}},
+        upsert=True)
+    return await db.wa_send_ledger.find_one({"instance_name": name, "day": day}, {"_id": 0}) or {}
+
+
+async def _claim_gap(db, name: str, now: datetime, cfg: dict) -> bool:
+    """Atomically take the next send slot on this number: succeeds only if the last send was at
+    least a random 8–25 s ago. Two concurrent callers cannot both win."""
+    if float(cfg["gap_max_s"]) <= 0:
+        return True
+    gap = _jitter(float(cfg["gap_min_s"]), float(cfg["gap_max_s"]))
+    res = await db.wa_send_ledger.update_one(
+        {"instance_name": name, "day": ist_day(now),
+         "$or": [{"last_sent_at": None}, {"last_sent_at": {"$lte": _iso(now - timedelta(seconds=gap))}}]},
+        {"$set": {"last_sent_at": _iso(now)}})
+    return getattr(res, "modified_count", 0) == 1
+
+
+async def _contacted_today(db, name: str, to_jid: str, now: datetime, cfg: dict) -> bool:
+    n = await db.wa_messages.count_documents({
+        "instance_name": name, "to_jid": to_jid, "direction": "out",
+        "kind": {"$in": sorted(MARKETING_KINDS)}, "sent_day": ist_day(now),
+        "status": {"$in": ["sent", "delivered", "read", "played"]}})
+    return n >= int(cfg["per_contact_per_day"])
+
+
+# ── Policy (the Task 5 table) ─────────────────────────────────────────────────
+#
+#   check                              chat   digest/alert  transactional  marketing
+#   opt-out / consent (D10)             –     staff exempt      skip          skip
+#   business hours 09:00–19:00 IST      –          –            queue         queue
+#   hourly cap                        queue      queue          queue         queue
+#   daily cap / warm-up                 –        queue          queue         queue
+#   one per contact per number per day  –          –              –           queue
+#   jittered gap                        –        queue          queue         queue
 
 async def _policy(db, row: dict, inst: Optional[dict], cfg: dict, *, from_queue: bool = False):
-    """-> ("send", "", None) | ("skip", reason, None) | ("queue", reason, send_after)."""
+    """-> ("send", "", None) | ("skip", reason, None) | ("queue", reason, send_after).
+
+    `from_queue`: the drainer is sending this row from the number it was queued on; the drainer
+    enforces the gap itself (it sleeps between sends), so the gap claim is not taken here."""
     kind = row["kind"]
-    if kind in MANUAL_KINDS:                      # a person pressed send (typed_by is required)
+    now = _now()
+    automated = kind not in MANUAL_KINDS                # chat: a person pressed send
+    customer_facing = automated and kind not in INTERNAL_KINDS
+    if automated and not (kind in INTERNAL_KINDS and await _is_staff_phone(db, row["to_e164"])):
+        # our own staff: an opt-out does not apply to an internal digest/alert
+        if await is_opted_out(db, e164=row["to_e164"], contact_id=row["contact_id"],
+                              school_id=row["school_id"], lead_id=row["lead_id"]):
+            return "skip", "opt_out", None
+        if kind in CONSENT_KINDS and row["enforce_consent"]:
+            if not await consent_ok(db, lead_id=row["lead_id"], contact_id=row["contact_id"],
+                                    school_id=row["school_id"]):
+                return "skip", "no_consent", None
+    if customer_facing:
+        opens = next_business_open(now, cfg)
+        if opens is not None:
+            return "queue", "quiet_hours", opens
+    if inst is None:                                    # AutoSender fallback: no per-number ledger
         return "send", "", None
-    if kind in INTERNAL_KINDS and await _is_staff_phone(db, row["to_e164"]):
-        return "send", "", None                   # our own staff: an opt-out does not apply
-    if await is_opted_out(db, e164=row["to_e164"], contact_id=row["contact_id"], school_id=row["school_id"],
-                          lead_id=row["lead_id"]):
-        return "skip", "opt_out", None
-    if kind in CONSENT_KINDS and row["enforce_consent"]:
-        if not await consent_ok(db, lead_id=row["lead_id"], contact_id=row["contact_id"],
-                                school_id=row["school_id"]):
-            return "skip", "no_consent", None
+    led = await _ledger(db, inst["instance_name"], now)
+    if int((led.get("hour_bucket") or {}).get(ist_hour(now), 0)) >= int(cfg["hourly_cap"]):
+        nxt = _next_hour(now)
+        if customer_facing:
+            nxt = next_business_open(nxt, cfg) or nxt
+        return "queue", "hourly_cap", nxt
+    if automated:
+        if int(led.get("sent_count", 0)) >= daily_cap(inst, cfg, now):
+            return "queue", "daily_cap", _tomorrow_open(now, cfg)
+        if kind in MARKETING_KINDS and await _contacted_today(db, inst["instance_name"], row["to_jid"], now, cfg):
+            return "queue", "per_contact_per_day", _tomorrow_open(now, cfg)
+        if not from_queue and not await _claim_gap(db, inst["instance_name"], now, cfg):
+            nxt = now + timedelta(seconds=_jitter(float(cfg["gap_min_s"]), float(cfg["gap_max_s"])))
+            if customer_facing:
+                nxt = next_business_open(nxt, cfg) or nxt
+            return "queue", "gap", nxt
     return "send", "", None
 
 
@@ -433,13 +548,41 @@ def _classify_send_error(e: Exception):
 
 
 async def _record_success(db, inst: dict) -> None:
-    await db.wa_instances.update_one({"instance_name": inst["instance_name"]}, {"$set": {
-        "consecutive_failures": 0, "last_sent_at": _iso(_now()), "last_error": ""}})
+    now = _now()
+    name = inst["instance_name"]
+    await _ledger(db, name, now)
+    await db.wa_send_ledger.update_one(
+        {"instance_name": name, "day": ist_day(now)},
+        {"$inc": {"sent_count": 1, f"hour_bucket.{ist_hour(now)}": 1}, "$set": {"last_sent_at": _iso(now)}})
+    await db.wa_instances.update_one({"instance_name": name}, {"$set": {
+        "consecutive_failures": 0, "last_sent_at": _iso(now), "last_error": ""}})
 
 
 async def _record_failure(db, inst: dict, err: str, cfg: dict) -> None:
-    await db.wa_instances.update_one({"instance_name": inst["instance_name"]}, {
+    """Only instance-level failures reach here (see _classify_send_error): a `skipped`, a
+    recipient 4xx or an uncertain timeout never counts toward the pause."""
+    name = inst["instance_name"]
+    await db.wa_instances.update_one({"instance_name": name}, {
         "$inc": {"consecutive_failures": 1}, "$set": {"last_error": err, "last_error_at": _iso(_now())}})
+    cur = await db.wa_instances.find_one({"instance_name": name}, {"_id": 0}) or {}
+    streak = int(cur.get("consecutive_failures", 0))
+    if streak >= int(cfg["failure_pause_after"]) and cur.get("state") != "paused":
+        await pause_instance(db, cur, reason=f"{streak} sends in a row failed. Last error: {err}")
+
+
+async def pause_instance(db, inst: dict, *, reason: str, by: str = "system") -> None:
+    """State `paused` (resolve_sender then never picks it) + bell and push to the number's owner
+    and every admin. Only an admin resumes it (Settings → WhatsApp)."""
+    now = _iso(_now())
+    await db.wa_instances.update_one({"instance_name": inst["instance_name"]}, {"$set": {
+        "state": "paused", "state_at": now, "paused_reason": reason, "paused_by": by}})
+    who = ("The company WhatsApp number" if inst.get("kind") == "company"
+           else f"{inst.get('label') or inst.get('owner_email') or inst['instance_name']}'s WhatsApp number")
+    await alert(db, emails=[inst.get("owner_email")] + await admin_emails(db),
+                title="WhatsApp number paused",
+                body=(f"{who} (+{inst.get('phone_e164') or '?'}) was paused: {reason} "
+                      "Nothing more goes out from it until an admin resumes it in Settings → WhatsApp."),
+                dedup_key=f"wa_paused:{inst['instance_name']}", ref_id=inst["instance_name"])
 
 
 async def _log_event(row: dict) -> None:
@@ -595,15 +738,30 @@ async def _deliver(db, row: dict, inst: Optional[dict], cfg: dict) -> dict:
 
 
 async def _route_and_send(db, row: dict, cfg: dict, *, from_queue: bool) -> dict:
+    queued_on = row.get("instance_name") or ""          # the drainer's number, when from_queue
     inst, why, fallback = await _resolve_sender(db, owner_email=row["owner_email"] or None, channel=row["channel"])
     row["fallback_reason"] = fallback
+    if (inst is not None and row["kind"] in YOUNG_NUMBER_BLOCKED_KINDS and inst.get("kind") == "rep"
+            and warmup_day(inst, _now()) <= int(cfg["warmup_days"])):
+        # Rollout 3: no campaign/broadcast from a rep number still in its warm-up period. An
+        # explicit-instance send is never silently rerouted (it is skipped instead).
+        comp = None
+        if row["channel"] in ("auto", "rep"):
+            comp, _ = await resolve_sender(db, channel="company")
+        if comp is None:
+            row["instance_name"] = inst["instance_name"]
+            return await _finish(db, row, "skipped", "number_warming_up")
+        inst = comp
+        row["fallback_reason"] = "owner_warming_up"
     if inst is None:
         if not (why == "no_sender" and cfg["fallback_provider"] == "autosender" and await _autosender_ready(db)):
             return await _finish(db, row, "skipped", why)
         row["instance_name"] = ""
     else:
         _stamp_sender(row, inst)
-    decision, reason, after = await _policy(db, row, inst, cfg, from_queue=from_queue)
+    # A queued row re-routed to another number takes that number's gap slot like any send.
+    same_number = from_queue and inst is not None and inst["instance_name"] == queued_on
+    decision, reason, after = await _policy(db, row, inst, cfg, from_queue=same_number)
     if decision == "skip":
         return await _finish(db, row, "skipped", reason)
     if decision == "queue":
@@ -642,3 +800,96 @@ async def send_whatsapp(db, *, to: str, text: str = "", media: Optional[dict] = 
     if not (row["text"] or row["media"]):
         return await _finish(db, row, "skipped", "empty_message")
     return await _route_and_send(db, row, cfg, from_queue=False)
+
+
+# ── The queue drainer (scheduler.wa_queue_loop, every minute) ─────────────────
+# Same two guards as the drip executor (scheduler.py _DRIP_LOCK / _claim_enrollment):
+# an in-process lock so overlapping passes collapse, and a per-row compare-and-set claim
+# (queued -> sending + claimed_at) so two workers can never send one row.
+#
+# A `sending` row is one of two things, told apart by `sending_at` (stamped by _mark_sending
+# immediately before the provider call):
+#   * no `sending_at` — only CLAIMED by a drainer that died before it tried to send. Nothing
+#     went out; after QUEUE_CLAIM_MINUTES it goes back to `queued`.
+#   * `sending_at` set — the provider WAS called and no result was recorded (crash mid-send).
+#     It may have been delivered, so it is NEVER resent: after QUEUE_CLAIM_MINUTES it becomes
+#     `sent` if there is evidence it went (another row holds its provider id, or its
+#     engagement event exists), else `failed` with reason "uncertain: …".
+_QUEUE_LOCK = asyncio.Lock()
+QUEUE_CLAIM_MINUTES = 10
+_UNCERTAIN_REASON = "uncertain: no result recorded for the send"
+
+
+async def _went_out(db, row: dict) -> bool:
+    if row.get("provider_msg_id") and await db.wa_messages.find_one(
+            {"instance_name": row.get("instance_name") or "", "provider_msg_id": row["provider_msg_id"],
+             "message_id": {"$ne": row["message_id"]}}, {"_id": 1}):
+        return True
+    return bool(await db.engagement_events.find_one(
+        {"$or": [{"dedup_key": f"wa:{row['message_id']}"}, {"meta.message_id": row["message_id"]}]}, {"_id": 1}))
+
+
+async def _sweep_stale_sending(db, now: datetime) -> None:
+    cutoff = _iso(now - timedelta(minutes=QUEUE_CLAIM_MINUTES))
+    # 1. claimed, never attempted: back to the queue
+    await db.wa_messages.update_many(
+        {"status": "sending", "sending_at": None, "claimed_at": {"$lt": cutoff}},
+        {"$set": {"status": "queued"}})
+    # 2. attempted, no outcome: sent (with evidence) or failed(uncertain) — never resent
+    async for row in db.wa_messages.find({"status": "sending", "sending_at": {"$lt": cutoff}}, {"_id": 0}):
+        went = await _went_out(db, row)
+        status = "sent" if went else "failed"
+        reason = "" if went else _UNCERTAIN_REASON
+        upd = {"status": status, "fail_reason": reason, "error_class": row.get("error_class") or "uncertain",
+               "send_after": None}
+        if went:
+            upd.update({"sent_at": row["sending_at"], "sent_day": ist_day(_parse(row["sending_at"])),
+                        "error_class": ""})
+        res = await db.wa_messages.update_one(
+            {"message_id": row["message_id"], "status": "sending", "sending_at": row["sending_at"]},
+            {"$set": upd, "$push": {"status_history": {"status": status, "at": _iso(now),
+                                                       "reason": reason or "swept: evidence it went"}}})
+        if getattr(res, "modified_count", 0):
+            log.warning("[wa-queue] %s stuck in 'sending' since %s -> %s", row["message_id"],
+                        row["sending_at"], status)
+
+
+async def run_wa_queue_pass(db, *, budget_s: float = 50.0) -> dict:
+    if _QUEUE_LOCK.locked():
+        return {"skipped": "already_running"}
+    async with _QUEUE_LOCK:
+        now = _now()
+        await _sweep_stale_sending(db, now)
+        names = await db.wa_messages.distinct("instance_name", {"status": "queued", "send_after": {"$lte": _iso(now)}})
+        deadline = now + timedelta(seconds=budget_s)
+        counts = await asyncio.gather(*[_drain_instance(db, n, deadline=deadline) for n in names])
+        return {"instances": len(names), "processed": sum(counts)}
+
+
+async def _drain_instance(db, name: str, *, deadline: datetime) -> int:
+    """Oldest first, one at a time per number, a jittered pause after each real send."""
+    cfg = await get_wa_settings(db)
+    done = 0
+    while _now() < deadline:
+        now_iso = _iso(_now())
+        row = await db.wa_messages.find_one_and_update(
+            {"status": "queued", "instance_name": name, "send_after": {"$lte": now_iso}},
+            {"$set": {"status": "sending", "claimed_at": now_iso}},
+            sort=[("created_at", 1)], projection={"_id": 0})
+        if not row:
+            break
+        # `row` is the document before the claim. It goes through the SAME path as a fresh send
+        # (ruling 3): the sender is re-resolved (the owner's number may have gone down since it
+        # was queued) and every check runs again — opt-out, consent, hours, caps. Only the gap
+        # is not claimed for this number: this loop enforces it by sleeping.
+        try:
+            res = await _route_and_send(db, row, cfg, from_queue=True)
+        except Exception as e:
+            # Left `sending`: the sweeper requeues it (never attempted) or settles it (attempted).
+            log.error("[wa-queue] %s on %s: %s", row.get("message_id"), name, str(e)[:160])
+            done += 1
+            continue
+        done += 1
+        if res["status"] == "sent":
+            await _sleep(_jitter(float(cfg["gap_min_s"]), float(cfg["gap_max_s"])))
+    return done

@@ -846,6 +846,21 @@ async def drip_executor_loop():
         await asyncio.sleep(3600)
 
 
+async def wa_queue_loop():
+    """Send queued WhatsApp messages (outside hours / over cap / behind the gap) once they are
+    due. services/wa_send.py owns the rules; this is only the clock."""
+    log.info("[scheduler] WhatsApp queue drainer started (every 60s)")
+    from services.wa_send import run_wa_queue_pass
+    while True:
+        try:
+            out = await run_wa_queue_pass(db)
+            if out.get("processed"):
+                log.info(f"[wa-queue] {out}")
+        except Exception as exc:
+            log.error(f"[wa-queue] {exc}")
+        await asyncio.sleep(60)
+
+
 async def greeting_loop():
     log.info("[scheduler] greeting loop started (fires daily at 9am IST)")
     while True:
@@ -2026,6 +2041,7 @@ async def start_scheduler():
     """Start all background automation loops. Call once from FastAPI startup."""
     asyncio.create_task(email_sender_loop())
     asyncio.create_task(wa_sender_loop())
+    asyncio.create_task(wa_queue_loop())
     asyncio.create_task(drip_executor_loop())
     asyncio.create_task(greeting_loop())
     asyncio.create_task(fms_sla_loop())
