@@ -515,19 +515,14 @@ async def _wa_enabled() -> bool:
     return bool(cfg.get("notify_whatsapp"))
 
 
-async def _wa_send(phone: str, message: str):
+async def _wa_send(phone: str, message: str, *, school_id: str = ""):
+    """School-portal WhatsApp through the one door (W1, D3). Never raises into the caller."""
     phone = (phone or "").strip()
     if not phone:
         return
-    wa = await db.settings.find_one({"type": "whatsapp"}, {"_id": 0})
-    if not wa or not wa.get("username"):
-        return
-    import httpx
     try:
-        async with httpx.AsyncClient(timeout=15) as c:
-            await c.post("https://app.messageautosender.com/message/new",
-                         data={"username": wa["username"], "password": wa.get("password", ""),
-                               "receiverMobileNo": phone, "message": message})
+        from services.wa_send import send_whatsapp
+        await send_whatsapp(db, to=phone, text=message, kind="portal", school_id=school_id, enforce_consent=False)
     except Exception:
         pass
 
@@ -545,7 +540,7 @@ async def _wa_school(school_id: str, message: str):
         return
     s = await db.schools.find_one({"school_id": school_id}, {"_id": 0, "phone": 1})
     if s and (s.get("phone") or "").strip():
-        await _wa_send(s["phone"], message)
+        await _wa_send(s["phone"], message, school_id=school_id)
 
 
 async def _require_admin(request: Request) -> dict:
