@@ -7,7 +7,9 @@ import uuid
 from database import db
 from auth_utils import get_current_user
 from rbac import get_team, require_module, sees_all
-from routes.crm_routes import create_physical_from_drip
+from routes.crm_routes import (create_physical_from_drip, _merge_or,
+                               _schools_visibility_or, _contacts_visibility_or,
+                               _leads_visibility_or)
 from services.tag_scope import resolve_tag_scope
 from services.drip_recipient import (CONTACT_DELETED_REASON, RECIPIENT_GONE_REASON,
                                      contacts_already_enrolled, find_active_duplicate)
@@ -980,6 +982,37 @@ async def sequence_deliveries(sequence_id: str, request: Request):
 
     enrolments = await db.drip_enrollments.find({"sequence_id": sequence_id},
                                                 {"_id": 0}).to_list(2000)
+
+    # Visibility. This drill-down now names the PERSON and their owner, so it is
+    # scoped by exactly the helpers the CRM lists use (and the marketing-sent
+    # report uses) — an admin sees everything, a rep sees only enrolments whose
+    # school, contact or lead she can already open. `?owner=` filters INSIDE that
+    # scope and can never widen it.
+    if get_team(user) != "admin" and user.get("role") != "admin":
+        email = user["email"]
+        vis_schools = {s["school_id"] for s in await db.schools.find(
+            _merge_or({}, await _schools_visibility_or(email)),
+            {"_id": 0, "school_id": 1}).to_list(None)}
+        vis_contacts = {c["contact_id"] for c in await db.contacts.find(
+            _merge_or({}, await _contacts_visibility_or(email)),
+            {"_id": 0, "contact_id": 1}).to_list(None)}
+        vis_leads = {l["lead_id"] for l in await db.leads.find(
+            _merge_or({}, await _leads_visibility_or(email)),
+            {"_id": 0, "lead_id": 1}).to_list(None)}
+        scoped = []
+        for e in enrolments:
+            lid, cid = e.get("lead_id") or "", e.get("contact_id") or ""
+            if lid and lid in vis_leads:
+                scoped.append(e)
+                continue
+            if cid and cid in vis_contacts:
+                scoped.append(e)
+                continue
+            sid = e.get("school_id") or ""
+            if sid and sid in vis_schools:
+                scoped.append(e)
+        enrolments = scoped
+
     lead_ids = [e["lead_id"] for e in enrolments if e.get("lead_id")]
     leads = {l["lead_id"]: l for l in await db.leads.find(
         {"lead_id": {"$in": lead_ids}}, {"_id": 0}).to_list(None)}

@@ -8,10 +8,13 @@ os.environ.setdefault("DB_NAME", "smartshape_test")
 import pytest
 from mongomock_motor import AsyncMongoMockClient
 
+import routes.crm_routes as crm
 import routes.drip_routes as drip
 import rbac
 
 ADMIN = {"email": "info@smartshape.in", "name": "Owner", "role": "admin"}
+REP = {"email": "parul@smartshape.in", "name": "Parul", "role": "sales",
+       "module_permissions": {"leads": {"level": "read"}}}
 
 
 class FakeRequest:
@@ -26,13 +29,21 @@ class FakeRequest:
 @pytest.fixture()
 def db(monkeypatch):
     d = AsyncMongoMockClient()["smartshape_test"]
-    monkeypatch.setattr(drip, "db", d, raising=False)
+    # The visibility helpers live in crm_routes and read ITS module-level db.
+    for mod in (drip, crm):
+        monkeypatch.setattr(mod, "db", d, raising=False)
     monkeypatch.setattr(rbac, "MODULE_RBAC_MODE", "enforce")
 
     async def _me(_request):
         return ADMIN
     monkeypatch.setattr(drip, "get_current_user", _me)
     return d
+
+
+def _as(monkeypatch, user):
+    async def _me(_request):
+        return user
+    monkeypatch.setattr(drip, "get_current_user", _me)
 
 
 def _run(coro):
@@ -50,10 +61,17 @@ async def _seed(db):
                                "company_name": "DPS", "assigned_to": "parul@smartshape.in"})
     await db.contacts.insert_one({"contact_id": "c2", "name": "A Menon", "school_id": "s1",
                                   "company": "DPS", "assigned_to": "bde@smartshape.in"})
+    # Bob's own school, which Parul has nothing to do with.
+    await db.schools.insert_one({"school_id": "s2", "school_name": "Lotus",
+                                 "assigned_to": "bde@smartshape.in"})
+    await db.contacts.insert_one({"contact_id": "c3", "name": "B Rao", "school_id": "s2",
+                                  "company": "Lotus", "assigned_to": "bde@smartshape.in"})
     await db.drip_enrollments.insert_many([
         {"enrollment_id": "e1", "sequence_id": "seq1", "lead_id": "l1", "status": "active",
          "enrolled_at": "2026-09-10T00:00:00+00:00", "current_step": 0},
         {"enrollment_id": "e2", "sequence_id": "seq1", "contact_id": "c2", "status": "active",
+         "enrolled_at": "2026-09-10T00:00:00+00:00", "current_step": 0},
+        {"enrollment_id": "e3", "sequence_id": "seq1", "contact_id": "c3", "status": "active",
          "enrolled_at": "2026-09-10T00:00:00+00:00", "current_step": 0},
     ])
 
@@ -77,7 +95,32 @@ def test_the_owner_filter_narrows_the_rows(db):
         await _seed(db)
         out = await drip.sequence_deliveries(
             "seq1", FakeRequest(params={"owner": "bde@smartshape.in"}))
+        assert sorted(r["enrollment_id"] for r in out["rows"]) == ["e2", "e3"]
+    _run(go())
+
+
+def test_a_rep_never_sees_another_reps_recipient(db, monkeypatch):
+    """The drill-down names people and owner emails, so it is scoped like the lists."""
+    async def go():
+        await _seed(db)
+        _as(monkeypatch, REP)
+        out = await drip.sequence_deliveries("seq1", FakeRequest())
+        got = sorted(r["enrollment_id"] for r in out["rows"])
+        # e1 is her lead; e2 is a contact at a school she owns; e3 is Bob's
+        # contact at Bob's school and must not appear at all.
+        assert got == ["e1", "e2"]
+        assert all(r["recipient_name"] != "B Rao" for r in out["rows"])
+    _run(go())
+
+
+def test_the_owner_filter_cannot_widen_a_reps_scope(db, monkeypatch):
+    async def go():
+        await _seed(db)
+        _as(monkeypatch, REP)
+        out = await drip.sequence_deliveries(
+            "seq1", FakeRequest(params={"owner": "bde@smartshape.in"}))
         assert [r["enrollment_id"] for r in out["rows"]] == ["e2"]
+        assert all(r["recipient_name"] != "B Rao" for r in out["rows"])
     _run(go())
 
 

@@ -115,15 +115,42 @@ export default function MarketingSentReport() {
             <span>WhatsApp <b className="text-[var(--text-primary)]">{ch.whatsapp ?? 0}</b></span>
             <span>Email <b className="text-[var(--text-primary)]">{ch.email ?? 0}</b></span>
             <span>Call <b className="text-[var(--text-primary)]">{ch.call ?? 0}</b></span>
-            <span>Post <b className="text-[var(--text-primary)]">{ch.post ?? 0}</b></span>
+            <span>Post <b className="text-[var(--text-primary)]">{ch.post ?? 0}</b>
+              {groupBy === 'contact' && t.post_envelopes != null && (
+                <span className="text-[var(--text-muted)]">
+                  {' '}(from {t.post_envelopes} envelope{t.post_envelopes === 1 ? '' : 's'})
+                </span>
+              )}
+            </span>
             <span className="text-[#9A6A15]">still to post <b>{(po.pending ?? 0) + (po.needs_address ?? 0)}</b></span>
             <span className="text-[#e94560]">responses <b>{(t.responses || {}).qr_scans ?? 0}</b></span>
           </div>
 
+          {groupBy === 'contact' && (
+            <p className="mb-3 text-[11px] text-[var(--text-muted)]" data-testid="ms-envelope-note">
+              One envelope goes to a school and lists everyone on it, so here it counts for
+              each person named: {t.post_envelopes ?? 0} envelope
+              {(t.post_envelopes ?? 0) === 1 ? '' : 's'} reached {ch.post ?? 0} people.
+            </p>
+          )}
+          {(from || to) && (
+            <p className="mb-3 text-[11px] text-[var(--text-muted)]" data-testid="ms-window-note">
+              Pending counts pieces <b>planned</b> in this window; sent counts pieces actually
+              posted in it.
+            </p>
+          )}
+
           {t.capped && (
-            <p className="mb-3 text-[11px] text-[#9A6A15]">
+            <p className="mb-3 text-[11px] text-[#9A6A15]" data-testid="ms-cap-note">
               Showing the first {t.shown} of {t.rows} rows — narrow the dates, owner or
-              channel, or use Export for the whole list. The totals above cover all {t.rows}.
+              channel. The totals above cover all {t.rows}, and Export gives you every row,
+              not just the ones on screen.
+            </p>
+          )}
+          {t.scan_capped && (
+            <p className="mb-3 text-[11px] text-[#C4402E]" data-testid="ms-scan-cap-note">
+              There were more deliveries in this window than one report can read, so these
+              numbers are a floor, not a total. Narrow the date range.
             </p>
           )}
 

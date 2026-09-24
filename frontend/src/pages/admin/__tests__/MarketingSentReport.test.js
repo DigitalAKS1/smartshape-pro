@@ -26,7 +26,7 @@ const PAYLOAD = {
       post: { verified_sent: 0, pending: 1, not_sent: 0, needs_address: 0 },
       last_sent_at: '', responses: { qr_scans: 0, interest: 0 } },
   ],
-  totals: { rows: 2, shown: 2, capped: false,
+  totals: { rows: 2, shown: 2, capped: false, scan_capped: false, post_envelopes: 1,
             sent_by_channel: { whatsapp: 1, email: 0, call: 0, post: 1 },
             post: { verified_sent: 1, pending: 1, not_sent: 0, needs_address: 0 },
             responses: { qr_scans: 1, interest: 1 } },
@@ -102,5 +102,46 @@ test('export asks for the same rows as CSV', async () => {
   });
   expect(reports.marketingSentCsv).toHaveBeenCalledWith(
     expect.objectContaining({ group_by: 'school' }));
+  v.unmount();
+});
+
+test('contact mode explains that one envelope reached several people', async () => {
+  reports.marketingSent.mockImplementation((params) => Promise.resolve({ data: {
+    ...PAYLOAD,
+    group_by: params.group_by,
+    totals: { ...PAYLOAD.totals, post_envelopes: 1,
+              sent_by_channel: { whatsapp: 1, email: 0, call: 0, post: 2 } },
+  } }));
+  const v = await render();
+  expect(v.q('ms-envelope-note')).toBeNull();
+  await act(async () => {
+    v.q('ms-tab-contact').click();
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+  });
+  const note = v.q('ms-envelope-note').textContent;
+  expect(note).toContain('1 envelope');
+  expect(note).toContain('2 people');
+  v.unmount();
+});
+
+test('a capped page says the export is NOT capped', async () => {
+  reports.marketingSent.mockImplementation(() => Promise.resolve({ data: {
+    ...PAYLOAD,
+    totals: { ...PAYLOAD.totals, rows: 9000, shown: 2000, capped: true },
+  } }));
+  const v = await render();
+  const note = v.q('ms-cap-note').textContent;
+  expect(note).toContain('first 2000 of 9000');
+  expect(note).toContain('Export gives you every row');
+  expect(v.q('ms-scan-cap-note')).toBeNull();
+  v.unmount();
+});
+
+test('a capped scan warns that the numbers are a floor', async () => {
+  reports.marketingSent.mockImplementation(() => Promise.resolve({ data: {
+    ...PAYLOAD, totals: { ...PAYLOAD.totals, scan_capped: true },
+  } }));
+  const v = await render();
+  expect(v.q('ms-scan-cap-note').textContent).toContain('a floor, not a total');
   v.unmount();
 });

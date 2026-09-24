@@ -139,9 +139,144 @@ def test_the_three_modes_agree_on_their_totals(db, monkeypatch):
             outs[g] = await crm.marketing_sent_report(FakeRequest(params={"group_by": g}))
         base = outs["school"]["totals"]
         for g in ("contact", "sequence"):
-            assert outs[g]["totals"]["sent_by_channel"] == base["sent_by_channel"], g
-            assert outs[g]["totals"]["post"] == base["post"], g
+            # The non-post channels are one delivery to one person everywhere.
+            for ch in ("whatsapp", "email", "call"):
+                assert outs[g]["totals"]["sent_by_channel"][ch] == \
+                    base["sent_by_channel"][ch], (g, ch)
+            # A response is one response however many names shared the envelope.
             assert outs[g]["totals"]["responses"] == base["responses"], g
+            # The school-level envelope count is the same number in every mode.
+            assert outs[g]["totals"]["post_envelopes"] == base["post_envelopes"], g
+        # Post counts ENVELOPES in school and sequence mode, identically.
+        assert outs["sequence"]["totals"]["sent_by_channel"]["post"] == \
+            base["sent_by_channel"]["post"]
+        assert outs["sequence"]["totals"]["post"] == base["post"]
+    _run(go())
+
+
+def test_one_envelope_credits_every_name_on_it_in_contact_mode(db, monkeypatch):
+    """D1: several contacts at one school share one envelope. In contact mode each
+    of them was posted to; in school/sequence mode that is still one envelope."""
+    async def go():
+        await _seed(db)
+        _as(monkeypatch, ADMIN)
+        await db.contacts.insert_one({"contact_id": "c1b", "name": "S Iyer", "school_id": "s1",
+                                      "assigned_to": "parul@smartshape.in"})
+        await db.mail_touches.update_one({"touch_id": "t1"}, {"$set": {
+            "contact_ids": ["c1", "c1b"], "recipient_names": ["R Sharma", "S Iyer"]}})
+        by_school = await crm.marketing_sent_report(FakeRequest(params={"group_by": "school"}))
+        by_contact = await crm.marketing_sent_report(FakeRequest(params={"group_by": "contact"}))
+        assert by_school["totals"]["sent_by_channel"]["post"] == 1, "one envelope"
+        assert by_contact["totals"]["sent_by_channel"]["post"] == 2, "two people reached"
+        rows = {r["key"]: r for r in by_contact["rows"]}
+        assert rows["c1"]["sent_by_channel"]["post"] == 1
+        assert rows["c1b"]["sent_by_channel"]["post"] == 1
+        assert rows["c1b"]["name"] == "S Iyer"
+        # Envelopes and responses stay school-level in BOTH modes.
+        assert by_contact["totals"]["post_envelopes"] == 1
+        assert by_school["totals"]["post_envelopes"] == 1
+        assert by_contact["totals"]["responses"] == by_school["totals"]["responses"]
+    _run(go())
+
+
+async def _seed_legacy(db):
+    """A manual mail run from before verification existed: no verify_status, no
+    planned_date, no sequence_id anywhere."""
+    await db.schools.insert_one({"school_id": "s9", "school_name": "Old School",
+                                 "assigned_to": "parul@smartshape.in", "is_deleted": False})
+    await db.mail_runs.insert_many([
+        {"run_id": "rold", "name": "Feb drop", "status": "posted",
+         "send_date": "2026-02-10", "school_ids": ["s9"]},
+        {"run_id": "rnew", "name": "March drop", "status": "planned",
+         "send_date": "2026-03-10", "school_ids": ["s9"]},
+    ])
+    await db.mail_touches.insert_many([
+        {"touch_id": "told", "run_id": "rold", "school_id": "s9", "piece_type": "brochure",
+         "posted_at": None, "owner": "parul@smartshape.in", "responded": False},
+        {"touch_id": "tnew", "run_id": "rnew", "school_id": "s9", "piece_type": "brochure",
+         "posted_at": None, "owner": "parul@smartshape.in", "responded": False},
+    ])
+
+
+def test_a_legacy_touch_on_a_posted_run_counts_as_sent(db, monkeypatch):
+    async def go():
+        await _seed_legacy(db)
+        _as(monkeypatch, ADMIN)
+        out = await crm.marketing_sent_report(FakeRequest(params={"group_by": "school"}))
+        s9 = next(r for r in out["rows"] if r["key"] == "s9")
+        assert s9["sent_by_channel"]["post"] == 1, "the posted run really went out"
+        assert s9["post"] == {"verified_sent": 1, "pending": 1, "not_sent": 0,
+                              "needs_address": 0}, "the planned run has not"
+        assert s9["last_sent_at"] == "2026-02-10", "dated from the run"
+    _run(go())
+
+
+def test_legacy_touches_roll_up_under_manual_mail_runs(db, monkeypatch):
+    async def go():
+        await _seed_legacy(db)
+        _as(monkeypatch, ADMIN)
+        out = await crm.marketing_sent_report(FakeRequest(params={"group_by": "sequence"}))
+        keys = {r["key"]: r["name"] for r in out["rows"]}
+        assert keys == {"manual": "Manual mail runs"}
+        only = await crm.marketing_sent_report(
+            FakeRequest(params={"group_by": "school", "sequence_id": "manual"}))
+        assert [r["key"] for r in only["rows"]] == ["s9"]
+    _run(go())
+
+
+def test_a_legacy_touch_does_not_vanish_under_a_date_filter(db, monkeypatch):
+    async def go():
+        await _seed_legacy(db)
+        _as(monkeypatch, ADMIN)
+        feb = await crm.marketing_sent_report(FakeRequest(params={
+            "group_by": "school", "from": "2026-02-01", "to": "2026-02-28"}))
+        assert [r["key"] for r in feb["rows"]] == ["s9"]
+        assert feb["rows"][0]["post"]["verified_sent"] == 1
+        assert feb["rows"][0]["post"]["pending"] == 0, "the March piece is out of window"
+        march = await crm.marketing_sent_report(FakeRequest(params={
+            "group_by": "school", "from": "2026-03-01", "to": "2026-03-31"}))
+        assert march["rows"][0]["post"]["pending"] == 1, "dated from the run send_date"
+        assert march["rows"][0]["sent_by_channel"]["post"] == 0
+    _run(go())
+
+
+def test_a_bad_channel_is_refused(db, monkeypatch):
+    async def go():
+        await _seed(db)
+        _as(monkeypatch, ADMIN)
+        with pytest.raises(crm.HTTPException) as e:
+            await crm.marketing_sent_report(
+                FakeRequest(params={"group_by": "school", "channel": "pigeon"}))
+        assert e.value.status_code == 400
+    _run(go())
+
+
+def test_the_totals_say_whether_a_scan_hit_its_ceiling(db, monkeypatch):
+    async def go():
+        await _seed(db)
+        _as(monkeypatch, ADMIN)
+        out = await crm.marketing_sent_report(FakeRequest(params={"group_by": "school"}))
+        assert out["totals"]["scan_capped"] is False
+        assert out["totals"]["capped"] is False
+        monkeypatch.setattr(crm, "_MS_SCAN_CAP", 1)
+        out = await crm.marketing_sent_report(FakeRequest(params={"group_by": "school"}))
+        assert out["totals"]["scan_capped"] is True
+    _run(go())
+
+
+def test_the_csv_export_is_not_row_capped(db, monkeypatch):
+    async def go():
+        await _seed(db)
+        _as(monkeypatch, ADMIN)
+        monkeypatch.setattr(crm, "_MS_ROW_CAP", 1)
+        js = await crm.marketing_sent_report(FakeRequest(params={"group_by": "school"}))
+        assert js["totals"]["capped"] is True and len(js["rows"]) == 1
+        assert js["totals"]["rows"] == 2, "the totals still cover every group"
+        resp = await crm.marketing_sent_report(
+            FakeRequest(params={"group_by": "school", "format": "csv"}))
+        body = b"".join([chunk async for chunk in resp.body_iterator])
+        rows = list(csv.DictReader(io.StringIO(body.decode("utf-8-sig"))))
+        assert [r["key"] for r in rows] == ["s1", "s2"], "the export carries every group"
     _run(go())
 
 
