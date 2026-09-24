@@ -114,3 +114,66 @@ def test_low_ram_alerts_admins_once_a_day_and_a_stale_reading_is_ignored(wa_env)
         out = await wh.run_wa_health_pass(db)
         assert out["health_stale"] is True and out["ram_low"] is False
     _run(go())
+
+
+def test_concurrent_sweeps_on_a_disconnected_rep_alert_exactly_once(wa_env):              # ruling 2
+    db = wa_env.db
+
+    async def go():
+        await seed_wa(db, reps={PARUL: "connected"})
+        wa_env.evo.state.update({COMPANY: "open", "rep_parul": "close"})
+        await asyncio.gather(wh.run_wa_health_pass(db), wh.run_wa_health_pass(db))
+        assert await _state(db, "rep_parul") == "disconnected"
+        assert await db.notifications.count_documents({"assigned_to": PARUL}) == 1
+        assert [p["email"] for p in wa_env.pushes].count(PARUL) == 1
+    _run(go())
+
+
+def test_a_self_heal_then_a_fresh_drop_the_same_day_alerts_again(wa_env):                 # ruling 3
+    db = wa_env.db
+
+    async def go():
+        await seed_wa(db, reps={PARUL: "connected"})
+        wa_env.evo.state.update({COMPANY: "open", "rep_parul": "close"})
+        await wh.run_wa_health_pass(db)
+        assert await _state(db, "rep_parul") == "disconnected"
+        assert await db.notifications.count_documents({"assigned_to": PARUL}) == 1
+        # the owner reads the first bell before the number recovers on its own
+        await db.notifications.update_many({"assigned_to": PARUL}, {"$set": {"is_read": True}})
+        wa_env.evo.state["rep_parul"] = "open"
+        await wh.run_wa_health_pass(db)
+        assert await _state(db, "rep_parul") == "connected"
+        inst = await db.wa_instances.find_one({"instance_name": "rep_parul"}, {"_id": 0})
+        assert not inst.get("health_alert_day")             # cleared by the self-heal
+        # a genuine new drop, still the same IST day
+        wa_env.evo.state["rep_parul"] = "close"
+        await wh.run_wa_health_pass(db)
+        assert await _state(db, "rep_parul") == "disconnected"
+        assert await db.notifications.count_documents({"assigned_to": PARUL}) == 2
+        assert [p["email"] for p in wa_env.pushes].count(PARUL) == 2
+    _run(go())
+
+
+def test_evolution_down_flag_self_heals_once_one_instance_answers(wa_env, monkeypatch):   # ruling 4
+    db = wa_env.db
+
+    async def go():
+        await seed_wa(db, reps={PARUL: "connected"})
+        real_connection_state = ec.EvolutionClient.connection_state
+
+        async def _down(self, instance=None, *, token=None):
+            raise ec.EvolutionError(502, "bad gateway")
+        monkeypatch.setattr(ec.EvolutionClient, "connection_state", _down)
+        out = await wh.run_wa_health_pass(db)
+        assert out["unreachable"] == 2
+        doc = await db.settings.find_one({"type": "wa_health"}, {"_id": 0})
+        assert doc["evolution_down"] is True and doc.get("evolution_down_at")
+        assert await db.notifications.count_documents({"title": "WhatsApp server not answering"}) == 1
+
+        monkeypatch.setattr(ec.EvolutionClient, "connection_state", real_connection_state)
+        wa_env.evo.state.update({COMPANY: "open", "rep_parul": "open"})
+        out2 = await wh.run_wa_health_pass(db)
+        assert out2["unreachable"] == 0
+        doc2 = await db.settings.find_one({"type": "wa_health"}, {"_id": 0})
+        assert doc2["evolution_down"] is False
+    _run(go())
