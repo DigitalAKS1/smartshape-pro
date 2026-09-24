@@ -1035,14 +1035,21 @@ async def _queued_touches(date_str: str):
         {"_id": 0}).to_list(None)
 
 
+async def _my_queued_touches(user: dict, date_str: str):
+    """`_queued_touches`, scoped exactly as the To-post queue is: a rep sees (and
+    prints, and stamps `printed_at` on) only the due pieces she can see."""
+    scope = await _to_post_scope(user)
+    return [t for t in await _queued_touches(date_str) if _touch_in_scope(t, scope)]
+
+
 # NOTE: static path — MUST stay above /mail-runs/{run_id} (see the analytics note).
 @router.get("/mail-runs/today-queue")
 async def mail_today_queue(request: Request):
     """The posting job for today, across every run — a drip mailer and a manual run
     are one task to whoever carries the bundle to the counter."""
-    await get_current_user(request)
+    user = await get_current_user(request)
     today = request.query_params.get("date") or datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    touches = await _queued_touches(today)
+    touches = await _my_queued_touches(user, today)
     runs = {r["run_id"]: r for r in await db.mail_runs.find({}, {"_id": 0}).to_list(None)}
 
     groups = {}
@@ -1085,7 +1092,7 @@ async def mail_queue_stickers(request: Request):
         scope = await _to_post_scope(user)
         touches = [t for t in touches if _touch_in_scope(t, scope)]
     else:
-        touches = await _queued_touches(today)
+        touches = await _my_queued_touches(user, today)
     ids = [t.get("school_id") for t in touches if t.get("school_id")]
     schools = await db.schools.find({"school_id": {"$in": ids}}, {"_id": 0}).to_list(None)
     schools_by_id = {s["school_id"]: s for s in schools}
@@ -1505,7 +1512,10 @@ async def mail_to_post(request: Request):
     totals = {s: 0 for s in VERIFY_STATUSES}
     for r in rows:
         totals[r["verify_status"]] = totals.get(r["verify_status"], 0) + 1
-    totals["overdue"] = sum(1 for r in rows if r["overdue_days"] > 0)
+    # Same rule as the chips: only a piece still owed to the post office can be
+    # overdue — a sent or not-sent one under the Sent chip is not "late".
+    totals["overdue"] = sum(1 for r in rows
+                            if r["overdue_days"] > 0 and r["verify_status"] in unresolved)
     totals["shown"] = len(shown)
     totals["capped"] = capped
     return {"rows": shown, "totals": totals, "totals_all": totals_all, "as_of": today}
@@ -1577,7 +1587,7 @@ async def verify_touches(request: Request):
         else:
             payload = {"posted_date": body.get("posted_date") or "",
                        "rows": [rows_by_id[tid] for tid in ids]}
-        run = await _do_verify(run_id, user, payload)
+        run = await _do_verify(run_id, user, payload, scope=scope)
         results.append({"run_id": run_id, "touch_ids": ids, "run": run})
         updated += len(ids)
     return {"results": results, "updated": updated,
@@ -1874,12 +1884,31 @@ async def _recompute_run_counts(run_id: str, target_db=None):
     return await _db.mail_runs.find_one({"run_id": run_id}, {"_id": 0})
 
 
-async def _do_verify(run_id: str, user: dict, body: dict):
-    """Core of verification, shared by the endpoint and the legacy status dropdown."""
+_SCOPE_UNSET = object()
+
+
+async def _do_verify(run_id: str, user: dict, body: dict, *, scope=_SCOPE_UNSET):
+    """Core of verification, shared by every route that records a posting.
+
+    Scoped like the To-post queue (`_to_post_scope`): a caller only ever writes
+    touches she can see. Out-of-scope ids — named in `rows`/`touch_ids`, or swept
+    up by `select_all` — are skipped and returned in `not_visible`; an admin is
+    unscoped. Scoping lives HERE, not in each route, because every route that
+    ticks, undoes or marks a run "posted" funnels through this one function, so
+    no older route can bypass it. `scope` lets a caller that already computed it
+    (verify-touches) pass it in rather than scan twice.
+    """
     run = await db.mail_runs.find_one({"run_id": run_id}, {"_id": 0})
     if not run:
         raise HTTPException(status_code=404, detail="Mail run not found")
     now_iso = datetime.now(timezone.utc).isoformat()
+    if scope is _SCOPE_UNSET:
+        scope = await _to_post_scope(user)
+    not_visible = []
+
+    async def _done():
+        out = await _recompute_run_counts(run_id)
+        return {**(out or {}), "not_visible": sorted(not_visible)}
 
     if body.get("undo"):
         ids = body.get("touch_ids") or []
@@ -1889,7 +1918,12 @@ async def _do_verify(run_id: str, user: dict, body: dict):
         # into the To-post queue.
         undone = await db.mail_touches.find(
             {"run_id": run_id, "touch_id": {"$in": ids}},
-            {"_id": 0, "touch_id": 1, "school_id": 1}).to_list(None)
+            {"_id": 0, "touch_id": 1, "school_id": 1, "contact_ids": 1}).to_list(None)
+        not_visible = [t["touch_id"] for t in undone if not _touch_in_scope(t, scope)]
+        undone = [t for t in undone if _touch_in_scope(t, scope)]
+        # Only what was really undone here: an id from another run, or one the
+        # caller cannot see, must not have its dispatch or ledger entry wiped.
+        ids = [t["touch_id"] for t in undone]
         for t in undone:
             back = "pending" if str(t.get("school_id") or "").strip() else "needs_address"
             await db.mail_touches.update_one(
@@ -1901,15 +1935,20 @@ async def _do_verify(run_id: str, user: dict, body: dict):
             {"touch_id": {"$in": ids}}, {"$set": {"sent_date": "", "courier_name": ""}})
         for tid in ids:
             await db.engagement_events.delete_many({"dedup_key": f"mailtouch:{tid}"})
-        return await _recompute_run_counts(run_id)
+        return await _done()
 
     posted_date = (body.get("posted_date") or "").strip()
     posted_iso = f"{posted_date}T00:00:00+00:00" if posted_date else now_iso
     if body.get("select_all"):
         status = body.get("verify_status", "sent")
         pending = await db.mail_touches.find(
-            {"run_id": run_id, "verify_status": "pending"}, {"_id": 0, "touch_id": 1}).to_list(None)
-        rows = [{"touch_id": t["touch_id"], "verify_status": status} for t in pending]
+            {"run_id": run_id, "verify_status": "pending"},
+            {"_id": 0, "touch_id": 1, "school_id": 1, "contact_ids": 1}).to_list(None)
+        # "Mark the run posted" by a rep means HER pieces in it went out — never
+        # a colleague's that she cannot even see.
+        not_visible = [t["touch_id"] for t in pending if not _touch_in_scope(t, scope)]
+        rows = [{"touch_id": t["touch_id"], "verify_status": status}
+                for t in pending if _touch_in_scope(t, scope)]
     else:
         rows = body.get("rows") or []
 
@@ -1923,6 +1962,9 @@ async def _do_verify(run_id: str, user: dict, body: dict):
         tid, status = r.get("touch_id"), r["verify_status"]
         touch = await db.mail_touches.find_one({"run_id": run_id, "touch_id": tid}, {"_id": 0})
         if not touch:
+            continue
+        if not _touch_in_scope(touch, scope):
+            not_visible.append(tid)
             continue
         was_sent = touch.get("verify_status") == "sent"
         actual = (r.get("posted_date") or posted_date)
@@ -1963,7 +2005,7 @@ async def _do_verify(run_id: str, user: dict, body: dict):
             await _create_mail_cadence({**run, "school_ids": [t.get("school_id", "")]},
                                        t["posted_at"], user)
 
-    return await _recompute_run_counts(run_id)
+    return await _done()
 
 
 @router.post("/mail-runs/{run_id}/verify")

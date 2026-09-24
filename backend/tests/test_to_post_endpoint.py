@@ -449,3 +449,122 @@ def test_queue_stickers_prints_only_the_selected_envelopes(db, monkeypatch):
         t2 = await db.mail_touches.find_one({"touch_id": "t2"}, {"_id": 0})
         assert t2["printed_at"], "printing IS the event, for the selection too"
     _run(go())
+
+
+# ── Fix round 2: the OLDER routes are scoped too ─────────────────────────────
+# Every route that records a posting funnels through _do_verify, so the scope
+# lives there; these prove the per-run route and "mark run posted" honour it.
+
+def test_a_rep_cannot_tick_a_colleagues_touch_via_the_per_run_route(db, monkeypatch):
+    async def go():
+        await _seed(db)
+        _as(monkeypatch, REP)
+        out = await crm.verify_mail_run("r1", FakeRequest(body={
+            "posted_date": "2026-09-20",
+            "rows": [{"touch_id": "t1", "verify_status": "sent"},
+                     {"touch_id": "t3", "verify_status": "sent"}]}))
+        assert out["not_visible"] == ["t3"]
+        t3 = await db.mail_touches.find_one({"touch_id": "t3"}, {"_id": 0})
+        assert t3["verify_status"] == "needs_address", "written by someone who cannot see it"
+        d = await db.physical_dispatches.find_one({"dispatch_id": "pd_2"}, {"_id": 0})
+        assert d["sent_date"] == ""
+        t1 = await db.mail_touches.find_one({"touch_id": "t1"}, {"_id": 0})
+        assert t1["verify_status"] == "sent", "her own piece still ticks"
+    _run(go())
+
+
+def test_a_rep_cannot_undo_a_colleagues_touch_via_the_per_run_route(db, monkeypatch):
+    async def go():
+        await _seed(db)
+        _as(monkeypatch, ADMIN)
+        await crm.verify_mail_run("r2", FakeRequest(body={
+            "posted_date": "2026-09-20",
+            "rows": [{"touch_id": "t2", "verify_status": "sent"}]}))
+        _as(monkeypatch, REP)
+        out = await crm.verify_mail_run("r2", FakeRequest(body={
+            "undo": True, "touch_ids": ["t2"]}))
+        assert out["not_visible"] == ["t2"]
+        t2 = await db.mail_touches.find_one({"touch_id": "t2"}, {"_id": 0})
+        assert t2["verify_status"] == "sent", "undone by someone who cannot see it"
+    _run(go())
+
+
+def test_marking_a_run_posted_as_a_rep_marks_only_her_pieces(db, monkeypatch):
+    async def go():
+        await _seed(db)
+        # A colleague's pending piece in the SAME run.
+        await db.mail_touches.insert_one(
+            {"touch_id": "t4", "run_id": "r1", "school_id": "s2", "piece_type": "brochure",
+             "planned_date": "2026-09-01", "verify_status": "pending",
+             "owner": "bde@smartshape.in", "contact_ids": [], "posted_at": None})
+        _as(monkeypatch, REP)
+        out = await crm.update_mail_run_status("r1", FakeRequest(body={"status": "posted"}))
+        assert out["not_visible"] == ["t4"]
+        t1 = await db.mail_touches.find_one({"touch_id": "t1"}, {"_id": 0})
+        t4 = await db.mail_touches.find_one({"touch_id": "t4"}, {"_id": 0})
+        assert t1["verify_status"] == "sent"
+        assert t4["verify_status"] == "pending", "a colleague's piece was marked posted"
+        assert out["status"] == "planned", "the run is not posted while t4 is still owed"
+    _run(go())
+
+
+def test_an_admin_marking_a_run_posted_is_unscoped(db, monkeypatch):
+    async def go():
+        await _seed(db)
+        await db.mail_touches.insert_one(
+            {"touch_id": "t4", "run_id": "r1", "school_id": "s2", "piece_type": "brochure",
+             "planned_date": "2026-09-01", "verify_status": "pending",
+             "owner": "bde@smartshape.in", "contact_ids": [], "posted_at": None})
+        _as(monkeypatch, ADMIN)
+        out = await crm.update_mail_run_status("r1", FakeRequest(body={"status": "posted"}))
+        assert out["not_visible"] == []
+        t4 = await db.mail_touches.find_one({"touch_id": "t4"}, {"_id": 0})
+        assert t4["verify_status"] == "sent"
+    _run(go())
+
+
+def test_the_today_queue_shows_a_rep_only_her_due_pieces(db, monkeypatch):
+    async def go():
+        await _seed(db)
+        _as(monkeypatch, REP)
+        out = await crm.mail_today_queue(FakeRequest(params={"date": "2026-12-31"}))
+        ids = [tid for g in out["groups"] for tid in g["touch_ids"]]
+        assert ids == ["t1"], f"rep saw {ids}"
+        assert out["total"] == 1
+        _as(monkeypatch, ADMIN)
+        out = await crm.mail_today_queue(FakeRequest(params={"date": "2026-12-31"}))
+        assert sorted(tid for g in out["groups"] for tid in g["touch_ids"]) == ["t1", "t2"]
+    _run(go())
+
+
+def test_the_days_sticker_print_is_scoped_and_stamps_only_hers(db, monkeypatch):
+    seen = {}
+
+    def _fake_pdf(touches, *a, **kw):
+        seen["ids"] = [t["touch_id"] for t in touches]
+        return b"%PDF-1.4 fake"
+
+    async def go():
+        await _seed(db)
+        monkeypatch.setattr(crm, "_build_stickers_pdf", _fake_pdf)
+        _as(monkeypatch, REP)
+        await crm.mail_queue_stickers(FakeRequest(params={"date": "2026-12-31"}))
+        assert seen["ids"] == ["t1"]
+        t1 = await db.mail_touches.find_one({"touch_id": "t1"}, {"_id": 0})
+        t2 = await db.mail_touches.find_one({"touch_id": "t2"}, {"_id": 0})
+        assert t1.get("printed_at")
+        assert not t2.get("printed_at"), "a colleague's piece was stamped printed"
+    _run(go())
+
+
+def test_the_summary_overdue_count_ignores_resolved_pieces(db, monkeypatch):
+    async def go():
+        await _seed(db)
+        _as(monkeypatch, ADMIN)
+        await crm._do_verify("r1", ADMIN, {"rows": [
+            {"touch_id": "t1", "verify_status": "sent", "posted_date": "2026-09-20"}]})
+        out = await crm.mail_to_post(FakeRequest(params={"status": "sent",
+                                                         "as_of": "2026-09-22"}))
+        assert [r["touch_id"] for r in out["rows"]] == ["t1"]
+        assert out["totals"]["overdue"] == 0, "a posted piece is not late"
+    _run(go())
