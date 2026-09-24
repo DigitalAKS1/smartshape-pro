@@ -1,5 +1,4 @@
 from fastapi import APIRouter, HTTPException, Request, UploadFile, File, BackgroundTasks
-from fastapi.responses import JSONResponse
 from typing import Optional
 from datetime import datetime, timezone
 import uuid
@@ -943,53 +942,6 @@ async def wa_upload_attachment(request: Request, file: UploadFile = File(...)):
 async def wa_list_attachments(request: Request):
     await get_current_user(request)
     return await db.whatsapp_attachments.find({}, {"_id": 0}).sort("uploaded_at", -1).to_list(100)
-
-
-# ── Evolution API webhook (no auth — called by Evolution API server) ───────────
-
-@router.post("/webhooks/whatsapp/{event_name:path}")
-@router.post("/webhooks/whatsapp")
-async def wa_webhook(request: Request, event_name: str = ""):
-    """
-    Receives delivery/connection events from Evolution API.
-    Silently accepts all payloads and updates message statuses.
-    """
-    try:
-        payload = await request.json()
-    except Exception:
-        return JSONResponse({"ok": True})
-
-    event = payload.get("event", "")
-
-    # Message delivery update: MESSAGES_UPDATE
-    if event in ("messages.update", "MESSAGES_UPDATE"):
-        for update in (payload.get("data") or []):
-            key    = update.get("key", {})
-            status_raw = (update.get("update") or {}).get("status", "")
-            wa_id  = key.get("id", "")
-            # Evolution status → our status
-            status_map = {
-                "PENDING": "pending", "SERVER_ACK": "sent",
-                "DELIVERY_ACK": "delivered", "READ": "read", "PLAYED": "read",
-                "ERROR": "failed",
-            }
-            new_status = status_map.get(status_raw.upper(), "")
-            if wa_id and new_status:
-                await db.whatsapp_scheduled.update_many(
-                    {"wa_message_id": wa_id},
-                    {"$set": {"status": new_status, "updated_at": datetime.now(timezone.utc).isoformat()}},
-                )
-
-    # Connection state change: CONNECTION_UPDATE
-    if event in ("connection.update", "CONNECTION_UPDATE"):
-        state = (payload.get("data") or {}).get("state", "")
-        await db.settings.update_one(
-            {"type": "wa_connection"},
-            {"$set": {"state": state, "updated_at": datetime.now(timezone.utc).isoformat()}},
-            upsert=True,
-        )
-
-    return JSONResponse({"ok": True})
 
 
 # ── WhatsApp Provider Settings ─────────────────────────────────────────────────

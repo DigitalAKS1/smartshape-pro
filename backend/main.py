@@ -57,6 +57,7 @@ from routes.device_routes import router as device_router
 from routes.drip_routes import router as drip_router
 from routes.greeting_routes import router as greeting_router
 from routes.whatsapp_routes import router as whatsapp_router
+from routes.wa_routes import router as wa_router
 from routes.email_routes import router as email_router
 from routes.demo_routes import router as demo_router
 from routes.push_routes import router as push_router
@@ -109,6 +110,7 @@ app.include_router(support_router, prefix="/api")
 app.include_router(device_router, prefix="/api")
 app.include_router(drip_router, prefix="/api")
 app.include_router(greeting_router, prefix="/api")
+app.include_router(wa_router, prefix="/api")
 app.include_router(whatsapp_router, prefix="/api")
 app.include_router(email_router, prefix="/api")
 app.include_router(demo_router, prefix="/api")
