@@ -1024,8 +1024,18 @@ async def import_mail_run(request: Request, file: UploadFile = File(...),
 
 @router.get("/mail-runs")
 async def get_mail_runs(request: Request):
-    await get_current_user(request)
-    return await db.mail_runs.find({}, {"_id": 0}).sort("created_at", -1).to_list(500)
+    """Every run for an admin; for a rep, the runs she built plus any run holding
+    at least one piece she can see (the To-post scope) — never a list of other
+    reps' campaigns."""
+    user = await get_current_user(request)
+    scope = await _to_post_scope(user)
+    if scope is None:
+        return await db.mail_runs.find({}, {"_id": 0}).sort("created_at", -1).to_list(500)
+    mine = await db.mail_touches.distinct("run_id", _scope_touch_filter(scope))
+    return await db.mail_runs.find(
+        {"$or": [{"run_id": {"$in": [r for r in mine if r]}},
+                 {"created_by": user["email"]}]},
+        {"_id": 0}).sort("created_at", -1).to_list(500)
 
 
 async def _queued_touches(date_str: str):
@@ -1395,6 +1405,48 @@ def _touch_in_scope(touch: dict, scope) -> bool:
     return bool(set(touch.get("contact_ids") or []) & vis_contacts)
 
 
+def _scope_touch_filter(scope) -> dict:
+    """`_touch_in_scope` as a Mongo filter, for when the touches are too many to
+    pull into memory first (the run list). `{}` for an admin. A missing
+    `school_id` matches `None`, so school-less pieces fall to the contact arm
+    exactly as they do in `_touch_in_scope`."""
+    if scope is None:
+        return {}
+    vis_schools, vis_contacts = scope
+    return {"$or": [
+        {"school_id": {"$in": sorted(vis_schools)}},
+        {"school_id": {"$in": ["", None]}, "contact_ids": {"$in": sorted(vis_contacts)}},
+    ]}
+
+
+def _owns_run(user: dict, run: dict) -> bool:
+    """Whole-run acts (delete it, push its addresses onto school records) belong
+    to an admin or the person who built the run. A drip run is `created_by:
+    "system"`, which no user email equals — so only an admin can do these to one."""
+    if get_team(user) == "admin" or user.get("role") == "admin":
+        return True
+    return bool(run.get("created_by")) and run.get("created_by") == user.get("email")
+
+
+async def _run_for_reader(run_id: str, user: dict):
+    """A run plus the caller's in-scope touches of it — every per-run read goes
+    through here, so a rep sees in a run exactly the pieces the To-post queue
+    would show her.
+
+    404 when the run does not exist OR when a non-admin has no piece in it and
+    did not create it: answering "exists, but not for you" would let anyone
+    enumerate run ids. Returns `(run, touches)`."""
+    run = await db.mail_runs.find_one({"run_id": run_id}, {"_id": 0})
+    if not run:
+        raise HTTPException(status_code=404, detail="Mail run not found")
+    scope = await _to_post_scope(user)
+    touches = [t for t in await db.mail_touches.find({"run_id": run_id}, {"_id": 0}).to_list(None)
+               if _touch_in_scope(t, scope)]
+    if scope is not None and not touches and run.get("created_by") != user.get("email"):
+        raise HTTPException(status_code=404, detail="Mail run not found")
+    return run, touches
+
+
 def _overdue_days(planned: str, as_of: str) -> int:
     """Whole days a piece is past its planned posting date, never negative."""
     if not planned:
@@ -1645,11 +1697,9 @@ async def get_mail_analytics(request: Request):
 
 @router.get("/mail-runs/{run_id}")
 async def get_mail_run(run_id: str, request: Request):
-    await get_current_user(request)
-    run = await db.mail_runs.find_one({"run_id": run_id}, {"_id": 0})
-    if not run:
-        raise HTTPException(status_code=404, detail="Mail run not found")
-    run["touches"] = await db.mail_touches.find({"run_id": run_id}, {"_id": 0}).to_list(None)
+    user = await get_current_user(request)
+    run, touches = await _run_for_reader(run_id, user)
+    run["touches"] = touches
     return run
 
 
@@ -1668,12 +1718,10 @@ def _complete_touches(touches, schools_by_id):
 
 @router.get("/mail-runs/{run_id}/addresses")
 async def get_mail_run_addresses(run_id: str, request: Request):
-    """Editable address sheet for a run — fill blanks before printing stickers."""
-    await get_current_user(request)
-    run = await db.mail_runs.find_one({"run_id": run_id}, {"_id": 0})
-    if not run:
-        raise HTTPException(status_code=404, detail="Mail run not found")
-    touches = await db.mail_touches.find({"run_id": run_id}, {"_id": 0}).to_list(None)
+    """Editable address sheet for a run — fill blanks before printing stickers.
+    A rep's sheet holds only the pieces in her scope."""
+    user = await get_current_user(request)
+    run, touches = await _run_for_reader(run_id, user)
     ids = [t["school_id"] for t in touches if t.get("school_id")]
     schools = await db.schools.find({"school_id": {"$in": ids}}, {"_id": 0}).to_list(None)
     by_id = {s["school_id"]: s for s in schools}
@@ -1725,6 +1773,11 @@ async def delete_mail_run(run_id: str, request: Request):
     run = await db.mail_runs.find_one({"run_id": run_id}, {"_id": 0})
     if not run:
         raise HTTPException(status_code=404, detail="Mail run not found")
+    # Deleting a run deletes EVERY piece in it, including other reps' — so it is
+    # the run's builder's call (or an admin's), never any signed-in user's.
+    if not _owns_run(user, run):
+        raise HTTPException(status_code=403,
+                            detail="Only an admin or the person who built this run can delete it")
     t = await db.mail_touches.delete_many({"run_id": run_id})
     a = await db.crm_activities.delete_many({"batch_id": run_id, "source": "mail_cadence"})
     await db.mail_runs.delete_one({"run_id": run_id})
@@ -1735,17 +1788,26 @@ async def delete_mail_run(run_id: str, request: Request):
 async def sync_mail_run_to_schools(run_id: str, request: Request):
     """Manual sync: push the address the run is using for each school back onto
     that school's record — a one-click 'save everything to the school database'.
-    Only writes non-empty fields so it never blanks a school."""
-    await get_current_user(request)
+    Only writes non-empty fields so it never blanks a school.
+
+    Admin or the run's builder only (it writes master data), and only onto
+    schools that are actually IN this run — a school id smuggled into the body
+    is skipped, so the route cannot be used to rewrite any school's address."""
+    user = await get_current_user(request)
     run = await db.mail_runs.find_one({"run_id": run_id}, {"_id": 0})
     if not run:
         raise HTTPException(status_code=404, detail="Mail run not found")
+    if not _owns_run(user, run):
+        raise HTTPException(status_code=403,
+                            detail="Only an admin or the person who built this run can sync it")
+    in_run = set(await db.mail_touches.distinct("school_id", {"run_id": run_id})) \
+        | set(run.get("school_ids") or [])
     body = await _parse_json_body(request) if request else {}
     rows = body.get("rows") or []
     synced = 0
     for r in rows:
         sid = r.get("school_id")
-        if not sid:
+        if not sid or sid not in in_run:
             continue
         upd = {k: v for k, v in {
             "address": (r.get("address") or "").strip(),
@@ -1785,12 +1847,9 @@ def _build_mail_run_csv(run, touches, schools_by_id):
 
 @router.get("/mail-runs/{run_id}/export.csv")
 async def export_mail_run(run_id: str, request: Request):
-    await get_current_user(request)
-    run = await db.mail_runs.find_one({"run_id": run_id}, {"_id": 0})
-    if not run:
-        raise HTTPException(status_code=404, detail="Mail run not found")
-    touches = await db.mail_touches.find({"run_id": run_id}, {"_id": 0}).to_list(None)
-    ids = [t["school_id"] for t in touches]
+    user = await get_current_user(request)
+    run, touches = await _run_for_reader(run_id, user)
+    ids = [t["school_id"] for t in touches if t.get("school_id")]
     schools = await db.schools.find({"school_id": {"$in": ids}}, {"_id": 0}).to_list(None)
     csv_text = _build_mail_run_csv(run, touches, {s["school_id"]: s for s in schools})
     safe = (run.get("name") or run_id).replace('"', "").replace(",", "")[:40]
@@ -1892,7 +1951,9 @@ async def _do_verify(run_id: str, user: dict, body: dict, *, scope=_SCOPE_UNSET)
 
     Scoped like the To-post queue (`_to_post_scope`): a caller only ever writes
     touches she can see. Out-of-scope ids — named in `rows`/`touch_ids`, or swept
-    up by `select_all` — are skipped and returned in `not_visible`; an admin is
+    up by `select_all` — are skipped and reported in `not_visible`: the ids the
+    caller herself named (rows / undo), but only a COUNT for a `select_all`
+    sweep, whose ids she never saw and should not learn. An admin is
     unscoped. Scoping lives HERE, not in each route, because every route that
     ticks, undoes or marks a run "posted" funnels through this one function, so
     no older route can bypass it. `scope` lets a caller that already computed it
@@ -1908,7 +1969,8 @@ async def _do_verify(run_id: str, user: dict, body: dict, *, scope=_SCOPE_UNSET)
 
     async def _done():
         out = await _recompute_run_counts(run_id)
-        return {**(out or {}), "not_visible": sorted(not_visible)}
+        hidden = len(not_visible) if body.get("select_all") else sorted(not_visible)
+        return {**(out or {}), "not_visible": hidden}
 
     if body.get("undo"):
         ids = body.get("touch_ids") or []
@@ -2025,8 +2087,12 @@ async def replan_mail_run(run_id: str, request: Request):
 
     Deliberately does NOT touch the drip enrolment schedule: a postage delay must
     never stall the WhatsApp and call cadence behind it (design spec 7.4).
+
+    Scoped like verification: a rep moves only pieces she can see. Named ids
+    outside her scope come back in `not_visible` (ids); a `select_pending`
+    sweep reports only how many it left alone (a count), never whose.
     """
-    await get_current_user(request)
+    user = await get_current_user(request)
     run = await db.mail_runs.find_one({"run_id": run_id}, {"_id": 0})
     if not run:
         raise HTTPException(status_code=404, detail="Mail run not found")
@@ -2035,14 +2101,21 @@ async def replan_mail_run(run_id: str, request: Request):
     if not new_date:
         raise HTTPException(status_code=400, detail="new_date is required")
 
+    scope = await _to_post_scope(user)
     movable = ("pending", "not_sent")
     if body.get("select_pending"):
         touches = await db.mail_touches.find(
             {"run_id": run_id, "verify_status": {"$in": list(movable)}}, {"_id": 0}).to_list(None)
+        hidden = sum(1 for t in touches if not _touch_in_scope(t, scope))
+        touches = [t for t in touches if _touch_in_scope(t, scope)]
     else:
         ids = body.get("touch_ids") or []
         touches = await db.mail_touches.find(
             {"run_id": run_id, "touch_id": {"$in": ids}}, {"_id": 0}).to_list(None)
+        # Scope BEFORE the posted-check: a colleague's piece must not even
+        # reveal its status through the "already posted" error.
+        hidden = sorted(t["touch_id"] for t in touches if not _touch_in_scope(t, scope))
+        touches = [t for t in touches if _touch_in_scope(t, scope)]
         blocked = [t["touch_id"] for t in touches if t.get("verify_status") not in movable]
         if blocked:
             raise HTTPException(status_code=400,
@@ -2053,7 +2126,7 @@ async def replan_mail_run(run_id: str, request: Request):
             "$set": {"planned_date": new_date, "verify_status": "pending", "reason": ""},
             "$inc": {"replan_count": 1}})
     run = await _recompute_run_counts(run_id)
-    return {**run, "moved": len(touches), "new_date": new_date}
+    return {**run, "moved": len(touches), "new_date": new_date, "not_visible": hidden}
 
 
 @router.put("/mail-runs/{run_id}/status")
@@ -2424,11 +2497,9 @@ def _build_stickers_pdf(touches, schools_by_id, company, base_url, *,
 
 @router.get("/mail-runs/{run_id}/stickers.pdf")
 async def mail_run_stickers(run_id: str, request: Request):
-    await get_current_user(request)
-    run = await db.mail_runs.find_one({"run_id": run_id}, {"_id": 0})
-    if not run:
-        raise HTTPException(status_code=404, detail="Mail run not found")
-    touches = await db.mail_touches.find({"run_id": run_id}, {"_id": 0}).to_list(None)
+    user = await get_current_user(request)
+    # A rep prints — and stamps `printed_at` on — only her pieces of the run.
+    run, touches = await _run_for_reader(run_id, user)
     # D2: a `needs_address` piece has no address to print — it is NEVER a label,
     # with or without ?skip_incomplete. Printing it wastes a sticker, and worse,
     # stamps `printed_at` on a piece that cannot go anywhere.

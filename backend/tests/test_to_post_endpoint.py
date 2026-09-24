@@ -499,7 +499,7 @@ def test_marking_a_run_posted_as_a_rep_marks_only_her_pieces(db, monkeypatch):
              "owner": "bde@smartshape.in", "contact_ids": [], "posted_at": None})
         _as(monkeypatch, REP)
         out = await crm.update_mail_run_status("r1", FakeRequest(body={"status": "posted"}))
-        assert out["not_visible"] == ["t4"]
+        assert out["not_visible"] == 1, "a COUNT: she never saw those ids and should not learn them"
         t1 = await db.mail_touches.find_one({"touch_id": "t1"}, {"_id": 0})
         t4 = await db.mail_touches.find_one({"touch_id": "t4"}, {"_id": 0})
         assert t1["verify_status"] == "sent"
@@ -517,7 +517,7 @@ def test_an_admin_marking_a_run_posted_is_unscoped(db, monkeypatch):
              "owner": "bde@smartshape.in", "contact_ids": [], "posted_at": None})
         _as(monkeypatch, ADMIN)
         out = await crm.update_mail_run_status("r1", FakeRequest(body={"status": "posted"}))
-        assert out["not_visible"] == []
+        assert out["not_visible"] == 0
         t4 = await db.mail_touches.find_one({"touch_id": "t4"}, {"_id": 0})
         assert t4["verify_status"] == "sent"
     _run(go())
@@ -567,4 +567,234 @@ def test_the_summary_overdue_count_ignores_resolved_pieces(db, monkeypatch):
                                                          "as_of": "2026-09-22"}))
         assert [r["touch_id"] for r in out["rows"]] == ["t1"]
         assert out["totals"]["overdue"] == 0, "a posted piece is not late"
+    _run(go())
+
+
+# ── Fix round 3: every mail-run route honours the caller's scope ─────────────
+
+async def _colleague_piece_in_r1(db, status="pending"):
+    """A piece for bde's school s2 inside run r1, which the rep also has a piece in."""
+    await db.mail_touches.insert_one(
+        {"touch_id": "t4", "run_id": "r1", "school_id": "s2", "piece_type": "brochure",
+         "planned_date": "2026-09-01", "verify_status": status,
+         "owner": "bde@smartshape.in", "contact_ids": [], "posted_at": None})
+
+
+def test_replan_moves_only_the_reps_named_pieces(db, monkeypatch):
+    async def go():
+        await _seed(db)
+        await _colleague_piece_in_r1(db)
+        _as(monkeypatch, REP)
+        out = await crm.replan_mail_run("r1", FakeRequest(body={
+            "new_date": "2026-10-01", "touch_ids": ["t1", "t4"]}))
+        assert out["moved"] == 1
+        assert out["not_visible"] == ["t4"]
+        t1 = await db.mail_touches.find_one({"touch_id": "t1"}, {"_id": 0})
+        t4 = await db.mail_touches.find_one({"touch_id": "t4"}, {"_id": 0})
+        assert t1["planned_date"] == "2026-10-01"
+        assert t4["planned_date"] == "2026-09-01", "a colleague's piece was moved"
+    _run(go())
+
+
+def test_replan_does_not_leak_a_colleagues_posted_status(db, monkeypatch):
+    """Scope first, then the 'already posted' check, so naming a colleague's
+    sent piece is not a way to learn that it was sent."""
+    async def go():
+        await _seed(db)
+        await _colleague_piece_in_r1(db, status="sent")
+        _as(monkeypatch, REP)
+        out = await crm.replan_mail_run("r1", FakeRequest(body={
+            "new_date": "2026-10-01", "touch_ids": ["t4"]}))
+        assert out["moved"] == 0
+        assert out["not_visible"] == ["t4"]
+    _run(go())
+
+
+def test_replan_sweep_by_a_rep_counts_what_it_left_alone(db, monkeypatch):
+    async def go():
+        await _seed(db)
+        await _colleague_piece_in_r1(db)
+        _as(monkeypatch, REP)
+        out = await crm.replan_mail_run("r1", FakeRequest(body={
+            "new_date": "2026-10-01", "select_pending": True}))
+        assert out["moved"] == 1
+        assert out["not_visible"] == 1
+        t4 = await db.mail_touches.find_one({"touch_id": "t4"}, {"_id": 0})
+        assert t4["planned_date"] == "2026-09-01"
+        _as(monkeypatch, ADMIN)
+        out = await crm.replan_mail_run("r1", FakeRequest(body={
+            "new_date": "2026-10-02", "select_pending": True}))
+        assert out["not_visible"] == 0
+        t4 = await db.mail_touches.find_one({"touch_id": "t4"}, {"_id": 0})
+        assert t4["planned_date"] == "2026-10-02", "an admin is unscoped"
+    _run(go())
+
+
+def test_only_an_admin_or_the_builder_can_delete_a_run(db, monkeypatch):
+    async def go():
+        await _seed(db)
+        await db.mail_runs.update_one({"run_id": "r1"}, {"$set": {"created_by": "system"}})
+        await db.mail_runs.insert_one({"run_id": "r3", "name": "Parul list",
+                                       "created_by": "parul@smartshape.in", "school_ids": []})
+        _as(monkeypatch, REP)
+        for rid in ("r1", "r2"):             # a drip run, and a run someone else built
+            with pytest.raises(crm.HTTPException) as e:
+                await crm.delete_mail_run(rid, FakeRequest())
+            assert e.value.status_code == 403
+        assert await db.mail_touches.count_documents({"run_id": "r1"}) == 2, "nothing deleted"
+        await crm.delete_mail_run("r3", FakeRequest())      # her own
+        assert await db.mail_runs.count_documents({"run_id": "r3"}) == 0
+        _as(monkeypatch, ADMIN)
+        await crm.delete_mail_run("r2", FakeRequest())
+        assert await db.mail_runs.count_documents({"run_id": "r2"}) == 0
+    _run(go())
+
+
+def test_only_an_admin_or_the_builder_can_sync_a_run_to_schools(db, monkeypatch):
+    async def go():
+        await _seed(db)
+        _as(monkeypatch, REP)
+        with pytest.raises(crm.HTTPException) as e:
+            await crm.sync_mail_run_to_schools("r2", FakeRequest(body={
+                "rows": [{"school_id": "s2", "address": "hijacked"}]}))
+        assert e.value.status_code == 403
+        s2 = await db.schools.find_one({"school_id": "s2"}, {"_id": 0})
+        assert s2["address"] == ""
+    _run(go())
+
+
+def test_the_builder_can_sync_only_schools_in_her_run(db, monkeypatch):
+    async def go():
+        await _seed(db)
+        await db.mail_runs.update_one({"run_id": "r2"},
+                                      {"$set": {"created_by": "parul@smartshape.in"}})
+        _as(monkeypatch, REP)
+        out = await crm.sync_mail_run_to_schools("r2", FakeRequest(body={
+            "rows": [{"school_id": "s2", "address": "12 Lotus Rd"},
+                     {"school_id": "s1", "address": "smuggled"}]}))   # s1 is not in r2
+        assert out["synced"] == 1
+        assert (await db.schools.find_one({"school_id": "s2"}))["address"] == "12 Lotus Rd"
+        assert (await db.schools.find_one({"school_id": "s1"}))["address"] == "Rohini"
+    _run(go())
+
+
+def test_get_run_shows_a_rep_only_her_pieces(db, monkeypatch):
+    async def go():
+        await _seed(db)
+        await _colleague_piece_in_r1(db)
+        _as(monkeypatch, REP)
+        run = await crm.get_mail_run("r1", FakeRequest())
+        assert [t["touch_id"] for t in run["touches"]] == ["t1"]
+        _as(monkeypatch, ADMIN)
+        run = await crm.get_mail_run("r1", FakeRequest())
+        assert sorted(t["touch_id"] for t in run["touches"]) == ["t1", "t3", "t4"]
+    _run(go())
+
+
+def test_a_run_with_nothing_for_the_rep_is_a_404_not_a_403(db, monkeypatch):
+    """'Exists but not yours' would let anyone enumerate run ids."""
+    async def go():
+        await _seed(db)
+        _as(monkeypatch, REP)
+        for call in (crm.get_mail_run, crm.get_mail_run_addresses,
+                     crm.export_mail_run, crm.mail_run_stickers):
+            with pytest.raises(crm.HTTPException) as e:
+                await call("r2", FakeRequest())
+            assert e.value.status_code == 404, call.__name__
+    _run(go())
+
+
+def test_the_builder_still_opens_her_run_with_nothing_in_scope(db, monkeypatch):
+    async def go():
+        await _seed(db)
+        await db.mail_runs.update_one({"run_id": "r2"},
+                                      {"$set": {"created_by": "parul@smartshape.in"}})
+        _as(monkeypatch, REP)
+        run = await crm.get_mail_run("r2", FakeRequest())
+        assert run["run_id"] == "r2"
+        assert run["touches"] == [], "she built it, but t2 is still not a piece she can see"
+    _run(go())
+
+
+def test_the_run_list_shows_a_rep_her_runs_only(db, monkeypatch):
+    async def go():
+        await _seed(db)
+        await db.mail_runs.insert_many([
+            {"run_id": "r3", "name": "Parul empty list", "created_by": "parul@smartshape.in",
+             "created_at": "2026-09-03"},
+            {"run_id": "r5", "name": "School-less only", "created_by": "system",
+             "created_at": "2026-09-04"},
+            {"run_id": "r6", "name": "Someone else", "created_by": "bde@smartshape.in",
+             "created_at": "2026-09-05"},
+        ])
+        # r5 holds only a school-less piece for a contact she owns: visible via
+        # the CONTACT arm of the scope, which the list evaluates in Mongo.
+        await db.contacts.insert_one({"contact_id": "c7", "name": "Own", "school_id": "",
+                                      "assigned_to": "parul@smartshape.in"})
+        await db.mail_touches.insert_one(
+            {"touch_id": "t5", "run_id": "r5", "school_id": "", "contact_ids": ["c7"],
+             "verify_status": "needs_address", "planned_date": "2026-09-04"})
+        _as(monkeypatch, REP)
+        ids = {r["run_id"] for r in await crm.get_mail_runs(FakeRequest())}
+        assert ids == {"r1", "r3", "r5"}, ids
+        _as(monkeypatch, ADMIN)
+        ids = {r["run_id"] for r in await crm.get_mail_runs(FakeRequest())}
+        assert ids == {"r1", "r2", "r3", "r5", "r6"}
+    _run(go())
+
+
+def test_the_address_sheet_holds_only_the_reps_pieces(db, monkeypatch):
+    async def go():
+        await _seed(db)
+        await _colleague_piece_in_r1(db)
+        _as(monkeypatch, REP)
+        out = await crm.get_mail_run_addresses("r1", FakeRequest())
+        assert [r["touch_id"] for r in out["rows"]] == ["t1"]
+        assert out["total"] == 1
+        _as(monkeypatch, ADMIN)
+        out = await crm.get_mail_run_addresses("r1", FakeRequest())
+        assert out["total"] == 3
+    _run(go())
+
+
+def test_the_csv_export_holds_only_the_reps_pieces(db, monkeypatch):
+    seen = {}
+    real = crm._build_mail_run_csv
+
+    def _spy(run, touches, schools_by_id):
+        seen["ids"] = [t["touch_id"] for t in touches]
+        return real(run, touches, schools_by_id)
+
+    async def go():
+        await _seed(db)
+        await _colleague_piece_in_r1(db)
+        monkeypatch.setattr(crm, "_build_mail_run_csv", _spy)
+        _as(monkeypatch, REP)
+        await crm.export_mail_run("r1", FakeRequest())
+        assert seen["ids"] == ["t1"]
+        _as(monkeypatch, ADMIN)
+        await crm.export_mail_run("r1", FakeRequest())
+        assert sorted(seen["ids"]) == ["t1", "t3", "t4"]
+    _run(go())
+
+
+def test_the_per_run_sticker_print_is_scoped(db, monkeypatch):
+    seen = {}
+
+    def _fake_pdf(touches, *a, **kw):
+        seen["ids"] = [t["touch_id"] for t in touches]
+        return b"%PDF-1.4 fake"
+
+    async def go():
+        await _seed(db)
+        await _colleague_piece_in_r1(db)
+        monkeypatch.setattr(crm, "_build_stickers_pdf", _fake_pdf)
+        _as(monkeypatch, REP)
+        await crm.mail_run_stickers("r1", FakeRequest())
+        assert seen["ids"] == ["t1"]
+        t4 = await db.mail_touches.find_one({"touch_id": "t4"}, {"_id": 0})
+        assert not t4.get("printed_at"), "a colleague's piece was stamped printed"
+        _as(monkeypatch, ADMIN)
+        await crm.mail_run_stickers("r1", FakeRequest())
+        assert sorted(seen["ids"]) == ["t1", "t4"], "admin: all but the unaddressable t3"
     _run(go())
