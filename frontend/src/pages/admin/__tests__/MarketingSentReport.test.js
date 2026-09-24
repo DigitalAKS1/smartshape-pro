@@ -142,6 +142,40 @@ test('a capped scan warns that the numbers are a floor', async () => {
     ...PAYLOAD, totals: { ...PAYLOAD.totals, scan_capped: true },
   } }));
   const v = await render();
-  expect(v.q('ms-scan-cap-note').textContent).toContain('a floor, not a total');
+  const note = v.q('ms-scan-cap-note').textContent;
+  expect(note).toContain('a floor, not a total');
+  expect(note).toContain('one sequence');
+  v.unmount();
+});
+
+test('contact mode labels what is owed as people, with the envelope count', async () => {
+  reports.marketingSent.mockImplementation((params) => Promise.resolve({ data: {
+    ...PAYLOAD,
+    group_by: params.group_by,
+    totals: { ...PAYLOAD.totals, pending_envelopes: 1,
+              post: { verified_sent: 1, pending: 3, not_sent: 0, needs_address: 0,
+                      closed_unposted: 0 } },
+  } }));
+  const v = await render();
+  expect(v.q('ms-owed').textContent).toContain('still to post');
+  await act(async () => {
+    v.q('ms-tab-contact').click();
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+  });
+  const owed = v.q('ms-owed').textContent;
+  expect(owed).toContain('people awaiting post');
+  expect(owed).toContain('3');
+  expect(owed).toContain('(1 envelope)');
+  v.unmount();
+});
+
+test('closed-but-never-posted pieces are shown, not hidden', async () => {
+  reports.marketingSent.mockImplementation(() => Promise.resolve({ data: {
+    ...PAYLOAD,
+    totals: { ...PAYLOAD.totals,
+              post: { ...PAYLOAD.totals.post, closed_unposted: 2 } },
+  } }));
+  const v = await render();
+  expect(v.q('ms-closed-unposted').textContent).toContain('2');
   v.unmount();
 });

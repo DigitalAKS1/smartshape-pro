@@ -124,7 +124,7 @@ def test_verifying_moves_a_school_from_pending_to_verified_sent(db, monkeypatch)
         out = await crm.marketing_sent_report(FakeRequest(params={"group_by": "school"}))
         s2 = next(r for r in out["rows"] if r["key"] == "s2")
         assert s2["post"] == {"verified_sent": 1, "pending": 0, "not_sent": 0,
-                              "needs_address": 0}
+                              "needs_address": 0, "closed_unposted": 0}
         assert s2["sent_by_channel"]["post"] == 1
         assert s2["last_sent_at"] == "2026-09-16"
     _run(go())
@@ -147,6 +147,7 @@ def test_the_three_modes_agree_on_their_totals(db, monkeypatch):
             assert outs[g]["totals"]["responses"] == base["responses"], g
             # The school-level envelope count is the same number in every mode.
             assert outs[g]["totals"]["post_envelopes"] == base["post_envelopes"], g
+            assert outs[g]["totals"]["pending_envelopes"] == base["pending_envelopes"], g
         # Post counts ENVELOPES in school and sequence mode, identically.
         assert outs["sequence"]["totals"]["sent_by_channel"]["post"] == \
             base["sent_by_channel"]["post"]
@@ -206,7 +207,8 @@ def test_a_legacy_touch_on_a_posted_run_counts_as_sent(db, monkeypatch):
         s9 = next(r for r in out["rows"] if r["key"] == "s9")
         assert s9["sent_by_channel"]["post"] == 1, "the posted run really went out"
         assert s9["post"] == {"verified_sent": 1, "pending": 1, "not_sent": 0,
-                              "needs_address": 0}, "the planned run has not"
+                              "needs_address": 0, "closed_unposted": 0}, \
+            "the planned run has not"
         assert s9["last_sent_at"] == "2026-02-10", "dated from the run"
     _run(go())
 
@@ -367,4 +369,104 @@ def test_the_report_appears_in_the_hub_catalogue(db, monkeypatch):
         assert row["title"] == "Marketing sent"
         assert row["route"] == "/reports/marketing-sent"
         assert row["metric"]["value"] == 1, "one school has a verified-sent piece"
+    _run(go())
+
+
+
+REP_PERMS = {**REP, "module_permissions": {"leads": {"level": "read"}}}
+
+
+async def _seed_shared_envelope(db):
+    """One envelope at a school BOTH reps can see, naming Parul's contact and Bob's."""
+    await db.schools.insert_one({"school_id": "sx", "school_name": "Shared Academy",
+                                 "assigned_to": "bde@smartshape.in", "is_deleted": False})
+    await db.contacts.insert_many([
+        {"contact_id": "cp", "name": "Parul Contact", "school_id": "sx",
+         "assigned_to": "parul@smartshape.in"},
+        {"contact_id": "cb", "name": "Bob Contact", "school_id": "sx",
+         "assigned_to": "bde@smartshape.in"},
+    ])
+    await db.mail_touches.insert_one({
+        "touch_id": "tx", "run_id": "rx", "school_id": "sx", "sequence_id": "",
+        "verify_status": "sent", "posted_at": "2026-09-18T00:00:00+00:00",
+        "planned_date": "2026-09-18", "owner": "bde@smartshape.in",
+        # Bob's contact first: the first name must not decide who is credited.
+        "contact_ids": ["cb", "cp", "cp"],
+        "recipient_names": ["Bob Contact", "Parul Contact"],
+        "responded": False, "interested": False})
+
+
+def test_a_shared_envelope_credits_only_contacts_the_rep_can_see(db, monkeypatch):
+    async def go():
+        await _seed_shared_envelope(db)
+        _as(monkeypatch, REP)
+        out = await crm.marketing_sent_report(FakeRequest(params={"group_by": "contact"}))
+        assert [r["key"] for r in out["rows"]] == ["cp"], "never Bob's contact"
+        assert out["rows"][0]["owner"] == "parul@smartshape.in", "her contact, her owner"
+        assert out["rows"][0]["sent_by_channel"]["post"] == 1, "deduped per envelope"
+        assert out["totals"]["post_envelopes"] == 1
+        bob = await crm.marketing_sent_report(FakeRequest(params={
+            "group_by": "contact", "owner": "bde@smartshape.in"}))
+        assert bob["rows"] == [], "?owner= cannot reach a contact she cannot see"
+        assert bob["totals"]["post_envelopes"] == 0
+    _run(go())
+
+
+def test_an_admin_sees_every_name_on_a_shared_envelope_with_its_own_owner(db, monkeypatch):
+    async def go():
+        await _seed_shared_envelope(db)
+        _as(monkeypatch, ADMIN)
+        out = await crm.marketing_sent_report(FakeRequest(params={"group_by": "contact"}))
+        owners = {r["key"]: r["owner"] for r in out["rows"]}
+        assert owners == {"cb": "bde@smartshape.in", "cp": "parul@smartshape.in"}
+        assert out["totals"]["sent_by_channel"]["post"] == 2
+        assert out["totals"]["post_envelopes"] == 1
+    _run(go())
+
+
+def test_a_step_log_at_a_merely_quoted_school_stays_hidden(db, monkeypatch):
+    """A quotation makes Bob's school 'visible' to Parul, not Bob's contacts."""
+    async def go():
+        await _seed(db)
+        await db.quotations.insert_one({"quotation_id": "q1", "school_id": "s2",
+                                        "assigned_to": "parul@smartshape.in"})
+        await db.drip_step_logs.insert_one({
+            "enrollment_id": "e9", "sequence_id": "seq2", "lead_id": "", "contact_id": "c2",
+            "step_number": 3, "message_type": "whatsapp", "status": "sent",
+            "fired_at": "2026-09-16T06:00:00+00:00"})
+        _as(monkeypatch, REP)
+        out = await crm.marketing_sent_report(FakeRequest(params={"group_by": "contact"}))
+        assert "c2" not in [r["key"] for r in out["rows"]]
+        assert out["totals"]["sent_by_channel"]["whatsapp"] == 1, "only her own WhatsApp"
+    _run(go())
+
+
+def test_a_closed_run_that_never_posted_is_not_sent(db, monkeypatch):
+    async def go():
+        await db.schools.insert_one({"school_id": "s8", "school_name": "Closed School",
+                                     "assigned_to": "parul@smartshape.in"})
+        await db.mail_runs.insert_many([
+            {"run_id": "rc", "name": "Abandoned", "status": "closed", "send_date": "2026-04-01"},
+            {"run_id": "rp", "name": "Closed after posting", "status": "closed",
+             "posted_at": "2026-05-02T00:00:00+00:00", "send_date": "2026-05-01"},
+        ])
+        await db.mail_touches.insert_many([
+            {"touch_id": "tc", "run_id": "rc", "school_id": "s8", "posted_at": None,
+             "owner": "parul@smartshape.in"},
+            {"touch_id": "tp", "run_id": "rp", "school_id": "s8", "posted_at": None,
+             "owner": "parul@smartshape.in"},
+        ])
+        _as(monkeypatch, ADMIN)
+        out = await crm.marketing_sent_report(FakeRequest(params={"group_by": "school"}))
+        s8 = out["rows"][0]
+        assert s8["post"] == {"verified_sent": 1, "pending": 0, "not_sent": 0,
+                              "needs_address": 0, "closed_unposted": 1}
+        assert s8["sent_by_channel"]["post"] == 1, "only the run with posted_at"
+        assert s8["last_sent_at"] == "2026-05-02"
+        assert out["totals"]["post"]["closed_unposted"] == 1
+        resp = await crm.marketing_sent_report(
+            FakeRequest(params={"group_by": "school", "format": "csv"}))
+        body = b"".join([chunk async for chunk in resp.body_iterator])
+        row = list(csv.DictReader(io.StringIO(body.decode("utf-8-sig"))))[0]
+        assert row["post_closed_unposted"] == "1"
     _run(go())

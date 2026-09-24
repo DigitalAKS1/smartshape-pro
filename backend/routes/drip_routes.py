@@ -999,17 +999,20 @@ async def sequence_deliveries(sequence_id: str, request: Request):
         vis_leads = {l["lead_id"] for l in await db.leads.find(
             _merge_or({}, await _leads_visibility_or(email)),
             {"_id": 0, "lead_id": 1}).to_list(None)}
+        # Scope by the ENROLLED RECORD, never by its school: a school is "visible"
+        # to a rep who merely quoted there, which does not let her open its
+        # contacts or leads. The school is only the fallback for an enrolment
+        # that names neither.
         scoped = []
         for e in enrolments:
             lid, cid = e.get("lead_id") or "", e.get("contact_id") or ""
-            if lid and lid in vis_leads:
-                scoped.append(e)
-                continue
-            if cid and cid in vis_contacts:
-                scoped.append(e)
-                continue
-            sid = e.get("school_id") or ""
-            if sid and sid in vis_schools:
+            if lid:
+                ok = lid in vis_leads
+            elif cid:
+                ok = cid in vis_contacts
+            else:
+                ok = bool(e.get("school_id")) and e["school_id"] in vis_schools
+            if ok:
                 scoped.append(e)
         enrolments = scoped
 

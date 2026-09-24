@@ -122,7 +122,22 @@ export default function MarketingSentReport() {
                 </span>
               )}
             </span>
-            <span className="text-[#9A6A15]">still to post <b>{(po.pending ?? 0) + (po.needs_address ?? 0)}</b></span>
+            {groupBy === 'contact' ? (
+              // Contact mode counts PEOPLE; say how many envelopes that is.
+              <span className="text-[#9A6A15]" data-testid="ms-owed">
+                people awaiting post <b>{(po.pending ?? 0) + (po.needs_address ?? 0)}</b>
+                {' '}({t.pending_envelopes ?? 0} envelope{(t.pending_envelopes ?? 0) === 1 ? '' : 's'})
+              </span>
+            ) : (
+              <span className="text-[#9A6A15]" data-testid="ms-owed">
+                still to post <b>{(po.pending ?? 0) + (po.needs_address ?? 0)}</b>
+              </span>
+            )}
+            {(po.closed_unposted ?? 0) > 0 && (
+              <span className="text-[var(--text-muted)]" data-testid="ms-closed-unposted">
+                closed, never posted <b>{po.closed_unposted}</b>
+              </span>
+            )}
             <span className="text-[#e94560]">responses <b>{(t.responses || {}).qr_scans ?? 0}</b></span>
           </div>
 
@@ -149,8 +164,9 @@ export default function MarketingSentReport() {
           )}
           {t.scan_capped && (
             <p className="mb-3 text-[11px] text-[#C4402E]" data-testid="ms-scan-cap-note">
-              There were more deliveries in this window than one report can read, so these
-              numbers are a floor, not a total. Narrow the date range.
+              There were more deliveries than one report can read, so these numbers are a
+              floor, not a total. Narrow the report to one sequence — the posted-mail scan
+              is narrowed by sequence only, not by dates or owner.
             </p>
           )}
 

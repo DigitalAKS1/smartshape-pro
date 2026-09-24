@@ -1227,7 +1227,7 @@ _MS_CHANNEL_OF = {"whatsapp": "whatsapp", "email": "email",
                   "physical_material": "post", "call_task": "call"}
 _MS_CSV_FIELDS = ["key", "name", "owner", "sequences", "whatsapp", "email", "call", "post",
                   "post_verified_sent", "post_pending", "post_not_sent", "post_needs_address",
-                  "last_sent_at", "qr_scans", "interest"]
+                  "post_closed_unposted", "last_sent_at", "qr_scans", "interest"]
 # Deliveries scanned per collection, and rows handed back ON SCREEN. Totals are
 # computed over EVERY group before the cap is applied, and the CSV streams every
 # group uncapped — groups can never outnumber the schools, so the export is
@@ -1235,10 +1235,6 @@ _MS_CSV_FIELDS = ["key", "name", "owner", "sequences", "whatsapp", "email", "cal
 # a slow one. `totals.scan_capped` says when a scan itself hit its ceiling.
 _MS_SCAN_CAP = 50000
 _MS_ROW_CAP = 2000
-# A mail run that has gone out. Touches written before verification existed
-# (`_make_mail_run`) carry no `verify_status`, so their run is what says whether
-# the envelope was actually posted.
-_MS_RUN_DONE = ("posted", "closed", "completed", "sent")
 # Manual (non-drip) mail runs have no sequence at all. They are real postings, so
 # they get their own bucket instead of being filed under "(deleted sequence)".
 _MS_MANUAL_KEY = "manual"
@@ -1248,7 +1244,8 @@ _MS_MANUAL_NAME = "Manual mail runs"
 def _ms_blank(key, name, owner):
     return {"key": key, "name": name, "owner": owner, "sequences": [],
             "sent_by_channel": {c: 0 for c in _MS_CHANNELS},
-            "post": {"verified_sent": 0, "pending": 0, "not_sent": 0, "needs_address": 0},
+            "post": {"verified_sent": 0, "pending": 0, "not_sent": 0, "needs_address": 0,
+                     "closed_unposted": 0},
             "last_sent_at": "", "responses": {"qr_scans": 0, "interest": 0}}
 
 
@@ -1266,17 +1263,24 @@ async def marketing_sent_report(request: Request):
     it (D1). In `group_by=school` and `group_by=sequence` that envelope counts ONCE.
     In `group_by=contact` it counts once for EVERY contact named on it, because
     there "post" answers "did we post to this person", and a shared envelope did
-    reach all of them. So `totals.sent_by_channel.post` is deliberately larger in
-    contact mode; whatsapp / email / call agree across all three modes, and
+    reach all of them — but only the names the CALLER can see
+    (`_contacts_visibility_or`), each under its own owner, so a shared envelope
+    never shows a rival rep's contact. So `totals.sent_by_channel.post` is
+    deliberately larger in contact mode; whatsapp / email / call agree across all three modes, and
     `totals.post_envelopes` carries the school-level envelope count in every mode
     so a screen can show both numbers side by side. Responses are credited once per
     envelope (to its first named contact), so `totals.responses` also agrees
     everywhere.
 
     LEGACY TOUCHES. A manual mail run written before verification existed has no
-    `verify_status`: it is read as `sent` when its run is posted/closed (dated from
-    the run's `posted_at`/`send_date`) and as `pending` otherwise, dated from the
-    run's `send_date` when the touch has no `planned_date`. Such touches roll up
+    `verify_status`: it is read as `sent` only when its run is `posted` or carries a
+    `posted_at` (dated from those, else `send_date`); a `closed` run that was never
+    posted is `post.closed_unposted` (visible, neither sent nor still to post); any
+    other run is `pending`, dated from the run's `send_date` when the touch has no
+    `planned_date`.
+
+    SCOPING. A step-log delivery is judged by the record it went to (lead, else
+    contact, else school); an envelope, as in To post, by its school or people. Such touches roll up
     under the synthetic sequence `manual` ("Manual mail runs")."""
     user = await get_current_user(request)
     qp = request.query_params
@@ -1388,10 +1392,24 @@ async def marketing_sent_report(request: Request):
         return sid, cid, owner
 
     def _visible(sid, cid, lead_id=""):
+        """An ENVELOPE (school-level, as in To post): visible via its school or any
+        of its people."""
         if vis_schools is None:
             return True
         return bool((sid and sid in vis_schools) or (cid and cid in vis_contacts)
                     or (lead_id and lead_id in vis_leads))
+
+    def _visible_record(sid, cid, lead_id=""):
+        """A step-log delivery went to ONE record: judge it by that record, never
+        by its school — a school is "visible" to a rep who merely quoted there,
+        which does not let her open its contacts or leads."""
+        if vis_schools is None:
+            return True
+        if lead_id:
+            return lead_id in vis_leads
+        if cid:
+            return cid in vis_contacts
+        return bool(sid and sid in vis_schools)
 
     def _key_of(sid, cid, sequence_id):
         if group_by == "school":
@@ -1429,7 +1447,7 @@ async def marketing_sent_report(request: Request):
         sid, cid, owner = _resolve(lg.get("lead_id"), lg.get("contact_id"))
         if want_owner and owner != want_owner:
             continue
-        if not _visible(sid, cid, lg.get("lead_id") or ""):
+        if not _visible_record(sid, lg.get("contact_id") or "", lg.get("lead_id") or ""):
             continue
         g = _bucket(sid, cid, sequence_id, owner)
         g["sent_by_channel"][ch] += 1
@@ -1437,7 +1455,7 @@ async def marketing_sent_report(request: Request):
             g["last_sent_at"] = day
 
     # ── Post: the mail touch is the record of truth (D4) ───────────────────
-    post_envelopes = 0
+    post_envelopes = pending_envelopes = 0
     for t in touches:
         run = runs.get(t.get("run_id"), {})
         sequence_id = t.get("sequence_id") or run.get("sequence_id") or _MS_MANUAL_KEY
@@ -1448,10 +1466,16 @@ async def marketing_sent_report(request: Request):
         status = t.get("verify_status")
         posted_day = str(t.get("posted_at") or "")[:10]
         if not status:
-            if str(run.get("status") or "").lower() in _MS_RUN_DONE:
+            # Sent ONLY on real evidence of posting. A run can be `closed` without
+            # ever being posted (PUT /mail-runs/{id}/status), so `closed` alone is
+            # neither sent nor still-to-post: it is reported as closed_unposted.
+            run_st = str(run.get("status") or "").lower()
+            if run_st == "posted" or run.get("posted_at"):
                 status = "sent"
                 posted_day = posted_day or \
                     str(run.get("posted_at") or run.get("send_date") or "")[:10]
+            elif run_st == "closed":
+                status = "closed_unposted"
             else:
                 status = "pending"
         day = posted_day or (t.get("planned_date") or "") or \
@@ -1459,22 +1483,39 @@ async def marketing_sent_report(request: Request):
         if not _in_range(day):
             continue
         sid, cid, owner = _resolve(t.get("lead_id"), t.get("contact_id"), t)
-        if want_owner and owner != want_owner:
-            continue
-        if not _visible(sid, cid, t.get("lead_id") or ""):
-            continue
+
+        # Who this envelope is credited to: [(contact_id, owner)].
+        named = list(dict.fromkeys(
+            c for c in (t.get("contact_ids") or []) if c and c in contacts))
+        if group_by == "contact" and named:
+            # One envelope, every name on it ("did we post to this person") — but
+            # ONLY the names the caller may see, each under THEIR OWN owner, so a
+            # shared envelope never leaks a rival rep's contact or owner.
+            credits = []
+            for c in named:
+                if vis_contacts is not None and c not in vis_contacts:
+                    continue
+                c_owner = contacts[c].get("assigned_to") \
+                    or schools.get(sid, {}).get("assigned_to", "") or t.get("owner", "")
+                if want_owner and c_owner != want_owner:
+                    continue
+                credits.append((c, c_owner))
+            if not credits:
+                continue
+        else:
+            # School / sequence mode: the envelope counts once, scoped the way the
+            # To-post queue scopes it.
+            if want_owner and owner != want_owner:
+                continue
+            if not _visible(sid, cid, t.get("lead_id") or ""):
+                continue
+            credits = [(cid, owner)]
         if status == "sent":
             post_envelopes += 1
-        # One envelope, every name on it: in contact mode it is credited to each
-        # named recipient ("did we post to this person"); school and sequence mode
-        # count the envelope once. See the docstring.
-        targets = [cid]
-        if group_by == "contact":
-            named = [c for c in (t.get("contact_ids") or []) if c and c in contacts]
-            if named:
-                targets = named
-        for i, target in enumerate(targets):
-            g = _bucket(sid, target, sequence_id, owner)
+        elif status in ("pending", "needs_address"):
+            pending_envelopes += 1
+        for i, (target, target_owner) in enumerate(credits):
+            g = _bucket(sid, target, sequence_id, target_owner)
             if status == "sent":
                 g["sent_by_channel"]["post"] += 1
                 g["post"]["verified_sent"] += 1
@@ -1484,6 +1525,8 @@ async def marketing_sent_report(request: Request):
                 g["post"]["not_sent"] += 1
             elif status == "needs_address":
                 g["post"]["needs_address"] += 1
+            elif status == "closed_unposted":
+                g["post"]["closed_unposted"] += 1
             elif status != "skipped":
                 g["post"]["pending"] += 1
             # A response is one response, however many names shared the envelope —
@@ -1502,12 +1545,16 @@ async def marketing_sent_report(request: Request):
         "rows": len(every),
         "sent_by_channel": {c: sum(r["sent_by_channel"][c] for r in every) for c in _MS_CHANNELS},
         "post": {k: sum(r["post"][k] for r in every)
-                 for k in ("verified_sent", "pending", "not_sent", "needs_address")},
+                 for k in ("verified_sent", "pending", "not_sent", "needs_address",
+                           "closed_unposted")},
         "responses": {k: sum(r["responses"][k] for r in every) for k in ("qr_scans", "interest")},
         # Verified-sent envelopes, counted school-level and so identical in every
         # mode — pair it with contact mode's larger `sent_by_channel.post` to read
         # "N envelopes reached M people".
         "post_envelopes": post_envelopes,
+        # Envelopes still owed to the post office (pending + needs_address), also
+        # school-level — contact mode's post.pending counts the PEOPLE on them.
+        "pending_envelopes": pending_envelopes,
     }
     rows = every[:_MS_ROW_CAP]
     totals["shown"] = len(rows)
@@ -1528,6 +1575,7 @@ async def marketing_sent_report(request: Request):
                 r["sent_by_channel"]["call"], r["sent_by_channel"]["post"],
                 r["post"]["verified_sent"], r["post"]["pending"],
                 r["post"]["not_sent"], r["post"]["needs_address"],
+                r["post"]["closed_unposted"],
                 r["last_sent_at"], r["responses"]["qr_scans"], r["responses"]["interest"],
             ])
         # utf-8-sig, like every other export here: without the BOM Excel mangles

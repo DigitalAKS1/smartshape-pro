@@ -131,3 +131,29 @@ def test_the_owner_filter_composes_with_the_others(db):
             "seq1", FakeRequest(params={"owner": "bde@smartshape.in", "channel": "whatsapp"}))
         assert out["rows"] == [], "the only step is a post step, so nothing matches"
     _run(go())
+
+
+
+def test_a_quotation_at_a_school_does_not_open_its_enrolments(db, monkeypatch):
+    """Scope by the enrolled record, not its school: a quotation makes Bob's school
+    visible to Parul, but not Bob's contacts or leads there."""
+    async def go():
+        await _seed(db)
+        await db.quotations.insert_one({"quotation_id": "q1", "school_id": "s2",
+                                        "assigned_to": "parul@smartshape.in"})
+        await db.leads.insert_one({"lead_id": "l2", "school_id": "s2", "contact_name": "B Lead",
+                                   "assigned_to": "bde@smartshape.in"})
+        # Both enrolments carry the school id - the old check let them through on it.
+        await db.drip_enrollments.insert_many([
+            {"enrollment_id": "e4", "sequence_id": "seq1", "lead_id": "l2", "school_id": "s2",
+             "status": "active", "enrolled_at": "2026-09-10T00:00:00+00:00", "current_step": 0},
+            {"enrollment_id": "e5", "sequence_id": "seq1", "contact_id": "c3", "school_id": "s2",
+             "status": "active", "enrolled_at": "2026-09-10T00:00:00+00:00", "current_step": 0},
+        ])
+        _as(monkeypatch, REP)
+        out = await drip.sequence_deliveries("seq1", FakeRequest())
+        got = sorted(r["enrollment_id"] for r in out["rows"])
+        assert got == ["e1", "e2"], "not Bob's contact (e3, e5) nor Bob's lead (e4)"
+        names = {r["recipient_name"] for r in out["rows"]}
+        assert "B Rao" not in names and "B Lead" not in names
+    _run(go())
