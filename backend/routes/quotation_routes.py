@@ -1598,7 +1598,15 @@ async def get_catalogue(token: str):
     package = None
     if package_id:
         package = await db.packages.find_one({"package_id": package_id}, {"_id": 0})
-    dies = await db.dies.find({"is_active": True}, {"_id": 0}).to_list(1000)
+
+    die_filter = {"is_active": True}
+    pkg_machine_category = (package or {}).get("machine_category")
+    if pkg_machine_category:
+        die_filter["machine_category"] = pkg_machine_category
+        # Never quote a die the school couldn't actually be fulfilled with.
+        die_filter["$expr"] = {"$gt": [
+            {"$subtract": ["$stock_qty", {"$ifNull": ["$reserved_qty", 0]}]}, 0]}
+    dies = await db.dies.find(die_filter, {"_id": 0}).to_list(1000)
     # Only show products whose product type is published to schools. Legacy products
     # with no product_type_id are treated as the built-in (visible) "Dies" type.
     visible_type_ids = {t["product_type_id"] async for t in db.product_types.find(
