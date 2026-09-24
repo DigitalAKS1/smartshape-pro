@@ -5,7 +5,6 @@ import uuid
 import os
 import asyncio
 import logging
-import httpx
 
 from database import db
 from auth_utils import get_current_user
@@ -713,180 +712,16 @@ async def get_queue(request: Request):
     return await db.whatsapp_scheduled.find(filt, {"_id": 0}).sort("queued_at", -1).to_list(300)
 
 
-# ── Evolution API — Instance management ───────────────────────────────────────
-
-@router.post("/whatsapp/instance/create")
-async def wa_instance_create(request: Request):
-    """Create the Evolution API WhatsApp instance and return QR code."""
-    await get_current_user(request)
-    try:
-        result = await evolution.create_instance()
-        return {"ok": True, "instance": result}
-    except Exception as e:
-        # Instance may already exist — return current status instead
-        try:
-            status = await evolution.get_status()
-            return {"ok": True, "instance": status, "note": "already exists"}
-        except Exception:
-            raise HTTPException(502, f"Evolution API unreachable: {e}")
-
-
-@router.get("/whatsapp/instance/qr")
-async def wa_instance_qr(request: Request):
-    """Fetch the current QR code (base64 PNG) for WhatsApp scanning."""
-    await get_current_user(request)
-    try:
-        data = await evolution.get_qr()
-        return data  # { code, base64 }
-    except Exception as e:
-        raise HTTPException(502, f"Could not fetch QR: {e}")
-
+# ── Company number state (read-only) ──────────────────────────────────────────
+# Instance management moved to routes/wa_routes.py (/wa/me*, /wa/instances*), which is
+# owner/admin-gated. This read-only route stays for MarketingHub's connection badge.
 
 @router.get("/whatsapp/instance/status")
 async def wa_instance_status(request: Request):
-    """Return connection state: open | connecting | close."""
     await get_current_user(request)
-    try:
-        data = await evolution.get_status()
-        state = (data.get("instance") or data).get("state", "close")
-        return {"state": state, "connected": state == "open", "instance": evolution.instance}
-    except Exception:
-        return {"state": "close", "connected": False, "instance": evolution.instance}
-
-
-@router.delete("/whatsapp/instance/logout")
-async def wa_instance_logout(request: Request):
-    """Log out the WhatsApp Web session."""
-    await get_current_user(request)
-    try:
-        result = await evolution.logout()
-        return {"ok": True, **result}
-    except Exception as e:
-        raise HTTPException(502, f"Logout failed: {e}")
-
-
-@router.get("/whatsapp/instances")
-async def wa_list_instances(request: Request):
-    """List all Evolution API instances."""
-    await get_current_user(request)
-    try:
-        async with httpx.AsyncClient(timeout=15) as c:
-            r = await c.get(
-                f"{evolution.base}/instance/fetchInstances",
-                headers={"apikey": evolution._headers["apikey"]},
-            )
-            r.raise_for_status()
-            return r.json()
-    except Exception as e:
-        return []
-
-
-@router.post("/whatsapp/instances/{instance_name}")
-async def wa_create_named_instance(request: Request, instance_name: str):
-    """Create a named Evolution API instance."""
-    await get_current_user(request)
-    try:
-        async with httpx.AsyncClient(timeout=15) as c:
-            r = await c.post(
-                f"{evolution.base}/instance/create",
-                headers={**evolution._headers},
-                json={"instanceName": instance_name, "qrcode": True, "integration": "WHATSAPP-BAILEYS"},
-            )
-            r.raise_for_status()
-            return {"ok": True, "instance": r.json()}
-    except Exception as e:
-        raise HTTPException(502, f"Create failed: {e}")
-
-
-@router.delete("/whatsapp/instances/{instance_name}")
-async def wa_delete_named_instance(request: Request, instance_name: str):
-    """Delete a named Evolution API instance."""
-    await get_current_user(request)
-    try:
-        async with httpx.AsyncClient(timeout=15) as c:
-            r = await c.delete(
-                f"{evolution.base}/instance/delete/{instance_name}",
-                headers={**evolution._headers},
-            )
-            r.raise_for_status()
-            return {"ok": True}
-    except Exception as e:
-        raise HTTPException(502, f"Delete failed: {e}")
-
-
-@router.get("/whatsapp/instances/{instance_name}/qr")
-async def wa_named_instance_qr(request: Request, instance_name: str):
-    """Get QR for a specific named instance."""
-    await get_current_user(request)
-    try:
-        async with httpx.AsyncClient(timeout=15) as c:
-            r = await c.get(
-                f"{evolution.base}/instance/connect/{instance_name}",
-                headers={**evolution._headers},
-            )
-            r.raise_for_status()
-            return r.json()
-    except Exception as e:
-        raise HTTPException(502, f"QR fetch failed: {e}")
-
-
-@router.get("/whatsapp/instances/{instance_name}/status")
-async def wa_named_instance_status(request: Request, instance_name: str):
-    """Get connection status for a specific named instance."""
-    await get_current_user(request)
-    try:
-        async with httpx.AsyncClient(timeout=15) as c:
-            r = await c.get(
-                f"{evolution.base}/instance/connectionState/{instance_name}",
-                headers={**evolution._headers},
-            )
-            r.raise_for_status()
-            data = r.json()
-            state = (data.get("instance") or data).get("state", "close")
-            return {"state": state, "connected": state == "open", "instance": instance_name}
-    except Exception:
-        return {"state": "close", "connected": False, "instance": instance_name}
-
-
-@router.get("/whatsapp/proxy/{instance_name}")
-async def wa_get_proxy(request: Request, instance_name: str):
-    """Get proxy config for an Evolution instance."""
-    await get_current_user(request)
-    try:
-        async with httpx.AsyncClient(timeout=15) as c:
-            r = await c.get(
-                f"{evolution.base}/proxy/find/{instance_name}",
-                headers={**evolution._headers},
-            )
-            r.raise_for_status()
-            return r.json() or {}
-    except Exception:
-        return {}
-
-
-@router.post("/whatsapp/proxy/{instance_name}")
-async def wa_set_proxy(request: Request, instance_name: str):
-    """Set SOCKS5 proxy for an Evolution instance to bypass IP restrictions."""
-    await get_current_user(request)
-    body = await request.json()
-    try:
-        async with httpx.AsyncClient(timeout=15) as c:
-            r = await c.post(
-                f"{evolution.base}/proxy/set/{instance_name}",
-                headers={**evolution._headers},
-                json={
-                    "enabled": body.get("enabled", True),
-                    "host": body.get("host", ""),
-                    "port": str(body.get("port", "1080")),
-                    "protocol": body.get("protocol", "socks5"),
-                    "username": body.get("username", ""),
-                    "password": body.get("password", ""),
-                },
-            )
-            r.raise_for_status()
-            return {"ok": True, "proxy": r.json()}
-    except Exception as e:
-        raise HTTPException(502, f"Proxy set failed: {e}")
+    inst = await db.wa_instances.find_one({"kind": "company"}, {"_id": 0, "instance_name": 1, "state": 1}) or {}
+    state = {"connected": "open", "qr": "connecting"}.get(inst.get("state"), "close")
+    return {"state": state, "connected": state == "open", "instance": inst.get("instance_name", "")}
 
 
 # ── Attachment upload ──────────────────────────────────────────────────────────

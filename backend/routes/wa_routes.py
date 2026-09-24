@@ -5,11 +5,17 @@ import logging
 import os
 import re
 import uuid
+from datetime import timedelta
 
 from fastapi import APIRouter, HTTPException, Request
 
+from auth_utils import get_current_user
 from database import db
+from rbac import get_team
 from services import wa_send
+from services.evolution_client import EvolutionError, instance_token
+from services.wa_config import (COMPANY_INSTANCE, PRIVACY_NOTICE, RAM_HEADROOM_MIN_MB, SLOT_STATES,
+                                WaSettingsError, get_wa_settings, rep_instance_name, save_wa_settings)
 
 router = APIRouter()
 log = logging.getLogger("wa_routes")
@@ -190,7 +196,8 @@ async def _on_close(inst: dict, data: dict) -> None:
         return
     raw = str(data.get("statusReason") or "0")
     code = int(raw) if raw.isdigit() else 0
-    if code in _TERMINAL_CLOSE:
+    if code in _TERMINAL_CLOSE and inst.get("state") != "qr":
+        # (In `qr` the number was not linked: a 401 there is our own relink's logout, not a ban.)
         # Permanent: pause (only an admin resumes) and alert the owner + admins.
         await db.wa_instances.update_one({"instance_name": name}, {"$set": {"evolution_state": "close"}})
         await wa_send.pause_instance(db, inst, reason=_TERMINAL_CLOSE[code])
@@ -363,3 +370,548 @@ _HANDLERS = {
     "SEND_MESSAGE": _on_send_message,
     "MESSAGES_UPSERT": _on_messages_upsert,
 }
+
+
+# ══ /wa routes: My WhatsApp, admin numbers, settings, default proxy (Task 7) ══════
+
+QR_REFRESH_SECONDS = 20
+HEALTH_FRESH_MINUTES = 30        # an older wa_health reading is shown but never blocks a link
+_PROXY_PROTOCOLS = ("http", "https", "socks4", "socks5")
+
+
+def _evo():
+    return wa_send._client()
+
+
+def _is_admin(user: dict) -> bool:
+    # The same admin test used everywhere else (crm_routes._is_admin): the owner's account
+    # (role "admin", no module_permissions) always passes, as does a multi-role admin.
+    return get_team(user) == "admin" or user.get("role") == "admin"
+
+
+def _require_admin(user: dict) -> None:
+    if not _is_admin(user):
+        raise HTTPException(status_code=403, detail="Only an admin can manage WhatsApp numbers")
+
+
+async def _body(request: Request) -> dict:
+    try:
+        b = await request.json()
+    except Exception:
+        b = {}
+    return b if isinstance(b, dict) else {}
+
+
+def _notice_accepted(body: dict) -> bool:
+    # `notice_accepted` (the brief) and `accept_notice` (the ruling) are both accepted.
+    return body.get("notice_accepted") is True or body.get("accept_notice") is True
+
+
+def _require_secret() -> None:
+    if not os.getenv("WA_WEBHOOK_SECRET"):
+        raise HTTPException(500, "WA_WEBHOOK_SECRET is not set on the server, so replies and receipts "
+                                 "would be refused. Finish the WhatsApp setup runbook first.")
+
+
+def _mask_proxy(p) -> dict:
+    """Never returns the password — only whether one is saved."""
+    p = p or {}
+    return {"host": p.get("host", ""), "port": p.get("port", ""), "protocol": p.get("protocol") or "socks5",
+            "username": p.get("username", ""), "has_password": bool(p.get("password"))}
+
+
+def _clean_proxy(body: dict, saved) -> dict:
+    """{} = no proxy (blank host). A blank password keeps the saved one."""
+    host = str(body.get("host") or "").strip()
+    if not host:
+        return {}
+    proto = str(body.get("protocol") or "socks5").lower()
+    if proto not in _PROXY_PROTOCOLS:
+        raise HTTPException(400, "protocol must be http, https, socks4 or socks5")
+    try:
+        port = int(body.get("port"))
+    except (TypeError, ValueError):
+        port = 0
+    if not 1 <= port <= 65535:
+        raise HTTPException(400, "port must be a number from 1 to 65535")
+    return {"host": host, "port": port, "protocol": proto, "username": str(body.get("username") or "").strip(),
+            "password": str(body.get("password") or "") or (saved or {}).get("password", "")}
+
+
+async def _my_instance(email: str):
+    """The rep's ONE number: users.wa_instance_name, else a rep row they own (never the company row)."""
+    u = await db.users.find_one({"email": wa_send._email_q(email)}, {"_id": 0, "wa_instance_name": 1}) or {}
+    inst = None
+    if u.get("wa_instance_name"):
+        inst = await db.wa_instances.find_one({"instance_name": u["wa_instance_name"]}, {"_id": 0})
+    if inst is None:
+        inst = await db.wa_instances.find_one({"kind": "rep", "owner_email": wa_send._email_q(email)}, {"_id": 0})
+    return inst
+
+
+async def _instance_or_404(name: str) -> dict:
+    inst = await db.wa_instances.find_one({"instance_name": name}, {"_id": 0})
+    if not inst:
+        raise HTTPException(404, "No such WhatsApp number")
+    return inst
+
+
+async def _used_slots() -> int:
+    return await db.wa_instances.count_documents({"state": {"$in": list(SLOT_STATES)}})
+
+
+async def _health() -> dict:
+    """settings{type:"wa_health"}, written by the host script (Task 8)."""
+    h = await db.settings.find_one({"type": "wa_health"}, {"_id": 0}) or {}
+    h.pop("type", None)
+    try:
+        avail = int(h["mem_available_mb"]) if h.get("mem_available_mb") is not None else None
+    except (TypeError, ValueError):
+        avail = None
+    try:
+        fresh = wa_send._parse(h["at"]) > wa_send._now() - timedelta(minutes=HEALTH_FRESH_MINUTES)
+    except Exception:
+        fresh = False
+    return {**h, "headroom_ok": avail is None or avail >= RAM_HEADROOM_MIN_MB, "fresh": fresh,
+            "min_headroom_mb": RAM_HEADROOM_MIN_MB}
+
+
+async def _require_capacity(cfg: dict, *, check_ram: bool = True) -> None:
+    """Linking a number that does not hold a slot yet: refuse past max_instances, or when the
+    server's latest (fresh) memory reading is below the D7 headroom."""
+    cap = int(cfg["max_instances"])
+    if await _used_slots() >= cap:
+        raise HTTPException(409, f"All {cap} WhatsApp slots on this server are in use. Unlink a number, "
+                                 "or ask an admin — more numbers need a bigger server.")
+    if check_ram:
+        h = await _health()
+        if h["fresh"] and not h["headroom_ok"]:
+            raise HTTPException(409, f"The server has only {h.get('mem_available_mb')} MB of free memory; "
+                                     f"linking another number needs at least {RAM_HEADROOM_MIN_MB} MB. "
+                                     "Ask an admin.")
+
+
+async def _view(inst: dict, cfg: dict) -> dict:
+    """What the UI shows for one number. Never carries instance_token, the QR or proxy password."""
+    now = wa_send._now()
+    led = await db.wa_send_ledger.find_one(
+        {"instance_name": inst["instance_name"], "day": wa_send.ist_day(now)}, {"_id": 0}) or {}
+    day = wa_send.warmup_day(inst, now)
+    sent = int(led.get("sent_count", 0))
+    cap = wa_send.daily_cap(inst, cfg, now)
+    return {
+        "instance_name": inst["instance_name"], "kind": inst.get("kind"), "owner_email": inst.get("owner_email") or "",
+        "label": inst.get("label") or "", "phone_e164": inst.get("phone_e164") or "", "state": inst.get("state"),
+        "state_at": inst.get("state_at"), "last_seen_at": inst.get("last_seen_at"),
+        "paused_reason": inst.get("paused_reason") or "", "paused_by": inst.get("paused_by") or "",
+        "unlinked_detail": inst.get("unlinked_detail") or "",
+        "consecutive_failures": int(inst.get("consecutive_failures") or 0),
+        # "Day 4 of 14 — today 40 of 60": nested (brief) and flat (ruling 5).
+        "warmup": {"day": day, "of": int(cfg["warmup_days"]), "today_sent": sent, "today_cap": cap},
+        "warmup_day": day, "sent_today": sent, "cap_today": cap,
+        "daily_cap_override": inst.get("daily_cap_override"),
+        "proxy": _mask_proxy(inst.get("proxy")),
+        "notice_accepted_at": inst.get("notice_accepted_at"),
+    }
+
+
+async def _looks_personal(inst: dict, email: str) -> bool:
+    """D1: warn (never block) when the linked number is the rep's own phone on their profile."""
+    linked = (inst.get("phone_e164") or "")[-10:]
+    if not linked:
+        return False
+    u = await db.users.find_one({"email": wa_send._email_q(email)}, {"_id": 0, "phone": 1, "calling_number": 1}) or {}
+    mine = {re.sub(r"\D", "", str(u.get(k) or ""))[-10:] for k in ("phone", "calling_number")}
+    return linked in mine
+
+
+async def _fresh_qr(inst: dict) -> str:
+    at = inst.get("qr_at")
+    try:
+        young = bool(at) and wa_send._parse(at) > wa_send._now() - timedelta(seconds=QR_REFRESH_SECONDS)
+    except Exception:
+        young = False
+    if inst.get("qr_base64") and young:
+        return inst["qr_base64"]
+    try:
+        qr = await _evo().get_qr(inst["instance_name"], token=inst.get("instance_token") or None)
+    except Exception as e:
+        log.warning("[wa] QR refresh for %s failed: %s", inst["instance_name"], str(e)[:120])
+        return inst.get("qr_base64") or ""
+    b64 = str((qr or {}).get("base64") or "")
+    if b64:
+        await db.wa_instances.update_one({"instance_name": inst["instance_name"]},
+                                         {"$set": {"qr_base64": b64, "qr_at": _now_iso()}})
+    return b64 or inst.get("qr_base64") or ""
+
+
+async def _default_proxy() -> dict:
+    d = await db.settings.find_one({"type": "wa_proxy_default"}, {"_id": 0}) or {}
+    if not (d.get("enabled") and d.get("host")):
+        return {}
+    return {k: d.get(k, "") for k in ("host", "port", "protocol", "username", "password")}
+
+
+async def _provision(name: str, *, kind: str, owner_email: str, label: str, accepted_by: str) -> dict:
+    """Create (or reuse) the Evolution instance, point its webhook at us, apply its proxy, and
+    return a QR to scan. The number becomes `connected` when CONNECTION_UPDATE: open arrives."""
+    _require_secret()
+    existing = await db.wa_instances.find_one({"instance_name": name}, {"_id": 0}) or {}
+    token = existing.get("instance_token") or ""
+    evo = _evo()
+    try:
+        token = instance_token(await evo.create_instance(name)) or token
+    except EvolutionError as e:
+        if e.status_code not in (403, 409):                 # 403/409 = the name already exists: reuse it
+            raise HTTPException(502, f"The WhatsApp server refused to create the number: {str(e)[:160]}")
+        if not token:
+            try:
+                token = str((await evo.fetch_instance(name)).get("token") or "")
+            except Exception:
+                token = ""
+    except Exception as e:
+        raise HTTPException(502, f"The WhatsApp server is not answering: {str(e)[:120]}")
+    proxy = existing.get("proxy") or {}
+    if not proxy.get("host"):
+        proxy = await _default_proxy()
+    try:
+        await evo.set_webhook(name)
+        if proxy.get("host"):
+            await evo.set_proxy(name, proxy)
+        qr = await evo.get_qr(name, token=token or None)
+    except Exception as e:
+        raise HTTPException(502, f"The WhatsApp server could not prepare the QR code: {str(e)[:120]}")
+    b64 = str((qr or {}).get("base64") or "")
+    now = _now_iso()
+    sets = {"kind": kind, "owner_email": owner_email, "label": label, "state": "qr", "state_at": now,
+            "qr_base64": b64, "qr_at": now, "instance_token": token, "proxy": proxy,
+            "consecutive_failures": 0, "notice_accepted_at": now, "notice_accepted_by": accepted_by}
+    if not existing.get("paused_before_unlink"):
+        sets["paused_reason"] = ""          # an admin's pause survives an unlink/relink (Task 6)
+    await db.wa_instances.update_one({"instance_name": name}, {
+        "$set": sets,
+        "$unset": {"unlinked_reason": "", "unlinked_detail": ""},
+        "$setOnInsert": {"phone_e164": "", "jid": "", "warmup_started_at": None, "daily_cap_override": None,
+                         "last_seen_at": None, "created_at": now}}, upsert=True)
+    if kind == "rep":
+        await db.users.update_one({"email": wa_send._email_q(owner_email)}, {"$set": {"wa_instance_name": name}})
+    return {"instance_name": name, "state": "qr", "qr_base64": b64}
+
+
+def _admin_paused(inst: dict) -> bool:
+    return inst.get("state") == "paused" and inst.get("paused_by") not in (None, "", "system")
+
+
+async def _relink(inst: dict) -> dict:
+    """Log the old session out and show a fresh QR. The state moves to `qr` BEFORE the logout, so
+    the CONNECTION_UPDATE close that the logout triggers is not read as a ban or a disconnect."""
+    _require_secret()
+    name, tok = inst["instance_name"], inst.get("instance_token") or None
+    sets = {"state": "qr", "state_at": _now_iso(), "qr_base64": "", "consecutive_failures": 0}
+    if not inst.get("paused_before_unlink"):
+        sets.update({"paused_reason": "", "paused_by": ""})
+    await db.wa_instances.update_one({"instance_name": name}, {
+        "$set": sets, "$unset": {"unlinked_reason": "", "unlinked_detail": ""}})
+    evo = _evo()
+    try:
+        await evo.logout(name, token=tok)
+    except Exception:
+        pass                                               # already logged out
+    try:
+        await evo.set_webhook(name)                        # re-register: header secret (Task 6 fix)
+    except Exception as e:
+        log.warning("[wa] webhook re-register for %s failed: %s", name, str(e)[:120])
+    try:
+        qr = await evo.get_qr(name, token=tok)             # /instance/connect: starts a new session
+    except Exception as e:
+        raise HTTPException(502, f"The WhatsApp server could not prepare the QR code: {str(e)[:120]}")
+    b64 = str((qr or {}).get("base64") or "")
+    await db.wa_instances.update_one({"instance_name": name}, {"$set": {"qr_base64": b64, "qr_at": _now_iso()}})
+    return {"instance_name": name, "state": "qr", "qr_base64": b64}
+
+
+async def _unlink(inst: dict, by: str) -> dict:
+    """Frees the slot. The state moves to `unlinked` BEFORE the logout (see _relink). An admin's
+    pause survives: the next link comes back `paused` (Task 6 paused_before_unlink)."""
+    name = inst["instance_name"]
+    keep_pause = _admin_paused(inst) or bool(inst.get("paused_before_unlink"))
+    sets = {"state": "unlinked", "state_at": _now_iso(), "qr_base64": "", "unlinked_by": by,
+            "consecutive_failures": 0}
+    if keep_pause:
+        sets["paused_before_unlink"] = True
+    else:
+        sets["paused_reason"] = ""
+    await db.wa_instances.update_one({"instance_name": name}, {"$set": sets})
+    try:
+        await _evo().logout(name, token=inst.get("instance_token") or None)
+    except Exception:
+        pass
+    return {"instance_name": name, "state": "unlinked"}
+
+
+# ── My WhatsApp ──────────────────────────────────────────────────────────────
+
+@router.get("/wa/me")
+async def wa_me(request: Request):
+    user = await get_current_user(request)
+    cfg = await get_wa_settings(db)
+    inst = await _my_instance(user["email"])
+    if not inst or inst.get("state") == "unlinked":
+        return {"linked": False, "state": "unlinked", "notice": PRIVACY_NOTICE,
+                "instance_name": (inst or {}).get("instance_name", ""),
+                "slots_full": await _used_slots() >= int(cfg["max_instances"]),
+                "paused_reason": (inst or {}).get("paused_reason", ""),
+                "unlinked_detail": (inst or {}).get("unlinked_detail", "")}
+    out = {"linked": True, **await _view(inst, cfg), "notice": PRIVACY_NOTICE,
+           "looks_personal": await _looks_personal(inst, user["email"])}
+    if inst.get("state") == "qr":
+        out["qr_base64"] = await _fresh_qr(inst)
+    return out
+
+
+@router.post("/wa/me/link")
+async def wa_me_link(request: Request):
+    user = await get_current_user(request)
+    body = await _body(request)
+    if not _notice_accepted(body):
+        raise HTTPException(400, "Read and accept the notice before linking a number.")
+    cfg = await get_wa_settings(db)
+    inst = await _my_instance(user["email"])
+    if inst and inst.get("state") != "unlinked":
+        # One number per rep: never a second instance — report the one they have.
+        out = {"instance_name": inst["instance_name"], "state": inst.get("state"), "already_linked": True}
+        if inst.get("state") == "qr":
+            out["qr_base64"] = await _fresh_qr(inst)
+        return out
+    await _require_capacity(cfg)
+    name = inst["instance_name"] if inst else rep_instance_name(user)
+    return await _provision(name, kind="rep", owner_email=user["email"],
+                            label=str(body.get("label") or user.get("name") or user["email"])[:60],
+                            accepted_by=user["email"])
+
+
+@router.post("/wa/me/relink")
+async def wa_me_relink(request: Request):
+    user = await get_current_user(request)
+    inst = await _my_instance(user["email"])
+    if not inst:
+        raise HTTPException(404, "You have no linked number yet.")
+    if _admin_paused(inst):
+        raise HTTPException(409, "An admin paused this number. Ask them to resume it.")
+    if inst.get("state") == "unlinked":
+        await _require_capacity(await get_wa_settings(db))
+    return await _relink(inst)
+
+
+@router.post("/wa/me/unlink")
+async def wa_me_unlink(request: Request):
+    user = await get_current_user(request)
+    inst = await _my_instance(user["email"])
+    if not inst:
+        raise HTTPException(404, "You have no linked number.")
+    if inst.get("state") == "unlinked":
+        return {"instance_name": inst["instance_name"], "state": "unlinked"}
+    return await _unlink(inst, user["email"])
+
+
+# ── Admin: every number ──────────────────────────────────────────────────────
+
+@router.get("/wa/instances")
+async def wa_instances_list(request: Request):
+    user = await get_current_user(request)
+    _require_admin(user)
+    cfg = await get_wa_settings(db)
+    rows = await db.wa_instances.find({}, {"_id": 0}).sort("created_at", 1).to_list(100)
+    names = {}
+    async for u in db.users.find({}, {"_id": 0, "email": 1, "name": 1}):
+        names[str(u.get("email") or "").strip().lower()] = u.get("name", "")
+    views = []
+    for inst in rows:
+        v = await _view(inst, cfg)
+        v["owner_name"] = names.get((inst.get("owner_email") or "").strip().lower(), "")
+        views.append(v)
+    return {"instances": views, "max_instances": int(cfg["max_instances"]),
+            "used": sum(1 for i in rows if i.get("state") in SLOT_STATES),
+            "company_instance": COMPANY_INSTANCE, "health": await _health(), "settings": cfg}
+
+
+@router.post("/wa/instances/company")
+async def wa_link_company(request: Request):
+    user = await get_current_user(request)
+    _require_admin(user)
+    body = await _body(request)
+    if not _notice_accepted(body):
+        raise HTTPException(400, "Read and accept the notice before linking a number.")
+    _require_secret()
+    cfg = await get_wa_settings(db)
+    name = COMPANY_INSTANCE
+    existing = await db.wa_instances.find_one({"instance_name": name}, {"_id": 0}) or {}
+    holds_slot = existing.get("state") in SLOT_STATES
+    evo = _evo()
+    try:
+        state = await evo.connection_state(name)
+    except Exception:
+        state = "close"
+    if state == "open":
+        # The number linked before the upgrade survives it: adopt it, no new QR.
+        if not holds_slot:
+            await _require_capacity(cfg, check_ram=False)      # already running: no new memory
+        try:
+            info = await evo.fetch_instance(name)
+        except Exception:
+            info = {}
+        jid = str(info.get("ownerJid") or "")
+        phone = jid.split("@")[0].split(":")[0]
+        try:
+            await evo.set_webhook(name)
+        except Exception as e:
+            raise HTTPException(502, f"Could not point the company number's webhook at the app: {str(e)[:120]}")
+        now = _now_iso()
+        new_state = "paused" if existing.get("state") == "paused" else "connected"
+        sets = {"kind": "company", "owner_email": user["email"], "label": existing.get("label") or "Company",
+                "state": new_state, "state_at": now, "qr_base64": "", "evolution_state": "open",
+                "instance_token": str(info.get("token") or "") or existing.get("instance_token") or "",
+                "notice_accepted_at": now, "notice_accepted_by": user["email"]}
+        if phone:
+            sets.update({"phone_e164": phone, "jid": f"{phone}@s.whatsapp.net"})
+        if not existing.get("warmup_started_at") or (phone and phone != existing.get("phone_e164")):
+            sets["warmup_started_at"] = now
+        await db.wa_instances.update_one({"instance_name": name}, {
+            "$set": sets,
+            "$setOnInsert": {"proxy": {}, "daily_cap_override": None, "consecutive_failures": 0,
+                             "paused_reason": "", "last_seen_at": None, "created_at": now}},
+            upsert=True)
+        return {"instance_name": name, "state": new_state, "phone_e164": phone}
+    if existing.get("state") == "qr":
+        return {"instance_name": name, "state": "qr", "qr_base64": await _fresh_qr(existing)}
+    if not holds_slot:
+        await _require_capacity(cfg)
+    return await _provision(name, kind="company", owner_email=user["email"],
+                            label=existing.get("label") or "Company", accepted_by=user["email"])
+
+
+@router.post("/wa/instances/{name}/pause")
+async def wa_instance_pause(name: str, request: Request):
+    user = await get_current_user(request)
+    _require_admin(user)
+    inst = await _instance_or_404(name)
+    if inst.get("state") == "unlinked":
+        raise HTTPException(409, "This number is not linked, so there is nothing to pause.")
+    reason = str((await _body(request)).get("reason") or f"Paused by {user.get('name') or user['email']}")[:200]
+    await wa_send.pause_instance(db, inst, reason=reason, by=user["email"])
+    return {"instance_name": name, "state": "paused"}
+
+
+@router.post("/wa/instances/{name}/resume")
+async def wa_instance_resume(name: str, request: Request):
+    """Clears the pause and the failure streak. The state follows Evolution: connected when the
+    session is open, else disconnected (relink from My WhatsApp)."""
+    user = await get_current_user(request)
+    _require_admin(user)
+    inst = await _instance_or_404(name)
+    clear = {"consecutive_failures": 0, "paused_reason": "", "paused_by": "", "resumed_by": user["email"]}
+    if inst.get("state") in ("unlinked", "qr"):
+        await db.wa_instances.update_one({"instance_name": name}, {
+            "$set": clear, "$unset": {"paused_before_unlink": ""}})
+        return {"instance_name": name, "state": inst.get("state")}
+    try:
+        st = await _evo().connection_state(name, token=inst.get("instance_token") or None)
+    except Exception:
+        st = "close"
+    new = "connected" if st == "open" else "disconnected"
+    await db.wa_instances.update_one({"instance_name": name}, {
+        "$set": {**clear, "state": new, "state_at": _now_iso()}, "$unset": {"paused_before_unlink": ""}})
+    return {"instance_name": name, "state": new}
+
+
+@router.post("/wa/instances/{name}/unlink")
+async def wa_instance_unlink(name: str, request: Request):
+    user = await get_current_user(request)
+    _require_admin(user)
+    inst = await _instance_or_404(name)
+    if inst.get("state") == "unlinked":
+        return {"instance_name": name, "state": "unlinked"}
+    return await _unlink(inst, user["email"])
+
+
+@router.put("/wa/instances/{name}/proxy")
+async def wa_instance_proxy(name: str, request: Request):
+    user = await get_current_user(request)
+    _require_admin(user)
+    inst = await _instance_or_404(name)
+    proxy = _clean_proxy(await _body(request), inst.get("proxy"))
+    try:
+        await _evo().set_proxy(name, proxy or None, token=inst.get("instance_token") or None)
+    except Exception as e:
+        raise HTTPException(502, f"The WhatsApp server refused the proxy: {str(e)[:120]}")
+    await db.wa_instances.update_one({"instance_name": name}, {"$set": {"proxy": proxy}})
+    return {"instance_name": name, "proxy": _mask_proxy(proxy)}
+
+
+@router.put("/wa/instances/{name}")
+async def wa_instance_update(name: str, request: Request):
+    user = await get_current_user(request)
+    _require_admin(user)
+    await _instance_or_404(name)
+    body = await _body(request)
+    sets = {}
+    if "label" in body:
+        sets["label"] = str(body.get("label") or "")[:60]
+    if "daily_cap_override" in body:
+        v = body.get("daily_cap_override")
+        if v in (None, ""):
+            sets["daily_cap_override"] = None
+        else:
+            try:
+                iv = int(v)
+            except (TypeError, ValueError):
+                iv = 0
+            if not 1 <= iv <= 2000:
+                raise HTTPException(400, "daily_cap_override must be 1-2000, or empty for the warm-up ramp")
+            sets["daily_cap_override"] = iv
+    if sets:
+        await db.wa_instances.update_one({"instance_name": name}, {"$set": sets})
+    return await _view(await _instance_or_404(name), await get_wa_settings(db))
+
+
+@router.get("/wa/settings")
+async def wa_settings_get(request: Request):
+    user = await get_current_user(request)
+    _require_admin(user)
+    return await get_wa_settings(db)
+
+
+@router.put("/wa/settings")
+async def wa_settings_put(request: Request):
+    user = await get_current_user(request)
+    _require_admin(user)
+    try:
+        return await save_wa_settings(db, await _body(request), by=user["email"])
+    except WaSettingsError as e:
+        raise HTTPException(400, str(e))
+
+
+# ── Default proxy (the endpoint the old Settings form called; it 404'd on main) ──
+
+@router.get("/whatsapp/proxy-config")
+async def wa_proxy_config_get(request: Request):
+    user = await get_current_user(request)
+    _require_admin(user)
+    doc = await db.settings.find_one({"type": "wa_proxy_default"}, {"_id": 0}) or {}
+    return {"enabled": bool(doc.get("enabled")), **_mask_proxy(doc)}
+
+
+@router.post("/whatsapp/proxy-config")
+async def wa_proxy_config_save(request: Request):
+    """The default proxy applied to a newly linked number. Existing numbers keep theirs
+    (PUT /wa/instances/{name}/proxy changes one)."""
+    user = await get_current_user(request)
+    _require_admin(user)
+    body = await _body(request)
+    saved = await db.settings.find_one({"type": "wa_proxy_default"}, {"_id": 0}) or {}
+    proxy = _clean_proxy(body, saved)
+    doc = {"type": "wa_proxy_default", "enabled": bool(body.get("enabled", True)) and bool(proxy),
+           **(proxy or {"host": "", "port": "", "protocol": "socks5", "username": "", "password": ""}),
+           "updated_by": user["email"], "updated_at": _now_iso()}
+    await db.settings.update_one({"type": "wa_proxy_default"}, {"$set": doc}, upsert=True)
+    return {"enabled": doc["enabled"], **_mask_proxy(doc)}

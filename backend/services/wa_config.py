@@ -17,6 +17,11 @@ PRIVACY_NOTICE = ("Every message this number sends or receives is visible to man
                   "Link a company number, not your personal one.")
 
 INSTANCE_STATES = ("unlinked", "qr", "connected", "disconnected", "paused")
+# States that hold one of the server's `max_instances` slots (an unlinked number frees its slot).
+SLOT_STATES = ("qr", "connected", "disconnected", "paused")
+
+# D7: below this much free server memory, do not link another number (admin page + health alert).
+RAM_HEADROOM_MIN_MB = 500
 
 WA_DEFAULTS = {
     "warmup_start_cap": 20,
