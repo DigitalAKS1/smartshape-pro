@@ -43,6 +43,7 @@ class DieCreate(BaseModel):
     show_video: bool = False
     show_description: bool = False
     product_type_id: Optional[str] = None
+    machine_category: Optional[str] = None
 
 
 class StockMovementCreate(BaseModel):
