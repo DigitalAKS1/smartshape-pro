@@ -662,6 +662,27 @@ def test_a_4xx_fails_only_this_message(wa_env, monkeypatch):
     _run(go())
 
 
+@pytest.mark.parametrize("code,counts", [(401, True), (403, True), (404, True), (400, False), (422, False)])
+def test_instance_level_http_errors_count_other_4xx_do_not(wa_env, monkeypatch, code, counts):
+    db = wa_env.db
+    used = []
+
+    async def _fake_autosender(dbh, e164, text, file_url=None):
+        used.append(e164)
+        return False                       # fallback tried but refuses: the message stays failed
+    monkeypatch.setattr(ws, "_send_via_autosender", _fake_autosender)
+
+    async def go():
+        await _autosender_on(db)
+        _raise_on_send(wa_env, EvolutionError(code, "evolution said no"))
+        res = await send_whatsapp(db, to="9811111111", text="x", kind="dispatch")
+        assert res["status"] == "failed" and str(code) in res["reason"]
+        assert await _failures(db) == (1 if counts else 0)
+        assert bool(used) is counts        # only an instance-level error may try the fallback
+        assert (await _row(db, res["message_id"]))["error_class"] == ("transport" if counts else "recipient")
+    _run(go())
+
+
 def test_a_timeout_fails_without_fallback_or_counter(wa_env, monkeypatch):
     db = wa_env.db
 

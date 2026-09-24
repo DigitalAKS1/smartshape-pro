@@ -407,17 +407,23 @@ async def _evolution_send(inst: dict, row: dict) -> dict:
     return await c.send_text(row["to_e164"], row["text"], instance=name, token=tok)
 
 
+_INSTANCE_HTTP_ERRORS = frozenset({401, 403, 404})    # bad/rotated token, instance gone
+
+
 def _classify_send_error(e: Exception):
     """-> (class, reason).
-    "transport": the request never reached Evolution or Evolution itself broke (connect/DNS/
-                 proxy failure, 5xx) — counts against the number and may use the fallback.
-    "recipient": Evolution refused THIS message (4xx) — this message fails, nothing else.
+    "transport": the request never reached Evolution, Evolution itself broke (connect/DNS/
+                 proxy failure, 5xx), or the instance is unusable (401/403/404) — counts
+                 against the number and may use the fallback.
+    "recipient": Evolution refused THIS message (any other 4xx) — this message fails, nothing else.
     "uncertain": it may have reached Evolution (read/write timeout, dropped connection) — fails
                  WITHOUT the fallback, which could deliver it twice."""
     import httpx        # already a dependency (evolution_client); lazy to keep this module light
     err = str(e)[:200] or type(e).__name__
     if isinstance(e, evo_mod.EvolutionError):
-        return ("transport" if e.status_code >= 500 else "recipient"), err
+        if e.status_code >= 500 or e.status_code in _INSTANCE_HTTP_ERRORS:
+            return "transport", err
+        return "recipient", err
     if isinstance(e, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout, httpx.ProxyError,
                       httpx.UnsupportedProtocol, httpx.LocalProtocolError)):
         return "transport", err
