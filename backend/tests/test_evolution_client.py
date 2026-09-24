@@ -50,7 +50,9 @@ def test_webhook_is_per_instance_with_the_secret_and_all_w1_w2_events(fake_evolu
     call = fake_evolution.calls[-1]
     assert call["path"] == "/webhook/set/rep_u1"
     hook = call["json"]["webhook"]
-    assert hook["url"] == "https://app.smartshape.in/api/webhooks/whatsapp/rep_u1?t=s3cret"
+    # Fix round 1: the secret rides in a header, never in the URL (access logs record URLs).
+    assert hook["url"] == "https://app.smartshape.in/api/webhooks/whatsapp/rep_u1"
+    assert "s3cret" not in hook["url"] and hook["headers"] == {"X-WA-Secret": "s3cret"}
     assert hook["enabled"] is True and hook["byEvents"] is False and hook["base64"] is False
     assert set(hook["events"]) == {"MESSAGES_UPSERT", "MESSAGES_UPDATE", "CONNECTION_UPDATE",
                                    "QRCODE_UPDATED", "SEND_MESSAGE"}

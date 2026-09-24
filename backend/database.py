@@ -144,6 +144,12 @@ async def ensure_wa_indexes(target_db):
     await _i(target_db.wa_number_cache.create_index("phone_e164", unique=True, background=True))
     await _i(target_db.wa_opt_outs.create_index("phone_e164", background=True))
     await _i(target_db.wa_events_raw.create_index([("instance_name", 1), ("received_at", -1)], background=True))
+    # TTLs need a real datetime field. Raw inbound events are kept 30 days (W2 back-fills from
+    # them); a receipt parked for a row still `sending` is useless after a day.
+    await _i(target_db.wa_events_raw.create_index("received_at", expireAfterSeconds=30 * 86400, background=True))
+    await _i(target_db.wa_receipts_pending.create_index("at", expireAfterSeconds=86400, background=True))
+    await _i(target_db.wa_receipts_pending.create_index([("instance_name", 1), ("provider_msg_id", 1)],
+                                                        background=True))
 
 
 async def connect_db():

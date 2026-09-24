@@ -215,6 +215,9 @@ async def ws_today_actions(websocket: WebSocket):
 
 @app.on_event("startup")
 async def startup():
+    # The WhatsApp webhook's legacy `?t=<secret>` must never reach the access log.
+    from routes.wa_routes import install_access_log_mask
+    install_access_log_mask()
     # Unique indexes — wrapped so pre-existing duplicate data can't crash startup
     # (a failure is logged and the app still boots; clean the dupes, then it takes).
     _unique = [(db.users, "email"), (db.dies, "code"), (db.contacts, "contact_id")]

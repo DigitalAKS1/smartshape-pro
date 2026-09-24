@@ -47,12 +47,21 @@ def _norm_phone(phone: str) -> str:
     return digits  # pass through and let Evolution handle it
 
 
+WEBHOOK_SECRET_HEADER = "X-WA-Secret"
+
+
 def webhook_url(instance: str) -> str:
-    """The per-instance webhook Evolution posts to. Read from env at call time so the secret
-    can be rotated with a backend restart and tests can set it."""
+    """The per-instance webhook Evolution posts to. It carries NO secret: a query string lands
+    in every access log (uvicorn, nginx). The secret travels in the X-WA-Secret header that
+    set_webhook registers (webhook_headers)."""
     base = os.getenv("WA_WEBHOOK_BASE", "https://app.smartshape.in").rstrip("/")
-    secret = os.getenv("WA_WEBHOOK_SECRET", "")
-    return f"{base}/api/webhooks/whatsapp/{quote(instance, safe='')}?t={quote(secret, safe='')}"
+    return f"{base}/api/webhooks/whatsapp/{quote(instance, safe='')}"
+
+
+def webhook_headers() -> dict:
+    """Headers Evolution sends with every webhook POST. Read from env at call time so the secret
+    can be rotated with a backend restart (then re-register the webhooks) and tests can set it."""
+    return {WEBHOOK_SECRET_HEADER: os.getenv("WA_WEBHOOK_SECRET", "")}
 
 
 def instance_token(create_response: dict) -> str:
@@ -149,6 +158,7 @@ class EvolutionClient:
         return await self._request("POST", f"/webhook/set/{instance}", token=token, json={"webhook": {
             "enabled": True,
             "url": url or webhook_url(instance),
+            "headers": webhook_headers(),     # Evolution v2 /webhook/set: sent with every POST
             "byEvents": False,     # one URL; the event name is in the body
             "base64": False,       # W2 fetches media explicitly (getBase64FromMediaMessage)
             "events": list(events or WEBHOOK_EVENTS),

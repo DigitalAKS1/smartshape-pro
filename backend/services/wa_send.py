@@ -616,6 +616,46 @@ async def _log_event(row: dict) -> None:
 
 _WEBHOOK_AHEAD = ("delivered", "read", "played")      # statuses a receipt may already have set
 
+# ── Receipts (delivery/read) — forward-only, shared with the webhook (routes/wa_routes.py) ──
+
+STATUS_RANK = {"queued": 0, "sending": 0, "sent": 1, "delivered": 2, "read": 3, "played": 3}
+FAILABLE = ("queued", "sending", "sent")            # a receipt may fail a message only before delivery
+
+
+def _lower_than(new: str, rank: dict = STATUS_RANK, failable=FAILABLE) -> list:
+    """The statuses a row may move FROM to reach `new` (forward-only)."""
+    if new == "failed":
+        return list(failable)
+    return [s for s, r in rank.items() if r < rank.get(new, -1)]
+
+
+async def apply_receipt(db, instance_name: str, pmid: str, new: str, at: str):
+    """One atomic conditional write: two receipts racing can never move a row backwards.
+    Returns the update result (matched_count 0 = no row at a lower status)."""
+    sets = {"status": new}
+    if new == "failed":
+        sets["fail_reason"] = "receipt: ERROR"
+    return await db.wa_messages.update_one(
+        {"instance_name": instance_name, "provider_msg_id": pmid, "status": {"$in": _lower_than(new)}},
+        {"$set": sets, "$push": {"status_history": {"status": new, "at": at, "reason": "receipt"}}})
+
+
+async def apply_parked_receipts(db, row: dict) -> None:
+    """A receipt that arrived while this row still read `sending` (no provider id yet) was parked
+    in wa_receipts_pending by the webhook. Apply it now, lowest status first and `failed` last
+    (evidence of delivery wins), never regressing."""
+    name, pmid = row.get("instance_name"), row.get("provider_msg_id")
+    if not (name and pmid):
+        return
+    parked = await db.wa_receipts_pending.find(
+        {"instance_name": name, "provider_msg_id": pmid}, {"_id": 0}).to_list(50)
+    if not parked:
+        return
+    for r in sorted(parked, key=lambda r: (r.get("status") == "failed", STATUS_RANK.get(r.get("status"), -1))):
+        at = r.get("at")
+        await apply_receipt(db, name, pmid, r["status"], _iso(at) if isinstance(at, datetime) else str(at or ""))
+    await db.wa_receipts_pending.delete_many({"instance_name": name, "provider_msg_id": pmid})
+
 
 async def _merge_into_existing(db, row: dict) -> None:
     """A SEND_MESSAGE webhook (Task 6) recorded this provider id first. That row survives (D9:
@@ -712,6 +752,11 @@ async def _finish(db, row: dict, status: str, reason: str) -> dict:
             log.error("[wa] message %s WAS SENT (provider id %s) but its row could not be updated and "
                       "still reads 'sending': %s", ours, row.get("provider_msg_id"), str(e2)[:160])
     if status == "sent":
+        if row.get("provider_msg_id"):
+            try:
+                await apply_parked_receipts(db, row)
+            except Exception as e:
+                log.warning("[wa] parked receipts for %s not applied: %s", row["message_id"], str(e)[:160])
         await _log_event(row)
     return {"status": status, "message_id": row["message_id"],
             "instance_name": row.get("instance_name") or "", "reason": reason}
