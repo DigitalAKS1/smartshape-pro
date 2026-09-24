@@ -834,3 +834,197 @@ def test_the_per_run_sticker_print_is_scoped(db, monkeypatch):
         await crm.mail_run_stickers("r1", FakeRequest())
         assert sorted(seen["ids"]) == ["t1", "t4"], "admin: all but the unaddressable t3"
     _run(go())
+
+
+# ── Fix round 4: run creation, run views and dispatch routes are scoped ──────
+
+def test_a_rep_builds_a_run_only_from_her_schools(db, monkeypatch):
+    async def go():
+        await _seed(db)
+        _as(monkeypatch, REP)
+        run = await crm.create_mail_run(FakeRequest(body={
+            "name": "Mine", "school_ids": ["s1", "s2", "s1"]}))
+        assert run["school_ids"] == ["s1"]
+        assert run["skipped_not_visible"] == ["s2"]
+        assert await db.mail_touches.count_documents({"run_id": run["run_id"]}) == 1
+        assert await db.mail_touches.count_documents(
+            {"run_id": run["run_id"], "school_id": "s2"}) == 0
+    _run(go())
+
+
+def test_a_run_of_only_colleagues_schools_is_refused(db, monkeypatch):
+    async def go():
+        await _seed(db)
+        _as(monkeypatch, REP)
+        before = await db.mail_runs.count_documents({})
+        with pytest.raises(crm.HTTPException) as e:
+            await crm.create_mail_run(FakeRequest(body={"name": "x", "school_ids": ["s2"]}))
+        assert e.value.status_code == 400
+        assert await db.mail_runs.count_documents({}) == before, "no empty run left behind"
+    _run(go())
+
+
+def test_an_admin_builds_a_run_from_any_school(db, monkeypatch):
+    async def go():
+        await _seed(db)
+        _as(monkeypatch, ADMIN)
+        run = await crm.create_mail_run(FakeRequest(body={
+            "name": "All", "school_ids": ["s1", "s2"]}))
+        assert run["school_ids"] == ["s1", "s2"]
+        assert run["skipped_not_visible"] == []
+    _run(go())
+
+
+def test_building_a_run_never_restamps_or_duplicates_a_colleagues_lead(db, monkeypatch):
+    """s2 is visible to the rep only because she has her OWN machine deal there;
+    bde's untyped deal at s2 is not hers. Mailing s2 untyped must leave bde's
+    deal alone and must not open a twin beside it."""
+    async def go():
+        await _seed(db)
+        await db.leads.insert_many([
+            {"lead_id": "L_own", "school_id": "s2", "assigned_to": "parul@smartshape.in",
+             "deal_type": "machine", "stage": "new", "source": "Referral"},
+            {"lead_id": "L_bde", "school_id": "s2", "assigned_to": "bde@smartshape.in",
+             "deal_type": "", "stage": "new", "source": "Referral"},
+        ])
+        _as(monkeypatch, REP)
+        run = await crm.create_mail_run(FakeRequest(body={"name": "x", "school_ids": ["s2"]}))
+        assert run["school_ids"] == ["s2"], "s2 IS visible to her, via her own lead"
+        bde = await db.leads.find_one({"lead_id": "L_bde"}, {"_id": 0})
+        assert bde["source"] == "Referral", "a colleague's lead was re-stamped"
+        assert await db.leads.count_documents({"school_id": "s2"}) == 2, "a twin deal was opened"
+        t = await db.mail_touches.find_one({"run_id": run["run_id"]}, {"_id": 0})
+        assert t["lead_id"] == ""
+    _run(go())
+
+
+def test_building_a_run_restamps_a_lead_the_rep_can_see(db, monkeypatch):
+    async def go():
+        await _seed(db)
+        # bde's lead at PARUL's school: visible to her through the school she owns.
+        await db.leads.insert_one(
+            {"lead_id": "L1", "school_id": "s1", "assigned_to": "bde@smartshape.in",
+             "deal_type": "", "stage": "new", "source": "Referral"})
+        _as(monkeypatch, REP)
+        run = await crm.create_mail_run(FakeRequest(body={"name": "x", "school_ids": ["s1"]}))
+        t = await db.mail_touches.find_one({"run_id": run["run_id"]}, {"_id": 0})
+        assert t["lead_id"] == "L1"
+        assert (await db.leads.find_one({"lead_id": "L1"}))["source"] == "Direct Mail"
+    _run(go())
+
+
+def test_a_rep_sees_only_her_pieces_schools_and_counts(db, monkeypatch):
+    async def go():
+        await _seed(db)
+        await _colleague_piece_in_r1(db)
+        await db.mail_runs.update_one({"run_id": "r1"}, {"$set": {
+            "school_ids": ["s1", "s2"], "counts": {"sent": 3, "responded": 2}}})
+        await db.mail_touches.update_one({"touch_id": "t4"}, {"$set": {"responded": True}})
+        _as(monkeypatch, REP)
+        run = await crm.get_mail_run("r1", FakeRequest())
+        assert run["school_ids"] == ["s1"]
+        assert run["counts"]["sent"] == 1
+        assert run["counts"]["responded"] == 0, "a colleague's response leaked"
+        listed = {r["run_id"]: r for r in await crm.get_mail_runs(FakeRequest())}
+        assert listed["r1"]["school_ids"] == ["s1"]
+        assert listed["r1"]["counts"]["sent"] == 1
+        _as(monkeypatch, ADMIN)
+        run = await crm.get_mail_run("r1", FakeRequest())
+        assert run["school_ids"] == ["s1", "s2"]
+        assert run["counts"]["sent"] == 3, "an admin sees the run as stored"
+    _run(go())
+
+
+async def _seed_dispatch_leads(db):
+    """L1 is parul's; L2 is bde's. pd_1 (linked to touch t1) is parul's lead;
+    pd_c is a contact-keyed drip dispatch for her contact c1; pd_b is bde's."""
+    await db.leads.insert_many([
+        {"lead_id": "L1", "school_id": "s1", "assigned_to": "parul@smartshape.in",
+         "stage": "new", "contact_name": "R Sharma"},
+        {"lead_id": "L2", "school_id": "s2", "assigned_to": "bde@smartshape.in",
+         "stage": "new", "contact_name": "Other"},
+    ])
+    await db.physical_dispatches.update_one({"dispatch_id": "pd_1"},
+                                            {"$set": {"lead_id": "L1"}})
+    await db.physical_dispatches.insert_many([
+        {"dispatch_id": "pd_c", "lead_id": "", "contact_id": "c1", "touch_id": "",
+         "sent_date": "", "courier_name": "", "created_by": "system"},
+        {"dispatch_id": "pd_b", "lead_id": "L2", "touch_id": "", "sent_date": "2026-09-01",
+         "courier_name": "DTDC", "created_by": "bde@smartshape.in"},
+    ])
+
+
+def test_the_dispatch_list_follows_lead_and_contact_visibility(db, monkeypatch):
+    async def go():
+        await _seed(db)
+        await _seed_dispatch_leads(db)
+        _as(monkeypatch, REP)
+        ids = {d["dispatch_id"] for d in await crm.get_physical_dispatches(FakeRequest())}
+        assert ids == {"pd_1", "pd_c"}, ids
+        named = await crm.get_physical_dispatches(FakeRequest(), lead_id="L2")
+        assert named == [], "?lead_id= narrows, it never widens"
+        _as(monkeypatch, ADMIN)
+        ids = {d["dispatch_id"] for d in await crm.get_physical_dispatches(FakeRequest())}
+        assert {"pd_1", "pd_2", "pd_c", "pd_b"} <= ids
+        named = await crm.get_physical_dispatches(FakeRequest(), lead_id="L2")
+        assert [d["dispatch_id"] for d in named] == ["pd_b"]
+    _run(go())
+
+
+def test_a_rep_cannot_edit_or_delete_a_colleagues_dispatch(db, monkeypatch):
+    async def go():
+        await _seed(db)
+        await _seed_dispatch_leads(db)
+        _as(monkeypatch, REP)
+        with pytest.raises(crm.HTTPException) as e:
+            await crm.update_physical_dispatch("pd_b", FakeRequest(body={"tracking_number": "X"}))
+        assert e.value.status_code == 404
+        with pytest.raises(crm.HTTPException) as e:
+            await crm.delete_physical_dispatch("pd_b", FakeRequest())
+        assert e.value.status_code == 404
+        d = await db.physical_dispatches.find_one({"dispatch_id": "pd_b"}, {"_id": 0})
+        assert d and not d.get("tracking_number")
+        await crm.delete_physical_dispatch("pd_c", FakeRequest())   # her contact's: fine
+        assert not await db.physical_dispatches.find_one({"dispatch_id": "pd_c"})
+    _run(go())
+
+
+def test_a_linked_dispatchs_posting_fields_come_only_from_the_touch(db, monkeypatch):
+    async def go():
+        await _seed(db)
+        await _seed_dispatch_leads(db)
+        _as(monkeypatch, ADMIN)                 # even an admin: this is D4, not access
+        for field, value in (("sent_date", "2026-09-20"), ("courier_name", "Blue Dart")):
+            with pytest.raises(crm.HTTPException) as e:
+                await crm.update_physical_dispatch("pd_1", FakeRequest(body={field: value}))
+            assert e.value.status_code == 409, field
+        d = await db.physical_dispatches.find_one({"dispatch_id": "pd_1"}, {"_id": 0})
+        assert d["sent_date"] == "" and d["courier_name"] == ""
+        # The edit form round-trips every field: re-sending the SAME courier is
+        # not a change, and the other fields still save.
+        out = await crm.update_physical_dispatch("pd_1", FakeRequest(body={
+            "courier_name": "", "tracking_number": "TRK1", "received_confirmed": True}))
+        assert out["tracking_number"] == "TRK1"
+        assert out["received_confirmed"] is True
+        # A manual dispatch (no touch) keeps full control of its own posting fields.
+        out = await crm.update_physical_dispatch("pd_b", FakeRequest(body={
+            "sent_date": "2026-09-21", "courier_name": "Blue Dart"}))
+        assert out["sent_date"] == "2026-09-21"
+    _run(go())
+
+
+def test_a_rep_creates_dispatches_only_for_leads_she_can_see(db, monkeypatch):
+    async def go():
+        await _seed(db)
+        await _seed_dispatch_leads(db)
+        _as(monkeypatch, REP)
+        with pytest.raises(crm.HTTPException) as e:
+            await crm.create_physical_dispatch(FakeRequest(body={"lead_id": "L2"}))
+        assert e.value.status_code == 404
+        assert await db.physical_dispatches.count_documents({"lead_id": "L2"}) == 1
+        out = await crm.create_physical_dispatch(FakeRequest(body={"lead_id": "L1"}))
+        assert out["lead_id"] == "L1"
+        _as(monkeypatch, ADMIN)
+        out = await crm.create_physical_dispatch(FakeRequest(body={"lead_id": "L2"}))
+        assert out["lead_id"] == "L2"
+    _run(go())

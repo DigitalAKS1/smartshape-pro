@@ -125,15 +125,19 @@ export default function OfflineMail() {
     if (!runForm.count) { toast.error('This area has no schools — recount it first'); return; }
     setBusy(true);
     try {
-      await mailRuns.create({
+      const r = await mailRuns.create({
         name: runForm.name, area_id: runForm.area_id, piece_type: runForm.piece_type,
         school_ids: runForm.school_ids, courier: runForm.courier,
         tracking_no: runForm.tracking_no, send_date: runForm.send_date,
       });
-      toast.success(`Mail run created for ${runForm.count} schools`);
+      // An area spans every school in a pincode/city; a rep's run keeps only
+      // hers. Say what the server KEPT, not what the area held.
+      const skipped = (r?.data?.skipped_not_visible || []).length;
+      toast.success(`Mail run created for ${runForm.count - skipped} schools`
+        + (skipped ? ` · ${skipped} in this area are not yours and were left out` : ''));
       setRunForm(null);
       load();
-    } catch { toast.error('Failed to create run'); }
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Failed to create run'); }
     finally { setBusy(false); }
   };
 

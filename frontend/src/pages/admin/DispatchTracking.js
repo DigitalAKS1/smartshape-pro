@@ -100,7 +100,7 @@ export default function DispatchTracking() {
       setDispatches(prev => prev.map(d => d.dispatch_id === dispatch_id ? { ...d, ...editForm } : d));
       setEditingId(null);
       toast.success('Dispatch updated');
-    } catch { toast.error('Failed to update'); }
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Failed to update'); }
     finally { setSavingEdit(false); }
   };
 
@@ -212,7 +212,11 @@ export default function DispatchTracking() {
                         <td className={`py-3 px-4 hidden sm:table-cell text-sm ${textSec} capitalize`}>{d.material_type || '—'}</td>
                         <td className={`py-3 px-4 hidden md:table-cell text-sm ${textSec}`}>
                           {editing ? (
-                            <select value={editForm.courier_name} onChange={e => setEditForm({ ...editForm, courier_name: e.target.value })} className={`h-8 px-2 rounded text-xs ${inputCls}`}>
+                            <select value={editForm.courier_name} onChange={e => setEditForm({ ...editForm, courier_name: e.target.value })} className={`h-8 px-2 rounded text-xs ${inputCls} disabled:opacity-60`}
+                              // D4: a drip piece's courier comes from marking it posted in Offline Mail → To post.
+                              disabled={!!d.touch_id}
+                              title={d.touch_id ? 'Set by marking it posted in Offline Mail → To post' : ''}
+                              data-testid={`dispatch-courier-${d.dispatch_id}`}>
                               <option value="">— Courier —</option>
                               {COURIERS.map(c => <option key={c} value={c}>{c}</option>)}
                             </select>
