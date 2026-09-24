@@ -125,7 +125,7 @@ def warmup_day(inst: dict, now: datetime) -> int:
 
 def daily_cap(inst: dict, cfg: dict, now: datetime) -> int:
     """D5 warm-up: 20/day, doubling every 3 days, capped at 200 — or the admin's override."""
-    if inst.get("daily_cap_override"):
+    if inst.get("daily_cap_override") is not None:      # 0 is a real override: "blocked"
         return int(inst["daily_cap_override"])
     if not inst.get("warmup_started_at"):
         return int(cfg["warmup_start_cap"])
@@ -400,17 +400,24 @@ async def _ledger(db, name: str, now: datetime) -> dict:
     return await db.wa_send_ledger.find_one({"instance_name": name, "day": day}, {"_id": 0}) or {}
 
 
-async def _claim_gap(db, name: str, now: datetime, cfg: dict) -> bool:
-    """Atomically take the next send slot on this number: succeeds only if the last send was at
-    least a random 8–25 s ago. Two concurrent callers cannot both win."""
+async def _claim_gap(db, name: str, now: datetime, cfg: dict, gap: Optional[float] = None):
+    """Atomically take the next send slot on this number: succeeds only if the last send (by
+    anyone — a direct send, a drip, any drainer) was at least `gap` seconds ago (default: a
+    random 8–25 s). Two concurrent callers cannot both win.
+    -> (True, None) | (False, the instant the slot opens)."""
     if float(cfg["gap_max_s"]) <= 0:
-        return True
-    gap = _jitter(float(cfg["gap_min_s"]), float(cfg["gap_max_s"]))
+        return True, None
+    if gap is None:
+        gap = _jitter(float(cfg["gap_min_s"]), float(cfg["gap_max_s"]))
     res = await db.wa_send_ledger.update_one(
         {"instance_name": name, "day": ist_day(now),
          "$or": [{"last_sent_at": None}, {"last_sent_at": {"$lte": _iso(now - timedelta(seconds=gap))}}]},
         {"$set": {"last_sent_at": _iso(now)}})
-    return getattr(res, "modified_count", 0) == 1
+    if getattr(res, "modified_count", 0) == 1:
+        return True, None
+    led = await db.wa_send_ledger.find_one({"instance_name": name, "day": ist_day(now)}, {"_id": 0}) or {}
+    last = _parse(led["last_sent_at"]) if led.get("last_sent_at") else now
+    return False, max(now, last + timedelta(seconds=gap))
 
 
 async def _contacted_today(db, name: str, to_jid: str, now: datetime, cfg: dict) -> bool:
@@ -431,16 +438,17 @@ async def _contacted_today(db, name: str, to_jid: str, now: datetime, cfg: dict)
 #   one per contact per number per day  –          –              –           queue
 #   jittered gap                        –        queue          queue         queue
 
-async def _policy(db, row: dict, inst: Optional[dict], cfg: dict, *, from_queue: bool = False):
+async def _policy(db, row: dict, inst: Optional[dict], cfg: dict, *, gap_s: Optional[float] = None):
     """-> ("send", "", None) | ("skip", reason, None) | ("queue", reason, send_after).
 
-    `from_queue`: the drainer is sending this row from the number it was queued on; the drainer
-    enforces the gap itself (it sleeps between sends), so the gap claim is not taken here."""
+    `gap_s`: the gap to claim on this number (the drainer passes the one it has already slept);
+    None draws a fresh random 8–25 s. Every automated send claims the slot — the drainer too."""
     kind = row["kind"]
     now = _now()
     automated = kind not in MANUAL_KINDS                # chat: a person pressed send
     customer_facing = automated and kind not in INTERNAL_KINDS
-    if automated and not (kind in INTERNAL_KINDS and await _is_staff_phone(db, row["to_e164"])):
+    to_staff = kind in INTERNAL_KINDS and await _is_staff_phone(db, row["to_e164"])
+    if automated and not to_staff:
         # our own staff: an opt-out does not apply to an internal digest/alert
         if await is_opted_out(db, e164=row["to_e164"], contact_id=row["contact_id"],
                               school_id=row["school_id"], lead_id=row["lead_id"]):
@@ -462,15 +470,17 @@ async def _policy(db, row: dict, inst: Optional[dict], cfg: dict, *, from_queue:
             nxt = next_business_open(nxt, cfg) or nxt
         return "queue", "hourly_cap", nxt
     if automated:
-        if int(led.get("sent_count", 0)) >= daily_cap(inst, cfg, now):
+        # an internal digest/alert to our own staff is exempt from the warm-up/daily cap (not
+        # from the hourly cap or the gap)
+        if not to_staff and int(led.get("sent_count", 0)) >= daily_cap(inst, cfg, now):
             return "queue", "daily_cap", _tomorrow_open(now, cfg)
         if kind in MARKETING_KINDS and await _contacted_today(db, inst["instance_name"], row["to_jid"], now, cfg):
             return "queue", "per_contact_per_day", _tomorrow_open(now, cfg)
-        if not from_queue and not await _claim_gap(db, inst["instance_name"], now, cfg):
-            nxt = now + timedelta(seconds=_jitter(float(cfg["gap_min_s"]), float(cfg["gap_max_s"])))
+        ok, opens_at = await _claim_gap(db, inst["instance_name"], now, cfg, gap_s)
+        if not ok:
             if customer_facing:
-                nxt = next_business_open(nxt, cfg) or nxt
-            return "queue", "gap", nxt
+                opens_at = next_business_open(opens_at, cfg) or opens_at
+            return "queue", "gap", opens_at
     return "send", "", None
 
 
@@ -634,10 +644,27 @@ async def _merge_into_existing(db, row: dict) -> None:
                   ours, existing["message_id"], ours, str(e)[:160])
 
 
+class ClaimLost(Exception):
+    """A drainer's claim on a queued row was taken over (the sweeper requeued it after the claim
+    went stale and another worker claimed it). The stalled worker must not touch the row."""
+
+
+async def _save_row(db, row: dict) -> None:
+    """$set the whole row. A row the drainer claimed is written only while this worker's
+    `claim_token` is still on it - otherwise ClaimLost, and nothing is written."""
+    tok = row.get("claim_token")
+    if not tok:
+        await db.wa_messages.update_one({"message_id": row["message_id"]}, {"$set": row}, upsert=True)
+        return
+    res = await db.wa_messages.update_one({"message_id": row["message_id"], "claim_token": tok}, {"$set": row})
+    if getattr(res, "matched_count", 0) == 0:
+        raise ClaimLost(f"{row['message_id']}: claim {tok} is no longer held")
+
+
 async def _write_row(db, row: dict) -> None:
     from pymongo.errors import DuplicateKeyError
     try:
-        await db.wa_messages.update_one({"message_id": row["message_id"]}, {"$set": row}, upsert=True)
+        await _save_row(db, row)
     except DuplicateKeyError:
         if not row.get("provider_msg_id"):
             raise
@@ -650,7 +677,7 @@ async def _mark_sending(db, row: dict) -> None:
     row["status"] = "sending"
     row["sending_at"] = now          # the ACTUAL send attempt (a queued row's created_at is older)
     row.setdefault("status_history", []).append({"status": "sending", "at": now, "reason": ""})
-    await db.wa_messages.update_one({"message_id": row["message_id"]}, {"$set": row}, upsert=True)
+    await _save_row(db, row)         # ClaimLost here means: do NOT call the provider
 
 
 async def _mark_sent_minimal(db, message_id: str, row: dict) -> None:
@@ -695,7 +722,7 @@ async def _finish_queued(db, row: dict, reason: str, send_after: datetime) -> di
     row["send_after"] = _iso(send_after)
     row["queue_reason"] = reason
     row.setdefault("status_history", []).append({"status": "queued", "at": _iso(_now()), "reason": reason})
-    await db.wa_messages.update_one({"message_id": row["message_id"]}, {"$set": row}, upsert=True)
+    await _save_row(db, row)
     return {"status": "queued", "message_id": row["message_id"],
             "instance_name": row.get("instance_name") or "", "reason": reason}
 
@@ -737,7 +764,13 @@ async def _deliver(db, row: dict, inst: Optional[dict], cfg: dict) -> dict:
     return await _finish(db, row, "sent", "")
 
 
-async def _route_and_send(db, row: dict, cfg: dict, *, from_queue: bool) -> dict:
+_HOLD_REASONS = frozenset({"no_sender", "sender_not_connected"})   # may come back (resume/reconnect)
+QUEUE_HOLD_HOURS = 72
+QUEUE_HOLD_RETRY_S = 60          # a held row is looked at again on the next drainer pass
+
+
+async def _route_and_send(db, row: dict, cfg: dict, *, from_queue: bool,
+                          gap_s: Optional[float] = None) -> dict:
     queued_on = row.get("instance_name") or ""          # the drainer's number, when from_queue
     inst, why, fallback = await _resolve_sender(db, owner_email=row["owner_email"] or None, channel=row["channel"])
     row["fallback_reason"] = fallback
@@ -755,13 +788,21 @@ async def _route_and_send(db, row: dict, cfg: dict, *, from_queue: bool) -> dict
         row["fallback_reason"] = "owner_warming_up"
     if inst is None:
         if not (why == "no_sender" and cfg["fallback_provider"] == "autosender" and await _autosender_ready(db)):
+            if from_queue and why in _HOLD_REASONS:
+                # A queued row whose sender is paused/down with no fallback waits (next pass)
+                # until it is sent, the number is resumed, or it is 72 h old.
+                if _now() - _parse(row["created_at"]) < timedelta(hours=QUEUE_HOLD_HOURS):
+                    return await _finish_queued(db, row, "sender_unavailable",
+                                                _now() + timedelta(seconds=QUEUE_HOLD_RETRY_S))
+                return await _finish(db, row, "skipped", "sender_unavailable")
             return await _finish(db, row, "skipped", why)
         row["instance_name"] = ""
     else:
         _stamp_sender(row, inst)
-    # A queued row re-routed to another number takes that number's gap slot like any send.
+    # The drainer claims the gap it already slept on its own number; a queued row re-routed to
+    # another number draws a fresh gap there like any send.
     same_number = from_queue and inst is not None and inst["instance_name"] == queued_on
-    decision, reason, after = await _policy(db, row, inst, cfg, from_queue=same_number)
+    decision, reason, after = await _policy(db, row, inst, cfg, gap_s=gap_s if same_number else None)
     if decision == "skip":
         return await _finish(db, row, "skipped", reason)
     if decision == "queue":
@@ -805,18 +846,23 @@ async def send_whatsapp(db, *, to: str, text: str = "", media: Optional[dict] = 
 # ── The queue drainer (scheduler.wa_queue_loop, every minute) ─────────────────
 # Same two guards as the drip executor (scheduler.py _DRIP_LOCK / _claim_enrollment):
 # an in-process lock so overlapping passes collapse, and a per-row compare-and-set claim
-# (queued -> sending + claimed_at) so two workers can never send one row.
+# (queued -> sending + claimed_at + a fresh claim_token) so two workers can never send one row.
+# Every write the worker makes afterwards is conditioned on its claim_token (_save_row), so a
+# worker that stalled past the reclaim window cannot complete a row somebody else now owns.
 #
 # A `sending` row is one of two things, told apart by `sending_at` (stamped by _mark_sending
 # immediately before the provider call):
 #   * no `sending_at` — only CLAIMED by a drainer that died before it tried to send. Nothing
-#     went out; after QUEUE_CLAIM_MINUTES it goes back to `queued`.
+#     went out; after QUEUE_CLAIM_MINUTES it goes back to `queued` (at most MAX_DRAIN_ERRORS
+#     times, then `failed(drain_error)`).
 #   * `sending_at` set — the provider WAS called and no result was recorded (crash mid-send).
 #     It may have been delivered, so it is NEVER resent: after QUEUE_CLAIM_MINUTES it becomes
 #     `sent` if there is evidence it went (another row holds its provider id, or its
 #     engagement event exists), else `failed` with reason "uncertain: …".
 _QUEUE_LOCK = asyncio.Lock()
 QUEUE_CLAIM_MINUTES = 10
+MAX_DRAIN_ERRORS = 3             # requeues after a drain error before the row is failed
+DRAIN_ERROR_RETRY_MINUTES = 5
 _UNCERTAIN_REASON = "uncertain: no result recorded for the send"
 
 
@@ -829,12 +875,30 @@ async def _went_out(db, row: dict) -> bool:
         {"$or": [{"dedup_key": f"wa:{row['message_id']}"}, {"meta.message_id": row["message_id"]}]}, {"_id": 1}))
 
 
+async def _release_unsent(db, row: dict, now: datetime, why: str, *, retry_at: datetime) -> None:
+    """A claimed row that never reached the provider: back to the queue (a fresh claim is
+    needed), or `failed(drain_error)` once it has errored more than MAX_DRAIN_ERRORS times.
+    Compare-and-set on the claim this worker (or the stale claim the sweeper saw) holds."""
+    errors = int(row.get("drain_errors") or 0) + 1
+    if errors > MAX_DRAIN_ERRORS:
+        upd = {"status": "failed", "fail_reason": "drain_error", "send_after": None}
+        hist = {"status": "failed", "at": _iso(now), "reason": f"drain_error: {why}"[:200]}
+    else:
+        upd = {"status": "queued", "send_after": _iso(retry_at)}
+        hist = {"status": "queued", "at": _iso(now), "reason": f"drain_retry: {why}"[:200]}
+    upd.update({"drain_errors": errors, "claim_token": None})
+    await db.wa_messages.update_one(
+        {"message_id": row["message_id"], "status": "sending", "sending_at": None,
+         "claim_token": row.get("claim_token")},
+        {"$set": upd, "$push": {"status_history": hist}})
+
+
 async def _sweep_stale_sending(db, now: datetime) -> None:
     cutoff = _iso(now - timedelta(minutes=QUEUE_CLAIM_MINUTES))
-    # 1. claimed, never attempted: back to the queue
-    await db.wa_messages.update_many(
-        {"status": "sending", "sending_at": None, "claimed_at": {"$lt": cutoff}},
-        {"$set": {"status": "queued"}})
+    # 1. claimed, never attempted: back to the queue (bounded)
+    async for row in db.wa_messages.find(
+            {"status": "sending", "sending_at": None, "claimed_at": {"$lt": cutoff}}, {"_id": 0}):
+        await _release_unsent(db, row, now, "claim went stale", retry_at=now)
     # 2. attempted, no outcome: sent (with evidence) or failed(uncertain) — never resent
     async for row in db.wa_messages.find({"status": "sending", "sending_at": {"$lt": cutoff}}, {"_id": 0}):
         went = await _went_out(db, row)
@@ -867,29 +931,54 @@ async def run_wa_queue_pass(db, *, budget_s: float = 50.0) -> dict:
 
 
 async def _drain_instance(db, name: str, *, deadline: datetime) -> int:
-    """Oldest first, one at a time per number, a jittered pause after each real send."""
+    """Oldest first, one at a time per number. Before every send the drainer takes the number's
+    gap slot through the same _claim_gap compare-and-set as every other sender (so a drip or a
+    rerouted row that used this number a moment ago is respected); after each real send it
+    sleeps the gap its next send will claim."""
     cfg = await get_wa_settings(db)
     done = 0
+    gap = _jitter(float(cfg["gap_min_s"]), float(cfg["gap_max_s"]))    # the gap the next send claims
     while _now() < deadline:
         now_iso = _iso(_now())
+        token = uuid.uuid4().hex
         row = await db.wa_messages.find_one_and_update(
             {"status": "queued", "instance_name": name, "send_after": {"$lte": now_iso}},
-            {"$set": {"status": "sending", "claimed_at": now_iso}},
+            {"$set": {"status": "sending", "claimed_at": now_iso, "claim_token": token},
+             "$inc": {"claim_count": 1}},
             sort=[("created_at", 1)], projection={"_id": 0})
         if not row:
             break
-        # `row` is the document before the claim. It goes through the SAME path as a fresh send
-        # (ruling 3): the sender is re-resolved (the owner's number may have gone down since it
-        # was queued) and every check runs again — opt-out, consent, hours, caps. Only the gap
-        # is not claimed for this number: this loop enforces it by sleeping.
+        # `row` is the document before the claim; carry the claim so every write is fenced by it.
+        row.update({"status": "sending", "claimed_at": now_iso, "claim_token": token,
+                    "claim_count": int(row.get("claim_count") or 0) + 1})
+        # It goes through the SAME path as a fresh send (ruling 3): the sender is re-resolved
+        # (the owner's number may have gone down since it was queued) and every check runs
+        # again — opt-out, consent, hours, caps, gap.
         try:
-            res = await _route_and_send(db, row, cfg, from_queue=True)
+            res = await _route_and_send(db, row, cfg, from_queue=True, gap_s=gap)
+        except ClaimLost as e:
+            log.warning("[wa-queue] %s", e)
+            continue
         except Exception as e:
-            # Left `sending`: the sweeper requeues it (never attempted) or settles it (attempted).
             log.error("[wa-queue] %s on %s: %s", row.get("message_id"), name, str(e)[:160])
+            cur = await db.wa_messages.find_one({"message_id": row["message_id"], "claim_token": token},
+                                                {"_id": 0}) or {}
+            if cur.get("status") == "sending" and not cur.get("sending_at"):
+                await _release_unsent(db, cur, _now(), str(e)[:120] or type(e).__name__,
+                                      retry_at=_now() + timedelta(minutes=DRAIN_ERROR_RETRY_MINUTES))
+            # else: the provider was called — the sweeper settles it (never resent)
             done += 1
+            continue
+        if res["status"] == "queued" and res["reason"] == "gap" and res["instance_name"] == name:
+            # Someone else sent from this number inside the gap: wait for the slot if this pass
+            # still has time, else leave it queued with send_after = the slot.
+            opens = _parse(row["send_after"])
+            if opens > deadline:
+                break
+            await _sleep(max(0.5, (opens - _now()).total_seconds()))
             continue
         done += 1
         if res["status"] == "sent":
-            await _sleep(_jitter(float(cfg["gap_min_s"]), float(cfg["gap_max_s"])))
+            gap = _jitter(float(cfg["gap_min_s"]), float(cfg["gap_max_s"]))
+            await _sleep(gap)
     return done

@@ -92,4 +92,4 @@ def test_wa_indexes_include_the_partial_unique_provider_key_and_the_ledger_key()
     assert key["partialFilterExpression"] == {"provider_msg_id": {"$type": "string"}}
     assert by[("wa_send_ledger", str([("instance_name", 1), ("day", 1)]))]["unique"] is True
     assert by[("wa_instances", str("instance_name"))]["unique"] is True
-    assert ("wa_messages", str([("status", 1), ("instance_name", 1), ("send_after", 1)])) in by
+    assert ("wa_messages", str([("status", 1), ("instance_name", 1), ("send_after", 1), ("created_at", 1)])) in by

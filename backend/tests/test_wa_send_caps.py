@@ -432,3 +432,190 @@ def test_wa_queue_loop_is_started_by_the_scheduler():
     import scheduler
     assert inspect.iscoroutinefunction(scheduler.wa_queue_loop)
     assert "wa_queue_loop()" in inspect.getsource(scheduler.start_scheduler)
+
+
+# ── Fix round 1 ──────────────────────────────────────────────────────────────
+
+async def _queue_one_overnight(db, wa_env, text="queued", **kw):
+    wa_env.clock["now"] = _at(2026, 9, 24, 14, 30)                    # 20:00 IST — queues
+    res = await send_whatsapp(db, to="9811111111", text=text, kind="dispatch", **kw)
+    assert res["status"] == "queued"
+    return res["message_id"]
+
+
+def test_the_drainer_waits_for_the_gap_after_an_out_of_band_send(wa_env):           # fix 1
+    db = wa_env.db
+
+    async def go():
+        await seed_wa(db, settings={"gap_min_s": 10, "gap_max_s": 10})
+        mid = await _queue_one_overnight(db, wa_env)
+        t = _at(2026, 9, 25, 3, 35)
+        wa_env.clock["now"] = t
+        oob = await send_whatsapp(db, to="9822222222", text="oob", kind="dispatch")   # e.g. a drip
+        assert oob["status"] == "sent"
+        await ws.run_wa_queue_pass(db)
+        assert [s["text"] for s in wa_env.evo.sends] == ["oob", "queued"]
+        assert wa_env.clock["slept"][0] == 10                                        # waited for the slot
+        row = await db.wa_messages.find_one({"message_id": mid}, {"_id": 0})
+        assert row["status"] == "sent" and row["sent_at"] == (t + timedelta(seconds=10)).isoformat()
+    _run(go())
+
+
+def test_the_drainer_requeues_to_the_slot_when_the_pass_has_no_time_left(wa_env):   # fix 1
+    db = wa_env.db
+
+    async def go():
+        await seed_wa(db, settings={"gap_min_s": 10, "gap_max_s": 10})
+        mid = await _queue_one_overnight(db, wa_env)
+        t = _at(2026, 9, 25, 3, 35)
+        wa_env.clock["now"] = t
+        await send_whatsapp(db, to="9822222222", text="oob", kind="dispatch")
+        await ws.run_wa_queue_pass(db, budget_s=5)
+        row = await db.wa_messages.find_one({"message_id": mid}, {"_id": 0})
+        assert (row["status"], row["queue_reason"]) == ("queued", "gap")
+        assert row["send_after"] == (t + timedelta(seconds=10)).isoformat()
+        assert [s["text"] for s in wa_env.evo.sends] == ["oob"]
+    _run(go())
+
+
+def test_a_row_that_errors_before_the_send_is_requeued_three_times_then_failed(wa_env, monkeypatch):  # fix 2
+    db = wa_env.db
+
+    async def go():
+        await seed_wa(db)
+        mid = await _queue_one_overnight(db, wa_env)
+
+        async def _boom(*a, **k):
+            raise RuntimeError("policy blew up")
+        monkeypatch.setattr(ws, "_policy", _boom)
+        wa_env.clock["now"] = _at(2026, 9, 25, 3, 35)
+        seen = []
+        for _ in range(4):
+            await ws.run_wa_queue_pass(db)
+            row = await db.wa_messages.find_one({"message_id": mid}, {"_id": 0})
+            seen.append((row["status"], row.get("drain_errors"), row.get("claim_count")))
+            wa_env.clock["now"] += timedelta(minutes=5)
+        assert seen == [("queued", 1, 1), ("queued", 2, 2), ("queued", 3, 3), ("failed", 4, 4)]
+        assert row["fail_reason"] == "drain_error" and wa_env.evo.sends == []
+    _run(go())
+
+
+def test_a_stalled_worker_cannot_complete_a_row_another_worker_resent(wa_env, monkeypatch):     # fix 3
+    db = wa_env.db
+    gate = {"ev": None}
+    calls = {"n": 0}
+    orig = ws._policy
+
+    async def _slow_first(*a, **k):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            await gate["ev"].wait()                                   # worker A stalls here
+        return await orig(*a, **k)
+
+    async def go():
+        gate["ev"] = asyncio.Event()
+        await seed_wa(db)
+        mid = await _queue_one_overnight(db, wa_env)
+        monkeypatch.setattr(ws, "_policy", _slow_first)               # A's _policy call is #1
+        wa_env.clock["now"] = _at(2026, 9, 25, 3, 35)
+        a = asyncio.create_task(ws._drain_instance(db, COMPANY, deadline=wa_env.clock["now"] + timedelta(hours=1)))
+        while calls["n"] == 0:
+            await asyncio.sleep(0)
+        claim_a = (await db.wa_messages.find_one({"message_id": mid}))["claim_token"]
+        wa_env.clock["now"] += timedelta(minutes=11)
+        await ws.run_wa_queue_pass(db)                                # worker B: sweep, reclaim, send
+        row = await db.wa_messages.find_one({"message_id": mid}, {"_id": 0})
+        assert row["status"] == "sent" and row["claim_token"] != claim_a and len(wa_env.evo.sends) == 1
+        gate["ev"].set()
+        await a                                                       # A resumes: ClaimLost, no send
+        assert len(wa_env.evo.sends) == 1
+        after = await db.wa_messages.find_one({"message_id": mid}, {"_id": 0})
+        assert after["status"] == "sent" and after["status_history"] == row["status_history"]
+    _run(go())
+
+
+def test_daily_cap_override_zero_blocks_the_number(wa_env):                          # fix 4
+    db = wa_env.db
+    now = _at(2026, 9, 24, 5, 30)
+    assert ws.daily_cap({"warmup_started_at": now.isoformat(), "daily_cap_override": 0}, dict(WA_DEFAULTS), now) == 0
+
+    async def go():
+        await seed_wa(db, company=None)
+        await seed_instance(db, COMPANY, kind="company", phone="919000000001", daily_cap_override=0)
+        a = await send_whatsapp(db, to="9811111111", text="x", kind="dispatch")
+        c = await send_whatsapp(db, to="9833333333", text="x", kind="chat", typed_by=PARUL)
+        assert (a["status"], a["reason"], c["status"]) == ("queued", "daily_cap", "sent")
+    _run(go())
+
+
+def test_staff_alerts_skip_the_daily_cap_but_not_the_hourly_cap(wa_env):            # fix 5a
+    from wa_fixtures import seed_user
+    db = wa_env.db
+
+    async def go():
+        await seed_wa(db, company=None, settings={"hourly_cap": 3})
+        await seed_instance(db, COMPANY, kind="company", phone="919000000001", daily_cap_override=1)
+        await seed_user(db, "store@smartshape.in", phone="9822222222")
+        d = await send_whatsapp(db, to="9811111111", text="x", kind="dispatch")
+        outsider = await send_whatsapp(db, to="9833333333", text="x", kind="alert")
+        s1 = await send_whatsapp(db, to="9822222222", text="x", kind="alert")
+        s2 = await send_whatsapp(db, to="9822222222", text="x", kind="digest")
+        s3 = await send_whatsapp(db, to="9822222222", text="x", kind="alert")
+        assert d["status"] == "sent"
+        assert (outsider["status"], outsider["reason"]) == ("queued", "daily_cap")
+        assert (s1["status"], s2["status"]) == ("sent", "sent")
+        assert (s3["status"], s3["reason"]) == ("queued", "hourly_cap")
+    _run(go())
+
+
+def test_a_queued_row_whose_sender_is_paused_waits_then_goes_after_resume(wa_env):   # fix 5b
+    db = wa_env.db
+
+    async def go():
+        await seed_wa(db)
+        mid = await _queue_one_overnight(db, wa_env)
+        await db.wa_instances.update_one({"instance_name": COMPANY}, {"$set": {"state": "paused"}})
+        wa_env.clock["now"] = _at(2026, 9, 25, 3, 35)
+        await ws.run_wa_queue_pass(db)
+        row = await db.wa_messages.find_one({"message_id": mid}, {"_id": 0})
+        assert (row["status"], row["queue_reason"]) == ("queued", "sender_unavailable") and wa_env.evo.sends == []
+        wa_env.clock["now"] += timedelta(minutes=2)
+        await ws.run_wa_queue_pass(db)                                # still paused: still waiting
+        assert (await db.wa_messages.find_one({"message_id": mid}))["status"] == "queued"
+        await db.wa_instances.update_one({"instance_name": COMPANY}, {"$set": {"state": "connected"}})
+        wa_env.clock["now"] += timedelta(minutes=2)
+        await ws.run_wa_queue_pass(db)
+        assert (await db.wa_messages.find_one({"message_id": mid}))["status"] == "sent"
+    _run(go())
+
+
+def test_a_queued_row_held_for_a_paused_sender_is_skipped_after_72h(wa_env):         # fix 5b
+    db = wa_env.db
+
+    async def go():
+        await seed_wa(db)
+        mid = await _queue_one_overnight(db, wa_env)
+        await db.wa_instances.update_one({"instance_name": COMPANY}, {"$set": {"state": "paused"}})
+        wa_env.clock["now"] = _at(2026, 9, 28, 4, 30)                 # 86 h later, 10:00 IST
+        await ws.run_wa_queue_pass(db)
+        row = await db.wa_messages.find_one({"message_id": mid}, {"_id": 0})
+        assert (row["status"], row["fail_reason"]) == ("skipped", "sender_unavailable")
+        assert wa_env.evo.sends == []
+    _run(go())
+
+
+def test_the_queue_and_ledger_queries_have_indexes():                               # fix 6
+    import database
+    calls = []
+
+    class _Rec:
+        def __getattr__(self, coll):
+            class _C:
+                async def create_index(self, keys, **kw):
+                    calls.append((coll, str(keys)))
+            return _C()
+    _run(database.ensure_wa_indexes(_Rec()))
+    for keys in ([("instance_name", 1), ("to_jid", 1), ("sent_day", 1)],
+                 [("status", 1), ("instance_name", 1), ("send_after", 1), ("created_at", 1)],
+                 [("status", 1), ("sending_at", 1)]):
+        assert ("wa_messages", str(keys)) in calls

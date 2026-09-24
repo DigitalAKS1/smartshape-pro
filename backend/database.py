@@ -129,8 +129,12 @@ async def ensure_wa_indexes(target_db):
     await _i(target_db.wa_messages.create_index([("chat_id", 1), ("created_at", -1)], background=True))
     await _i(target_db.wa_messages.create_index([("contact_id", 1), ("created_at", -1)], background=True))
     await _i(target_db.wa_messages.create_index([("school_id", 1), ("created_at", -1)], background=True))
-    await _i(target_db.wa_messages.create_index(
-        [("status", 1), ("instance_name", 1), ("send_after", 1)], background=True))   # queue drainer
+    await _i(target_db.wa_messages.create_index(     # queue drainer claim (due, oldest first)
+        [("status", 1), ("instance_name", 1), ("send_after", 1), ("created_at", 1)], background=True))
+    await _i(target_db.wa_messages.create_index(     # stale-`sending` sweeper
+        [("status", 1), ("sending_at", 1)], background=True))
+    await _i(target_db.wa_messages.create_index(     # one marketing message per contact per number per day
+        [("instance_name", 1), ("to_jid", 1), ("sent_day", 1)], background=True))
     await _i(target_db.wa_chats.create_index([("instance_name", 1), ("last_message_at", -1)], background=True))
     await _i(target_db.wa_chats.create_index("contact_id", background=True))
     await _i(target_db.wa_send_ledger.create_index([("instance_name", 1), ("day", 1)], unique=True, background=True))

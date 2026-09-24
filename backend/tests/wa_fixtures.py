@@ -1,5 +1,5 @@
 """Shared WhatsApp test wiring — not a test module (no test_ prefix). `from wa_fixtures import …`."""
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 T_1100_IST = datetime(2026, 9, 24, 5, 30, tzinfo=timezone.utc)   # Thu 24 Sep 2026, 11:00 IST
@@ -19,8 +19,9 @@ def wire_wa(monkeypatch, db, fake_evolution, *, now=T_1100_IST):
     clock = {"now": now, "slept": []}
     monkeypatch.setattr(ws, "_now", lambda: clock["now"])
 
-    async def _sleep(s):
+    async def _sleep(s):                    # a real sleep lets time pass: advance the frozen clock
         clock["slept"].append(s)
+        clock["now"] += timedelta(seconds=s)
     monkeypatch.setattr(ws, "_sleep", _sleep)
     pushes = []
 
