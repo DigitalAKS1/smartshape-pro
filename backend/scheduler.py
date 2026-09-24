@@ -861,6 +861,20 @@ async def wa_queue_loop():
         await asyncio.sleep(60)
 
 
+async def wa_health_loop():
+    """Hourly: every linked WhatsApp number's real state, plus the host RAM reading."""
+    log.info("[scheduler] WhatsApp health check started (every hour)")
+    from services.wa_health import run_wa_health_pass
+    while True:
+        await asyncio.sleep(3600)            # first check an hour after boot; webhooks cover the meantime
+        try:
+            out = await run_wa_health_pass(db)
+            if out.get("changed") or out.get("unreachable") or out.get("ram_low"):
+                log.warning(f"[wa-health] {out}")
+        except Exception as exc:
+            log.error(f"[wa-health] {exc}")
+
+
 async def greeting_loop():
     log.info("[scheduler] greeting loop started (fires daily at 9am IST)")
     while True:
@@ -2042,6 +2056,7 @@ async def start_scheduler():
     asyncio.create_task(email_sender_loop())
     asyncio.create_task(wa_sender_loop())
     asyncio.create_task(wa_queue_loop())
+    asyncio.create_task(wa_health_loop())
     asyncio.create_task(drip_executor_loop())
     asyncio.create_task(greeting_loop())
     asyncio.create_task(fms_sla_loop())
