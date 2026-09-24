@@ -21,7 +21,7 @@ export const TYPE_COLORS = {
 };
 
 export const DEFAULT_ITEM = { type: 'standard_die', name: '', qty: 1, unit_price: 0, gst_pct: 18 };
-export const DEFAULT_FORM = { display_name: '', gst_pct: 18, description: '', is_active: true, items: [] };
+export const DEFAULT_FORM = { display_name: '', gst_pct: 18, description: '', is_active: true, items: [], machine_category: '' };
 
 export function calcItemTotal(item) {
   return (item.qty || 0) * (item.unit_price || 0);
@@ -91,6 +91,7 @@ export function usePackageMaster() {
       description:  pkg.description || '',
       is_active:    pkg.is_active !== false,
       items:        (pkg.items || []).map(i => ({ ...DEFAULT_ITEM, ...i })),
+      machine_category: pkg.machine_category || '',
     });
     setEditorOpen(true);
   };
@@ -104,6 +105,7 @@ export function usePackageMaster() {
       description:  pkg.description || '',
       is_active:    true,
       items:        (pkg.items || []).map(i => ({ ...DEFAULT_ITEM, ...i })),
+      machine_category: pkg.machine_category || '',
     });
     setEditorOpen(true);
     toast.info('Duplicated — review and save');
@@ -152,6 +154,7 @@ export function usePackageMaster() {
         std_die_qty:  form.items.filter(i => i.type === 'standard_die').reduce((s, i) => s + (i.qty || 0), 0),
         large_die_qty:form.items.filter(i => i.type === 'large_die').reduce((s, i) => s + (i.qty || 0), 0),
         machine_qty:  form.items.filter(i => i.type === 'machine').reduce((s, i) => s + (i.qty || 0), 0),
+        machine_category: form.machine_category || null,
       };
       if (editPkg) {
         await packages.update(editPkg.package_id, payload);

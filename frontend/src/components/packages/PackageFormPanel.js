@@ -186,6 +186,18 @@ export default function PackageFormPanel({
                 placeholder="Brief description…"
               />
             </div>
+            <div>
+              <Label className={`${textMuted} text-[10px] uppercase tracking-wider mb-1.5 block`}>Machine Category</Label>
+              <select
+                value={form.machine_category || ''}
+                onChange={e => setForm(f => ({ ...f, machine_category: e.target.value }))}
+                className={`w-full ${inputCls} h-10 px-3 rounded-md text-sm`}
+                data-testid="pkg-machine-category-select"
+              >
+                <option value="">— General —</option>
+                <option value="small_machine">Small Machine</option>
+              </select>
+            </div>
             <div className="flex flex-col justify-end">
               <Label className={`${textMuted} text-[10px] uppercase tracking-wider mb-1.5 block`}>Status</Label>
               <button
