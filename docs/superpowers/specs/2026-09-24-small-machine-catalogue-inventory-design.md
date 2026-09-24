@@ -120,10 +120,16 @@ one category vs. everything else).
 
 ### 4. Inventory: stock grouped by machine category
 
-Add a new endpoint `GET /stock/by-machine-category` (new function in
-`inventory_routes.py`, near the existing `/sales-person-stock` report at
-line 627) that aggregates `db.dies` by `machine_category` (missing/null
-bucketed as `"general"`):
+No new backend endpoint. `GET /dies` already returns every die's
+`stock_qty`, `reserved_qty`, `min_level` (and, after this change,
+`machine_category`) with no gating — `useStockManagement.js` already
+fetches the full die list on load (`fetchData`, calls `dies.getAll()`).
+Grouping by machine category is therefore a client-side computation over
+data already in memory, the same way `typeFilter`/`categoryFilter`
+already group/filter dies in `useInventory.js` — no new API surface, no
+new auth path to secure.
+
+Group shape (computed in the frontend):
 
 ```
 {
@@ -142,9 +148,9 @@ out of scope (owner confirmed: just Small Machine vs. everything else, no
 other categories needed right now); can be a follow-up if wanted later.
 
 Frontend: a small "Small Machine" tile/section on the existing stock
-report page, reading this endpoint, listing low-stock items so the owner
-can see reorder needs for the small-machine line separately from the
-rest of the catalogue.
+report page (holdings tab), computed from `diesList` (already fetched),
+listing low-stock items so the owner can see reorder needs for the
+small-machine line separately from the rest of the catalogue.
 
 ### Testing
 
@@ -152,8 +158,9 @@ rest of the catalogue.
   `package.machine_category` is unset (regression, matches today);
   returns only `machine_category`-matching, in-stock dies when set.
 - Backend: die/package create+update round-trip `machine_category`.
-- Backend: `/stock/by-machine-category` groups correctly and flags
-  low-stock items using `min_level`.
+- Frontend: a grouping helper groups a die list by `machine_category`
+  (missing/null bucketed as `"general"`) and flags low-stock items using
+  `min_level`.
 - Frontend: Die/Package forms render and save the new select.
 - No changes to `catalogue_selections`/order auto-creation logic — covered
   by existing tests since the dies list is the only thing that changes.
