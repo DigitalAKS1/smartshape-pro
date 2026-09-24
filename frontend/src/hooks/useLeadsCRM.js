@@ -18,6 +18,7 @@ import {
   designations as designationsApi,
   dealTypes as dealTypesApi,
 } from '../lib/api';
+import { contactSaveError, schoolSaveError } from '../lib/crmErrors';
 import { useDataSync, useAutoRefresh } from '../lib/dataSync';
 import useCrmData from './useCrmData';
 import useCrmFilters from './useCrmFilters';
@@ -376,13 +377,13 @@ export default function useLeadsCRM() {
   // ─────────────────────────────────────────────────────────────────────────────
   const openEditSchool = (sch) => {
     setEditSchool(sch);
-    setEditSchoolForm({ school_name: sch.school_name || '', school_type: sch.school_type || 'CBSE', group_id: sch.group_id || '', phone: sch.phone || '', email: sch.email || '', alternate_contact: sch.alternate_contact || '', city: sch.city || '', state: sch.state || '', address: sch.address || '', pincode: sch.pincode || '', primary_contact_name: sch.primary_contact_name || '', designation: sch.designation || '', school_strength: sch.school_strength || '', number_of_branches: sch.number_of_branches ?? '', annual_budget_range: sch.annual_budget_range || '', existing_vendor: sch.existing_vendor || '', linkedin_url: sch.linkedin_url || '', instagram_url: sch.instagram_url || '', website: sch.website || '' });
+    setEditSchoolForm({ school_name: sch.school_name || '', school_type: sch.school_type || 'CBSE', group_id: sch.group_id || '', phone: sch.phone || '', email: sch.email || '', alternate_contact: sch.alternate_contact || '', city: sch.city || '', state: sch.state || '', address: sch.address || '', pincode: sch.pincode || '', primary_contact_name: sch.primary_contact_name || '', designation: sch.designation || '', school_strength: sch.school_strength || '', number_of_branches: sch.number_of_branches ?? '', annual_budget_range: sch.annual_budget_range || '', existing_vendor: sch.existing_vendor || '', linkedin_url: sch.linkedin_url || '', instagram_url: sch.instagram_url || '', website: sch.website || '', tag_ids: sch.tag_ids || [] });
     setSchoolDialogOpen(true);
   };
 
   const openCreateSchool = () => {
     setEditSchool(null);
-    setEditSchoolForm({ school_name: '', school_type: 'CBSE', group_id: '', phone: '', email: '', alternate_contact: '', city: '', state: '', address: '', pincode: '', primary_contact_name: '', designation: '', school_strength: '', number_of_branches: '', annual_budget_range: '', existing_vendor: '', linkedin_url: '', instagram_url: '', website: '' });
+    setEditSchoolForm({ school_name: '', school_type: 'CBSE', group_id: '', phone: '', email: '', alternate_contact: '', city: '', state: '', address: '', pincode: '', primary_contact_name: '', designation: '', school_strength: '', number_of_branches: '', annual_budget_range: '', existing_vendor: '', linkedin_url: '', instagram_url: '', website: '', tag_ids: [] });
     setSchoolDialogOpen(true);
   };
 
@@ -399,7 +400,7 @@ export default function useLeadsCRM() {
       setSchoolDialogOpen(false);
       setEditSchool(null);
       fetchData();
-    } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
+    } catch (err) { toast.error(schoolSaveError(err)); }
   };
 
   const handleDeleteSchool = async (sch) => {
@@ -460,7 +461,12 @@ export default function useLeadsCRM() {
   const saveContact = async () => {
     if (!contactForm.name || !contactForm.phone) { toast.error('Name and phone required'); return; }
     try {
-      const { tag_ids, ...payload } = contactForm;
+      // tag_ids now travel IN the payload. POST/PUT /contacts used to ignore
+      // them, so this hook diffed the chips and fired a separate addTag /
+      // removeTag per tag — the School Profile dialog, which posts the same
+      // form straight through, had no such workaround and silently lost every
+      // chip. One path now, and one request instead of N+1.
+      const payload = { ...contactForm, tag_ids: contactForm.tag_ids || [] };
       if (!payload.school_id && payload.company) {
         const matched = schoolsList.find(s => s.school_name.toLowerCase() === payload.company.toLowerCase());
         if (matched) {
@@ -469,28 +475,15 @@ export default function useLeadsCRM() {
           payload.create_school_if_missing = true;
         }
       }
-      let contactId;
       if (editContact) {
         await contactsApi.update(editContact.contact_id, payload);
-        contactId = editContact.contact_id;
         toast.success('Contact updated');
-        const prevTags = editContact.tag_ids || [];
-        const toAdd = tag_ids.filter(id => !prevTags.includes(id));
-        const toRemove = prevTags.filter(id => !tag_ids.includes(id));
-        await Promise.all([
-          ...toAdd.map(id => contactsApi.addTag(contactId, id)),
-          ...toRemove.map(id => contactsApi.removeTag(contactId, id)),
-        ]);
       } else {
-        const res = await contactsApi.create(payload);
-        contactId = res.data?.contact_id;
+        await contactsApi.create(payload);
         toast.success('Contact added');
-        if (contactId && tag_ids.length > 0) {
-          await Promise.all(tag_ids.map(id => contactsApi.addTag(contactId, id)));
-        }
       }
       setContactDialogOpen(false); fetchData();
-    } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
+    } catch (err) { toast.error(contactSaveError(err)); }
   };
 
   const deleteContact = async (id) => {
@@ -554,9 +547,12 @@ export default function useLeadsCRM() {
     URL.revokeObjectURL(a.href);
   };
 
-  const handleContactExport = () => {
-    exportData.download('contacts');
-    toast.success('Exporting contacts...');
+  const handleContactExport = async () => {
+    // Only claim success once the server has actually handed over the file —
+    // `download` returns false (and toasts the reason) on a 401/403/500, and
+    // an optimistic "Exporting contacts..." on top of that read as though the
+    // export had worked.
+    if (await exportData.download('contacts')) toast.success('Contacts exported');
   };
 
   const openWaForContact = (c) => {

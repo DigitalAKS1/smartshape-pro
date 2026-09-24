@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { toast } from 'sonner';
 import { emitChange } from './dataSync';
 
 // Fall back to same-origin (relative) if the build-time backend URL is missing,
@@ -1257,23 +1258,39 @@ export const delegation = {
 };
 
 // Export (CSV download)
+//
+// The response was piped straight to disk with no `res.ok` check, so a 401
+// ("Not authenticated") or a 500 stack trace was saved AS `contacts_export.csv`
+// — a file that opens in Excel, shows one nonsense row, and re-uploads as
+// garbage. Nothing is written unless the server actually returned the file.
 export const exportData = {
-  download: (type) => {
+  download: async (type) => {
     const url = `${process.env.REACT_APP_BACKEND_URL}/api/export/${type}`;
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${type}_export.csv`;
-    // Use fetch to handle cookies
-    fetch(url, { credentials: 'include' })
-      .then(res => res.blob())
-      .then(blob => {
-        const blobUrl = URL.createObjectURL(blob);
-        a.href = blobUrl;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(blobUrl);
-      });
+    try {
+      const res = await fetch(url, { credentials: 'include' });   // cookies
+      if (!res.ok) {
+        let detail = '';
+        try {
+          const body = await res.text();
+          try { detail = JSON.parse(body)?.detail || ''; } catch { detail = ''; }
+        } catch { /* body unreadable — fall through to the status message */ }
+        toast.error(detail || `Export failed (${res.status}) — nothing was downloaded`);
+        return false;
+      }
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = `${type}_export.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(blobUrl);
+      return true;
+    } catch (e) {
+      toast.error('Export failed — could not reach the server');
+      return false;
+    }
   },
 };
 

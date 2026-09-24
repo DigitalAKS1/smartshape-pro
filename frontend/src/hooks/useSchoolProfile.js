@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { schools as schoolsApi, contacts as contactsApi } from '../lib/api';
 import { toast } from 'sonner';
+import { contactSaveError } from '../lib/crmErrors';
 
 export default function useSchoolProfile(school_id) {
   const navigate = useNavigate();
@@ -59,7 +60,7 @@ export default function useSchoolProfile(school_id) {
       setEditingContact(null);
       loadProfile();
     } catch (e) {
-      toast.error(e?.response?.data?.detail || 'Failed to save');
+      toast.error(contactSaveError(e));
     } finally {
       setSaving(false);
     }
