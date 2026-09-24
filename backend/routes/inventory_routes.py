@@ -43,6 +43,7 @@ class DieCreate(BaseModel):
     show_video: bool = False
     show_description: bool = False
     product_type_id: Optional[str] = None
+    machine_category: Optional[str] = None
 
 
 class StockMovementCreate(BaseModel):
@@ -432,6 +433,7 @@ async def create_package(request: Request):
         "large_die_qty": body.get("large_die_qty", 0),
         "gst_pct": body.get("gst_pct", 18),
         "items": body.get("items", []),
+        "machine_category": body.get("machine_category"),
         "is_active": True,
     }
     await db.packages.insert_one(pkg_doc)
@@ -443,7 +445,7 @@ async def update_package(package_id: str, request: Request):
     await get_current_user(request)
     body = await request.json()
     allowed = {}
-    for key in ("display_name", "base_price", "std_die_qty", "large_die_qty", "machine_qty", "gst_pct", "items", "is_active"):
+    for key in ("display_name", "base_price", "std_die_qty", "large_die_qty", "machine_qty", "gst_pct", "items", "is_active", "machine_category"):
         if key in body:
             allowed[key] = body[key]
     if allowed:

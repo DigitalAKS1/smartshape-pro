@@ -79,6 +79,15 @@ export function CreateDieDialog({
               </select>
             </div>
           </div>
+          <div>
+            <Label className={`${textSec} text-xs mb-1 block`}>Machine Category</Label>
+            <select value={newDie.machine_category || ''} onChange={e => setNewDie({...newDie, machine_category: e.target.value})}
+              className={`w-full h-11 px-3 rounded-md text-sm ${inputCls}`}
+              data-testid="die-machine-category-select">
+              <option value="">— General —</option>
+              <option value="small_machine">Small Machine</option>
+            </select>
+          </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
               <Label className={`${textSec} text-xs mb-1 block`}>Initial Stock</Label>
@@ -226,6 +235,15 @@ export function EditDieDialog({
                 {CATEGORIES.map(c => <option key={c} value={c}>{CAT_LABELS[c]}</option>)}
               </select>
             </div>
+          </div>
+          <div>
+            <Label className={`${textSec} text-xs mb-1 block`}>Machine Category</Label>
+            <select value={editForm.machine_category || ''} onChange={e => setEditForm({...editForm, machine_category: e.target.value})}
+              className={`w-full h-11 px-3 rounded-md text-sm ${inputCls}`}
+              data-testid="die-machine-category-select">
+              <option value="">— General —</option>
+              <option value="small_machine">Small Machine</option>
+            </select>
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>

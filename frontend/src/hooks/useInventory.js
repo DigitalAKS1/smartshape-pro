@@ -16,7 +16,7 @@ export const CAT_LABELS = {
   fruits:'Fruits', shapes:'Shapes', other:'Other',
 };
 export const TYPES = ['standard','large','machine'];
-export const BLANK_DIE = { code:'', name:'', type:'standard', category:'decorative', min_level:5, description:'', stock_qty:0, product_type_id:'', video_url:'', show_video:false, show_description:false };
+export const BLANK_DIE = { code:'', name:'', type:'standard', category:'decorative', min_level:5, description:'', stock_qty:0, product_type_id:'', video_url:'', show_video:false, show_description:false, machine_category:'' };
 
 // Sort options for the inventory list. 'code' is the default (natural code order).
 export const SORT_OPTIONS = [
@@ -170,6 +170,7 @@ export default function useInventory() {
       video_url: die.video_url || '',
       show_video: !!die.show_video,
       show_description: !!die.show_description,
+      machine_category: die.machine_category || '',
     });
     setEditImage(null); setEditImagePreview('');
     setEditOpen(true);
