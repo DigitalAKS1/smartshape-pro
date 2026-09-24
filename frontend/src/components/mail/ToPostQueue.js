@@ -67,23 +67,36 @@ export default function ToPostQueue({ onOpenSchool }) {
   // selection hidden by a filter stays selected and is counted in
   // `hiddenCount` — while every action still sends `visibleIds` only, so
   // nothing is ever acted on out of sight. Reset when the selection is.
+  //
+  // `lastIdsByView` remembers which ids each exact filter combination returned
+  // last time. When the SAME view is fetched again and an id it used to hold
+  // is gone, that piece was deleted or verified elsewhere — not merely
+  // filtered out — so it leaves the seen-set and stops counting as selected
+  // (or as "hidden by filter"). An id missing from a DIFFERENT view proves
+  // nothing and is kept.
   const seenRef = useRef(new Map());
+  const lastIdsByView = useRef(new Map());
   const [seenRows, setSeenRows] = useState([]);
   const forgetSeen = useCallback(() => {
     seenRef.current = new Map();
+    lastIdsByView.current = new Map();
     setSeenRows([]);
   }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await mailRuns.toPost({
-        status, sequence_id: sequenceId, owner, from, to, q: debouncedQ,
-      });
+      const params = { status, sequence_id: sequenceId, owner, from, to, q: debouncedQ };
+      const r = await mailRuns.toPost(params);
       const fresh = r.data?.rows || [];
       setRows(fresh);
       setTotals(r.data?.totals || {});
       setTotalsAll(r.data?.totals_all || r.data?.totals || {});
+      const view = JSON.stringify(params);
+      const freshIds = new Set(fresh.map(row => row.touch_id));
+      const before = lastIdsByView.current.get(view);
+      if (before) before.forEach(id => { if (!freshIds.has(id)) seenRef.current.delete(id); });
+      lastIdsByView.current.set(view, freshIds);
       fresh.forEach(row => seenRef.current.set(row.touch_id, row));
       setSeenRows(Array.from(seenRef.current.values()));
     } catch { toast.error('Could not load the posting queue'); }

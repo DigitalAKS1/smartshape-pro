@@ -260,6 +260,37 @@ test('a selection survives a filter change and is counted as hidden', async () =
   jest.useRealTimers();
 });
 
+test('a row gone from an identical refetch is pruned, not kept as hidden', async () => {
+  jest.useFakeTimers();
+  const v = await render();                       // view A: no filters, t1 t2 t3
+  act(() => { v.q('to-post-check-t1').click(); });
+  act(() => { v.q('to-post-check-t2').click(); });
+
+  // View B (a search) lacks t2 — that proves nothing, so t2 stays selected.
+  mailRuns.toPost.mockImplementation(() => Promise.resolve({
+    data: { rows: [ROWS[0]], totals: TOTALS, totals_all: TOTALS, as_of: '2026-09-22' } }));
+  await act(async () => {
+    setInputValue(v.q('to-post-search'), 'sharma');
+    jest.advanceTimersByTime(400);
+    for (let i = 0; i < 40; i++) await Promise.resolve();
+  });
+  expect(v.q('to-post-bar').textContent).toContain('2 selected');
+
+  // Back to view A, which now lacks t2: it was verified elsewhere. Gone.
+  mailRuns.toPost.mockImplementation(() => Promise.resolve({
+    data: { rows: [ROWS[0], ROWS[2]], totals: TOTALS, totals_all: TOTALS,
+            as_of: '2026-09-22' } }));
+  await act(async () => {
+    setInputValue(v.q('to-post-search'), '');
+    jest.advanceTimersByTime(400);
+    for (let i = 0; i < 40; i++) await Promise.resolve();
+  });
+  expect(v.q('to-post-bar').textContent).toContain('1 selected');
+  expect(v.q('to-post-bar').textContent).not.toContain('hidden by filter');
+  v.unmount();
+  jest.useRealTimers();
+});
+
 test('only the visible part of a selection is ever acted on', async () => {
   jest.useFakeTimers();
   const v = await render();
