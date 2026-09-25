@@ -542,7 +542,8 @@ async def _maybe_notify_customer(flow: dict, stage: dict):
     )
     from scheduler import _fms_send_wa, _fms_send_email   # local import avoids cycle
     if "whatsapp" in cfg["notify_channels"] and flow.get("customer_phone"):
-        ok, err = await _fms_send_wa(flow["customer_phone"], text, kind="fms")
+        ok, err = await _fms_send_wa(flow["customer_phone"], text, kind="fms",   # owner's number (D2)
+                                     lead_id=flow.get("lead_id") or "", school_id=flow.get("school_id") or "")
         await db.fms_notifications.insert_one({
             "notif_id": gen_id("fnotif"), "flow_id": flow["flow_id"], "stage_id": stage["stage_id"],
             "kind": "customer_stage", "channel": "whatsapp", "recipient": flow["customer_phone"],

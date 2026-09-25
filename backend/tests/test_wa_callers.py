@@ -257,3 +257,189 @@ def test_the_old_senders_are_gone():
     import inspect
     for mod in (sched, settings_mod, crm, school, wroutes):
         assert "messageautosender.com" not in inspect.getsource(mod), mod.__name__
+
+
+# ── Fix round 1 ───────────────────────────────────────────────────────────────
+
+AT_2000_IST = datetime(2026, 9, 24, 14, 30, tzinfo=timezone.utc)      # Thu 24 Sep, 20:00 IST
+NEXT_1000_IST = datetime(2026, 9, 25, 4, 30, tzinfo=timezone.utc)     # Fri 25 Sep, 10:00 IST
+
+
+def _ago(**kw):
+    return (datetime.now(timezone.utc) - timedelta(**kw)).isoformat()
+
+
+def test_a_scheduled_message_ignores_business_hours_but_a_system_one_does_not(env):
+    # fix 1: a person picked the time of a `scheduled` message - it goes at 20:00 IST like a chat
+    db = env.db
+
+    async def go():
+        import services.wa_send as ws
+        await seed_wa(db)
+        env.clock["now"] = AT_2000_IST
+        a = await ws.send_whatsapp(db, to="9811111111", text="At 8 pm as asked", kind="scheduled",
+                                   enforce_consent=False)
+        b = await ws.send_whatsapp(db, to="9822222222", text="Form stage", kind="form", enforce_consent=False)
+        assert (a["status"], b["status"], b["reason"]) == ("sent", "queued", "quiet_hours")
+        # the opt-out still applies to a scheduled message
+        await db.wa_opt_outs.insert_one({"phone_e164": "919833333333", "active": True})
+        c = await ws.send_whatsapp(db, to="9833333333", text="x", kind="scheduled", enforce_consent=False)
+        assert (c["status"], c["reason"]) == ("skipped", "opt_out")
+    _run(go())
+
+
+def test_an_unknown_campaign_row_is_a_system_message_and_does_not_bypass_hours(env):
+    db = env.db
+
+    async def go():
+        await seed_wa(db)
+        env.clock["now"] = AT_2000_IST
+        assert sched._queue_kind({"campaign_id": "mystery_42"}) == "form"
+        assert sched._queue_kind({"campaign_id": None}) == "form"
+        await db.whatsapp_scheduled.insert_one({"scheduled_id": "q1", "campaign_id": "mystery_42",
+                                                "status": "pending", "phone": "9811111111", "message": "hi"})
+        await sched.process_wa_queue()
+        row = await db.wa_messages.find_one({}, {"_id": 0})
+        assert (row["kind"], row["status"], row["queue_reason"]) == ("form", "queued", "quiet_hours")
+        assert env.evo.sends == []
+    _run(go())
+
+
+def test_the_legacy_backlog_expires_once_and_the_seven_day_floor_holds_after(env):
+    # fix 2: the first pass after deploy expires pending rows older than 24 h (never sent), once;
+    # afterwards anything created more than 7 days ago is expired, never sent.
+    db = env.db
+
+    async def go():
+        await seed_wa(db)
+        future = (datetime.now(timezone.utc) + timedelta(days=2)).isoformat()
+        await db.whatsapp_scheduled.insert_many([
+            {"scheduled_id": "old_c", "campaign_id": "daily_digest", "status": "pending", "phone": "9811111111",
+             "message": "stale digest", "created_at": _ago(days=2)},
+            {"schedule_id": "old_s", "status": "pending", "phone": "9822222222", "message": "stale",
+             "scheduled_at": _ago(days=3), "created_at": _ago(days=4)},
+            {"scheduled_id": "old_camp", "campaign_id": "camp_x", "type": "campaign", "status": "pending",
+             "phone": "9833333333", "message": "", "queued_at": _ago(days=2)},
+            {"schedule_id": "later", "status": "pending", "phone": "9844444444", "message": "for Saturday",
+             "scheduled_at": future, "created_at": _ago(days=3)},
+            {"scheduled_id": "fresh", "campaign_id": "daily_digest", "status": "pending", "phone": "9855555555",
+             "message": "today", "created_at": _ago(hours=1)},
+        ])
+        await sched.process_wa_queue()
+        st = {(r.get("scheduled_id") or r.get("schedule_id")): r["status"]
+              for r in await db.whatsapp_scheduled.find({}, {"_id": 0}).to_list(None)}
+        assert st == {"old_c": "expired", "old_s": "expired", "old_camp": "expired", "later": "pending",
+                      "fresh": "sent"}
+        marker = await db.settings.find_one({"type": "wa_queue_migrated"}, {"_id": 0})
+        assert marker["expired"] == 3
+        assert [s["text"] for s in env.evo.sends] == ["today"]
+
+        # The migration does not run again: a 2-day-old row inserted now is sent...
+        await db.whatsapp_scheduled.insert_many([
+            {"scheduled_id": "two_days", "campaign_id": "daily_digest", "status": "pending", "phone": "9866666666",
+             "message": "two days", "created_at": _ago(days=2)},
+            # ...but the permanent floor expires one created more than 7 days ago.
+            {"scheduled_id": "eight_days", "campaign_id": "daily_digest", "status": "pending",
+             "phone": "9877777777", "message": "eight days", "created_at": _ago(days=8)}])
+        await sched.process_wa_queue()
+        st = {r["scheduled_id"]: r["status"] for r in await db.whatsapp_scheduled.find(
+            {"scheduled_id": {"$in": ["two_days", "eight_days"]}}, {"_id": 0}).to_list(None)}
+        assert st == {"two_days": "sent", "eight_days": "expired"}
+        assert "eight days" not in [s["text"] for s in env.evo.sends]
+    _run(go())
+
+
+def test_a_row_stuck_sending_goes_back_to_pending_then_fails_after_three_claims(env):
+    db = env.db
+
+    async def go():
+        await seed_wa(db)
+        await db.settings.insert_one({"type": "wa_queue_migrated"})
+        await db.whatsapp_scheduled.insert_many([
+            {"scheduled_id": "s1", "campaign_id": "reminder", "status": "sending", "claimed_at": _ago(minutes=20),
+             "claim_count": 1, "phone": "9811111111", "message": "retry me"},
+            {"scheduled_id": "s2", "campaign_id": "reminder", "status": "sending", "claimed_at": _ago(minutes=20),
+             "claim_count": 3, "phone": "9822222222", "message": "give up"},
+            {"scheduled_id": "s3", "campaign_id": "reminder", "status": "sending", "claimed_at": _ago(minutes=2),
+             "claim_count": 1, "phone": "9833333333", "message": "still running"},
+        ])
+        await sched.process_wa_queue()
+        st = {r["scheduled_id"]: r["status"] for r in await db.whatsapp_scheduled.find({}, {"_id": 0}).to_list(None)}
+        assert st == {"s1": "sent", "s2": "failed", "s3": "sending"}
+        assert [s["text"] for s in env.evo.sends] == ["retry me"]
+    _run(go())
+
+
+def test_a_drip_whatsapp_step_with_no_number_to_send_from_is_held_not_closed(env):
+    # fix 3: no_sender / sender_not_connected hold the step an hour; other refusals still close it
+    db = env.db
+
+    async def go():
+        await seed_wa(db, company=None, settings={"drip_wa_enabled": True})     # no number at all
+        await db.schools.insert_one({"school_id": "s1", "school_name": "DPS", "wa_consent": True, "is_deleted": False})
+        await db.contacts.insert_one({"contact_id": "c1", "name": "Ritu", "phone": "9811111111", "school_id": "s1",
+                                      "is_deleted": False})
+        await db.drip_sequences.insert_one({"sequence_id": "seq1", "name": "S", "is_active": True, "steps": [
+            {"step_number": 1, "delay_days": 0, "message_type": "whatsapp", "message_template": "Hi"}]})
+        await db.drip_enrollments.insert_one({"enrollment_id": "e1", "sequence_id": "seq1", "contact_id": "c1",
+                                              "lead_id": None, "school_id": "s1", "current_step": 0,
+                                              "status": "active", "enrolled_at": PAST, "next_step_at": PAST})
+        await sched.run_drip_executor()
+        enr = await db.drip_enrollments.find_one({"enrollment_id": "e1"}, {"_id": 0})
+        assert enr["current_step"] == 0 and enr["status"] == "active" and not enr.get("step_fail_count")
+        assert enr["next_step_at"] > _ago(minutes=-50)            # pushed about an hour ahead
+        assert await db.drip_step_logs.count_documents({}) == 0
+        assert (await db.wa_messages.find_one({}, {"_id": 0}))["fail_reason"] == "no_sender"
+    _run(go())
+
+
+def test_a_queued_campaign_row_is_settled_on_its_scheduled_row_when_the_drainer_sends_it(env, monkeypatch):
+    # fix 4
+    db = env.db
+
+    async def _same(template, contact, campaign_name, ai_enabled):
+        return template
+    monkeypatch.setattr(wroutes, "personalize_message", _same)
+
+    async def go():
+        import services.wa_send as ws
+        await seed_wa(db)
+        env.clock["now"] = AT_2000_IST                                  # outside business hours
+        await db.whatsapp_campaigns.insert_one({"campaign_id": "camp1", "name": "Diwali", "status": "queued"})
+        await db.whatsapp_scheduled.insert_one({"scheduled_id": "s1", "campaign_id": "camp1", "contact_id": "c1",
+                                                "phone": "9811111111", "status": "pending", "type": "campaign",
+                                                "contact_snapshot": {}})
+        await wroutes._send_campaign_background(campaign_id="camp1", sched_ids=["s1"], template="Happy Diwali",
+                                                attachment_doc=None, ai_enabled=False)
+        row = await db.whatsapp_scheduled.find_one({"scheduled_id": "s1"}, {"_id": 0})
+        msg = await db.wa_messages.find_one({}, {"_id": 0})
+        assert (row["status"], row["wa_msg_id"]) == ("queued", msg["message_id"])
+        assert msg["ref"]["scheduled_id"] == "s1"
+        camp = await db.whatsapp_campaigns.find_one({"campaign_id": "camp1"}, {"_id": 0})
+        assert (camp["status"], camp["sent_count"], camp["queued_count"]) == ("queued", 0, 1)
+
+        env.clock["now"] = NEXT_1000_IST
+        await ws.run_wa_queue_pass(db, budget_s=5)
+        row = await db.whatsapp_scheduled.find_one({"scheduled_id": "s1"}, {"_id": 0})
+        assert row["status"] == "sent" and row["wa_message_id"] == "PMID1" and row["sent_at"]
+        camp = await db.whatsapp_campaigns.find_one({"campaign_id": "camp1"}, {"_id": 0})
+        assert (camp["status"], camp["sent_count"], camp["queued_count"]) == ("sent", 1, 0)
+    _run(go())
+
+
+def test_an_fms_customer_message_goes_from_the_flow_owners_number(env):
+    # fix 5: the flow's lead/school reach _fms_send_wa, so the owner resolves (D2)
+    db = env.db
+
+    async def go():
+        import fms_actions
+        await seed_wa(db, reps={PARUL: "connected"})
+        await db.leads.insert_one({"lead_id": "L1", "school_id": "s1", "assigned_to": PARUL})
+        flow = {"flow_id": "f1", "customer_phone": "9811111111", "customer_name": "Ritu", "title": "Order",
+                "lead_id": "L1", "school_id": "s1"}
+        await fms_actions._exec_send_message(
+            {"params": {"template": "Your order moved to {stage}", "channels": ["whatsapp"], "to": "customer"}},
+            flow, {"label": "Packing"})
+        row = await db.wa_messages.find_one({}, {"_id": 0})
+        assert (row["kind"], row["instance_name"], row["lead_id"]) == ("fms", "rep_parul", "L1")
+    _run(go())

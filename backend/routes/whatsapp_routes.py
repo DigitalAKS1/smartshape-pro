@@ -8,7 +8,7 @@ import logging
 
 from database import db
 from auth_utils import get_current_user
-from services.wa_send import send_whatsapp, consent_ok
+from services.wa_send import send_whatsapp, consent_ok, campaign_final_status
 from services.ai_personalizer import personalize_message
 from services.tag_scope import resolve_tag_scope
 
@@ -579,6 +579,11 @@ async def _send_campaign_background(campaign_id: str, sched_ids: list, template:
     from its owner's number (contact owner, else school owner, else the company's; a rep number
     still warming up -> the company's), with opt-out, caps and business hours enforced by the
     service - which also paces and queues the sends, so there is no fixed delay here any more."""
+    # Counters move with $inc, per row: the drainer may settle an early queued row (and move it
+    # from queued_count to sent_count) while this loop is still personalising later ones.
+    field = {"sent": "sent_count", "queued": "queued_count", "skipped": "skipped_count", "failed": "failed_count"}
+    await db.whatsapp_campaigns.update_one({"campaign_id": campaign_id}, {"$set": {
+        "sent_count": 0, "queued_count": 0, "skipped_count": 0, "failed_count": 0}})
     counts = {"sent": 0, "queued": 0, "skipped": 0, "failed": 0}
     for sched_id in sched_ids:
         doc = await db.whatsapp_scheduled.find_one({"scheduled_id": sched_id}, {"_id": 0})
@@ -595,19 +600,23 @@ async def _send_campaign_background(campaign_id: str, sched_ids: list, template:
             res = await send_whatsapp(db, to=doc["phone"], text=personalised_msg, media=attachment_doc, kind="campaign",
                                       contact_id=doc.get("contact_id") or "",
                                       ref={"campaign_id": campaign_id, "scheduled_id": sched_id,
+                                           "writeback": "whatsapp_scheduled",
                                            "dedup_key": f"camp:{campaign_id}:{sched_id}"})
         except Exception as exc:
             res = {"status": "failed", "message_id": "", "reason": str(exc)[:200]}
         counts[res["status"]] = counts.get(res["status"], 0) + 1
-        await db.whatsapp_scheduled.update_one({"scheduled_id": sched_id}, {"$set": {
-            "message": personalised_msg, "status": res["status"], "wa_msg_id": res.get("message_id", ""),
-            "error": res.get("reason", ""), "sent_at": datetime.now(timezone.utc).isoformat()}})
-    delivered = counts["sent"] + counts["queued"]
-    final_status = "sent" if delivered else ("failed" if counts["failed"] else "queued")
+        upd = {"message": personalised_msg, "status": res["status"], "wa_msg_id": res.get("message_id", ""),
+               "error": res.get("reason", "")}
+        if res["status"] == "sent":
+            upd["sent_at"] = datetime.now(timezone.utc).isoformat()
+        await db.whatsapp_scheduled.update_one({"scheduled_id": sched_id}, {"$set": upd})
+        await db.whatsapp_campaigns.update_one({"campaign_id": campaign_id},
+                                               {"$inc": {field.get(res["status"], "failed_count"): 1}})
+    # sent_count = actually sent; a queued row stays in queued_count until the drainer settles it
+    # (services.wa_send._writeback_scheduled moves it across and closes the campaign then).
+    camp = await db.whatsapp_campaigns.find_one({"campaign_id": campaign_id}, {"_id": 0}) or {}
     await db.whatsapp_campaigns.update_one({"campaign_id": campaign_id}, {"$set": {
-        "status": final_status, "sent_count": delivered, "queued_count": counts["queued"],
-        "skipped_count": counts["skipped"], "failed_count": counts["failed"],
-        "updated_at": datetime.now(timezone.utc).isoformat()}})
+        "status": campaign_final_status(camp), "updated_at": datetime.now(timezone.utc).isoformat()}})
     logger.info(f"Campaign {campaign_id} complete — {counts}")
 
 

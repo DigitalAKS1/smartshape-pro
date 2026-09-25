@@ -21,8 +21,6 @@ from datetime import datetime, timezone, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
-import httpx
-
 from database import db
 from notify import notify_user
 import services.account_lifecycle as al
@@ -259,12 +257,105 @@ _QUEUE_KIND = {"daily_digest": "digest", "daily_orders_report": "digest", "remin
 
 
 def _queue_kind(row: dict) -> str:
+    """A queued row's kind. Anything that is not our own digest/alert is a system message to a
+    customer (form/webinar stages, and any campaign id we do not know): `form` - opt-out and
+    business hours apply. Never `scheduled`, which would skip business hours (fix 1)."""
     cid = str(row.get("campaign_id") or "")
-    if cid in _QUEUE_KIND:
-        return _QUEUE_KIND[cid]
-    if cid.startswith("form_"):
-        return "form"
-    return "scheduled"
+    return _QUEUE_KIND.get(cid, "form")
+
+
+# ── Legacy backlog and stuck rows (Task 9 fix round 1) ────────────────────────
+# Before W1 the WABA queue was never configured in production, so `whatsapp_scheduled` holds
+# pending rows that are days or months old. Sending them now would message people about things
+# long past. The FIRST pass after deploy expires every pending row older than 24 h (once, keyed
+# on settings{type: "wa_queue_migrated"}); afterwards no drainer sends a row created more than
+# WA_QUEUE_MAX_AGE_DAYS ago - it is expired instead.
+WA_LEGACY_EXPIRE_HOURS = 24
+WA_QUEUE_MAX_AGE_DAYS = 7
+WA_SCHED_CLAIM_MINUTES = 10
+WA_SCHED_MAX_CLAIMS = 3
+
+
+def _older_than(cutoff_iso: str) -> dict:
+    """A pending row is 'older than' the cutoff by its due time when it has one, else by when it
+    was created/queued. (A row created long ago for a time still ahead is not old.)"""
+    no_due = [{"scheduled_at": {"$exists": False}}, {"scheduled_at": None}, {"scheduled_at": ""}]
+    return {"$or": [
+        {"scheduled_at": {"$lt": cutoff_iso, "$gt": ""}},
+        {"$and": [{"$or": no_due}, {"$or": [{"created_at": {"$lt": cutoff_iso}},
+                                            {"queued_at": {"$lt": cutoff_iso}}]}]},
+    ]}
+
+
+async def expire_legacy_wa_backlog(target_db=None) -> int:
+    """One-time: expire pending rows older than 24 h. Returns how many (0 after the first run).
+    The settings marker is inserted with an upsert first, so two workers cannot both run it."""
+    d = target_db if target_db is not None else db
+    res = await d.settings.update_one(
+        {"type": "wa_queue_migrated"},
+        {"$setOnInsert": {"type": "wa_queue_migrated", "at": datetime.now(timezone.utc).isoformat()}},
+        upsert=True)
+    if getattr(res, "upserted_id", None) is None:
+        return 0
+    now = datetime.now(timezone.utc)
+    cutoff = (now - timedelta(hours=WA_LEGACY_EXPIRE_HOURS)).isoformat()
+    out = await d.whatsapp_scheduled.update_many(
+        {"status": "pending", **_older_than(cutoff)},
+        {"$set": {"status": "expired", "error": "legacy backlog: older than 24 h at W1 deploy",
+                  "expired_at": now.isoformat()}})
+    n = getattr(out, "modified_count", 0)
+    await d.settings.update_one({"type": "wa_queue_migrated"}, {"$set": {"expired": n}})
+    log.warning(f"[wa] legacy queue migration: {n} pending whatsapp_scheduled row(s) older than "
+                f"{WA_LEGACY_EXPIRE_HOURS} h expired, never sent")
+    return n
+
+
+async def expire_stale_wa_rows(target_db=None) -> int:
+    """Permanent floor: a pending row created more than WA_QUEUE_MAX_AGE_DAYS ago is expired."""
+    d = target_db if target_db is not None else db
+    now = datetime.now(timezone.utc)
+    cutoff = (now - timedelta(days=WA_QUEUE_MAX_AGE_DAYS)).isoformat()
+    out = await d.whatsapp_scheduled.update_many(
+        {"status": "pending", "$or": [{"created_at": {"$lt": cutoff}}, {"queued_at": {"$lt": cutoff}}]},
+        {"$set": {"status": "expired", "error": f"older than {WA_QUEUE_MAX_AGE_DAYS} days, never sent",
+                  "expired_at": now.isoformat()}})
+    n = getattr(out, "modified_count", 0)
+    if n:
+        log.warning(f"[wa] {n} pending whatsapp_scheduled row(s) older than {WA_QUEUE_MAX_AGE_DAYS} days expired")
+    return n
+
+
+async def sweep_stuck_wa_scheduled(target_db=None) -> None:
+    """A row left `sending` (the worker died mid-row) for over 10 min: if a wa_messages row for it
+    exists, take that outcome; else back to `pending`, at most WA_SCHED_MAX_CLAIMS claims, then
+    `failed`. Both drainers (this one and admin_routes.run_auto_reminders) stamp claimed_at."""
+    d = target_db if target_db is not None else db
+    now = datetime.now(timezone.utc)
+    cutoff = (now - timedelta(minutes=WA_SCHED_CLAIM_MINUTES)).isoformat()
+    async for row in d.whatsapp_scheduled.find(
+            {"status": "sending", "claimed_at": {"$lt": cutoff}}, {"_id": 0}):
+        key = "scheduled_id" if row.get("scheduled_id") else "schedule_id"
+        if not row.get(key):
+            continue
+        cond = {key: row[key], "status": "sending", "claimed_at": row["claimed_at"]}
+        msg = await d.wa_messages.find_one({f"ref.{key}": row[key]}, {"_id": 0, "status": 1, "message_id": 1,
+                                                                      "fail_reason": 1})
+        if msg and msg.get("status") not in (None, "sending"):
+            st = "sent" if msg["status"] in ("delivered", "read", "played") else msg["status"]
+            await d.whatsapp_scheduled.update_one(cond, {"$set": {
+                "status": st, "wa_msg_id": msg.get("message_id", ""), "error": msg.get("fail_reason", "")}})
+        elif int(row.get("claim_count") or 1) >= WA_SCHED_MAX_CLAIMS:
+            await d.whatsapp_scheduled.update_one(cond, {"$set": {
+                "status": "failed", "error": f"stuck sending after {WA_SCHED_MAX_CLAIMS} tries"}})
+        else:
+            await d.whatsapp_scheduled.update_one(cond, {"$set": {"status": "pending"}})
+
+
+async def prepare_wa_scheduled(target_db=None) -> None:
+    """Run by both whatsapp_scheduled drainers before they look for work."""
+    await expire_legacy_wa_backlog(target_db)
+    await expire_stale_wa_rows(target_db)
+    await sweep_stuck_wa_scheduled(target_db)
 
 
 async def process_wa_queue():
@@ -272,6 +363,7 @@ async def process_wa_queue():
     send_whatsapp. Campaign rows are sent by their own background task and schedule_id rows by
     run_auto_reminders — neither is touched here (a schedule_id row used to raise KeyError and
     abort the cycle). A row scheduled for later now waits for its time (it used to fire early)."""
+    await prepare_wa_scheduled()
     now_iso = datetime.now(timezone.utc).isoformat()
     rows = await db.whatsapp_scheduled.find({
         "status": "pending", "scheduled_id": {"$exists": True}, "type": {"$ne": "campaign"},
@@ -280,7 +372,7 @@ async def process_wa_queue():
     for msg in rows:
         claim = await db.whatsapp_scheduled.update_one(
             {"scheduled_id": msg["scheduled_id"], "status": "pending"},
-            {"$set": {"status": "sending", "claimed_at": now_iso}})
+            {"$set": {"status": "sending", "claimed_at": now_iso}, "$inc": {"claim_count": 1}})
         if getattr(claim, "modified_count", 0) != 1:
             continue
         kind = _queue_kind(msg)
@@ -326,6 +418,8 @@ _DRIP_RERUN = False
 DRIP_MAX_PASSES = 3             # the first pass + up to two re-runs asked for meanwhile
 DRIP_CLAIM_MINUTES = 10
 
+
+_WA_HOLD_REASONS = frozenset({"no_sender", "sender_not_connected"})   # may come back: hold, not close
 
 _WA_SKIP_TEXT = {
     "no_consent": "no WhatsApp consent on record for this school",
@@ -509,9 +603,16 @@ async def _drip_executor_pass():
                     school_id=lead.get("school_id") or "")
                 if res["status"] in ("sent", "queued"):
                     sent = True                      # queued = accepted; the drainer sends it in hours
+                elif res["status"] == "skipped" and res["reason"] in _WA_HOLD_REASONS:
+                    # No number to send from (none linked, or it is down): the step is HELD like
+                    # the off-switch - pushed an hour, no log, no failure - not closed.
+                    await db.drip_enrollments.update_one(
+                        {"enrollment_id": enr["enrollment_id"]},
+                        {"$set": {"next_step_at": (now + timedelta(hours=1)).isoformat()}})
+                    continue
                 elif res["status"] == "skipped":
-                    # A refusal (consent, opt-out, not on WhatsApp, no number) is not a failure:
-                    # retrying would stall the school on a step that cannot send (spec W3).
+                    # A refusal (consent, opt-out, not on WhatsApp) is not a failure: retrying
+                    # would stall the school on a step that cannot send (spec W3).
                     skipped = True
                     err_detail = _WA_SKIP_TEXT.get(res["reason"], res["reason"])
                 else:
@@ -1040,7 +1141,8 @@ DAILY_DIGEST_DRY_RUN = os.getenv("DAILY_DIGEST_DRY_RUN", "0") == "1"
 
 
 async def _fms_send_wa(phone: str, text: str, *, kind: str = "alert",
-                       owner_email: str | None = None) -> tuple[bool, str]:
+                       owner_email: str | None = None, lead_id: str = "", school_id: str = "",
+                       contact_id: str = "") -> tuple[bool, str]:
     """FMS / digest WhatsApp through the one door. `alert`/`digest` (our staff) go from the company
     number; `fms` (a customer) from the record owner's. Queued counts as accepted."""
     if not phone:
@@ -1051,7 +1153,8 @@ async def _fms_send_wa(phone: str, text: str, *, kind: str = "alert",
     try:
         res = await send_whatsapp(db, to=phone, text=text, kind=kind, owner_email=owner_email,
                                   channel="company" if kind in ("alert", "digest") else "auto",
-                                  enforce_consent=False)
+                                  lead_id=lead_id or "", school_id=school_id or "",
+                                  contact_id=contact_id or "", enforce_consent=False)
     except Exception as e:
         return False, str(e)[:200]
     if res["status"] in ("sent", "queued"):

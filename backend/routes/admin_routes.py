@@ -1523,13 +1523,16 @@ async def run_auto_reminders():
             # Through the one door (W1, D3). Only schedule_id rows are ours; scheduled_id rows
             # belong to scheduler.process_wa_queue. Claimed pending -> sending before sending.
             from services.wa_send import send_whatsapp as _send_wa_one
+            from scheduler import prepare_wa_scheduled   # legacy expiry, 7-day floor, stuck sweep
+            await prepare_wa_scheduled(db)
             now_iso_full = datetime.now(timezone.utc).isoformat()
             due_scheduled = await db.whatsapp_scheduled.find(
                 {"status": "pending", "schedule_id": {"$exists": True}, "scheduled_at": {"$lte": now_iso_full}},
                 {"_id": 0}).to_list(100)
             for sched in due_scheduled:
                 claimed = await db.whatsapp_scheduled.update_one(
-                    {"schedule_id": sched["schedule_id"], "status": "pending"}, {"$set": {"status": "sending"}})
+                    {"schedule_id": sched["schedule_id"], "status": "pending"},
+                    {"$set": {"status": "sending", "claimed_at": now_iso_full}, "$inc": {"claim_count": 1}})
                 if getattr(claimed, "modified_count", 0) != 1:
                     continue
                 phone = sched.get("phone", "")

@@ -33,6 +33,9 @@ INTERNAL_KINDS = frozenset({"digest", "alert"})         # to our own staff
 MARKETING_KINDS = frozenset({"drip", "greeting", "campaign", "broadcast"})   # caps + 1/contact/day
 CONSENT_KINDS = frozenset({"drip", "greeting"})   # D10: consent gates automations only (ruling 2026-09-24)
 YOUNG_NUMBER_BLOCKED_KINDS = frozenset({"campaign", "broadcast"})           # Rollout 3 (Task 5)
+# A person picked the send time (Task 9 fix 1): business hours do not apply, like a chat; the
+# opt-out, the hourly cap, the daily cap and the gap still do.
+PERSON_TIMED_KINDS = frozenset({"scheduled"})
 AUTOSENDER_URL = "https://app.messageautosender.com/message/new"
 
 
@@ -433,6 +436,7 @@ async def _contacted_today(db, name: str, to_jid: str, now: datetime, cfg: dict)
 #   check                              chat   digest/alert  transactional  marketing
 #   opt-out / consent (D10)             –     staff exempt      skip          skip
 #   business hours 09:00–19:00 IST      –          –            queue         queue
+#     (except `scheduled`: a person picked the time - no business-hours rule, like chat)
 #   hourly cap                        queue      queue          queue         queue
 #   daily cap / warm-up                 –        queue          queue         queue
 #   one per contact per number per day  –          –              –           queue
@@ -447,6 +451,7 @@ async def _policy(db, row: dict, inst: Optional[dict], cfg: dict, *, gap_s: Opti
     now = _now()
     automated = kind not in MANUAL_KINDS                # chat: a person pressed send
     customer_facing = automated and kind not in INTERNAL_KINDS
+    hours_bound = customer_facing and kind not in PERSON_TIMED_KINDS   # 09:00-19:00 IST applies
     to_staff = kind in INTERNAL_KINDS and await _is_staff_phone(db, row["to_e164"])
     if automated and not to_staff:
         # our own staff: an opt-out does not apply to an internal digest/alert
@@ -457,7 +462,7 @@ async def _policy(db, row: dict, inst: Optional[dict], cfg: dict, *, gap_s: Opti
             if not await consent_ok(db, lead_id=row["lead_id"], contact_id=row["contact_id"],
                                     school_id=row["school_id"]):
                 return "skip", "no_consent", None
-    if customer_facing:
+    if hours_bound:
         opens = next_business_open(now, cfg)
         if opens is not None:
             return "queue", "quiet_hours", opens
@@ -466,7 +471,7 @@ async def _policy(db, row: dict, inst: Optional[dict], cfg: dict, *, gap_s: Opti
     led = await _ledger(db, inst["instance_name"], now)
     if int((led.get("hour_bucket") or {}).get(ist_hour(now), 0)) >= int(cfg["hourly_cap"]):
         nxt = _next_hour(now)
-        if customer_facing:
+        if hours_bound:
             nxt = next_business_open(nxt, cfg) or nxt
         return "queue", "hourly_cap", nxt
     if automated:
@@ -478,7 +483,7 @@ async def _policy(db, row: dict, inst: Optional[dict], cfg: dict, *, gap_s: Opti
             return "queue", "per_contact_per_day", _tomorrow_open(now, cfg)
         ok, opens_at = await _claim_gap(db, inst["instance_name"], now, cfg, gap_s)
         if not ok:
-            if customer_facing:
+            if hours_bound:
                 opens_at = next_business_open(opens_at, cfg) or opens_at
             return "queue", "gap", opens_at
     return "send", "", None
@@ -728,6 +733,41 @@ async def _mark_sent_minimal(db, message_id: str, row: dict) -> None:
         "status_history": row.get("status_history") or [], "sent_at": row.get("sent_at")}})
 
 
+async def _writeback_scheduled(db, row: dict) -> None:
+    """A campaign row that was QUEUED (Task 9 fix 4): its `whatsapp_scheduled` row said `queued`
+    when the campaign task finished; when the drainer settles the message, the outcome goes back
+    onto that row (and the campaign's counters). Only a row still reading `queued` is touched,
+    so a direct send - whose caller writes the row itself - is never written twice."""
+    ref = row.get("ref") or {}
+    sid = ref.get("scheduled_id")
+    if ref.get("writeback") != "whatsapp_scheduled" or not sid:
+        return
+    status = row["status"]
+    upd = {"status": status, "wa_msg_id": row["message_id"], "error": row.get("fail_reason") or ""}
+    if status == "sent":
+        upd.update({"wa_message_id": row.get("provider_msg_id") or "", "sent_at": row.get("sent_at")})
+    res = await db.whatsapp_scheduled.update_one({"scheduled_id": sid, "status": "queued"}, {"$set": upd})
+    cid = ref.get("campaign_id")
+    if getattr(res, "modified_count", 0) != 1 or not cid:
+        return
+    field = {"sent": "sent_count", "skipped": "skipped_count"}.get(status, "failed_count")
+    await db.whatsapp_campaigns.update_one({"campaign_id": cid}, {"$inc": {"queued_count": -1, field: 1}})
+    if not await db.whatsapp_scheduled.find_one(
+            {"campaign_id": cid, "status": {"$in": ["pending", "queued", "sending"]}}, {"_id": 1}):
+        camp = await db.whatsapp_campaigns.find_one({"campaign_id": cid}, {"_id": 0}) or {}
+        await db.whatsapp_campaigns.update_one({"campaign_id": cid}, {"$set": {
+            "status": campaign_final_status(camp), "updated_at": _iso(_now())}})
+
+
+def campaign_final_status(c: dict) -> str:
+    """queued while any row is still queued; else sent if anything went, else failed/skipped."""
+    if int(c.get("queued_count") or 0) > 0:
+        return "queued"
+    if int(c.get("sent_count") or 0) > 0:
+        return "sent"
+    return "failed" if int(c.get("failed_count") or 0) > 0 else "skipped"
+
+
 async def _finish(db, row: dict, status: str, reason: str) -> dict:
     now = _now()
     row["status"] = status
@@ -758,6 +798,10 @@ async def _finish(db, row: dict, status: str, reason: str) -> dict:
             except Exception as e:
                 log.warning("[wa] parked receipts for %s not applied: %s", row["message_id"], str(e)[:160])
         await _log_event(row)
+    try:
+        await _writeback_scheduled(db, row)
+    except Exception as e:
+        log.warning("[wa] campaign row write-back failed for %s: %s", row["message_id"], str(e)[:160])
     return {"status": status, "message_id": row["message_id"],
             "instance_name": row.get("instance_name") or "", "reason": reason}
 
