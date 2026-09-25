@@ -19,6 +19,9 @@ node_modules/
 # Testing
 /coverage
 
+# superpowers inline-execution scratch (ledger, briefs, review packages) — not project output
+.superpowers/sdd/
+
 # Next.js
 /.next/
 /out/
