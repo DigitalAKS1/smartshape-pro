@@ -6,10 +6,24 @@ import {
   integrationsApi, sheetsApi, notifPrefsApi,
 } from '../lib/api';
 
-export default function useAppSettings() {
+export const DEFAULT_TAB = 'company';
+
+/** The tab to open for `?tab=<requested>`: the requested one when it is a tab this user can
+ *  see, else the default (or the first visible tab). Without a `tabs` list, anything non-empty. */
+export function resolveTab(requested, tabs) {
+  const want = String(requested || '').trim();
+  if (!Array.isArray(tabs) || tabs.length === 0) return want || DEFAULT_TAB;
+  if (want && tabs.includes(want)) return want;
+  return tabs.includes(DEFAULT_TAB) ? DEFAULT_TAB : tabs[0];
+}
+
+export default function useAppSettings({ tabs } = {}) {
   // `?tab=` deep-links a section (alerts and Marketing link to /app-settings?tab=whatsapp).
+  // An unknown (or not-allowed) tab falls back to the default.
   const [activeTab, setActiveTab] = useState(() => {
-    try { return new URLSearchParams(window.location.search).get('tab') || 'company'; } catch { return 'company'; }
+    let requested = '';
+    try { requested = new URLSearchParams(window.location.search).get('tab') || ''; } catch { /* no URL */ }
+    return resolveTab(requested, tabs);
   });
   const [loading, setLoading] = useState(true);
   const logoRef = useRef(null);

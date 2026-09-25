@@ -3,7 +3,7 @@ import { Wifi, WifiOff, Target, Users, MessageSquare, FileText, Gift, RefreshCw,
 
 // Marketing → WhatsApp. Numbers, limits and business hours live in Settings → WhatsApp now
 // (spec 2026-09-24, W1); this tab shows the company number's state and the Blueprint.
-export default function SetupTab({ tk, waConnected, openQrDialog }) {
+export default function SetupTab({ tk, waConnected, openQrDialog, connectLabel = 'Open Settings → WhatsApp' }) {
   return (
     <div className="space-y-5">
       {/* Status bar — the company number */}
@@ -32,7 +32,7 @@ export default function SetupTab({ tk, waConnected, openQrDialog }) {
         </p>
         <button type="button" onClick={openQrDialog} data-testid="setup-open-wa-settings"
           className={`px-3 py-1.5 rounded-lg text-xs font-medium border border-[var(--border-color)] ${tk.t1} ${tk.hov}`}>
-          Open Settings → WhatsApp
+          {connectLabel}
         </button>
       </div>
 

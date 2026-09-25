@@ -4,7 +4,7 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { act } from 'react';
-import WhatsAppNumbersSection from '../WhatsAppNumbersSection';
+import WhatsAppNumbersSection, { SYSTEM_RESUME_WARNING } from '../WhatsAppNumbersSection';
 import { waNumbers } from '../../../lib/api';
 import { toast } from 'sonner';
 
@@ -25,7 +25,8 @@ const SETTINGS = {
   failure_pause_after: 5, number_check_ttl_days: 30, opt_out_keywords: ['STOP', 'UNSUBSCRIBE'],
   fallback_provider: 'none', max_instances: 4, drip_wa_enabled: false, greetings_enabled: false,
 };
-const HEALTH_AT = '2026-09-24T05:07:00+00:00';
+const HEALTH_AT = new Date().toISOString();       // a reading taken today
+const OLD_AT = '2026-01-05T05:07:00+00:00';
 const hhmm = (iso) => {
   const d = new Date(iso);
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
@@ -43,7 +44,7 @@ const makeList = (over = {}) => ({
       warmup: { day: 4, of: 14, today_sent: 12, today_cap: 40 }, warmup_day: 4, sent_today: 12, cap_today: 40,
       proxy: PROXY_MASKED, last_seen_at: null },
     { instance_name: 'rep_amit', kind: 'rep', label: 'Amit', owner_name: 'Amit', phone_e164: '919000000222',
-      state: 'paused', paused_reason: '5 sends in a row failed.', paused_by: '',
+      state: 'paused', paused_reason: '5 sends in a row failed.', paused_by: 'system',
       warmup: { day: 2, of: 14, today_sent: 0, today_cap: 20 }, warmup_day: 2, sent_today: 0, cap_today: 20,
       proxy: { host: '' }, last_seen_at: null },
   ],
@@ -145,6 +146,9 @@ test('resuming an admin pause needs no confirm; resuming a system pause does', a
 
   await click(v.q('wa-admin-resume-rep_amit'));
   expect(window.confirm).toHaveBeenCalledTimes(1);
+  expect(window.confirm.mock.calls[0][0]).toContain(SYSTEM_RESUME_WARNING);
+  expect(SYSTEM_RESUME_WARNING).toBe('This number was paused automatically after send failures / a WhatsApp logout '
+    + '— check the phone first. Resume?');
   expect(window.confirm.mock.calls[0][0]).toMatch(/5 sends in a row failed/);
   expect(waNumbers.resume).toHaveBeenCalledTimes(1);
   window.confirm = jest.fn(() => true);
@@ -241,4 +245,77 @@ test('the default proxy shows as configured from host/has_password and keeps the
   expect(waNumbers.saveDefaultProxy).toHaveBeenCalledWith({ enabled: true, host: 'gate.decodo.com', port: '10001',
     protocol: 'socks5', username: 'u1', password: 'newpw' });
   expect(v.q('wa-admin-dproxy-password').value).toBe('');
+});
+
+test('a system pause (paused_by "system") is marked automatic; an admin pause is not', async () => {
+  const v = await render();
+  expect(v.q('wa-admin-paused-reason-rep_amit').textContent).toBe('5 sends in a row failed. (automatic)');
+  expect(v.q('wa-admin-paused-reason-rep_parul').textContent).toBe('Paused by Owner');
+});
+
+test('a stale reading from another day shows its date and "(stale)", never red or the warning', async () => {
+  waNumbers.instances.mockResolvedValueOnce({ data: makeList({
+    health: { mem_available_mb: 300, at: OLD_AT, fresh: false, headroom_ok: false, min_headroom_mb: 500 } }) });
+  const v = await render();
+  const d = new Date(OLD_AT);
+  expect(v.q('wa-admin-ram').textContent)
+    .toBe(`Free RAM: 300 MB (as of ${d.getDate()} Jan, ${hhmm(OLD_AT)}) (stale)`);
+  expect(v.q('wa-admin-ram').className).not.toMatch(/text-red-500/);
+  expect(v.q('wa-admin-ram-warning')).toBeNull();
+});
+
+test('a cancelled unlink sends nothing', async () => {
+  window.confirm = jest.fn(() => false);
+  const v = await render();
+  await click(v.q('wa-admin-unlink-rep_parul'));
+  expect(window.confirm).toHaveBeenCalled();
+  expect(waNumbers.unlinkInstance).not.toHaveBeenCalled();
+});
+
+test('removing a number\'s proxy confirms first; a bad port blocks Save', async () => {
+  const v = await render();
+  act(() => { v.q('wa-admin-edit-proxy-rep_parul').click(); });
+  type(v.q('wa-admin-iproxy-port'), '70000');
+  expect(v.q('wa-admin-iproxy-save').disabled).toBe(true);
+  expect(v.q('wa-admin-iproxy-error').textContent).toMatch(/1 to 65535/);
+  type(v.q('wa-admin-iproxy-port'), '10001');
+  type(v.q('wa-admin-iproxy-host'), '');
+  window.confirm = jest.fn(() => false);
+  await click(v.q('wa-admin-iproxy-save'));
+  expect(window.confirm.mock.calls[0][0]).toBe('Removing the proxy exposes the server IP to WhatsApp — remove?');
+  expect(waNumbers.setProxy).not.toHaveBeenCalled();
+  expect(v.q('wa-admin-proxy-editor')).not.toBeNull();
+  window.confirm = jest.fn(() => true);
+  await click(v.q('wa-admin-iproxy-save'));
+  expect(waNumbers.setProxy).toHaveBeenCalledWith('rep_parul', expect.objectContaining({ host: '' }));
+});
+
+test('while the company number waits for a scan, each 20 s poll fetches a fresh QR', async () => {
+  const spy = jest.spyOn(global, 'setInterval');
+  waNumbers.linkCompany
+    .mockResolvedValueOnce({ data: { instance_name: 'smartshape', state: 'qr', qr_base64: 'data:QR1' } })
+    .mockResolvedValueOnce({ data: { instance_name: 'smartshape', state: 'qr', qr_base64: 'data:QR2' } });
+  const v = await render();
+  act(() => { v.q('wa-admin-accept').click(); });
+  await click(v.q('wa-admin-link-company'));
+  expect(v.q('wa-admin-company-qr').getAttribute('src')).toBe('data:QR1');
+  const call = spy.mock.calls.find((c) => c[1] === 20000);
+  expect(call).toBeTruthy();
+  const tick = call[0];
+
+  const inQr = makeList();
+  inQr.instances[0] = { ...inQr.instances[0], state: 'qr' };
+  waNumbers.instances.mockResolvedValueOnce({ data: inQr });
+  await act(async () => { await tick(); });
+  await flush();
+  expect(waNumbers.linkCompany).toHaveBeenCalledTimes(2);
+  expect(v.q('wa-admin-company-qr').getAttribute('src')).toBe('data:QR2');
+
+  waNumbers.instances.mockResolvedValueOnce({ data: makeList() });   // company connected
+  const tick2 = spy.mock.calls.filter((c) => c[1] === 20000).pop()[0];
+  await act(async () => { await tick2(); });
+  await flush();
+  expect(v.q('wa-admin-company-qr')).toBeNull();
+  expect(waNumbers.linkCompany).toHaveBeenCalledTimes(2);
+  spy.mockRestore();
 });

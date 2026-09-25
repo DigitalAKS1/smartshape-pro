@@ -12,6 +12,8 @@ import {
 } from 'lucide-react';
 
 import { useTk, mapCampaign, mapRule, mapSeq } from '../../lib/marketingUtils';
+import { waLinkTarget } from '../../lib/waStatus';
+import { useTeam } from '../../hooks/usePermission';
 import OverviewTab    from '../../components/marketing/OverviewTab';
 import CampaignsTab  from '../../components/marketing/CampaignsTab';
 import TemplatesTab  from '../../components/marketing/TemplatesTab';
@@ -36,6 +38,8 @@ const TABS = [
 
 export default function MarketingHub() {
   const tk = useTk();
+  // Admin test as the backend's (_is_admin: get_team == admin); useTeam mirrors get_team.
+  const waLink = waLinkTarget(useTeam() === 'admin');
 
   const [tab, setTab] = useState('overview');
   const [waConnected, setWaConnected] = useState(false);
@@ -66,8 +70,9 @@ export default function MarketingHub() {
     }).catch(() => {});
   }
 
-  // Numbers are linked in Settings → WhatsApp now (W1); every "Connect" button goes there.
-  const openQrDialog = () => { window.location.assign('/app-settings?tab=whatsapp'); };
+  // Numbers are linked in Settings → WhatsApp (admins) or My WhatsApp (everyone else) since W1;
+  // every "Connect" button goes there.
+  const openQrDialog = () => { window.location.assign(waLink.href); };
 
   useEffect(() => { reload(); }, []); // eslint-disable-line
 
@@ -113,7 +118,7 @@ export default function MarketingHub() {
                 ? <Wifi className="h-3 w-3 text-green-600 flex-shrink-0" />
                 : <QrCode className="h-3 w-3 text-amber-600 flex-shrink-0" />}
               <span className={`text-[11px] font-semibold tracking-tight ${waConnected ? 'text-green-700' : 'text-amber-700'}`}>
-                {waConnected ? 'WhatsApp On' : 'Scan QR to Connect'}
+                {waConnected ? 'WhatsApp On' : (waLink.href === '/me/whatsapp' ? waLink.label : 'Scan QR to Connect')}
               </span>
             </button>
           </div>
@@ -153,7 +158,7 @@ export default function MarketingHub() {
           {tab === 'drips'     && <DripsTab      tk={tk} drips={drips} setDrips={setDrips} />}
           {tab === 'analytics' && <AnalyticsTab  tk={tk} analytics={analytics} campaigns={campaigns} />}
           {tab === 'engagement' && <EngagementDashboardTab />}
-          {tab === 'setup'     && <SetupTab      tk={tk} waConnected={waConnected} setWaConnected={setWaConnected} evolutionState={evolutionState} openQrDialog={openQrDialog} />}
+          {tab === 'setup'     && <SetupTab      tk={tk} waConnected={waConnected} setWaConnected={setWaConnected} evolutionState={evolutionState} openQrDialog={openQrDialog} connectLabel={waLink.label} />}
           {tab === 'email'     && <EmailHubTab   tk={tk} />}
         </div>
       </div>

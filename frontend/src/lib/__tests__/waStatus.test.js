@@ -20,3 +20,9 @@ test('a broadcast result names every outcome it has', () => {
     + 'not on WhatsApp), 1 failed, 1 deal(s) with no usable phone');
   expect(describeBroadcastResult({ sent: 0 })).toBe('Broadcast: 0 sent');
 });
+
+test('"Connect WhatsApp" goes to Settings for admins and to My WhatsApp for everyone else', () => {
+  const { waLinkTarget } = require('../waStatus');
+  expect(waLinkTarget(true)).toEqual({ href: '/app-settings?tab=whatsapp', label: 'Open Settings → WhatsApp' });
+  expect(waLinkTarget(false)).toEqual({ href: '/me/whatsapp', label: 'My WhatsApp' });
+});

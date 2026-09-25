@@ -35,3 +35,11 @@ export function describeBroadcastResult(d) {
   if (d.capped_at) s += ` — capped at ${d.capped_at}, ${d.over_cap} not messaged`;
   return s;
 }
+
+/** Where a "Connect WhatsApp" button goes: admins manage every number in Settings → WhatsApp;
+ *  everyone else links their own company SIM on My WhatsApp (the admin page answers them 403). */
+export function waLinkTarget(isAdmin) {
+  return isAdmin
+    ? { href: '/app-settings?tab=whatsapp', label: 'Open Settings → WhatsApp' }
+    : { href: '/me/whatsapp', label: 'My WhatsApp' };
+}

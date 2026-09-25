@@ -57,6 +57,19 @@ const hhmm = (iso) => {
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? '' : `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 };
+/** "HH:MM" for a reading taken today (local), else "24 Sep, HH:MM". */
+const asOf = (iso, now = new Date()) => {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  if (d.toDateString() === now.toDateString()) return hhmm(iso);
+  return `${d.getDate()} ${d.toLocaleString('en-GB', { month: 'short' })}, ${hhmm(iso)}`;
+};
+const validPort = (v) => isInt(v) && Number(v) >= 1 && Number(v) <= 65535;
+/** wa_send.pause_instance writes paused_by "system" (failure streak, WhatsApp logout/ban); an
+ *  admin's pause carries the admin's email. Older rows may have it empty. */
+export const isSystemPause = (i) => !i.paused_by || i.paused_by === 'system';
+export const SYSTEM_RESUME_WARNING = 'This number was paused automatically after send failures / a WhatsApp logout '
+  + '— check the phone first. Resume?';
 const fmtWhen = (iso) => {
   if (!iso) return '—';
   const d = new Date(iso);
@@ -157,9 +170,15 @@ export default function WhatsAppNumbersSection() {
       try {
         const d = await loadList();
         const c = (d?.instances || []).find((i) => i.kind === 'company');
-        if (c && (c.state === 'connected' || c.state === 'paused') && mounted.current) {
+        if (!mounted.current || !c) return;
+        if (c.state === 'connected' || c.state === 'paused') {
           setCompanyQr('');
           toast.success('Company number connected');
+        } else if (c.state === 'qr') {
+          // A WhatsApp QR expires in about 20-40 s: fetch a fresh one (the route returns the
+          // cached QR while it is under 20 s old, else asks Evolution for a new one).
+          const r = await waNumbers.linkCompany({ notice_accepted: true });
+          if (mounted.current && r?.data?.qr_base64) setCompanyQr(qrSrc(r.data.qr_base64));
         }
       } catch { /* the next tick tries again */ }
     }, QR_POLL_MS);
@@ -198,8 +217,8 @@ export default function WhatsAppNumbersSection() {
     run(() => waNumbers.pause(i.instance_name, reason.trim()), 'Number paused');
   };
   const resume = (i) => {
-    if (!i.paused_by && !window.confirm(`This number was paused automatically: ${i.paused_reason || 'no reason recorded'}\n\n`
-      + 'Resume it anyway? Check the phone first — a banned or logged-out number will fail again.')) return;
+    if (isSystemPause(i) && !window.confirm(SYSTEM_RESUME_WARNING
+      + (i.paused_reason ? `\n\nReason: ${i.paused_reason}` : ''))) return;
     run(() => waNumbers.resume(i.instance_name), 'Number resumed');
   };
   const unlink = (i) => {
@@ -219,12 +238,15 @@ export default function WhatsAppNumbersSection() {
     run(() => waNumbers.updateInstance(i.instance_name, { daily_cap_override: t === '' ? null : Number(t) }), 'Limit saved');
   };
   const openProxyEditor = (i) => setEditProxy({
-    name: i.instance_name, host: i.proxy?.host || '', port: i.proxy?.port ? String(i.proxy.port) : '',
+    name: i.instance_name, had_host: i.proxy?.host || '', host: i.proxy?.host || '', port: i.proxy?.port ? String(i.proxy.port) : '',
     protocol: i.proxy?.protocol || 'socks5', username: i.proxy?.username || '', password: '',
     has_password: !!i.proxy?.has_password,
   });
   const saveInstanceProxy = async () => {
-    const { name, has_password: _hp, ...body } = editProxy;
+    const { name, has_password: _hp, had_host: hadHost, ...body } = editProxy;
+    if (body.host.trim() && !validPort(body.port)) return;
+    if (!body.host.trim() && hadHost
+      && !window.confirm('Removing the proxy exposes the server IP to WhatsApp — remove?')) return;
     const r = await run(() => waNumbers.setProxy(name, body), body.host ? 'Proxy saved' : 'Proxy removed');
     if (r && mounted.current) setEditProxy(null);
   };
@@ -244,7 +266,8 @@ export default function WhatsAppNumbersSection() {
     }
   };
 
-  const dproxyError = dproxy.host.trim() && !(isInt(dproxy.port) && Number(dproxy.port) >= 1 && Number(dproxy.port) <= 65535)
+  const dproxyError = dproxy.host.trim() && !validPort(dproxy.port) ? 'Port must be a number from 1 to 65535' : '';
+  const iproxyError = editProxy && editProxy.host.trim() && !validPort(editProxy.port)
     ? 'Port must be a number from 1 to 65535' : '';
   const saveDefaultProxy = async () => {
     const body = { enabled: !!dproxy.enabled && !!dproxy.host.trim(), host: dproxy.host.trim(), port: String(dproxy.port || ''),
@@ -261,7 +284,8 @@ export default function WhatsAppNumbersSection() {
   const h = data.health || {};
   const minMb = h.min_headroom_mb || RAM_MIN_MB;
   const hasRam = h.mem_available_mb != null;
-  const ramLow = hasRam && Number(h.mem_available_mb) < minMb;
+  const stale = h.fresh === false;               // an old host reading is shown, but never alarms
+  const ramLow = hasRam && !stale && Number(h.mem_available_mb) < minMb;
   const instances = data.instances || [];
   const company = instances.find((i) => i.kind === 'company');
   const dproxyConfigured = !!dproxy.host;
@@ -282,7 +306,7 @@ export default function WhatsAppNumbersSection() {
         </p>
         <p data-testid="wa-admin-ram" className={`text-xs ${ramLow ? 'text-red-500 font-semibold' : 'text-[var(--text-muted)]'}`}>
           {hasRam
-            ? `Free RAM: ${h.mem_available_mb} MB${h.at ? ` (as of ${hhmm(h.at)})` : ''}`
+            ? `Free RAM: ${h.mem_available_mb} MB${h.at ? ` (as of ${asOf(h.at)})` : ''}${stale ? ' (stale)' : ''}`
             : 'Free RAM: not reported yet (the hourly host check has not run)'}
         </p>
         {hasRam && (h.mem_total_mb != null || h.evolution_mem_mb != null) && (
@@ -328,7 +352,7 @@ export default function WhatsAppNumbersSection() {
                     </span>
                     {i.state === 'paused' && i.paused_reason && (
                       <div className={MUTED} data-testid={`wa-admin-paused-reason-${n}`}>
-                        {i.paused_reason}{i.paused_by ? '' : ' (automatic)'}
+                        {i.paused_reason}{isSystemPause(i) ? ' (automatic)' : ''}
                       </div>
                     )}
                     {i.unlinked_detail && i.state === 'unlinked' && <div className={MUTED}>{i.unlinked_detail}</div>}
@@ -368,12 +392,13 @@ export default function WhatsAppNumbersSection() {
               type={k === 'password' ? 'password' : 'text'} value={editProxy[k]}
               onChange={(e) => setEditProxy({ ...editProxy, [k]: e.target.value })} />
           ))}
+          {iproxyError && <p className="sm:col-span-2 text-xs text-red-500" data-testid="wa-admin-iproxy-error">{iproxyError}</p>}
           <select className={INPUT} data-testid="wa-admin-iproxy-protocol" value={editProxy.protocol}
             onChange={(e) => setEditProxy({ ...editProxy, protocol: e.target.value })}>
             {PROTOCOLS.map((p) => <option key={p} value={p}>{p}</option>)}
           </select>
           <div className="flex gap-2">
-            <button type="button" className={BTN_PRIMARY} disabled={busy} data-testid="wa-admin-iproxy-save"
+            <button type="button" className={BTN_PRIMARY} disabled={busy || !!iproxyError} data-testid="wa-admin-iproxy-save"
               onClick={saveInstanceProxy}>Save</button>
             <button type="button" className={BTN} data-testid="wa-admin-iproxy-cancel" onClick={() => setEditProxy(null)}>Cancel</button>
           </div>
