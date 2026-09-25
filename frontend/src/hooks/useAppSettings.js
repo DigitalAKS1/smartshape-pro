@@ -7,7 +7,10 @@ import {
 } from '../lib/api';
 
 export default function useAppSettings() {
-  const [activeTab, setActiveTab] = useState('company');
+  // `?tab=` deep-links a section (alerts and Marketing link to /app-settings?tab=whatsapp).
+  const [activeTab, setActiveTab] = useState(() => {
+    try { return new URLSearchParams(window.location.search).get('tab') || 'company'; } catch { return 'company'; }
+  });
   const [loading, setLoading] = useState(true);
   const logoRef = useRef(null);
 

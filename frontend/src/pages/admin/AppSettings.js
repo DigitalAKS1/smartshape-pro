@@ -16,7 +16,7 @@ import KeepInTouchSection from '../../components/settings/KeepInTouchSection';
 import BalanceReminderSection from '../../components/settings/BalanceReminderSection';
 import OrdersReportSection from '../../components/settings/OrdersReportSection';
 import SchoolPortalSection from '../../components/settings/SchoolPortalSection';
-import WhatsAppConnectionSection from '../../components/settings/WhatsAppConnectionSection';
+import WhatsAppNumbersSection from '../../components/settings/WhatsAppNumbersSection';
 import CallingSection from '../../components/settings/CallingSection';
 import SecurityTab from '../../components/settings/SecurityTab';
 import IntegrationsOverview from '../../components/settings/IntegrationsOverview';
@@ -144,7 +144,7 @@ export default function AppSettings() {
 
             {s.activeTab === 'whatsapp' && (
               <div className="mb-4">
-                <WhatsAppConnectionSection />
+                <WhatsAppNumbersSection />
               </div>
             )}
 

@@ -506,23 +506,9 @@ export const whatsApp = {
   getQueue:       (params) => API.get('/whatsapp/queue', { params }),
   getProvider:    ()       => API.get('/whatsapp/provider'),
   saveProvider:   (data)   => API.post('/whatsapp/provider', data),
-  // ── Evolution API — WhatsApp instance management ──────────────────────────
-  instanceConnect: ()           => API.post('/whatsapp/instance/create'),
+  // Company number's state, read-only ({state: open|connecting|close}). Numbers are managed
+  // through `waNumbers` (Settings → WhatsApp and My WhatsApp) since W1.
   instanceStatus:  ()           => API.get('/whatsapp/instance/status'),
-  instanceQR:      ()           => API.get('/whatsapp/instance/qr'),
-  instanceLogout:  ()           => API.delete('/whatsapp/instance/logout'),
-  // ── Multi-instance management ─────────────────────────────────────────────
-  listInstances:   ()           => API.get('/whatsapp/instances'),
-  createInstance:  (name)       => API.post(`/whatsapp/instances/${name}`),
-  deleteInstance:  (name)       => API.delete(`/whatsapp/instances/${name}`),
-  instanceQRFor:   (name)       => API.get(`/whatsapp/instances/${name}/qr`),
-  instanceStatusFor: (name)     => API.get(`/whatsapp/instances/${name}/status`),
-  // ── Proxy configuration ───────────────────────────────────────────────────
-  getProxy:        (name)       => API.get(`/whatsapp/proxy/${name}`),
-  setProxy:        (name, data) => API.post(`/whatsapp/proxy/${name}`, data),
-  // Persisted residential-proxy config (applied to the default instance)
-  getProxyConfig:  ()           => API.get('/whatsapp/proxy-config'),
-  saveProxyConfig: (data)       => API.post('/whatsapp/proxy-config', data),
   // ── Attachments ───────────────────────────────────────────────────────────
   uploadAttachment: (file) => {
     const fd = new FormData();
