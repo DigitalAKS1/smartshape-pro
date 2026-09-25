@@ -13,8 +13,10 @@ that safe to press:
   * every stage is included, won and lost too — the broadcast never filtered by
     stage, and the roll-up does not change that.
 
-No real sends: `_send_wa_autosender` is replaced by a recorder in every test,
-and httpx.AsyncClient is replaced by one that fails the test if it is touched.
+No real sends: every message goes through services.wa_send.send_whatsapp to the
+`fake_evolution` recorder (conftest), and httpx.AsyncClient is replaced by one that
+fails the test if it is touched. A broadcast is not consent-gated (only drips and
+greetings are, D10); the preview reports `no_consent`, how many lack it.
 
 Run:
     DB_NAME=smartshape_test MONGO_URL=mongodb://localhost:27017 \
@@ -34,6 +36,7 @@ from mongomock_motor import AsyncMongoMockClient
 import rbac
 import routes.crm_routes as crm
 import routes.settings_routes as settings_mod
+from wa_fixtures import seed_wa, wire_wa
 
 ADMIN = {"email": "info@smartshape.in", "name": "Owner", "role": "admin"}
 REP = {
@@ -67,14 +70,14 @@ def db(monkeypatch):
 
 
 @pytest.fixture()
-def sender(monkeypatch):
-    """Records every send; the provider is never called."""
+def sender(monkeypatch, db, fake_evolution):
+    """Records every send (as the E.164 number Evolution was asked for); nothing leaves."""
+    wire_wa(monkeypatch, db, fake_evolution)
     calls = []
 
-    async def _record(wa_settings, phone, message):
-        calls.append({"phone": phone, "message": message})
-        return True
-    monkeypatch.setattr(settings_mod, "_send_wa_autosender", _record)
+    async def _rec(s):
+        calls.append({"phone": s["number"], "message": s["text"]})
+    fake_evolution.on_send = _rec
     return calls
 
 
@@ -89,7 +92,7 @@ def _run(coro):
 
 
 async def _seed_common(db):
-    await db.settings.insert_one({"type": "whatsapp", "username": "u", "password": "p"})
+    await seed_wa(db)
     await db.tags.insert_one({"tag_id": "t_gslc", "name": "GSLC 2026"})
     # The tag sits on one person; the school's deals are reached through her (D2 -> D3).
     await db.schools.insert_one({"school_id": "s1", "school_name": "DPS", "is_deleted": False})
@@ -131,7 +134,7 @@ def test_deals_sharing_a_phone_get_one_message_and_bad_phones_are_skipped(db, se
 
         out = await _send()
         assert len(sender) == 2, "one send per unique normalised phone"
-        assert sorted(c["phone"] for c in sender) == ["+91 98765 43210", "9123456789"]
+        assert sorted(c["phone"] for c in sender) == ["919123456789", "919876543210"]
         # The merged message is personalised from the OLDEST deal, so the preview
         # and the send always name the same person.
         assert any(c["message"] == "Hi Name l_a at DPS" for c in sender)
@@ -164,10 +167,12 @@ def test_preview_sends_nothing_and_matches_what_the_send_reports(db, sender, mon
         assert sender == [], "the preview must not send"
         assert await db.whatsapp_logs.count_documents({}) == 0
         assert preview == {"deals": 4, "unique_recipients": 2, "skipped_no_phone": 1,
-                           "capped_at": None, "over_cap": 0}
+                           "capped_at": None, "over_cap": 0, "no_consent": 2}
 
         out = await _send()
-        assert {k: out[k] for k in preview} == preview
+        assert {k: out[k] for k in preview if k != "no_consent"} == {
+            k: v for k, v in preview.items() if k != "no_consent"}
+        assert out["sent"] == 2, "no consent does not stop a broadcast (D10: drips/greetings only)"
         assert len(sender) == preview["unique_recipients"]
     _run(go())
 
@@ -251,6 +256,6 @@ def test_deleted_deals_and_deals_outside_the_tag_are_not_messaged(db, sender, mo
         await _deal(db, "l_deleted", "9000000002", is_deleted=True)
         await _deal(db, "l_elsewhere", "9000000003", school="s_other")
         out = await _send()
-        assert [c["phone"] for c in sender] == ["9000000001"]
+        assert [c["phone"] for c in sender] == ["919000000001"]
         assert out["deals"] == 1
     _run(go())

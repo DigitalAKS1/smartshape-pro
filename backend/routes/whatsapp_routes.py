@@ -8,7 +8,7 @@ import logging
 
 from database import db
 from auth_utils import get_current_user
-from services.evolution_client import evolution
+from services.wa_send import send_whatsapp, consent_ok
 from services.ai_personalizer import personalize_message
 from services.tag_scope import resolve_tag_scope
 
@@ -552,7 +552,6 @@ async def launch_campaign(campaign_id: str, request: Request, background_tasks: 
 
     # Fire-and-forget background task — does AI personalisation + Evolution API sending
     ai_enabled = camp.get("ai_personalization", True)
-    send_delay = float(os.getenv("WA_SEND_DELAY_SECONDS", "3"))
     background_tasks.add_task(
         _send_campaign_background,
         campaign_id=campaign_id,
@@ -560,108 +559,56 @@ async def launch_campaign(campaign_id: str, request: Request, background_tasks: 
         template=message,
         attachment_doc=attachment_doc,
         ai_enabled=ai_enabled,
-        send_delay=send_delay,
     )
 
-    return {"queued": queued, "status": new_status, "ai_enabled": ai_enabled}
+    # A campaign is not consent-gated (only drips and greetings are, D10), but the launcher is
+    # told how many recipients have no WhatsApp consent on record.
+    no_consent = 0
+    for contact in contacts:
+        if (contact.get("phone") or contact.get("whatsapp") or "").strip() and not await consent_ok(
+                db, lead_id=contact.get("lead_id") or "", contact_id=contact.get("contact_id") or "",
+                school_id=contact.get("school_id") or ""):
+            no_consent += 1
+
+    return {"queued": queued, "status": new_status, "ai_enabled": ai_enabled, "no_consent": no_consent}
 
 
-async def _send_campaign_background(
-    campaign_id: str,
-    sched_ids: list,
-    template: str,
-    attachment_doc: Optional[dict],
-    ai_enabled: bool,
-    send_delay: float,
-):
-    """
-    Background task: AI-personalise → Evolution API send → update status.
-    Runs after the HTTP response has been returned to the frontend.
-    Rate-limited to `send_delay` seconds between messages (default 3 s).
-    """
-    connected = await evolution.is_connected()
-    if not connected:
-        logger.warning(f"Campaign {campaign_id}: Evolution API not connected — messages will stay 'pending' until WhatsApp is linked")
-
-    sent = failed = 0
-    now_iso = datetime.now(timezone.utc).isoformat()
-
+async def _send_campaign_background(campaign_id: str, sched_ids: list, template: str,
+                                    attachment_doc: Optional[dict], ai_enabled: bool):
+    """AI-personalise each message, then hand it to send_whatsapp (W1, D3): each contact is sent
+    from its owner's number (contact owner, else school owner, else the company's; a rep number
+    still warming up -> the company's), with opt-out, caps and business hours enforced by the
+    service - which also paces and queues the sends, so there is no fixed delay here any more."""
+    counts = {"sent": 0, "queued": 0, "skipped": 0, "failed": 0}
     for sched_id in sched_ids:
         doc = await db.whatsapp_scheduled.find_one({"scheduled_id": sched_id}, {"_id": 0})
         if not doc:
             continue
-
-        phone    = doc["phone"]
-        contact  = doc.get("contact_snapshot", {})
-        camp_name = doc.get("campaign_name", "")
-
-        # 1. Personalise with Claude (or fallback)
         try:
-            personalised_msg = await personalize_message(
-                template=template,
-                contact=contact,
-                campaign_name=camp_name,
-                ai_enabled=ai_enabled,
-            )
+            personalised_msg = await personalize_message(template=template, contact=doc.get("contact_snapshot", {}),
+                                                         campaign_name=doc.get("campaign_name", ""),
+                                                         ai_enabled=ai_enabled)
         except Exception as exc:
             logger.error(f"Personalisation error for {sched_id}: {exc}")
-            personalised_msg = template   # last-resort fallback
-
-        # Store the personalised message
-        await db.whatsapp_scheduled.update_one(
-            {"scheduled_id": sched_id},
-            {"$set": {"message": personalised_msg}},
-        )
-
-        # 2. Send via Evolution API (if connected)
-        if not connected:
-            await asyncio.sleep(0)
-            continue
-
+            personalised_msg = template
         try:
-            att_type = (attachment_doc or {}).get("attachment_type", "none")
-            att_url  = (attachment_doc or {}).get("url", "")
-            att_name = (attachment_doc or {}).get("filename", "attachment")
-
-            result = await evolution.send_message_with_attachment(
-                phone=phone,
-                text=personalised_msg,
-                attachment_url=att_url or None,
-                attachment_type=att_type if att_url else "none",
-                attachment_filename=att_name,
-            )
-            wa_id = (result.get("key") or {}).get("id") or result.get("id", "")
-            await db.whatsapp_scheduled.update_one(
-                {"scheduled_id": sched_id},
-                {"$set": {
-                    "status": "sent",
-                    "sent_at": datetime.now(timezone.utc).isoformat(),
-                    "wa_message_id": wa_id,
-                }},
-            )
-            sent += 1
+            res = await send_whatsapp(db, to=doc["phone"], text=personalised_msg, media=attachment_doc, kind="campaign",
+                                      contact_id=doc.get("contact_id") or "",
+                                      ref={"campaign_id": campaign_id, "scheduled_id": sched_id,
+                                           "dedup_key": f"camp:{campaign_id}:{sched_id}"})
         except Exception as exc:
-            logger.error(f"Evolution send failed for {sched_id} ({phone}): {exc}")
-            await db.whatsapp_scheduled.update_one(
-                {"scheduled_id": sched_id},
-                {"$set": {"status": "failed", "error": str(exc)[:200]}},
-            )
-            failed += 1
-
-        await asyncio.sleep(send_delay)  # rate-limit: don't flood WhatsApp
-
-    # Final campaign status update
-    final_status = "sent" if sent > 0 else ("failed" if failed == len(sched_ids) else "queued")
-    await db.whatsapp_campaigns.update_one(
-        {"campaign_id": campaign_id},
-        {"$set": {
-            "status": final_status,
-            "sent_count": sent,
-            "failed_count": failed,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        }},
-    )
-    logger.info(f"Campaign {campaign_id} complete — sent={sent} failed={failed}")
+            res = {"status": "failed", "message_id": "", "reason": str(exc)[:200]}
+        counts[res["status"]] = counts.get(res["status"], 0) + 1
+        await db.whatsapp_scheduled.update_one({"scheduled_id": sched_id}, {"$set": {
+            "message": personalised_msg, "status": res["status"], "wa_msg_id": res.get("message_id", ""),
+            "error": res.get("reason", ""), "sent_at": datetime.now(timezone.utc).isoformat()}})
+    delivered = counts["sent"] + counts["queued"]
+    final_status = "sent" if delivered else ("failed" if counts["failed"] else "queued")
+    await db.whatsapp_campaigns.update_one({"campaign_id": campaign_id}, {"$set": {
+        "status": final_status, "sent_count": delivered, "queued_count": counts["queued"],
+        "skipped_count": counts["skipped"], "failed_count": counts["failed"],
+        "updated_at": datetime.now(timezone.utc).isoformat()}})
+    logger.info(f"Campaign {campaign_id} complete — {counts}")
 
 
 # ── Analytics endpoint ─────────────────────────────────────────────────────────

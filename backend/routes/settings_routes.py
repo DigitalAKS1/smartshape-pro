@@ -428,7 +428,8 @@ async def integrations_status(request: Request):
 
     return {
         "gmail":      {"configured": _has(email, "sender_email", "gmail_app_password")},
-        "whatsapp":   {"configured": _has(wa, "username", "password")},
+        "whatsapp":   {"configured": bool(await db.wa_instances.find_one({"kind": "company", "state": "connected"}, {"_id": 1}))
+                       or _has(wa, "username", "password")},
         "zoom":       {"configured": _has(zoom, "account_id", "client_id", "client_secret")},
         "cloudinary": {"configured": _has(cloud, "cloud_name", "api_key", "api_secret")},
         "ai":         {"configured": bool(ai and (ai.get("gemini_api_key") or "").strip())},
@@ -517,56 +518,39 @@ async def create_zoom_meeting(request: Request):
 
 @router.post("/whatsapp/send")
 async def send_whatsapp_message(request: Request):
+    """A one-off message typed in the app (Settings -> test message), from the company number."""
     user = await get_current_user(request)
     body = await request.json()
-    wa_settings = await db.settings.find_one({"type": "whatsapp"}, {"_id": 0})
-    if not wa_settings or not wa_settings.get("username"):
-        raise HTTPException(status_code=400, detail="WhatsApp not configured. Go to Settings.")
-    phone = body.get("phone", "")
-    message = body.get("message", "")
+    phone, message = body.get("phone", ""), body.get("message", "")
     if not phone or not message:
         raise HTTPException(status_code=400, detail="phone and message required")
-    import httpx
-    try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(
-                "https://app.messageautosender.com/message/new",
-                data={
-                    "username": wa_settings["username"],
-                    "password": wa_settings["password"],
-                    "receiverMobileNo": phone,
-                    "message": message,
-                },
-            )
-            return {"success": True, "status_code": resp.status_code, "response": resp.text[:500]}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+    from services.wa_send import send_whatsapp
+    res = await send_whatsapp(db, to=phone, text=message, kind="chat", channel="company", typed_by=user["email"])
+    return {"success": res["status"] in ("sent", "queued"), **res,
+            "error": "" if res["status"] in ("sent", "queued") else res["reason"]}
+
+
+_WA_IMAGE_EXT = ("jpg", "jpeg", "png", "webp", "gif")
+_WA_VIDEO_EXT = ("mp4", "mov", "webm")
 
 
 @router.post("/whatsapp/send-file")
 async def send_whatsapp_file(request: Request):
     user = await get_current_user(request)
     body = await request.json()
-    wa_settings = await db.settings.find_one({"type": "whatsapp"}, {"_id": 0})
-    if not wa_settings or not wa_settings.get("username"):
-        raise HTTPException(status_code=400, detail="WhatsApp not configured")
-    phone = body.get("phone", "")
-    message = body.get("message", "")
-    file_url = body.get("file_url", "")
+    phone, message, file_url = body.get("phone", ""), body.get("message", ""), body.get("file_url", "")
     if not phone:
         raise HTTPException(status_code=400, detail="phone required")
-    import httpx
-    try:
-        data = {"username": wa_settings["username"], "password": wa_settings["password"], "receiverMobileNo": phone}
-        if message:
-            data["message"] = message
-        if file_url:
-            data["filePathUrl"] = file_url
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post("https://app.messageautosender.com/message/new", data=data)
-            return {"success": True, "status_code": resp.status_code, "response": resp.text[:500]}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+    media = None
+    if file_url:
+        ext = file_url.rsplit(".", 1)[-1].lower() if "." in file_url else ""
+        media = {"type": "image" if ext in _WA_IMAGE_EXT else "video" if ext in _WA_VIDEO_EXT else "document",
+                 "url": file_url, "filename": file_url.rsplit("/", 1)[-1]}
+    from services.wa_send import send_whatsapp
+    res = await send_whatsapp(db, to=phone, text=message, media=media, kind="chat", channel="company",
+                              typed_by=user["email"])
+    return {"success": res["status"] in ("sent", "queued"), **res,
+            "error": "" if res["status"] in ("sent", "queued") else res["reason"]}
 
 
 # ==================== WHATSAPP TEMPLATE MASTER (FMS Phase 4) ====================
@@ -777,27 +761,16 @@ async def send_via_template(request: Request):
     if send_mode == "manual":
         log_doc["status"] = "manual_sent"
     else:
-        wa_settings = await db.settings.find_one({"type": "whatsapp"}, {"_id": 0})
-        if not wa_settings or not wa_settings.get("username"):
-            log_doc["status"] = "wa_not_configured"
-        else:
-            import httpx
-            try:
-                async with httpx.AsyncClient(timeout=30) as client:
-                    resp = await client.post(
-                        "https://app.messageautosender.com/message/new",
-                        data={
-                            "username": wa_settings["username"],
-                            "password": wa_settings["password"],
-                            "receiverMobileNo": phone,
-                            "message": msg,
-                        },
-                    )
-                    log_doc["status"] = "sent" if 200 <= resp.status_code < 300 else "failed"
-                    log_doc["response"] = resp.text[:500]
-            except Exception as e:
-                log_doc["status"] = "error"
-                log_doc["response"] = str(e)[:500]
+        from services.wa_send import send_whatsapp
+        res = await send_whatsapp(
+            db, to=phone, text=msg, kind="chat", owner_email=user["email"], typed_by=user["email"],
+            lead_id=body.get("lead_id") or "", contact_id=body.get("contact_id") or "",
+            school_id=body.get("school_id") or "",
+            ref={"template_id": body.get("template_id"), "order_id": body.get("order_id")})
+        log_doc["status"] = res["status"] if res["status"] != "skipped" else f"skipped:{res['reason']}"
+        log_doc["response"] = res["reason"] or None
+        log_doc["wa_message_id"] = res["message_id"]
+        log_doc["instance_name"] = res["instance_name"]
 
     await db.whatsapp_logs.insert_one(log_doc)
 
@@ -922,7 +895,7 @@ async def _tag_broadcast_audience(tag_id: str) -> dict:
         deals = await db.leads.find(
             {"lead_id": {"$in": lead_ids}, "is_deleted": {"$ne": True}},
             {"_id": 0, "lead_id": 1, "contact_phone": 1, "contact_name": 1,
-             "company_name": 1, "school_name": 1, "created_at": 1},
+             "company_name": 1, "school_name": 1, "created_at": 1, "assigned_to": 1, "school_id": 1},
         ).to_list(None)
     # Oldest deal first, so the name a merged message is personalised with is
     # stable from one preview to the send.
@@ -957,18 +930,17 @@ def _audience_counts(aud: dict) -> dict:
     return {k: aud[k] for k in ("deals", "unique_recipients", "skipped_no_phone", "capped_at", "over_cap")}
 
 
-async def _send_wa_autosender(wa_settings: dict, phone: str, message: str) -> bool:
-    """One message through the MessageAutoSender account in Settings. True when
-    the provider accepted it. Its own function so tests replace it — nothing in
-    the test suite may reach the real provider."""
-    import httpx
-    async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.post(
-            "https://app.messageautosender.com/message/new",
-            data={"username": wa_settings["username"], "password": wa_settings["password"],
-                  "receiverMobileNo": phone, "message": message},
-        )
-    return 200 <= resp.status_code < 300
+async def _count_without_consent(recipients: list) -> int:
+    """How many of these people have no WhatsApp consent on record (lead, else contact, else
+    school - services.wa_send.consent_ok). A broadcast is NOT consent-gated (only drips and
+    greetings are, D10); the preview just says how many would be messaged without it."""
+    from services.wa_send import consent_ok
+    n = 0
+    for person in recipients:
+        lead = person["lead"]
+        if not await consent_ok(db, lead_id=lead.get("lead_id") or "", school_id=lead.get("school_id") or ""):
+            n += 1
+    return n
 
 
 @router.get("/whatsapp/broadcast-by-tag/preview")
@@ -980,7 +952,8 @@ async def whatsapp_broadcast_by_tag_preview(request: Request, tag_id: str = ""):
         raise HTTPException(status_code=403, detail="Admin only")
     if not (tag_id or "").strip():
         raise HTTPException(status_code=400, detail="tag_id is required")
-    return _audience_counts(await _tag_broadcast_audience(tag_id.strip()))
+    aud = await _tag_broadcast_audience(tag_id.strip())
+    return {**_audience_counts(aud), "no_consent": await _count_without_consent(aud["recipients"])}
 
 
 @router.post("/whatsapp/broadcast-by-tag")
@@ -994,9 +967,9 @@ async def whatsapp_broadcast_by_tag(request: Request):
     if not tag_id or not isinstance(tag_id, str):
         raise HTTPException(status_code=400, detail="tag_id is required")
 
-    wa_settings = await db.settings.find_one({"type": "whatsapp"}, {"_id": 0})
-    if not wa_settings or not wa_settings.get("username"):
-        raise HTTPException(status_code=400, detail="WhatsApp not configured")
+    from services.wa_send import send_whatsapp, wa_available
+    if not await wa_available(db):
+        raise HTTPException(status_code=400, detail="WhatsApp is not connected — link the company number in Settings → WhatsApp")
 
     # Get template body if provided
     template_body = body.get("message", "")
@@ -1011,39 +984,34 @@ async def whatsapp_broadcast_by_tag(request: Request):
     # The tag roll-up's deals, merged into one message per person by phone —
     # see _tag_broadcast_audience, which the preview shares.
     aud = await _tag_broadcast_audience(tag_id)
-    sent, failed = 0, 0
+    # Each person goes through send_whatsapp (W1, D3): from the deal owner's number (a number
+    # still warming up -> the company's), with opt-out, hours and caps enforced there. Outside
+    # hours / over a cap it is QUEUED and the drainer sends it later - never waited on here.
+    counts = {"sent": 0, "queued": 0, "skipped": 0, "failed": 0}
     now_iso = datetime.now(timezone.utc).isoformat()
-
     for person in aud["recipients"]:
         lead = person["lead"]
         phone = person["phone"]
         school = lead.get("company_name") or lead.get("school_name") or ""
         msg = template_body.replace("{contact_name}", lead.get("contact_name") or "").replace("{school_name}", school)
         try:
-            ok = await _send_wa_autosender(wa_settings, phone, msg)
-        except Exception:
-            ok = False
-        status = "sent" if ok else "failed"
-        if ok:
-            sent += 1
-        else:
-            failed += 1
+            res = await send_whatsapp(
+                db, to=phone, text=msg, kind="broadcast", owner_email=lead.get("assigned_to") or None,
+                lead_id=lead.get("lead_id") or "", school_id=lead.get("school_id") or "", typed_by=user["email"],
+                ref={"tag_id": tag_id, "lead_ids": person["lead_ids"], "template_id": template_id})
+        except Exception as exc:
+            res = {"status": "failed", "message_id": "", "reason": str(exc)[:200]}
+        counts[res["status"]] = counts.get(res["status"], 0) + 1
         await db.whatsapp_logs.insert_one({
-            "log_id": f"wal_{uuid.uuid4().hex[:10]}",
-            "template_id": template_id,
-            "phone": phone,
-            "body": msg,
-            "lead_id": lead.get("lead_id"),
-            "lead_ids": person["lead_ids"],     # every deal this one message covered
-            "send_mode": "broadcast_tag",
-            "status": status,
-            "sent_by": user["email"],
-            "sent_at": now_iso,
-        })
-    # `skipped` and `total` keep their old meanings for older callers: deals with
-    # no usable phone, and deals considered.
-    return {"sent": sent, "failed": failed, "skipped": aud["skipped_no_phone"],
-            "total": aud["deals"], **_audience_counts(aud)}
+            "log_id": f"wal_{uuid.uuid4().hex[:10]}", "template_id": template_id, "phone": phone, "body": msg,
+            "lead_id": lead.get("lead_id"), "lead_ids": person["lead_ids"], "send_mode": "broadcast_tag",
+            "status": res["status"], "wa_message_id": res.get("message_id", ""), "reason": res.get("reason", ""),
+            "sent_by": user["email"], "sent_at": now_iso})
+    # `skipped` and `total` keep their old meanings for older callers: deals with no usable phone,
+    # and deals considered. `skipped_policy` = refused by opt-out / not on WhatsApp / no sender.
+    return {"sent": counts["sent"], "queued": counts["queued"], "skipped_policy": counts["skipped"],
+            "failed": counts["failed"], "skipped": aud["skipped_no_phone"], "total": aud["deals"],
+            **_audience_counts(aud)}
 
 
 # ==================== EMAIL BROADCAST BY TAG ====================

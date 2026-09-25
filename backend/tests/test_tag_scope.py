@@ -371,34 +371,15 @@ def test_tag_targeted_drip_still_refuses_a_tag_that_reaches_no_school(db, monkey
 
 # ── WhatsApp: POST /whatsapp/broadcast-by-tag — messages LEADS (D3) ─────────
 
-class _FakeHttpClient:
-    """Stands in for httpx.AsyncClient: records every send, sends nothing."""
-    sent = []
-
-    def __init__(self, *a, **k):
-        pass
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *a):
-        return False
-
-    async def post(self, url, data=None, **k):
-        _FakeHttpClient.sent.append({"url": url, **(data or {})})
-
-        class _Resp:
-            status_code = 200
-        return _Resp()
-
-
-def test_whatsapp_tag_broadcast_reaches_the_lead_at_a_school_surfaced_by_a_tagged_contact(db, monkeypatch):
+def test_whatsapp_tag_broadcast_reaches_the_lead_at_a_school_surfaced_by_a_tagged_contact(db, monkeypatch,
+                                                                                          fake_evolution):
+    from wa_fixtures import seed_wa, wire_wa
     _as(ADMIN, monkeypatch)
-    _FakeHttpClient.sent = []
-    monkeypatch.setattr(httpx, "AsyncClient", _FakeHttpClient)
+    wire_wa(monkeypatch, db, fake_evolution)
 
     async def go():
-        await db.settings.insert_one({"type": "whatsapp", "username": "u", "password": "p"})
+        await seed_wa(db)
+        await db.settings.insert_one({"type": "notifications", "require_wa_consent": False})
         await _school(db, "s_via_contact")
         await _contact(db, "c_attendee", "s_via_contact", ["t_gslc"], phone="9111111111")
         await _lead(db, "l_at_school", "s_via_contact", contact_phone="9222222222",
@@ -411,8 +392,8 @@ def test_whatsapp_tag_broadcast_reaches_the_lead_at_a_school_surfaced_by_a_tagge
         assert {k: out[k] for k in ("sent", "failed", "skipped", "total")} == {
             "sent": 1, "failed": 0, "skipped": 0, "total": 1}
         assert out["unique_recipients"] == 1 and out["deals"] == 1
-        # This one goes through the real _send_wa_autosender, into a fake transport.
-        assert [s["receiverMobileNo"] for s in _FakeHttpClient.sent] == ["9222222222"]
+        # It goes through services.wa_send.send_whatsapp, to the fake Evolution server.
+        assert [s["number"] for s in fake_evolution.sends] == ["919222222222"]
         # before the roll-up: db.leads.find({"tag_ids": tag}) -> total 0
     _run(go())
 
