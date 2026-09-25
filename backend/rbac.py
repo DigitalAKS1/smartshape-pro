@@ -204,6 +204,7 @@ ROLE_DEFAULT_PERMISSIONS = {
         "field_sales": _RW_OWN, "sales_portal": _RW_OWN,
         "leave_management": _RW_OWN, "analytics": _R_OWN,
         "delegation": _RW_OWN, "forms": _RW_OWN,
+        "orders": _RW_OWN,
     },
 }
 

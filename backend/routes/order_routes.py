@@ -404,6 +404,7 @@ async def create_order_for_quotation(quotation_id: str, *, created_by: str,
         "school_id": quot.get("school_id", ""),
         "school_name": quot.get("school_name", ""),
         "lead_id": eff_lead_id,
+        "sales_person_email": quot.get("sales_person_email", ""),
         "package_name": quot.get("package_name", ""),
         "total_items": len(sel_items),
         "grand_total": quot.get("grand_total", 0),
@@ -610,8 +611,20 @@ EDITABLE_ORDER_STATUSES = ("pending", "confirmed")
 EDITABLE_ITEM_STATUSES = ("on_hold", "confirmed")
 
 
-def _assert_can_edit_selection(user, order):
+def _assert_can_act_on_order(user: dict, order: dict):
+    """Shared scope gate for confirm/reject/edit-selection/call-log. The module
+    grant decides whether staff may touch orders at all; for an 'own'-scoped
+    grant (sales reps) ownership is the order's own sales_person_email,
+    denormalised from its quotation at creation — the same ownership rule the
+    quotations/leads grants already use (quotation_routes.py: sales_person_email
+    comparisons)."""
     require_module(user, "orders", "read_write")
+    if not sees_all(user, "orders") and order.get("sales_person_email") != user.get("email"):
+        raise HTTPException(status_code=403, detail="You can only act on orders for your own schools")
+
+
+def _assert_can_edit_selection(user, order):
+    _assert_can_act_on_order(user, order)
     if order.get("order_status") not in EDITABLE_ORDER_STATUSES:
         raise HTTPException(status_code=400,
             detail=f"Selection is locked once the order is {order.get('order_status')}")
