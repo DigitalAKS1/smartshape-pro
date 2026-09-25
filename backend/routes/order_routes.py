@@ -523,6 +523,9 @@ async def update_order_status(order_id: str, request: Request):
     order = await db.orders.find_one({"order_id": order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
+    if order.get("order_status") == "awaiting_confirmation":
+        raise HTTPException(status_code=400,
+            detail="This order is awaiting confirmation — use Confirm or Reject, not a direct status change")
 
     update_data = {"order_status": new_status, "updated_at": datetime.now(timezone.utc).isoformat()}
     if new_status == "dispatched":
@@ -607,6 +610,76 @@ async def update_order_production_stage(order_id: str, request: Request):
     })
     await log_activity(user["email"], "update_production_stage", "order", order_id, f"-> {new_stage}")
     return await db.orders.find_one({"order_id": order_id}, {"_id": 0})
+
+
+@router.post("/orders/{order_id}/confirm")
+async def confirm_order(order_id: str, request: Request):
+    """Sales/Store confirms a school/teacher's submitted selection: locks in
+    quantities, reserves stock, and moves the order into the normal pending
+    lifecycle. A shortage does not block confirmation — it raises the same
+    purchase_alerts doc editing an existing order already would."""
+    user = await get_current_user(request)
+    order = await db.orders.find_one({"order_id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    _assert_can_act_on_order(user, order)
+    if order.get("order_status") != "awaiting_confirmation":
+        raise HTTPException(status_code=400,
+            detail=f"Only an order awaiting confirmation can be confirmed (this one is {order.get('order_status')})")
+
+    items = await db.order_items.find(
+        {"order_id": order_id, "status": AWAITING_ITEM_STATUS}, {"_id": 0}).to_list(1000)
+    for it in items:
+        qty = int(it.get("quantity", 1) or 1)
+        await db.order_items.update_one({"order_item_id": it["order_item_id"]}, {"$set": {"status": "on_hold"}})
+        await db.dies.update_one({"die_id": it["die_id"]}, {"$inc": {"reserved_qty": qty}})
+        die = await db.dies.find_one({"die_id": it["die_id"]}, {"_id": 0})
+        if die:
+            await _maybe_alert_shortage(die, it["order_item_id"])
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    await db.orders.update_one({"order_id": order_id},
+        {"$set": {"order_status": "pending", "updated_at": now_iso}})
+    await db.order_timeline.insert_one({
+        "timeline_id": f"tl_{uuid.uuid4().hex[:8]}", "order_id": order_id,
+        "status": "pending", "note": "Selection confirmed — stock reserved.",
+        "updated_by": user["email"], "timestamp": now_iso,
+    })
+    await log_activity(user["email"], "confirm_order", "order", order_id, "")
+    return {"message": "Order confirmed", "items_reserved": len(items)}
+
+
+@router.post("/orders/{order_id}/reject")
+async def reject_order(order_id: str, request: Request):
+    """Sales/Store declines a submitted selection. Nothing was reserved for an
+    awaiting-confirmation order, so there is no stock to release — a reason is
+    mandatory so the school's record shows why."""
+    user = await get_current_user(request)
+    order = await db.orders.find_one({"order_id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    _assert_can_act_on_order(user, order)
+    if order.get("order_status") != "awaiting_confirmation":
+        raise HTTPException(status_code=400,
+            detail=f"Only an order awaiting confirmation can be rejected (this one is {order.get('order_status')})")
+
+    body = await request.json()
+    reason = (body.get("reason") or "").strip()
+    if not reason:
+        raise HTTPException(status_code=400, detail="A reason is required to reject a selection")
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    await db.orders.update_one({"order_id": order_id},
+        {"$set": {"order_status": "cancelled", "updated_at": now_iso}})
+    await db.order_items.update_many(
+        {"order_id": order_id, "status": AWAITING_ITEM_STATUS}, {"$set": {"status": "cancelled"}})
+    await db.order_timeline.insert_one({
+        "timeline_id": f"tl_{uuid.uuid4().hex[:8]}", "order_id": order_id,
+        "status": "cancelled", "note": f"Selection rejected: {reason}",
+        "updated_by": user["email"], "timestamp": now_iso,
+    })
+    await log_activity(user["email"], "reject_order", "order", order_id, reason)
+    return {"message": "Order rejected"}
 
 
 # ==================== MANAGE SELECTION (order line items) ====================
