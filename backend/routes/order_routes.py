@@ -72,6 +72,26 @@ def _credit_stamp(user, body):
 # Order-item statuses that still hold stock (reserved but not yet fully dispatched).
 COMMITTING_ITEM_STATUSES = ["on_hold", "confirmed", "partially_dispatched"]
 
+# An order created from a school/teacher's own selection (catalogue link or
+# School Portal reorder) starts here, not "pending" — its lines do NOT commit
+# stock (see _is_committing) until Sales/Store calls POST /orders/{id}/confirm.
+AWAITING_ITEM_STATUS = "awaiting_confirmation"
+
+
+def _is_committing(status: str) -> bool:
+    """True when this order_item status holds stock — i.e. counts toward
+    compute_committed()/compute_availability(). Every place that increments or
+    decrements dies.reserved_qty alongside an item write must gate on this,
+    so an awaiting-confirmation line never reserves anything."""
+    return status in COMMITTING_ITEM_STATUSES
+
+
+def _active_item_status(order_status: str) -> str:
+    """The order_items.status a newly added/edited line should take: the
+    normal committing 'on_hold', unless the order itself is still awaiting
+    confirmation, in which case the line waits alongside it."""
+    return AWAITING_ITEM_STATUS if order_status == "awaiting_confirmation" else "on_hold"
+
 
 def _remaining_qty(it: dict) -> int:
     """Undispatched remainder of a line = ordered quantity - already dispatched."""
