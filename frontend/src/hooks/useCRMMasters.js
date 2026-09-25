@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { toast } from 'sonner';
+import { describeBroadcastResult } from '../lib/waStatus';
 import {
   groups as groupsApi,
   sources as sourcesApi,
@@ -26,6 +27,8 @@ export function describeBroadcastReach(tagName, p) {
     + `(${plural(p.deals, 'deal', 'deals')}). Deals that share a phone number get one message.`;
   if (p.skipped_no_phone) s += ` ${plural(p.skipped_no_phone, 'deal has', 'deals have')} no usable phone and will be skipped.`;
   if (p.capped_at) s += ` Capped at ${p.capped_at}: ${plural(p.over_cap, 'more person', 'more people')} will NOT be messaged.`;
+  // A broadcast is not consent-gated (only drips and greetings are); say how many lack it.
+  if (p.no_consent) s += ` ${plural(p.no_consent, 'person has', 'people have')} no WhatsApp consent on record.`;
   return s;
 }
 
@@ -294,9 +297,7 @@ export function useCRMMasters() {
     try {
       const res = await broadcastApi.byTag({ tag_id: campaignTag, template_id: campaignTemplate });
       const d = res.data;
-      toast.success(`Campaign sent: ${d.sent} delivered, ${d.failed} failed`
-        + (d.skipped_no_phone ? `, ${d.skipped_no_phone} deal(s) with no usable phone` : '')
-        + (d.capped_at ? ` — capped at ${d.capped_at}, ${d.over_cap} not messaged` : ''));
+      toast.success(describeBroadcastResult(d));
     } catch (e) {
       toast.error(e?.response?.data?.detail || 'Campaign failed');
     } finally { setCampaignSending(false); }

@@ -5,6 +5,7 @@ import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { whatsappTemplates, whatsappSend } from '../lib/api';
 import { toast } from 'sonner';
+import { describeSendResult } from '../lib/waStatus';
 import { MessageSquare, Send, ExternalLink, Save } from 'lucide-react';
 
 /**
@@ -76,10 +77,8 @@ export default function WhatsAppSendDialog({ open, onOpenChange, module = 'gener
         lead_id: context.lead_id, contact_id: context.contact_id,
         school_id: context.school_id, order_id: context.order_id,
       });
-      const status = res.data?.status;
-      if (status === 'sent') toast.success('WhatsApp sent via API');
-      else if (status === 'wa_not_configured') toast.warning('WhatsApp API not configured. Use Open WhatsApp App instead.');
-      else toast.error(`Send result: ${status}`);
+      const r = describeSendResult(res.data?.status);
+      (toast[r.level] || toast)(r.text);
       onOpenChange(false);
     } catch (e) { toast.error(e?.response?.data?.detail || 'Failed to send'); }
     finally { setSaving(false); }
