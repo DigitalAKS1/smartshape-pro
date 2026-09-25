@@ -289,13 +289,11 @@ def _older_than(cutoff_iso: str) -> dict:
 
 async def expire_legacy_wa_backlog(target_db=None) -> int:
     """One-time: expire pending rows older than 24 h. Returns how many (0 after the first run).
-    The settings marker is inserted with an upsert first, so two workers cannot both run it."""
+    The settings marker is written only AFTER the expiry succeeded, so a crash part-way retries
+    on the next pass. The expiry is idempotent (pending -> expired), so two workers racing on
+    the first pass at worst both run it; neither sends anything."""
     d = target_db if target_db is not None else db
-    res = await d.settings.update_one(
-        {"type": "wa_queue_migrated"},
-        {"$setOnInsert": {"type": "wa_queue_migrated", "at": datetime.now(timezone.utc).isoformat()}},
-        upsert=True)
-    if getattr(res, "upserted_id", None) is None:
+    if await d.settings.find_one({"type": "wa_queue_migrated"}, {"_id": 1}):
         return 0
     now = datetime.now(timezone.utc)
     cutoff = (now - timedelta(hours=WA_LEGACY_EXPIRE_HOURS)).isoformat()
@@ -304,19 +302,24 @@ async def expire_legacy_wa_backlog(target_db=None) -> int:
         {"$set": {"status": "expired", "error": "legacy backlog: older than 24 h at W1 deploy",
                   "expired_at": now.isoformat()}})
     n = getattr(out, "modified_count", 0)
-    await d.settings.update_one({"type": "wa_queue_migrated"}, {"$set": {"expired": n}})
+    await d.settings.update_one(
+        {"type": "wa_queue_migrated"},
+        {"$setOnInsert": {"type": "wa_queue_migrated", "at": now.isoformat(), "expired": n}}, upsert=True)
     log.warning(f"[wa] legacy queue migration: {n} pending whatsapp_scheduled row(s) older than "
                 f"{WA_LEGACY_EXPIRE_HOURS} h expired, never sent")
     return n
 
 
 async def expire_stale_wa_rows(target_db=None) -> int:
-    """Permanent floor: a pending row created more than WA_QUEUE_MAX_AGE_DAYS ago is expired."""
+    """Permanent floor: a pending row more than WA_QUEUE_MAX_AGE_DAYS old is expired - judged by
+    the same due-time rule as the one-time expiry (_older_than): by `scheduled_at` when it has
+    one, so a message scheduled for a time still ahead is never expired, however long ago it
+    was created; else by created_at / queued_at."""
     d = target_db if target_db is not None else db
     now = datetime.now(timezone.utc)
     cutoff = (now - timedelta(days=WA_QUEUE_MAX_AGE_DAYS)).isoformat()
     out = await d.whatsapp_scheduled.update_many(
-        {"status": "pending", "$or": [{"created_at": {"$lt": cutoff}}, {"queued_at": {"$lt": cutoff}}]},
+        {"status": "pending", **_older_than(cutoff)},
         {"$set": {"status": "expired", "error": f"older than {WA_QUEUE_MAX_AGE_DAYS} days, never sent",
                   "expired_at": now.isoformat()}})
     n = getattr(out, "modified_count", 0)

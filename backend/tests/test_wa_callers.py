@@ -443,3 +443,55 @@ def test_an_fms_customer_message_goes_from_the_flow_owners_number(env):
         row = await db.wa_messages.find_one({}, {"_id": 0})
         assert (row["kind"], row["instance_name"], row["lead_id"]) == ("fms", "rep_parul", "L1")
     _run(go())
+
+
+# ── Fix round 2 ───────────────────────────────────────────────────────────────
+
+def test_the_seven_day_floor_judges_a_scheduled_row_by_its_due_time(env):
+    db = env.db
+
+    async def go():
+        await seed_wa(db)
+        await db.settings.insert_one({"type": "wa_queue_migrated"})          # one-time step already done
+        tomorrow = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+        await db.whatsapp_scheduled.insert_many([
+            {"schedule_id": "ahead", "status": "pending", "phone": "9811111111", "message": "next week",
+             "created_at": _ago(days=10), "scheduled_at": tomorrow},
+            {"schedule_id": "missed", "status": "pending", "phone": "9822222222", "message": "long gone",
+             "created_at": _ago(days=12), "scheduled_at": _ago(days=8)},
+            {"scheduled_id": "no_due", "campaign_id": "reminder", "status": "pending", "phone": "9833333333",
+             "message": "old reminder", "created_at": _ago(days=8)},
+        ])
+        assert await sched.expire_stale_wa_rows(db) == 2
+        st = {(r.get("scheduled_id") or r.get("schedule_id")): r["status"]
+              for r in await db.whatsapp_scheduled.find({}, {"_id": 0}).to_list(None)}
+        assert st == {"ahead": "pending", "missed": "expired", "no_due": "expired"}
+    _run(go())
+
+
+def test_the_migration_marker_is_written_only_after_the_expiry_succeeds(env, monkeypatch):
+    db = env.db
+
+    async def go():
+        await db.whatsapp_scheduled.insert_one({"scheduled_id": "old", "campaign_id": "daily_digest",
+                                                "status": "pending", "phone": "9811111111", "message": "x",
+                                                "created_at": _ago(days=2)})
+        # A crash while the expiry runs (here: building its query) must leave no marker behind.
+        real = sched._older_than
+        calls = {"n": 0}
+
+        def _boom(cutoff):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("crash mid-migration")
+            return real(cutoff)
+        monkeypatch.setattr(sched, "_older_than", _boom)
+        try:
+            await sched.expire_legacy_wa_backlog(db)
+        except RuntimeError:
+            pass
+        assert await db.settings.find_one({"type": "wa_queue_migrated"}) is None     # will retry
+        assert await sched.expire_legacy_wa_backlog(db) == 1
+        assert (await db.settings.find_one({"type": "wa_queue_migrated"}, {"_id": 0}))["expired"] == 1
+        assert await sched.expire_legacy_wa_backlog(db) == 0                        # once only
+    _run(go())
