@@ -534,6 +534,25 @@ export const whatsApp = {
   listAttachments: () => API.get('/whatsapp/attachments'),
 };
 
+// WhatsApp team numbers (spec 2026-09-24, W1): my own number, and admin control of every number.
+export const waNumbers = {
+  me:              ()             => API.get('/wa/me'),
+  link:            (data)         => API.post('/wa/me/link', data),
+  relink:          ()             => API.post('/wa/me/relink'),
+  unlink:          ()             => API.post('/wa/me/unlink'),
+  instances:       ()             => API.get('/wa/instances'),
+  linkCompany:     (data)         => API.post('/wa/instances/company', data),
+  pause:           (name, reason) => API.post(`/wa/instances/${encodeURIComponent(name)}/pause`, { reason }),
+  resume:          (name)         => API.post(`/wa/instances/${encodeURIComponent(name)}/resume`),
+  unlinkInstance:  (name)         => API.post(`/wa/instances/${encodeURIComponent(name)}/unlink`),
+  setProxy:        (name, data)   => API.put(`/wa/instances/${encodeURIComponent(name)}/proxy`, data),
+  updateInstance:  (name, data)   => API.put(`/wa/instances/${encodeURIComponent(name)}`, data),
+  getSettings:     ()             => API.get('/wa/settings'),
+  saveSettings:    (data)         => API.put('/wa/settings', data),
+  getDefaultProxy: ()             => API.get('/whatsapp/proxy-config'),
+  saveDefaultProxy:(data)         => API.post('/whatsapp/proxy-config', data),
+};
+
 // Email Marketing
 export const email = {
   getTemplates:   ()       => API.get('/email/templates'),

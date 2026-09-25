@@ -64,6 +64,7 @@ const Procurement = lazyRoute(() => import('./pages/admin/Procurement'));
 const ReturnableChallans = lazyRoute(() => import('./pages/admin/ReturnableChallans'));
 const AdminControl = lazyRoute(() => import('./pages/admin/AdminControl'));
 const TodayDashboard = lazyRoute(() => import('./pages/TodayDashboard'));
+const MyWhatsApp = lazyRoute(() => import('./pages/MyWhatsApp'));
 const Accounts = lazyRoute(() => import('./pages/admin/Accounts'));
 const HR = lazyRoute(() => import('./pages/admin/HR'));
 const Store = lazyRoute(() => import('./pages/admin/Store'));
@@ -229,6 +230,7 @@ function AppRouter() {
       {/* Protected Routes - Admin */}
       <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
       <Route path="/today" element={<ProtectedRoute><TodayDashboard /></ProtectedRoute>} />
+      <Route path="/me/whatsapp" element={<ProtectedRoute><MyWhatsApp /></ProtectedRoute>} />
       <Route path="/create-quotation" element={<ProtectedRoute><CreateQuotation /></ProtectedRoute>} />
       <Route path="/quotations" element={<ProtectedRoute><Quotations /></ProtectedRoute>} />
       <Route path="/inventory" element={<ProtectedRoute><Inventory /></ProtectedRoute>} />
