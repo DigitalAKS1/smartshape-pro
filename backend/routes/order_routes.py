@@ -367,12 +367,15 @@ async def create_order_for_quotation(quotation_id: str, *, created_by: str,
                                      lead_id: Optional[str] = None,
                                      payment_threshold_pct: float = 50.0,
                                      payment_received: float = 0.0,
-                                     notes: str = "", source: str = "manual"):
+                                     notes: str = "", source: str = "manual",
+                                     order_status: str = "pending"):
     """Create a Sales Order from a quotation + its catalogue selection.
 
     Idempotent: returns (order, created=False) if an order already exists for the
     quotation. `source` is recorded for audit ('manual' | 'catalogue_submit').
     Shared by the manual admin route and the auto-generation on catalogue submit.
+    `order_status='awaiting_confirmation'` creates the order without committing
+    any stock — see _active_item_status and POST /orders/{id}/confirm.
     """
     quot = await db.quotations.find_one({"quotation_id": quotation_id}, {"_id": 0})
     if not quot:
@@ -393,8 +396,10 @@ async def create_order_for_quotation(quotation_id: str, *, created_by: str,
         ).to_list(1000)
 
     eff_lead_id = lead_id or quot.get("lead_id") or ""
-    note_text = notes or ("Auto-created from catalogue submission" if source == "catalogue_submit"
-                          else "Order created from quotation")
+    note_text = notes or (
+        "Submitted by school/teacher — awaiting confirmation" if order_status == "awaiting_confirmation"
+        else "Auto-created from catalogue submission" if source == "catalogue_submit"
+        else "Order created from quotation")
     now_iso = datetime.now(timezone.utc).isoformat()
     order_doc = {
         "order_id": order_id,
@@ -408,7 +413,7 @@ async def create_order_for_quotation(quotation_id: str, *, created_by: str,
         "package_name": quot.get("package_name", ""),
         "total_items": len(sel_items),
         "grand_total": quot.get("grand_total", 0),
-        "order_status": "pending",
+        "order_status": order_status,
         "production_stage": "order_created",
         "payment_threshold_pct": float(payment_threshold_pct),
         "payment_received": float(payment_received),
@@ -435,6 +440,7 @@ async def create_order_for_quotation(quotation_id: str, *, created_by: str,
         order_doc["payment_received"] = synced["total_paid"]
         order_doc["payment_status"] = synced["payment_status"]
 
+    item_status = _active_item_status(order_status)
     for item in sel_items:
         await db.order_items.insert_one({
             "order_item_id": f"oi_{uuid.uuid4().hex[:8]}",
@@ -445,13 +451,13 @@ async def create_order_for_quotation(quotation_id: str, *, created_by: str,
             "die_type": item.get("die_type"),
             "die_image_url": item.get("die_image_url"),
             "quantity": int(item.get("quantity", 1) or 1),
-            "status": "on_hold",
+            "status": item_status,
         })
 
     await db.order_timeline.insert_one({
         "timeline_id": f"tl_{uuid.uuid4().hex[:8]}",
         "order_id": order_id,
-        "status": "pending",
+        "status": order_status,
         "note": note_text,
         "updated_by": created_by,
         "timestamp": now_iso,
