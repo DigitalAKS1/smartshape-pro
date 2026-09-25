@@ -297,7 +297,9 @@ export function useCRMMasters() {
     try {
       const res = await broadcastApi.byTag({ tag_id: campaignTag, template_id: campaignTemplate });
       const d = res.data;
-      toast.success(describeBroadcastResult(d));
+      // Nothing went out: an error if something failed, else a warning (all refused / no phone).
+      const level = (d.sent || d.queued) ? 'success' : (d.failed ? 'error' : 'warning');
+      (toast[level] || toast.success)(describeBroadcastResult(d));
     } catch (e) {
       toast.error(e?.response?.data?.detail || 'Campaign failed');
     } finally { setCampaignSending(false); }

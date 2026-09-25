@@ -27,7 +27,7 @@ jest.mock('../../lib/api', () => ({
   activityTypes:     { getAll: () => Promise.resolve({ data: [] }) },
   broadcastApi:      { byTag: jest.fn(), previewByTag: jest.fn() },
 }));
-jest.mock('sonner', () => ({ toast: { success: jest.fn(), error: jest.fn() } }));
+jest.mock('sonner', () => ({ toast: { success: jest.fn(), error: jest.fn(), warning: jest.fn() } }));
 
 const PREVIEW = { deals: 5, unique_recipients: 3, skipped_no_phone: 1, capped_at: null, over_cap: 0 };
 
@@ -118,4 +118,20 @@ test('the reach text says how many people have no WhatsApp consent on record', (
   expect(describeBroadcastReach('X', { ...PREVIEW, no_consent: 2 }))
     .toMatch(/ 2 people have no WhatsApp consent on record\.$/);
   expect(describeBroadcastReach('X', PREVIEW)).not.toMatch(/consent/);
+});
+
+test('a broadcast that sent nothing warns (all refused) or errors (something failed)', async () => {
+  await set(() => api.setCampaignTag('t_gslc'));
+  await set(() => api.setCampaignTemplate('tpl1'));
+  toast.success.mockClear(); toast.warning.mockClear(); toast.error.mockClear();
+  broadcastApi.byTag.mockImplementation(() => ok({ sent: 0, queued: 0, skipped_policy: 3, failed: 0, ...PREVIEW,
+    skipped_no_phone: 0 }));
+  await set(() => api.sendCampaign());
+  expect(toast.warning).toHaveBeenCalledWith(
+    'Broadcast: 0 sent, 3 not sent (opted out, no consent or not on WhatsApp)');
+  broadcastApi.byTag.mockImplementation(() => ok({ sent: 0, queued: 0, skipped_policy: 0, failed: 2, ...PREVIEW,
+    skipped_no_phone: 0 }));
+  await set(() => api.sendCampaign());
+  expect(toast.error).toHaveBeenCalledWith('Broadcast: 0 sent, 2 failed');
+  expect(toast.success).not.toHaveBeenCalled();
 });
