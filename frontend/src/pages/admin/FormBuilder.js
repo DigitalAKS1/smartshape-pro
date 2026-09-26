@@ -8,6 +8,7 @@ import { Label } from '../../components/ui/label';
 import { toast } from 'sonner';
 import { QRCodeCanvas } from 'qrcode.react';
 import HtmlBodyEditor from '../../components/email/HtmlBodyEditor';
+import useGoBack from '../../hooks/useGoBack';
 import {
   ArrowLeft, ArrowUp, ArrowDown, Trash2, Plus, Copy, Download,
   MessageCircle, Users, Save, Send, ExternalLink,
@@ -26,6 +27,7 @@ const MAP_OPTIONS = [
 export default function FormBuilder() {
   const { formId } = useParams();
   const nav = useNavigate();
+  const goBack = useGoBack('/forms');
   const [form, setForm] = useState(null);
   const [tab, setTab] = useState('fields'); // fields | messages | share
   const [saving, setSaving] = useState(false);
@@ -126,7 +128,7 @@ export default function FormBuilder() {
       <div className="max-w-6xl mx-auto space-y-4">
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div className="flex items-center gap-2">
-            <Button variant="ghost" size="sm" onClick={() => nav('/forms')}>
+            <Button variant="ghost" size="sm" onClick={goBack}>
               <ArrowLeft className="h-4 w-4" />
             </Button>
             <Input value={form.title} onChange={e => set({ title: e.target.value })}

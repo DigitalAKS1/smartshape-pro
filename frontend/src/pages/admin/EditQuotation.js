@@ -7,6 +7,7 @@ import { Label } from '../../components/ui/label';
 import { ArrowLeft, Save, Download, Plus, X, Loader2, Clock, ChevronDown, ChevronUp, AlertCircle } from 'lucide-react';
 import SendEmailDialog from '../../components/SendEmailDialog';
 import { useEditQuotation } from '../../hooks/useEditQuotation';
+import useGoBack from '../../hooks/useGoBack';
 
 const CURRENCIES = [
   { code: 'INR', sym: '₹', label: '₹ INR' },
@@ -30,6 +31,7 @@ export default function EditQuotation() {
     navigate,
     quotations,
   } = useEditQuotation();
+  const goBack = useGoBack('/quotations');
 
   if (loading || !quot) {
     return (
@@ -58,7 +60,7 @@ export default function EditQuotation() {
             </div>
           </div>
           <div className="flex gap-2 flex-wrap">
-            <Button onClick={() => navigate('/quotations')} variant="outline" className="border-[var(--border-color)] text-[var(--text-secondary)]"><ArrowLeft className="mr-2 h-4 w-4" /> Back</Button>
+            <Button onClick={goBack} variant="outline" className="border-[var(--border-color)] text-[var(--text-secondary)]"><ArrowLeft className="mr-2 h-4 w-4" /> Back</Button>
             <Button onClick={() => quotations.downloadPdf(id)} variant="outline" className="border-[var(--border-color)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]" data-testid="download-pdf-btn"><Download className="mr-2 h-4 w-4" /> PDF</Button>
             <Button onClick={() => handleSave('draft')} variant="outline" className="border-[var(--border-color)] text-[var(--text-primary)]" data-testid="save-draft-btn"><Save className="mr-2 h-4 w-4" /> Save Draft</Button>
             <Button onClick={() => handleSave('sent')} disabled={sending} className="bg-[#e94560] hover:bg-[#f05c75] text-white" data-testid="send-quotation-btn">

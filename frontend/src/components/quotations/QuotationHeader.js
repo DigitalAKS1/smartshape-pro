@@ -1,16 +1,17 @@
 import React from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { Button } from '../ui/button';
 import { Download, Edit2, ArrowLeft, Printer, GitBranch } from 'lucide-react';
 import { quotations } from '../../lib/api';
+import useGoBack from '../../hooks/useGoBack';
 
 export default function QuotationHeader({ quot, id, creatingVersion, onNewVersion }) {
-  const navigate = useNavigate();
+  const goBack = useGoBack('/quotations');
 
   return (
     <div className="no-print bg-[var(--bg-primary)] border-b border-[var(--border-color)] px-6 py-3 flex items-center justify-between sticky top-0 z-50">
       <div className="flex items-center gap-3">
-        <Button onClick={() => navigate('/quotations')} variant="ghost" size="sm" className="text-[var(--text-secondary)]">
+        <Button onClick={goBack} variant="ghost" size="sm" className="text-[var(--text-secondary)]">
           <ArrowLeft className="mr-2 h-4 w-4" /> Back
         </Button>
         <span className="text-[var(--text-primary)] font-medium">{quot.quote_number}</span>

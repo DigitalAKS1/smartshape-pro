@@ -6,6 +6,7 @@ import { Button } from '../../components/ui/button';
 import { toast } from 'sonner';
 import { ArrowLeft, Download, Send, Mail, CheckCircle2, XCircle, MinusCircle } from 'lucide-react';
 import { Input } from '../../components/ui/input';
+import useGoBack from '../../hooks/useGoBack';
 
 const Tick = ({ v }) => v === 'queued' || v === 'sent'
   ? <CheckCircle2 className="h-4 w-4 text-green-500 inline" />
@@ -16,6 +17,7 @@ const Tick = ({ v }) => v === 'queued' || v === 'sent'
 export default function FormResponses() {
   const { formId } = useParams();
   const nav = useNavigate();
+  const goBack = useGoBack(`/forms/${formId}`);
   const [data, setData] = useState(null);
   const [shareOpen, setShareOpen] = useState(false);
   const [shareTo, setShareTo] = useState('');
@@ -58,7 +60,7 @@ export default function FormResponses() {
       <div className="max-w-6xl mx-auto space-y-4">
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div className="flex items-center gap-2">
-            <Button variant="ghost" size="sm" onClick={() => nav(`/forms/${formId}`)}>
+            <Button variant="ghost" size="sm" onClick={goBack}>
               <ArrowLeft className="h-4 w-4" />
             </Button>
             <div>

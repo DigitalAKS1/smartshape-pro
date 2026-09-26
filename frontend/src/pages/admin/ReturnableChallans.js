@@ -9,7 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import {
   PackageOpen, Plus, Trash2, FileDown, Undo2, ArrowLeft, Search,
 } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import useGoBack from '../../hooks/useGoBack';
 
 const REASONS = [
   { id: 'demo',       label: 'Demo' },
@@ -26,7 +26,7 @@ const STATUS_CLS = {
 
 export default function ReturnableChallans() {
   const { user } = useAuth();
-  const navigate = useNavigate();
+  const goBack = useGoBack('/inventory');
   // Creating new challans stays admin/store; accounts may record returns.
   const canCreate = ['admin', 'store'].includes(user?.role);
   const canRecordReturn = ['admin', 'store', 'accounts'].includes(user?.role);
@@ -145,7 +145,7 @@ export default function ReturnableChallans() {
         {/* Header */}
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2.5">
-            <button onClick={() => navigate('/inventory')} className={`p-1.5 rounded-md hover:bg-[var(--bg-hover)] ${textSec}`} title="Back to Inventory">
+            <button onClick={goBack} className={`p-1.5 rounded-md hover:bg-[var(--bg-hover)] ${textSec}`} title="Back to Inventory">
               <ArrowLeft className="h-5 w-5" />
             </button>
             <div className="p-2 rounded-xl bg-[#e94560]/10 hidden sm:flex">

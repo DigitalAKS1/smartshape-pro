@@ -1,9 +1,10 @@
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { deriveFilterOptions } from '../lib/crmFilter';
 import {
   buildMasterContexts, computeMasterFiltered, makeCountFor, tabKind,
   parseSearchQuery, mergeFilters,
 } from '../lib/crmMasterFilter';
+import useSessionState from './useSessionState';
 
 /**
  * One filter pipeline for the whole CRM page.
@@ -24,10 +25,14 @@ export default function useCrmFilters({
   sourcesList = [], rolesList = [], tagsList = [], spList = [], dealTypesList = [],
   activeTab = 'schools',
 } = {}) {
-  const [searchTerm, setSearchTerm] = useState('');
-  const [filterType, setFilterType] = useState('all');
-  const [filterTag, setFilterTag] = useState('');
-  const [masterFilter, setMasterFilter] = useState({});
+  // Session-persisted (not plain useState): this filter pipeline sits inside
+  // the LeadsCRM page, which unmounts when the user navigates to a school
+  // profile or quotation. Without this, "Back" would return to an empty,
+  // unfiltered CRM instead of retracing the user's actual journey.
+  const [searchTerm, setSearchTerm] = useSessionState('crm.searchTerm', '');
+  const [filterType, setFilterType] = useSessionState('crm.filterType', 'all');
+  const [filterTag, setFilterTag] = useSessionState('crm.filterTag', '');
+  const [masterFilter, setMasterFilter] = useSessionState('crm.masterFilter', {});
 
   const filterOptions = useMemo(() => deriveFilterOptions({
     contacts: contactsList, leads: leadsList, schools: schoolsList,

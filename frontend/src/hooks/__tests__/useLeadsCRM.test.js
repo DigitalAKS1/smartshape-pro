@@ -92,7 +92,10 @@ async function mount() {
 const set = async (fn) => { await act(async () => { fn(); }); };
 
 let view;
-beforeEach(async () => { api = null; view = await mount(); });
+// filterRole/activeTab/contactPage etc. are now session-persisted (so a real
+// "Back" button retraces the user's filter, not just the URL) — clear
+// between tests so that persistence doesn't leak from one test into the next.
+beforeEach(async () => { window.sessionStorage.clear(); api = null; view = await mount(); });
 afterEach(() => { view.unmount(); });
 
 // ── Loading ─────────────────────────────────────────────────────────────────

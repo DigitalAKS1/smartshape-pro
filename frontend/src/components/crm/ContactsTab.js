@@ -14,6 +14,7 @@ import AssignToPicker from './AssignToPicker';
 import BulkTagPicker, { formatTagResult } from './BulkTagPicker';
 import BulkDripPicker, { formatDripEnrolResult } from './BulkDripPicker';
 import useBulkSelect from '../../hooks/useBulkSelect';
+import useSessionState from '../../hooks/useSessionState';
 import { deriveFilterOptions, buildCrmContext, matchesCrmFilter } from '../../lib/crmFilter';
 import { CallStatusBadge } from './ContactDetailPanel';
 
@@ -82,7 +83,8 @@ export default function ContactsTab({
   });
   const topRoles = Object.entries(roleCounts).sort((a, b) => b[1] - a[1]);
 
-  const [crmFilter, setCrmFilter] = React.useState({});
+  // Session-persisted so it survives navigating to a school/quotation and back.
+  const [crmFilter, setCrmFilter] = useSessionState('crm.contactsFilter', {});
   const filterOptions = React.useMemo(
     () => deriveFilterOptions({ contacts: contactsList, schools: schoolsList, sources: sourcesList, roles: rolesList, tags: tagsList }),
     [contactsList, schoolsList, sourcesList, rolesList, tagsList]);

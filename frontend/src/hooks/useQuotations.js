@@ -3,17 +3,21 @@ import { useNavigate } from 'react-router-dom';
 import API, { quotations as quotApi, salesPersons, exportData } from '../lib/api';
 import { useDataSync, useAutoRefresh } from '../lib/dataSync';
 import { toast } from 'sonner';
+import useSessionState from './useSessionState';
 
 export default function useQuotations() {
   const navigate = useNavigate();
 
   const [quotations, setQuotations] = useState([]);
   const [filteredQuotations, setFiltered] = useState([]);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState('all');
-  const [agentFilter, setAgentFilter] = useState('all');
-  const [dateFrom, setDateFrom] = useState('');
-  const [dateTo, setDateTo] = useState('');
+  // Session-persisted: opening a quotation and pressing Back now returns here
+  // via real history (useGoBack) instead of a fresh page load, so these
+  // filters need to survive that unmount/remount just like the CRM's do.
+  const [searchTerm, setSearchTerm] = useSessionState('quotations.searchTerm', '');
+  const [statusFilter, setStatusFilter] = useSessionState('quotations.statusFilter', 'all');
+  const [agentFilter, setAgentFilter] = useSessionState('quotations.agentFilter', 'all');
+  const [dateFrom, setDateFrom] = useSessionState('quotations.dateFrom', '');
+  const [dateTo, setDateTo] = useSessionState('quotations.dateTo', '');
   const [loading, setLoading] = useState(true);
   const [selectedQuotations, setSelected] = useState([]);
   const [agentList, setAgentList] = useState([]);
