@@ -337,3 +337,216 @@ def test_norm10_and_match_record_order(env):
         m = await wa_inbox.match_record(db, PHONE)
         assert m == {"contact_id": "c_owned", "lead_id": "", "school_id": "sch_o", "display_name": "Owned"}
     _run(go())
+
+
+# ══ Fix round 1 ══════════════════════════════════════════════════════════════
+
+def _disjoint(update):
+    return set(update["$set"]) & set(update.get("$setOnInsert", {}))
+
+
+def test_chat_update_never_puts_a_field_in_both_set_and_set_on_insert(env):
+    # 1. Real MongoDB rejects a field in $set and $setOnInsert (ConflictingUpdateOperators);
+    #    mongomock does not, so the update document is checked on every branch.
+    inst = {"instance_name": "rep_parul", "owner_email": PARUL, "jid": "919000000111@s.whatsapp.net"}
+    match = {"contact_id": "c1", "lead_id": "", "school_id": "sch1", "display_name": "Sunita Verma"}
+    row = {"message_id": "wam_x", "chat_id": CHAT, "remote_jid": JID, "phone_e164": PHONE, "direction": "in",
+           "text": "hi", "push_name": "Sunita", "created_at": "2026-09-24T05:30:00+00:00", "hidden": False}
+    out_row = {**row, "direction": "out"}
+    linked = {"chat_id": CHAT, "contact_id": "c_manual", "display_name": "By Hand", "status": "open",
+              "phone_e164": PHONE}
+    resolved = {**linked, "status": "resolved"}
+    cases = {
+        "new chat, inbound": wa_inbox._chat_update(inst, row, {}, inbound=True, match=match),
+        "new chat, outbound": wa_inbox._chat_update(inst, out_row, {}, inbound=False, match=match),
+        "new lid chat": wa_inbox._chat_update(inst, {**row, "lid": "123@lid", "remote_jid": "123@lid",
+                                                     "chat_id": "rep_parul:123@lid", "phone_e164": ""},
+                                              {}, inbound=True, match=dict(wa_inbox._EMPTY_MATCH)),
+        "existing linked": wa_inbox._chat_update(inst, row, linked, inbound=True, match=match),
+        "resolved + inbound": wa_inbox._chat_update(inst, row, resolved, inbound=True, match=match),
+        "resolved + outbound": wa_inbox._chat_update(inst, out_row, resolved, inbound=False, match=match),
+    }
+    for name, upd in cases.items():
+        assert _disjoint(upd) == set(), f"{name}: {_disjoint(upd)}"
+        assert "unread_count" not in upd["$set"], name
+    new_in, new_out = cases["new chat, inbound"], cases["new chat, outbound"]
+    assert new_in["$inc"] == {"unread_count": 1} and "unread_count" not in new_in["$setOnInsert"]
+    assert new_out["$setOnInsert"]["unread_count"] == 0 and "$inc" not in new_out
+    assert new_in["$set"]["contact_id"] == "c1" and new_in["$setOnInsert"]["lead_id"] == ""
+    assert cases["new lid chat"]["$setOnInsert"]["lid"] == "123@lid"
+    assert "contact_id" not in cases["existing linked"]["$set"] and "display_name" not in cases["existing linked"]["$set"]
+    assert cases["resolved + inbound"]["$set"]["status"] == "open"
+    assert "status" not in cases["resolved + inbound"]["$setOnInsert"]
+    assert "status" not in cases["resolved + outbound"]["$set"]
+
+
+def test_a_resolved_chat_reopens_with_a_conflict_free_update(env, monkeypatch):
+    # The live path: the update sent to the driver on the resolved -> open branch has no overlap.
+    # (mongomock_motor hands out a fresh collection object per `db.wa_chats`, so the update
+    # document is captured at the builder, whose return value goes to the driver unchanged.)
+    db = env.db
+    seen = []
+    real = wa_inbox._chat_update
+
+    def spy(*a, **kw):
+        upd = real(*a, **kw)
+        seen.append(upd)
+        return upd
+    monkeypatch.setattr(wa_inbox, "_chat_update", spy)
+
+    async def go():
+        inst = await _setup(db)
+        await db.wa_chats.insert_one({"chat_id": CHAT, "instance_name": "rep_parul", "remote_jid": JID,
+                                      "phone_e164": PHONE, "status": "resolved", "unread_count": 0,
+                                      "assignee_email": PARUL, "contact_id": "c1", "lead_id": "", "school_id": "sch1",
+                                      "display_name": "Sunita Verma", "notes": [], "created_at": "2026-09-01T00:00:00+00:00"})
+        await wa_inbox.ingest_message(db, inst, inbound("IN9", PHONE, "back again"))
+        assert len(seen) == 1 and _disjoint(seen[0]) == set() and seen[0]["$set"]["status"] == "open"
+        chat = await _chat(db)
+        assert chat["status"] == "open" and chat["unread_count"] == 1
+    _run(go())
+
+
+def test_a_reaction_leaves_the_chat_and_events_untouched(env):
+    # 2. content-less events: the row is kept (D9), nothing else happens.
+    db = env.db
+
+    async def go():
+        inst = await _setup(db)
+        q = asyncio.Queue()
+        wa_events._queues.add(q)
+        try:
+            row = await wa_inbox.ingest_message(db, inst, inbound(
+                "RX1", PHONE, "", message={"reactionMessage": {"key": {"id": "IN1"}, "text": "+1"}},
+                messageType="reactionMessage"))
+            empty = await wa_inbox.ingest_message(db, inst, inbound("RX2", PHONE, "", message=None,
+                                                                    messageType=""))
+            proto = await wa_inbox.ingest_message(db, inst, inbound(
+                "RX3", PHONE, "", message={"protocolMessage": {"type": "REVOKE"}, "messageContextInfo": {}},
+                messageType="protocolMessage"))
+            wrapper = await wa_inbox.ingest_message(db, inst, inbound(
+                "RX4", PHONE, "", message={"ephemeralMessage": {"message": {}}}, messageType="ephemeralMessage"))
+        finally:
+            wa_events._queues.discard(q)
+        for r, t in ((row, "reactionMessage"), (empty, ""), (proto, "protocolMessage"), (wrapper, "ephemeralMessage")):
+            assert r["hidden"] is True and r["contentless"] is True and r["raw_type"] == t
+        assert await db.wa_messages.count_documents({"contentless": True}) == 4
+        assert await db.wa_chats.count_documents({}) == 0
+        assert await db.engagement_events.count_documents({}) == 0
+        assert q.empty()
+        # a real message still makes the chat, with unread 1 (the reactions never counted)
+        await wa_inbox.ingest_message(db, inst, inbound("IN10", PHONE, "real"))
+        assert (await _chat(db))["unread_count"] == 1
+        # messageContextInfo beside real content is not content-less
+        n = wa_inbox.normalise_upsert(inst, inbound("N9", PHONE, "", message={
+            "messageContextInfo": {"deviceListMetadata": {}}, "conversation": "hey"}))
+        assert n["contentless"] is False and n["hidden"] is False and n["text"] == "hey"
+    _run(go())
+
+
+def test_a_group_image_is_not_downloaded(env):
+    # 3. hidden rows never fetch media
+    db = env.db
+    env.evo.media["G2"] = {"base64": base64.b64encode(b"abc").decode(), "mimetype": "image/jpeg"}
+
+    async def go():
+        inst = await _setup(db)
+        row = await wa_inbox.ingest_message(db, inst, inbound(
+            "G2", "x", "", key={"remoteJid": "120363012345678901@g.us", "fromMe": False, "id": "G2"},
+            message={"imageMessage": {"caption": "group pic", "mimetype": "image/jpeg"}}, messageType="imageMessage"))
+        assert row["media"] == {"type": "image", "caption": "group pic", "url": "", "pending": True, "skipped": "hidden"}
+        stored = await db.wa_messages.find_one({"provider_msg_id": "G2"}, {"_id": 0})
+        assert stored["media"] == row["media"] and stored["hidden"] is True
+        assert not [c for c in env.evo.calls if "getBase64" in c["path"]]
+        assert await db.wa_chats.count_documents({}) == 0
+    _run(go())
+
+
+def test_lid_without_an_alt_makes_a_lid_chat_and_sender_pn_is_an_alt(env):
+    # 4. @lid with no alt: keyed by the lid, nothing crashes; senderPn counts as the alt.
+    db = env.db
+
+    async def go():
+        inst = await _setup(db)
+        row = await wa_inbox.ingest_message(db, inst, inbound(
+            "L1", "x", "from a lid", key={"remoteJid": "123@lid", "fromMe": False, "id": "L1"}))
+        assert row["lid"] == "123@lid" and row["remote_jid"] == "123@lid" and row["phone_e164"] == ""
+        assert row["chat_id"] == "rep_parul:123@lid" and row["contact_id"] == "" and row["hidden"] is False
+        chat = await _chat(db, "rep_parul:123@lid")
+        assert chat["lid"] == "123@lid" and chat["display_name"] == "Sunita" and chat["unread_count"] == 1
+        assert await db.engagement_events.count_documents({}) == 0
+        # senderPn on the key, or on data
+        r2 = await wa_inbox.ingest_message(db, inst, inbound(
+            "L2", "x", "hi", key={"remoteJid": "123@lid", "fromMe": False, "id": "L2", "senderPn": JID}))
+        r3 = await wa_inbox.ingest_message(db, inst, inbound(
+            "L3", "x", "hi", key={"remoteJid": "123@lid", "fromMe": False, "id": "L3"}, senderPn=JID))
+        assert r2["chat_id"] == CHAT and r3["chat_id"] == CHAT and r2["lid"] == "" and r2["contact_id"] == "c1"
+        assert await db.wa_chats.count_documents({}) == 2
+    _run(go())
+
+
+def test_provider_ts_accepts_float_str_and_milliseconds():
+    # 5.
+    iso = "2026-09-26T05:20:00+00:00"
+    assert wa_inbox._provider_ts(1790400000) == iso
+    assert wa_inbox._provider_ts(1790400000.7) == iso
+    assert wa_inbox._provider_ts("1790400000") == iso
+    assert wa_inbox._provider_ts(" 1790400000.0 ") == iso
+    assert wa_inbox._provider_ts(1790400000123) == iso
+    assert wa_inbox._provider_ts("1790400000123") == iso
+    assert wa_inbox._provider_ts({"low": 1790400000, "high": 0, "unsigned": False}) == iso
+    for bad in (None, "", "abc", 0, -5, {}, [1]):
+        assert wa_inbox._provider_ts(bad) is None
+
+
+def test_an_empty_remote_jid_is_not_ingested(env):
+    # 6.
+    inst = {"instance_name": "rep_parul"}
+    assert wa_inbox.normalise_upsert(inst, {"key": {"id": "X1", "remoteJid": ""}, "message": {"conversation": "x"}}) is None
+    assert wa_inbox.normalise_upsert(inst, {"key": {"id": "X1"}, "message": {"conversation": "x"}}) is None
+    db = env.db
+
+    async def go():
+        i = await _setup(db)
+        assert await wa_inbox.ingest_message(db, i, {"key": {"id": "X1", "remoteJid": " "}}) is None
+        assert await db.wa_messages.count_documents({}) == 0
+    _run(go())
+
+
+def test_a_redelivery_is_caught_before_the_record_scan(env, monkeypatch):
+    # 7.
+    db = env.db
+    scans = []
+    real = wa_inbox.match_record
+
+    async def counting(db_, phone):
+        scans.append(phone)
+        return await real(db_, phone)
+    monkeypatch.setattr(wa_inbox, "match_record", counting)
+
+    async def go():
+        inst = await _setup(db)
+        await wa_inbox.ingest_message(db, inst, inbound("IN1", PHONE, "hello"))
+        assert await wa_inbox.ingest_message(db, inst, inbound("IN1", PHONE, "hello")) == {"duplicate": True}
+        assert scans == [PHONE]
+    _run(go())
+
+
+def test_backfill_lets_a_connection_error_propagate_and_leaves_the_event_unprocessed(env, monkeypatch):
+    # 8.
+    db = env.db
+
+    async def boom(db_, inst, data):
+        raise ConnectionError("mongo went away")
+    monkeypatch.setattr(wa_inbox, "ingest_message", boom)
+
+    async def go():
+        await _setup(db)
+        await db.wa_events_raw.insert_one({"instance_name": "rep_parul", "event": "MESSAGES_UPSERT",
+                                           "data": inbound("R9", PHONE, "x"), "received_at": env.clock["now"],
+                                           "processed": False})
+        with pytest.raises(ConnectionError):
+            await wa_inbox.backfill_raw_events(db)
+        raw = await db.wa_events_raw.find_one({}, {"_id": 0})
+        assert raw["processed"] is False and "error" not in raw
+    _run(go())

@@ -40,6 +40,9 @@ _MIME_EXT = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "ima
 # Baileys wraps the real message under `.message` for these.
 _WRAPPERS = ("ephemeralMessage", "viewOnceMessage", "viewOnceMessageV2", "viewOnceMessageV2Extension",
              "documentWithCaptionMessage", "editedMessage")
+# Message keys that carry no content a person reads: the row is kept (D9) but makes no chat.
+_NO_CONTENT_KEYS = frozenset({"reactionMessage", "protocolMessage", "pollUpdateMessage",
+                              "senderKeyDistributionMessage", "messageContextInfo"})
 _EMPTY_MATCH = {"contact_id": "", "lead_id": "", "school_id": "", "display_name": ""}
 PREVIEW_LEN = 120
 
@@ -101,34 +104,51 @@ def _quoted(message) -> Optional[str]:
 
 
 def _provider_ts(raw) -> Optional[str]:
-    """messageTimestamp: int seconds, a digit string, or a protobuf Long {"low", "high"} -> UTC ISO."""
+    """messageTimestamp: int/float seconds, a numeric string, milliseconds (> 1e11), or a protobuf
+    Long {"low", "high"} -> UTC ISO. None when absent or unreadable."""
     if isinstance(raw, dict):
         raw = int(raw.get("low") or 0) + (int(raw.get("high") or 0) << 32)
     try:
-        ts = int(str(raw).strip())
-    except (TypeError, ValueError):
+        ts = int(float(str(raw).strip()))
+    except (TypeError, ValueError, OverflowError):
         return None
     if ts <= 0:
         return None
     if ts > 10 ** 11:                        # milliseconds
         ts //= 1000
-    return datetime.fromtimestamp(ts, timezone.utc).isoformat()
+    try:
+        return datetime.fromtimestamp(ts, timezone.utc).isoformat()
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def _is_contentless(msg: dict) -> bool:
+    """A reaction, a protocol message (delete/edit/history sync), a poll vote, a sender-key
+    distribution or an empty wrapper: nothing a person would read in the inbox."""
+    if not isinstance(msg, dict) or not msg:
+        return True
+    return not (set(msg.keys()) - _NO_CONTENT_KEYS)
 
 
 def normalise_upsert(inst: dict, data: dict) -> Optional[dict]:
     """Pure. The row-to-be for one 2.3.x MESSAGES_UPSERT `data` item, or None when it carries no
-    key id (nothing to key a row on)."""
+    key id or no remote jid (nothing to key a row on / no chat to hang it on)."""
     d = data if isinstance(data, dict) else {}
     key = d.get("key") if isinstance(d.get("key"), dict) else {}
     pmid = str(key.get("id") or "").strip()
-    if not pmid:
-        return None
     remote = str(key.get("remoteJid") or "").strip()
+    if not pmid or not remote:
+        return None
+    lid = ""
     if remote.endswith("@lid"):
-        # A linked-device id: the real number rides along as remoteJidAlt (on data or on key).
-        alt = str(d.get("remoteJidAlt") or key.get("remoteJidAlt") or "").strip()
-        if alt:
+        # A linked-device id: the real number rides along as remoteJidAlt / senderPn (on data or
+        # on key). With no alt the chat is keyed by the lid itself (W4 merges it into the phone chat).
+        alt = str(d.get("remoteJidAlt") or key.get("remoteJidAlt") or key.get("senderPn")
+                  or d.get("senderPn") or "").strip()
+        if alt and alt.endswith("@s.whatsapp.net"):
             remote = alt
+        else:
+            lid = remote
     hidden = remote.endswith(HIDDEN_SUFFIXES)
     phone = ""
     if remote.endswith("@s.whatsapp.net"):
@@ -137,18 +157,21 @@ def normalise_upsert(inst: dict, data: dict) -> Optional[dict]:
         phone = wa_send.to_e164("+" + remote.split("@")[0].split(":")[0])
     msg = _unwrap(d.get("message"))
     media_ref = _media_ref(msg)
+    contentless = _is_contentless(msg)
     return {
         "provider_msg_id": pmid,
         "direction": "in" if not key.get("fromMe") else "out",
         "remote_jid": remote,
-        "hidden": hidden,
+        "lid": lid,
+        "hidden": hidden or contentless,
+        "contentless": contentless,
         "phone_e164": phone,
         "push_name": str(d.get("pushName") or "")[:120],
         "text": (_text_of(msg) or (media_ref or {}).get("caption") or "").strip(),
         "media_ref": media_ref,
         "quoted_provider_msg_id": _quoted(msg),
         "provider_ts": _provider_ts(d.get("messageTimestamp")),
-        "raw_type": str(d.get("messageType") or ""),
+        "raw_type": str(d.get("messageType") or next(iter(msg), "") or ""),
     }
 
 
@@ -200,20 +223,22 @@ def _preview(row: dict) -> str:
     return (row.get("text") or "")[:PREVIEW_LEN]
 
 
-async def upsert_chat(db, inst: dict, row: dict, *, inbound: bool, match: dict) -> dict:
-    """One wa_chats row per (instance, remote jid). A record link already on the chat is never
-    overwritten (a person may have linked it by hand); a resolved chat that receives an inbound
-    message goes back to `open`; unread_count grows only on inbound."""
+def _chat_update(inst: dict, row: dict, existing: dict, *, inbound: bool, match: dict) -> dict:
+    """Pure: the update document for one message landing on a chat (`existing` = the chat as it
+    is now, {} for a new one). INVARIANT: no field is in both $set and $setOnInsert — real
+    MongoDB rejects that (ConflictingUpdateOperators; mongomock does not), and `unread_count`
+    is never in $setOnInsert on an inbound message because $inc creates it as 1 on insert."""
     name = inst["instance_name"]
     remote = row["remote_jid"]
     chat_id = row.get("chat_id") or f"{name}:{remote}"
-    existing = await db.wa_chats.find_one({"chat_id": chat_id}, {"_id": 0}) or {}
+    existing = existing or {}
     match = match or {}
-    at = row.get("provider_ts") or row.get("created_at") or wa_send._iso(wa_send._now())
-    sets = {"last_message_at": at, "last_message_preview": _preview(row),
+    now_iso = wa_send._iso(wa_send._now())
+    sets = {"last_message_at": row.get("provider_ts") or row.get("created_at") or now_iso,
+            "last_message_preview": _preview(row),
             "last_direction": row.get("direction") or ("in" if inbound else "out"),
             "last_message_id": row.get("message_id") or "", "hidden": bool(row.get("hidden")),
-            "updated_at": wa_send._iso(wa_send._now())}
+            "updated_at": now_iso}
     if row.get("phone_e164") and not existing.get("phone_e164"):
         sets["phone_e164"] = row["phone_e164"]
     linked = any(existing.get(k) for k in ("contact_id", "lead_id", "school_id"))
@@ -224,23 +249,34 @@ async def upsert_chat(db, inst: dict, row: dict, *, inbound: bool, match: dict) 
                 sets[k] = match[k]
     name_now = (match.get("display_name") if not linked else "") or ""
     if not existing.get("display_name") or (not linked and name_now):
-        sets["display_name"] = name_now or existing.get("display_name") or row.get("push_name") or row.get("phone_e164") or remote
+        sets["display_name"] = (name_now or existing.get("display_name") or row.get("push_name")
+                                or row.get("phone_e164") or remote)
     if row.get("push_name"):
         sets["push_name"] = row["push_name"]
     if inbound and existing.get("status") == "resolved":
         sets["status"] = "open"
-    on_insert = {"chat_id": chat_id, "instance_name": name, "remote_jid": remote,
-                 "created_at": wa_send._iso(wa_send._now()), "status": "open",
-                 "assignee_email": inst.get("owner_email") or "", "notes": []}
-    # A field may sit in $set OR $setOnInsert, never both (Mongo rejects the conflict).
-    for k in ("contact_id", "lead_id", "school_id", "phone_e164"):
-        if k not in sets:
-            on_insert[k] = ""
-    if not inbound:
-        on_insert["unread_count"] = 0           # inbound: $inc creates it as 1 on insert
+    on_insert = {"chat_id": chat_id, "instance_name": name, "remote_jid": remote, "created_at": now_iso,
+                 "status": "open", "assignee_email": inst.get("owner_email") or "", "notes": [],
+                 "contact_id": "", "lead_id": "", "school_id": "", "phone_e164": "", "unread_count": 0}
+    if row.get("lid"):
+        on_insert["lid"] = row["lid"]              # an unmapped @lid chat (W4 merges it into the phone chat)
+    if inbound:
+        on_insert.pop("unread_count", None)
+    for k in sets:
+        on_insert.pop(k, None)
     update = {"$set": sets, "$setOnInsert": on_insert}
     if inbound:
         update["$inc"] = {"unread_count": 1}
+    return update
+
+
+async def upsert_chat(db, inst: dict, row: dict, *, inbound: bool, match: dict) -> dict:
+    """One wa_chats row per (instance, remote jid). A record link already on the chat is never
+    overwritten (a person may have linked it by hand); a resolved chat that receives an inbound
+    message goes back to `open`; unread_count grows only on inbound."""
+    chat_id = row.get("chat_id") or f"{inst['instance_name']}:{row['remote_jid']}"
+    existing = await db.wa_chats.find_one({"chat_id": chat_id}, {"_id": 0}) or {}
+    update = _chat_update(inst, row, existing, inbound=inbound, match=match)
     try:
         await db.wa_chats.update_one({"chat_id": chat_id}, update, upsert=True)
     except DuplicateKeyError:
@@ -330,8 +366,8 @@ def _build_row(inst: dict, n: dict, match: dict) -> dict:
         "status_history": [{"status": status, "at": now_iso,
                             "reason": "received" if inbound else "sent from the phone"}],
         "fail_reason": "", "source": "webhook" if inbound else "phone", "created_at": now_iso,
-        "provider_ts": n["provider_ts"], "hidden": n["hidden"], "push_name": n["push_name"],
-        "raw_type": n["raw_type"],
+        "provider_ts": n["provider_ts"], "hidden": n["hidden"], "contentless": bool(n.get("contentless")),
+        "lid": n.get("lid") or "", "push_name": n["push_name"], "raw_type": n["raw_type"],
     }
     if inbound:
         row["received_at"] = now_iso
@@ -372,9 +408,13 @@ async def ingest_message(db, inst: dict, data: dict) -> Optional[dict]:
     if n is None:
         return None
     name = inst["instance_name"]
+    key = {"instance_name": name, "provider_msg_id": n["provider_msg_id"]}
+    # Cheap early exit for a redelivery (Evolution retries; W1's SEND_MESSAGE row): saves the
+    # record scan. The atomic $setOnInsert below is the real guard.
+    if await db.wa_messages.find_one(key, {"_id": 1}):
+        return {"duplicate": True}
     match = await match_record(db, n["phone_e164"]) if (n["phone_e164"] and not n["hidden"]) else dict(_EMPTY_MATCH)
     row = _build_row(inst, n, match)
-    key = {"instance_name": name, "provider_msg_id": n["provider_msg_id"]}
     try:
         res = await db.wa_messages.update_one(key, {"$setOnInsert": row}, upsert=True)
     except DuplicateKeyError:
@@ -383,11 +423,19 @@ async def ingest_message(db, inst: dict, data: dict) -> Optional[dict]:
         return {"duplicate": True}              # a second delivery (or W1's phone row): one row, no side effects
     inbound = n["direction"] == "in"
     if n["media_ref"]:
-        row["media"] = await store_media(inst, n["provider_msg_id"], n["media_ref"])
+        if n["hidden"]:
+            # A group / status / newsletter / content-less message: never download its media.
+            row["media"] = {"type": n["media_ref"].get("type") or "document",
+                            "caption": n["media_ref"].get("caption") or "", "url": "", "pending": True,
+                            "skipped": "hidden"}
+        else:
+            row["media"] = await store_media(inst, n["provider_msg_id"], n["media_ref"])
         try:
             await db.wa_messages.update_one({"message_id": row["message_id"]}, {"$set": {"media": row["media"]}})
         except Exception as e:
             log.error("[wa-inbox] media not written on %s: %s", row["message_id"], str(e)[:160])
+    if n.get("contentless"):
+        return row                              # a reaction / protocol message: the row only, nothing else
     chat = {}
     if not n["hidden"]:
         try:
@@ -412,8 +460,10 @@ async def ingest_message(db, inst: dict, data: dict) -> Optional[dict]:
 
 async def backfill_raw_events(db, *, limit: int = 500) -> int:
     """Run the MESSAGES_UPSERT events the W1 stub parked in wa_events_raw through ingest, oldest
-    first, marking each `processed`. An event that fails is marked `processed` WITH its error so
-    the back-fill never loops on it. Returns how many events were marked this pass."""
+    first, marking each `processed`. A BAD event (malformed data, unknown instance, a value the
+    normaliser cannot read) is marked `processed` WITH its error so the back-fill never loops on
+    it; any other exception (a database/connection error) propagates so the next pass retries
+    from the same event. Returns how many events were marked this pass."""
     events = await db.wa_events_raw.find(
         {"processed": {"$ne": True}, "event": "MESSAGES_UPSERT"}).sort("received_at", 1).to_list(max(1, int(limit)))
     insts: dict = {}
@@ -434,7 +484,7 @@ async def backfill_raw_events(db, *, limit: int = 500) -> int:
                 raise TypeError("malformed event data")
             for item in items:
                 await ingest_message(db, inst, item)
-        except Exception as e:
+        except (TypeError, LookupError, ValueError, AttributeError) as e:
             marks["error"] = (str(e)[:200] or type(e).__name__)
             log.warning("[wa-inbox] backfill: raw event %s skipped: %s", ev.get("_id"), marks["error"])
         await db.wa_events_raw.update_one({"_id": ev["_id"]}, {"$set": marks})
