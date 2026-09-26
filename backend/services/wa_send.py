@@ -829,6 +829,7 @@ async def _finish(db, row: dict, status: str, reason: str) -> dict:
         await _writeback_scheduled(db, row)
     except Exception as e:
         log.warning("[wa] campaign row write-back failed for %s: %s", row["message_id"], str(e)[:160])
+    await _land_on_inbox(db, row, status)
     return {"status": status, "message_id": row["message_id"],
             "instance_name": row.get("instance_name") or "", "reason": reason}
 
@@ -839,8 +840,44 @@ async def _finish_queued(db, row: dict, reason: str, send_after: datetime) -> di
     row["queue_reason"] = reason
     row.setdefault("status_history", []).append({"status": "queued", "at": _iso(_now()), "reason": reason})
     await _save_row(db, row)
+    await _land_on_inbox(db, row, "queued")
     return {"status": "queued", "message_id": row["message_id"],
             "instance_name": row.get("instance_name") or "", "reason": reason}
+
+
+async def _land_on_inbox(db, row: dict, status: str) -> None:
+    """W2 (task 3): a settled row that has a chat (a sender was resolved) lands on the inbox —
+    the chat's last_message_* move (wa_inbox.touch_chat_after_send) and a bus event goes out:
+    `message_new` for sent / queued, `message_status` for failed / skipped. A digest or alert
+    to our own staff (INTERNAL_KINDS) never makes a chat. Never raises. The imports are lazy:
+    wa_inbox imports this module."""
+    if not row.get("chat_id") or row.get("kind") in INTERNAL_KINDS:
+        return
+    if status not in ("sent", "queued", "failed", "skipped"):
+        return
+    try:
+        from services import wa_events, wa_inbox
+    except Exception as e:                                       # pragma: no cover
+        log.warning("[wa] inbox modules unavailable: %s", str(e)[:120])
+        return
+    chat: dict = {}
+    try:
+        chat = await wa_inbox.touch_chat_after_send(db, row) or {}
+    except Exception as e:
+        log.warning("[wa] chat not updated after %s: %s", row["message_id"], str(e)[:160])
+    try:
+        await wa_events.publish({
+            "type": "message_new" if status in ("sent", "queued") else "message_status",
+            "instance_name": row.get("instance_name") or "", "chat_id": row["chat_id"],
+            "message_id": row["message_id"], "status": status, "direction": "out",
+            "contact_id": chat.get("contact_id") or row.get("contact_id") or "",
+            "lead_id": chat.get("lead_id") or row.get("lead_id") or "",
+            "school_id": chat.get("school_id") or row.get("school_id") or "",
+            "preview": wa_inbox._preview(row), "typed_by": row.get("typed_by"),
+            "sent_via_owner_email": row.get("sent_via_owner_email") or "",
+            "unread_count": int(chat.get("unread_count") or 0)})
+    except Exception as e:
+        log.warning("[wa] event not published for %s: %s", row["message_id"], str(e)[:160])
 
 
 async def _deliver(db, row: dict, inst: Optional[dict], cfg: dict) -> dict:

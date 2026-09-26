@@ -837,3 +837,114 @@ def test_a_failed_merge_update_loses_nothing(wa_env, monkeypatch):
         assert ours is not None and ours["status"] == "sending"     # minimal retry hits the same unique key
         assert hook["source"] == "phone" and "app_message_id" not in hook
     _run(go())
+
+
+# ══ W2 task 3: the send door lands on the inbox ══════════════════════════════
+
+from services import wa_events  # noqa: E402
+
+CHAT_PARUL = "rep_parul:919811111111@s.whatsapp.net"
+
+
+def _events(q):
+    out = []
+    while not q.empty():
+        out.append(q.get_nowait())
+    return out
+
+
+def test_a_chat_send_touches_the_chat_and_publishes(wa_env):
+    db = wa_env.db
+
+    async def go():
+        await seed_wa(db, reps={PARUL: "connected"})
+        await _school(db, assigned_to=PARUL)
+        await _contact(db, assigned_to=PARUL)
+        q = asyncio.Queue()
+        wa_events._queues.add(q)
+        try:
+            res = await send_whatsapp(db, to="9811111111", text="Hello from the desk", kind="chat",
+                                      contact_id="c1", school_id="s1", typed_by=PARUL)
+        finally:
+            wa_events._queues.discard(q)
+        assert res["status"] == "sent" and res["instance_name"] == "rep_parul"
+        chat = await db.wa_chats.find_one({"chat_id": CHAT_PARUL}, {"_id": 0})
+        assert chat["last_direction"] == "out" and chat["last_message_id"] == res["message_id"]
+        assert chat["last_message_preview"] == "Hello from the desk" and chat["unread_count"] == 0
+        assert chat["contact_id"] == "c1" and chat["school_id"] == "s1" and chat["display_name"] == "Ritu"
+        assert chat["assignee_email"] == PARUL and chat["status"] == "open" and chat["phone_e164"] == "919811111111"
+        assert chat["instance_name"] == "rep_parul" and chat["remote_jid"] == "919811111111@s.whatsapp.net"
+        assert chat["last_message_at"] == "2026-09-24T05:30:00+00:00" and chat["hidden"] is False
+        new = [e for e in _events(q) if e["type"] == "message_new"]
+        assert len(new) == 1
+        ev = new[0]
+        assert ev["message_id"] == res["message_id"] and ev["direction"] == "out" and ev["status"] == "sent"
+        assert ev["chat_id"] == CHAT_PARUL and ev["instance_name"] == "rep_parul" and ev["at"]
+        assert ev["typed_by"] == PARUL and ev["sent_via_owner_email"] == PARUL and ev["contact_id"] == "c1"
+        assert ev["school_id"] == "s1" and ev["preview"] == "Hello from the desk"
+        # a second send only moves the same chat forward
+        res2 = await send_whatsapp(db, to="9811111111", text="second", kind="chat", contact_id="c1",
+                                   school_id="s1", typed_by=PARUL)
+        chat2 = await db.wa_chats.find_one({"chat_id": CHAT_PARUL}, {"_id": 0})
+        assert chat2["last_message_id"] == res2["message_id"] and chat2["last_message_preview"] == "second"
+        assert await db.wa_chats.count_documents({}) == 1
+    _run(go())
+
+
+def test_a_send_to_an_unlinked_number_matches_the_record_by_phone(wa_env):
+    db = wa_env.db
+
+    async def go():
+        await seed_wa(db, reps={PARUL: "connected"})
+        await _contact(db, assigned_to=PARUL)                       # phone 9811111111, no ids on the send
+        res = await send_whatsapp(db, to="9811111111", text="x", kind="chat", channel="rep_parul", typed_by=PARUL)
+        assert res["status"] == "sent"
+        chat = await db.wa_chats.find_one({"chat_id": CHAT_PARUL}, {"_id": 0})
+        assert chat["contact_id"] == "c1" and chat["school_id"] == "s1" and chat["display_name"] == "Ritu"
+    _run(go())
+
+
+def test_a_failed_chat_send_still_lands_on_the_chat_as_a_status_event(wa_env):
+    db = wa_env.db
+    wa_env.evo.fail_sends = True
+
+    async def go():
+        await seed_wa(db, reps={PARUL: "connected"})
+        q = asyncio.Queue()
+        wa_events._queues.add(q)
+        try:
+            res = await send_whatsapp(db, to="9811111111", text="x", kind="chat", channel="rep_parul", typed_by=PARUL)
+        finally:
+            wa_events._queues.discard(q)
+        assert res["status"] == "failed"
+        chat = await db.wa_chats.find_one({"chat_id": CHAT_PARUL}, {"_id": 0})
+        assert chat is not None and chat["last_message_id"] == res["message_id"] and chat["display_name"] == "919811111111"
+        evs = _events(q)
+        assert len(evs) == 1 and evs[0]["type"] == "message_status" and evs[0]["status"] == "failed"
+        assert evs[0]["message_id"] == res["message_id"]
+    _run(go())
+
+
+def test_an_internal_digest_creates_no_chat(wa_env):
+    db = wa_env.db
+
+    async def go():
+        await seed_wa(db)
+        await db.users.insert_one({"email": "x@smartshape.in", "phone": "+91 98111 11111"})
+        q = asyncio.Queue()
+        wa_events._queues.add(q)
+        try:
+            digest = await send_whatsapp(db, to="9811111111", text="Your day", kind="digest", channel="company")
+            alert = await send_whatsapp(db, to="9811111111", text="Number paused", kind="alert", channel="company")
+        finally:
+            wa_events._queues.discard(q)
+        assert digest["status"] == "sent" and alert["status"] == "sent"
+        assert await db.wa_chats.count_documents({}) == 0
+        assert _events(q) == []
+        # ...but a customer-facing automation (a dispatch notice) does land on the chat
+        await _contact(db)
+        res = await send_whatsapp(db, to="9811111111", text="Your kit shipped", kind="dispatch", contact_id="c1")
+        assert res["status"] == "sent"
+        chat = await db.wa_chats.find_one({}, {"_id": 0})
+        assert chat["chat_id"] == f"{COMPANY}:919811111111@s.whatsapp.net" and chat["last_message_id"] == res["message_id"]
+    _run(go())

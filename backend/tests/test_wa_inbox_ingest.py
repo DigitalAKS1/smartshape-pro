@@ -444,6 +444,32 @@ def test_a_reaction_leaves_the_chat_and_events_untouched(env):
     _run(go())
 
 
+def test_a_group_message_publishes_nothing(env):
+    # Task 3 ruling: a hidden row (group / status / newsletter) makes no chat AND no bus event.
+    db = env.db
+
+    async def go():
+        inst = await _setup(db)
+        q = asyncio.Queue()
+        wa_events._queues.add(q)
+        try:
+            g = await wa_inbox.ingest_message(db, inst, inbound(
+                "G3", "x", "in a group", key={"remoteJid": "120363012345678901@g.us", "fromMe": False, "id": "G3"}))
+            nl = await wa_inbox.ingest_message(db, inst, inbound(
+                "NL1", "x", "news", key={"remoteJid": "1@newsletter", "fromMe": False, "id": "NL1"}))
+            real = await wa_inbox.ingest_message(db, inst, inbound("IN11", PHONE, "real"))
+        finally:
+            wa_events._queues.discard(q)
+        assert g["hidden"] is True and nl["hidden"] is True and real["hidden"] is False
+        assert await db.wa_messages.count_documents({}) == 3
+        evs = []
+        while not q.empty():
+            evs.append(q.get_nowait())
+        assert [e["message_id"] for e in evs] == [real["message_id"]]
+        assert "hidden" not in evs[0]
+    _run(go())
+
+
 def test_a_group_image_is_not_downloaded(env):
     # 3. hidden rows never fetch media
     db = env.db

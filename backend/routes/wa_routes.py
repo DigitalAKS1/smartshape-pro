@@ -1,10 +1,10 @@
 """WhatsApp team numbers (spec 2026-09-24, W1): the per-instance webhook (this block) and the
 /wa routes for "My WhatsApp" and Settings → WhatsApp (appended in Task 7)."""
+import asyncio
 import hmac
 import logging
 import os
 import re
-import uuid
 from datetime import timedelta
 from typing import Optional
 
@@ -13,11 +13,10 @@ from fastapi import APIRouter, HTTPException, Request
 from auth_utils import get_current_user
 from database import db
 from rbac import get_team
-from services import wa_send
+from services import wa_events, wa_inbox, wa_send
 from services.evolution_client import EvolutionError, instance_token, webhook_url
 from services.wa_config import (COMPANY_INSTANCE, PRIVACY_NOTICE, RAM_HEADROOM_MIN_MB, SLOT_STATES,
                                 WaSettingsError, get_wa_settings, rep_instance_name, save_wa_settings)
-from services.wa_inbox import _text_of
 
 router = APIRouter()
 log = logging.getLogger("wa_routes")
@@ -200,6 +199,22 @@ async def _on_open(inst: dict, data: dict) -> None:
             {"instance_name": {"$ne": name}, "state": {"$in": ["qr", "unlinked"]},
              "$or": [{"phone_e164": phone}, {"jid": f"{phone}@s.whatsapp.net"}]},
             {"$unset": {"phone_e164": "", "jid": ""}})
+    await _publish_state(inst, sets["state"])
+    if not inst.get("history_synced_at"):
+        # W2 task 5 adds wa_inbox.sync_history (the first link pulls the recent chats in); until
+        # then the guard keeps this a no-op. Task 5 removes the guard.
+        if hasattr(wa_inbox, "sync_history"):
+            try:
+                asyncio.create_task(wa_inbox.sync_history(db, {**inst, **sets}))
+            except Exception as e:
+                log.warning("[wa-webhook] history sync for %s not started: %s", name, str(e)[:120])
+
+
+async def _publish_state(inst: dict, state: str) -> None:
+    """{"type": "instance_state"} on the bus: the inbox header shows a number's link state live."""
+    await wa_events.publish({"type": "instance_state", "instance_name": inst["instance_name"], "state": state,
+                             "owner_email": inst.get("owner_email") or "", "kind": inst.get("kind") or "",
+                             "chat_id": "", "contact_id": "", "lead_id": "", "school_id": ""})
 
 
 async def _on_close(inst: dict, data: dict) -> None:
@@ -224,11 +239,14 @@ async def _on_close(inst: dict, data: dict) -> None:
         # Permanent: pause (only an admin resumes) and alert the owner + admins.
         await db.wa_instances.update_one({"instance_name": name}, {"$set": {"evolution_state": "close"}})
         await wa_send.pause_instance(db, inst, reason=_TERMINAL_CLOSE[code])
+        await _publish_state(inst, "paused")
         return
     now = _now_iso()
     was = inst.get("state")
+    new_state = "paused" if was == "paused" else "disconnected"
     await db.wa_instances.update_one({"instance_name": name}, {"$set": {
-        "state": "paused" if was == "paused" else "disconnected", "state_at": now, "evolution_state": "close"}})
+        "state": new_state, "state_at": now, "evolution_state": "close"}})
+    await _publish_state(inst, new_state)
     if was not in ("connected", "paused"):
         return                       # a QR that timed out, or already down: nothing new to tell anyone
     # ONE alert per number per IST day: an atomic claim on the instance, independent of whether
@@ -305,7 +323,10 @@ async def _on_messages_update(inst: dict, data) -> None:
              "$or": [{"status": {"$in": _lower_than(new, _LEGACY_RANK, ("pending", "sent"))}},
                      {"status": {"$exists": False}}]},
             {"$set": {"status": new, "updated_at": now}})
-        if getattr(res, "matched_count", 0) or getattr(legacy, "matched_count", 0):
+        if getattr(res, "matched_count", 0):
+            await _publish_receipt(name, pmid, new)
+            continue
+        if getattr(legacy, "matched_count", 0):
             continue
         # Nothing moved. Park it only when NO row holds the id (an ignored regression is not parked)
         # and it can be one of ours: a receipt for an inbound message (fromMe false - we marked it
@@ -320,6 +341,19 @@ async def _on_messages_update(inst: dict, data) -> None:
             await _park_receipt(name, pmid, new)
 
 
+async def _publish_receipt(name: str, pmid: str, new: str) -> None:
+    """A receipt moved one of our rows: {"type": "message_status"} with the row's scope."""
+    row = await db.wa_messages.find_one(
+        {"instance_name": name, "provider_msg_id": pmid},
+        {"_id": 0, "chat_id": 1, "message_id": 1, "status": 1, "direction": 1,
+         "contact_id": 1, "lead_id": 1, "school_id": 1}) or {}
+    await wa_events.publish({
+        "type": "message_status", "instance_name": name, "chat_id": row.get("chat_id") or "",
+        "message_id": row.get("message_id") or "", "provider_msg_id": pmid, "status": row.get("status") or new,
+        "direction": row.get("direction") or "out", "contact_id": row.get("contact_id") or "",
+        "lead_id": row.get("lead_id") or "", "school_id": row.get("school_id") or ""})
+
+
 async def _park_receipt(name: str, pmid: str, new: str) -> None:
     """No row holds this provider id yet: most likely our own send is still `sending` (the
     provider answered, _finish has not written the id). Park it; wa_send._finish applies it.
@@ -332,16 +366,17 @@ async def _park_receipt(name: str, pmid: str, new: str) -> None:
 
 
 # ── SEND_MESSAGE (sent from the phone) ────────────────────────────────────────
-# `_text_of` moved to services.wa_inbox (W2 task 2) and is imported back at the top.
+# The W1 row builder that lived here (and `_text_of`) moved to services.wa_inbox (W2 tasks 2-3).
 
 async def _on_send_message(inst: dict, data) -> None:
     """A message this number sent. Our own API sends already have their row (wa_send._finish
-    merges into this placeholder if the webhook wins the race, and returns THIS row's
-    message_id — so it carries one of ours); a message typed on the phone gets one
-    `source: "phone"` row, keyed by provider id (D9). W2 fills contact/lead/school."""
-    from pymongo.errors import DuplicateKeyError
+    merges into the webhook's row if the webhook wins the race, and returns THAT row's
+    message_id — so it carries one of ours); a message typed on the phone goes through
+    wa_inbox.ingest_message (W2): one `source: "phone"` row keyed by provider id (D9), the
+    chat upserted with direction out and no unread bump, contact/lead/school matched by phone.
+    A provider id already held (our own send, a redelivery) is a no-op there."""
     d = data if isinstance(data, dict) else {}
-    key = d.get("key") or {}
+    key = d.get("key") if isinstance(d.get("key"), dict) else {}
     pmid = str(key.get("id") or "")
     if not pmid or key.get("fromMe") is False:
         return
@@ -351,39 +386,28 @@ async def _on_send_message(inst: dict, data) -> None:
         log.debug("[wa-webhook] SEND_MESSAGE on %s to %s ignored (group/status, or not connected: %s)",
                   name, remote[:40], inst.get("state"))
         return
-    if await db.wa_messages.find_one({"instance_name": name, "provider_msg_id": pmid}, {"_id": 1}):
-        return
-    now = wa_send._now()
-    try:
-        await db.wa_messages.update_one({"instance_name": name, "provider_msg_id": pmid}, {"$setOnInsert": {
-            "message_id": f"wam_{uuid.uuid4().hex[:16]}", "instance_name": name, "provider_msg_id": pmid,
-            "chat_id": f"{name}:{remote}", "direction": "out", "from_jid": inst.get("jid") or "",
-            "to_jid": remote, "to_e164": remote.split("@")[0] if remote.endswith("@s.whatsapp.net") else "",
-            "contact_id": "", "lead_id": "", "school_id": "", "kind": "chat", "ref": {},
-            "text": _text_of(d.get("message")), "media": None, "quoted_provider_msg_id": None,
-            "typed_by": None, "owner_email": inst.get("owner_email") or "",
-            "sent_via_owner_email": inst.get("owner_email") or "", "sender_kind": inst.get("kind") or "",
-            "provider": "evolution", "status": "sent",
-            "status_history": [{"status": "sent", "at": wa_send._iso(now), "reason": "sent from the phone"}],
-            "fail_reason": "", "source": "phone", "created_at": wa_send._iso(now),
-            "sent_at": wa_send._iso(now), "sent_day": wa_send.ist_day(now),
-            "provider_ts": d.get("messageTimestamp")}}, upsert=True)
-    except DuplicateKeyError:
-        return                  # our own send (or a duplicate delivery) wrote it first — one row
+    await wa_inbox.ingest_message(db, inst, d)
     # A receipt may have beaten this event here (parked by _on_messages_update).
     await wa_send.apply_parked_receipts(db, {"instance_name": name, "provider_msg_id": pmid})
 
 
-# ── MESSAGES_UPSERT (W1 stub) ─────────────────────────────────────────────────
+# ── MESSAGES_UPSERT (W2: ingest) ──────────────────────────────────────────────
 
 async def _on_messages_upsert(inst: dict, data) -> None:
-    """W1 STUB. Inbound messages are only KEPT here, raw, for W2's ingest (spec W2 "Ingest"),
-    which replaces this handler in _HANDLERS and back-fills from wa_events_raw. Any
-    wa_messages row W2 creates must carry a `message_id` of ours (`wam_<uuid>`) — see
-    _on_send_message."""
-    await db.wa_events_raw.insert_one({"instance_name": inst["instance_name"], "event": "MESSAGES_UPSERT",
-                                       "data": data, "received_at": wa_send._now(),   # datetime: TTL 30 days
-                                       "processed": False})
+    """Every message on this number (Evolution batches: `data` may be a list) goes through
+    wa_inbox.ingest_message. Nothing is parked raw any more (the W1 stub's wa_events_raw is
+    drained once at startup by main._wa_backfill); an ingest failure is logged, never raised —
+    Evolution retries a non-2xx forever, and the next MESSAGES_UPSERT redelivery is dedup'd
+    by provider id anyway."""
+    items = data if isinstance(data, list) else [data]
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        try:
+            await wa_inbox.ingest_message(db, inst, item)
+        except Exception as e:
+            pmid = str((item.get("key") or {}).get("id") or "?") if isinstance(item.get("key"), dict) else "?"
+            log.error("[wa-webhook] ingest failed on %s for %s: %s", inst["instance_name"], pmid[:40], str(e)[:200])
 
 
 _HANDLERS = {

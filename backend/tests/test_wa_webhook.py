@@ -6,6 +6,7 @@ Run:
     python -m pytest tests/test_wa_webhook.py -q
 """
 import asyncio
+import logging
 import os
 
 os.environ.setdefault("MONGO_URL", "mongodb://localhost:27017")
@@ -15,6 +16,7 @@ import pytest
 from fastapi import HTTPException
 
 import routes.wa_routes as wr
+from services import wa_events, wa_inbox
 from services.wa_send import send_whatsapp
 from wa_fixtures import COMPANY, seed_instance, seed_user, seed_wa
 
@@ -360,20 +362,170 @@ def test_our_send_racing_its_own_send_message_webhook_leaves_one_row(env):
     _run(go())
 
 
-# ── MESSAGES_UPSERT (W2 stub) ────────────────────────────────────────────────
+# ── MESSAGES_UPSERT (W2 task 3: the W1 raw stub is gone, the webhook ingests) ─
 
-def test_messages_upsert_is_stored_raw_for_w2(env):
+INBOUND = {"key": {"id": "IN1", "fromMe": False, "remoteJid": "919811111111@s.whatsapp.net"},
+           "message": {"conversation": "STOP"}, "pushName": "Ritu", "messageTimestamp": 1790000000}
+
+
+def _events(q):
+    out = []
+    while not q.empty():
+        out.append(q.get_nowait())
+    return out
+
+
+def test_messages_upsert_now_ingests_instead_of_parking(env):
     db = env.db
 
     async def go():
-        await seed_instance(db, "rep_parul", owner_email=PARUL, state="connected")
-        data = {"key": {"id": "IN1", "fromMe": False, "remoteJid": "919811111111@s.whatsapp.net"},
-                "message": {"conversation": "STOP"}, "pushName": "Ritu"}
-        out = await _hook("rep_parul", {"event": "messages.upsert", "data": data})
+        await seed_instance(db, "rep_parul", owner_email=PARUL, state="connected", phone="919000000111")
+        q = asyncio.Queue()
+        wa_events._queues.add(q)
+        try:
+            out = await _hook("rep_parul", {"event": "messages.upsert", "data": INBOUND})
+        finally:
+            wa_events._queues.discard(q)
         assert out == {"ok": True}
-        raw = await db.wa_events_raw.find_one({}, {"_id": 0})
-        assert raw["event"] == "MESSAGES_UPSERT" and raw["data"] == data and raw["processed"] is False
-        assert await db.wa_messages.count_documents({}) == 0     # W2 ingests; W1 only keeps it
+        assert await db.wa_events_raw.count_documents({"processed": {"$ne": True}}) == 0
+        rows = await db.wa_messages.find({}, {"_id": 0}).to_list(None)
+        assert len(rows) == 1
+        r = rows[0]
+        assert r["provider_msg_id"] == "IN1" and r["direction"] == "in" and r["source"] == "webhook"
+        assert r["message_id"].startswith("wam_") and r["text"] == "STOP" and r["status"] == "delivered"
+        chat = await db.wa_chats.find_one({"chat_id": "rep_parul:919811111111@s.whatsapp.net"}, {"_id": 0})
+        assert chat["unread_count"] == 1 and chat["display_name"] == "Ritu" and chat["last_direction"] == "in"
+        evs = _events(q)
+        assert len(evs) == 1 and evs[0]["type"] == "message_new" and evs[0]["message_id"] == r["message_id"]
+        # a batched delivery (Evolution sends a list) and a redelivery: one row each, still nothing parked
+        second = {**INBOUND, "key": {**INBOUND["key"], "id": "IN2"}}
+        await _hook("rep_parul", {"event": "messages.upsert", "data": [INBOUND, second]})
+        assert await db.wa_messages.count_documents({}) == 2
+        assert (await db.wa_chats.find_one({}, {"_id": 0}))["unread_count"] == 2
+        assert await db.wa_events_raw.count_documents({}) == 0
+    _run(go())
+
+
+def test_a_bad_upsert_is_acknowledged_and_never_raises(env, monkeypatch):
+    db = env.db
+
+    async def go():
+        await seed_instance(db, "rep_parul", owner_email=PARUL, state="connected", phone="919000000111")
+        # nothing to key a row on, or junk: acknowledged, nothing stored, nothing parked
+        assert await _hook("rep_parul", {"event": "messages.upsert", "data": {"key": {"id": "IN2"}}}) == {"ok": True}
+        assert await _hook("rep_parul", {"event": "messages.upsert", "data": "junk"}) == {"ok": True}
+        assert await _hook("rep_parul", {"event": "messages.upsert", "data": [None, 3]}) == {"ok": True}
+        assert await db.wa_messages.count_documents({}) == 0
+        assert await db.wa_events_raw.count_documents({}) == 0
+
+        # an ingest that blows up is logged and still answered 200 (Evolution retries non-2xx forever)
+        async def boom(db_, inst, data):
+            raise RuntimeError("mongo went away")
+        monkeypatch.setattr(wa_inbox, "ingest_message", boom)
+        with caplog_at("wa_routes") as records:
+            assert await _hook("rep_parul", {"event": "messages.upsert", "data": INBOUND}) == {"ok": True}
+        assert any("ingest failed" in r.getMessage() for r in records)
+    _run(go())
+
+
+class caplog_at:
+    """`with caplog_at("wa_routes") as records:` — the records that logger emitted inside the block
+    (pytest's caplog is a fixture; this is usable inside an asyncio.run body)."""
+
+    def __init__(self, name, level=logging.WARNING):
+        self.logger, self.level, self.records = logging.getLogger(name), level, []
+        self.handler = logging.Handler(level)
+        self.handler.emit = self.records.append
+
+    def __enter__(self):
+        self._old = self.logger.level
+        self.logger.setLevel(min(self.level, self._old or self.level))
+        self.logger.addHandler(self.handler)
+        return self.records
+
+    def __exit__(self, *exc):
+        self.logger.removeHandler(self.handler)
+        self.logger.setLevel(self._old)
+
+
+def test_a_phone_typed_message_fills_the_chat_and_record(env):
+    db = env.db
+
+    async def go():
+        await seed_instance(db, "rep_parul", owner_email=PARUL, state="connected", phone="919000000111")
+        await db.schools.insert_one({"school_id": "s1", "school_name": "DPS", "is_deleted": False})
+        await db.contacts.insert_one({"contact_id": "c1", "name": "Ritu", "phone": "98111 11111", "school_id": "s1",
+                                      "assigned_to": PARUL, "is_deleted": False})
+        q = asyncio.Queue()
+        wa_events._queues.add(q)
+        try:
+            await _hook("rep_parul", {"event": "send.message", "data": {
+                "key": {"id": "PHONE2", "fromMe": True, "remoteJid": "919811111111@s.whatsapp.net"},
+                "message": {"conversation": "typed on the phone"}, "messageTimestamp": 1790000000}})
+        finally:
+            wa_events._queues.discard(q)
+        row = await db.wa_messages.find_one({"provider_msg_id": "PHONE2"}, {"_id": 0})
+        assert row["source"] == "phone" and row["direction"] == "out" and row["status"] == "sent"
+        assert row["contact_id"] == "c1" and row["school_id"] == "s1" and row["lead_id"] == ""
+        chat = await db.wa_chats.find_one({"chat_id": "rep_parul:919811111111@s.whatsapp.net"}, {"_id": 0})
+        assert chat["contact_id"] == "c1" and chat["school_id"] == "s1" and chat["display_name"] == "Ritu"
+        assert chat["last_direction"] == "out" and chat["unread_count"] == 0 and chat["assignee_email"] == PARUL
+        assert chat["last_message_id"] == row["message_id"] and chat["last_message_preview"] == "typed on the phone"
+        assert await db.engagement_events.count_documents({}) == 0      # a phone-typed message is not a "reply"
+        evs = _events(q)
+        assert len(evs) == 1 and evs[0]["type"] == "message_new" and evs[0]["direction"] == "out"
+        assert evs[0]["contact_id"] == "c1" and evs[0]["message_id"] == row["message_id"]
+    _run(go())
+
+
+def test_receipt_publishes_a_status_event(env):
+    db = env.db
+
+    async def go():
+        await seed_wa(db)
+        res = await send_whatsapp(db, to="9811111111", text="x", kind="dispatch")        # PMID1
+        got = []
+
+        async def consume():
+            async for ev in wa_events.subscribe():
+                got.append(ev)
+        task = asyncio.ensure_future(consume())
+        await asyncio.sleep(0)
+        await _hook(COMPANY, {"event": "messages.update", "data": {"keyId": "PMID1", "fromMe": True,
+                                                                   "status": "DELIVERY_ACK"}})
+        await _hook(COMPANY, {"event": "messages.update", "data": {"keyId": "PMID1", "status": "DELIVERY_ACK"}})
+        await _hook(COMPANY, {"event": "messages.update", "data": {"keyId": "NOPE", "status": "READ"}})
+        for _ in range(3):
+            await asyncio.sleep(0)
+        task.cancel()
+        assert len(got) == 1                     # the ignored regression and the unknown id publish nothing
+        ev = got[0]
+        assert ev["type"] == "message_status" and ev["status"] == "delivered" and ev["at"]
+        assert ev["message_id"] == res["message_id"] and ev["provider_msg_id"] == "PMID1"
+        assert ev["chat_id"] == f"{COMPANY}:919811111111@s.whatsapp.net" and ev["instance_name"] == COMPANY
+        assert ev["direction"] == "out"
+    _run(go())
+
+
+def test_open_and_close_publish_the_instance_state(env):
+    db = env.db
+
+    async def go():
+        await seed_instance(db, "rep_parul", owner_email=PARUL, state="qr")
+        q = asyncio.Queue()
+        wa_events._queues.add(q)
+        try:
+            await _hook("rep_parul", {"event": "connection.update", "data": {"state": "open",
+                                                                             "wuid": "919811111111@s.whatsapp.net"}})
+            await _hook("rep_parul", {"event": "connection.update", "data": {"state": "close", "statusReason": 428}})
+            await db.wa_instances.update_one({"instance_name": "rep_parul"}, {"$set": {"state": "connected"}})
+            await _hook("rep_parul", {"event": "connection.update", "data": {"state": "close", "statusReason": 401}})
+        finally:
+            wa_events._queues.discard(q)
+        states = [(e["type"], e["instance_name"], e["state"], e["owner_email"]) for e in _events(q)]
+        assert states == [("instance_state", "rep_parul", "connected", PARUL),
+                          ("instance_state", "rep_parul", "disconnected", PARUL),
+                          ("instance_state", "rep_parul", "paused", PARUL)]
     _run(go())
 
 
@@ -654,16 +806,20 @@ def test_the_rf2_newcomer_records_why_it_was_unlinked(env):
     _run(go())
 
 
-# 5. raw events carry a real datetime (TTL)
+# 5. (W2 task 3) the webhook parks nothing raw any more; what W1 parked is drained at startup
 
-def test_raw_events_are_stamped_with_a_datetime(env):
+def test_the_webhook_parks_nothing_raw_and_main_backfills_at_startup(env):
     db = env.db
+    src = open(os.path.join(os.path.dirname(__file__), "..", "main.py"), encoding="utf-8").read()
+    startup = src.split('@app.on_event("startup")', 1)[1][:1200]
+    assert "_wa_backfill()" in startup and "backfill_raw_events" in src
 
     async def go():
-        await seed_instance(db, "rep_parul", owner_email=PARUL, state="connected")
+        await seed_instance(db, "rep_parul", owner_email=PARUL, state="connected", phone="919000000111")
         await _hook("rep_parul", {"event": "messages.upsert", "data": {"key": {"id": "IN2"}}})
-        raw = await db.wa_events_raw.find_one({}, {"_id": 0})
-        assert isinstance(raw["received_at"], datetime)
+        await _hook("rep_parul", {"event": "messages.upsert", "data": INBOUND})
+        assert await db.wa_events_raw.count_documents({}) == 0
+        assert await db.wa_messages.count_documents({}) == 1
     _run(go())
 
 

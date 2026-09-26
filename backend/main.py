@@ -213,11 +213,29 @@ async def ws_today_actions(websocket: WebSocket):
 
 # ==================== STARTUP & SEEDING ====================
 
+async def _wa_backfill() -> None:
+    """W2: the W1 webhook stub parked inbound WhatsApp messages raw (wa_events_raw). Run them
+    through the ingest once, in passes of 500, and log the count. Never fails the startup."""
+    try:
+        from services import wa_inbox
+        total = 0
+        for _ in range(40):                                  # at most 20k events a start
+            n = await wa_inbox.backfill_raw_events(db)
+            total += n
+            if n == 0:
+                break
+        logging.info("[wa] backfill: %s raw events ingested", total)
+    except Exception as e:
+        logging.warning("[wa] backfill of raw webhook events failed: %s", str(e)[:200])
+
+
 @app.on_event("startup")
 async def startup():
     # The WhatsApp webhook's legacy `?t=<secret>` must never reach the access log.
     from routes.wa_routes import install_access_log_mask
     install_access_log_mask()
+    # W2: drain what the W1 webhook stub parked raw (in the background; the app boots on).
+    asyncio.create_task(_wa_backfill())
     # Unique indexes — wrapped so pre-existing duplicate data can't crash startup
     # (a failure is logged and the app still boots; clean the dupes, then it takes).
     _unique = [(db.users, "email"), (db.dies, "code"), (db.contacts, "contact_id")]

@@ -28,7 +28,25 @@ def wire_wa(monkeypatch, db, fake_evolution, *, now=T_1100_IST):
     async def _push(email, title, body):
         pushes.append({"email": email, "title": title, "body": body})
     monkeypatch.setattr(ws, "_push", _push)
+    redis_down(monkeypatch)
     return SimpleNamespace(db=db, evo=fake_evolution, clock=clock, pushes=pushes)
+
+
+def redis_down(monkeypatch):
+    """Redis is unreachable: the event bus (services.wa_events) must fall back to its local
+    fan-out without ever opening a socket. Every client call the bus makes raises."""
+    import cache
+    from services import wa_events
+
+    async def _publish_down(*a, **k):
+        raise ConnectionError("redis is down (test)")
+
+    def _pubsub_down(*a, **k):
+        raise ConnectionError("redis is down (test)")
+    monkeypatch.setattr(cache.redis_client, "publish", _publish_down)
+    monkeypatch.setattr(cache.redis_client, "pubsub", _pubsub_down)
+    monkeypatch.setattr(wa_events, "LISTENER_RETRY_S", 0.01, raising=False)
+    monkeypatch.setattr(wa_events, "_listener_task", None, raising=False)
 
 
 async def seed_user(db, email, *, role="sales", user_id=None, phone="", **extra):

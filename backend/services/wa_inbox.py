@@ -10,9 +10,10 @@ own storage, never left as WhatsApp's encrypted reference).
         store_media       -> download through Evolution, save through services.storage
         upsert_chat       -> the chat row (skipped for groups / statuses / newsletters)
         engagement event  -> inbound only, only when a record matched
-        wa_events.publish -> {"type": "message_new", ...}
+        wa_events.publish -> {"type": "message_new", ...} (never for a hidden row)
 
-    backfill_raw_events(db) -> the W1 stub parked inbound events raw; run them through ingest once.
+    backfill_raw_events(db)        -> the W1 stub parked inbound events raw; run them through ingest once.
+    touch_chat_after_send(db, row) -> wa_send._finish: an app send lands on its chat.
 """
 import base64
 import logging
@@ -270,12 +271,14 @@ def _chat_update(inst: dict, row: dict, existing: dict, *, inbound: bool, match:
     return update
 
 
-async def upsert_chat(db, inst: dict, row: dict, *, inbound: bool, match: dict) -> dict:
+async def upsert_chat(db, inst: dict, row: dict, *, inbound: bool, match: dict, existing: Optional[dict] = None) -> dict:
     """One wa_chats row per (instance, remote jid). A record link already on the chat is never
     overwritten (a person may have linked it by hand); a resolved chat that receives an inbound
-    message goes back to `open`; unread_count grows only on inbound."""
+    message goes back to `open`; unread_count grows only on inbound. `existing` is the chat as
+    the caller already read it (saves the read); None reads it here."""
     chat_id = row.get("chat_id") or f"{inst['instance_name']}:{row['remote_jid']}"
-    existing = await db.wa_chats.find_one({"chat_id": chat_id}, {"_id": 0}) or {}
+    if existing is None:
+        existing = await db.wa_chats.find_one({"chat_id": chat_id}, {"_id": 0}) or {}
     update = _chat_update(inst, row, existing, inbound=inbound, match=match)
     try:
         await db.wa_chats.update_one({"chat_id": chat_id}, update, upsert=True)
@@ -434,26 +437,77 @@ async def ingest_message(db, inst: dict, data: dict) -> Optional[dict]:
             await db.wa_messages.update_one({"message_id": row["message_id"]}, {"$set": {"media": row["media"]}})
         except Exception as e:
             log.error("[wa-inbox] media not written on %s: %s", row["message_id"], str(e)[:160])
-    if n.get("contentless"):
-        return row                              # a reaction / protocol message: the row only, nothing else
+    if n["hidden"]:
+        # A reaction / protocol message, a group / status / newsletter: the row only (D9) —
+        # no chat, no engagement event, and nothing on the bus (Task 3 ruling).
+        return row
     chat = {}
-    if not n["hidden"]:
+    try:
+        chat = await upsert_chat(db, inst, row, inbound=inbound, match=match)
+    except Exception as e:
+        log.error("[wa-inbox] chat upsert failed for %s: %s", row["message_id"], str(e)[:160])
+    if inbound:
         try:
-            chat = await upsert_chat(db, inst, row, inbound=inbound, match=match)
+            await _log_inbound_event(row)
         except Exception as e:
-            log.error("[wa-inbox] chat upsert failed for %s: %s", row["message_id"], str(e)[:160])
-        if inbound:
-            try:
-                await _log_inbound_event(row)
-            except Exception as e:
-                log.error("[wa-inbox] engagement event failed for %s: %s", row["message_id"], str(e)[:160])
+            log.error("[wa-inbox] engagement event failed for %s: %s", row["message_id"], str(e)[:160])
     await wa_events.publish({
         "type": "message_new", "instance_name": name, "chat_id": row["chat_id"],
         "contact_id": chat.get("contact_id") or row["contact_id"], "lead_id": chat.get("lead_id") or row["lead_id"],
         "school_id": chat.get("school_id") or row["school_id"], "message_id": row["message_id"],
         "status": row["status"], "direction": row["direction"], "preview": _preview(row),
-        "unread_count": int(chat.get("unread_count") or 0), "hidden": n["hidden"]})
+        "unread_count": int(chat.get("unread_count") or 0)})
     return row
+
+
+# ── An app send landing on a chat (wa_send._finish / _finish_queued) ─────────
+
+async def _display_name_for(db, links: dict) -> str:
+    """The name a chat shows for a send to a record: the contact's, else the lead's, else the
+    school's. Only read when the chat is being created (an existing name is never replaced)."""
+    try:
+        if links.get("contact_id"):
+            c = await db.contacts.find_one({"contact_id": links["contact_id"]}, {"_id": 0, "name": 1})
+            if c and c.get("name"):
+                return str(c["name"])
+        if links.get("lead_id"):
+            ld = await db.leads.find_one({"lead_id": links["lead_id"]}, {"_id": 0, "contact_name": 1, "company_name": 1})
+            if ld and (ld.get("contact_name") or ld.get("company_name")):
+                return str(ld.get("contact_name") or ld.get("company_name"))
+        if links.get("school_id"):
+            s = await db.schools.find_one({"school_id": links["school_id"]}, {"_id": 0, "school_name": 1, "name": 1})
+            if s and (s.get("school_name") or s.get("name")):
+                return str(s.get("school_name") or s.get("name"))
+    except Exception as e:
+        log.debug("[wa-inbox] display name lookup failed: %s", str(e)[:120])
+    return ""
+
+
+async def touch_chat_after_send(db, row: dict) -> dict:
+    """A wa_messages row the send door just settled (sent / queued / failed / skipped) lands on
+    its chat: last_message_* move (direction out, no unread bump). A chat that does not exist
+    yet is created, linked to the row's contact / lead / school (a phone match when the row
+    carries none) and named after that record. Returns the chat as stored ({} when the row has
+    no chat to land on)."""
+    chat_id = str(row.get("chat_id") or "")
+    name = str(row.get("instance_name") or "")
+    if not chat_id or not name or ":" not in chat_id:
+        return {}
+    remote = str(row.get("to_jid") or chat_id.split(":", 1)[1])
+    existing = await db.wa_chats.find_one({"chat_id": chat_id}, {"_id": 0}) or {}
+    match = dict(_EMPTY_MATCH)
+    if any(row.get(k) for k in ("contact_id", "lead_id", "school_id")):
+        match.update({k: str(row.get(k) or "") for k in ("contact_id", "lead_id", "school_id")})
+        if not existing:
+            match["display_name"] = await _display_name_for(db, match)
+    elif not existing and row.get("to_e164"):
+        match = await match_record(db, row["to_e164"])
+    inst = {"instance_name": name,
+            "owner_email": row.get("sent_via_owner_email") or row.get("owner_email") or ""}
+    r = {**row, "remote_jid": remote, "chat_id": chat_id, "direction": "out", "hidden": False,
+         "phone_e164": row.get("to_e164") or "", "push_name": "", "lid": "",
+         "provider_ts": row.get("sent_at") or row.get("created_at") or ""}
+    return await upsert_chat(db, inst, r, inbound=False, match=match, existing=existing)
 
 
 # ── Back-fill of the W1 raw stub ──────────────────────────────────────────────
