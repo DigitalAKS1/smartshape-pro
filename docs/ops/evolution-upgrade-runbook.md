@@ -4,7 +4,7 @@ Read this together, owner and operator, before starting. WhatsApp sending/receiv
 
 **Starting facts, verified by SSH on 2026-09-26 (do not assume the spec's numbers instead):** container `smartshape_evolution` runs `atendai/evolution-api:v2.2.3`; `smartshape_postgres_wa` is Postgres 15; port `8080/tcp` is bound to `0.0.0.0:8080` — **public on the internet today**; `CONFIG_SESSION_PHONE_VERSION=2.3000.1041267924` is set; the one instance `smartshape` is `connectionStatus: connecting` (never linked); the backend's `EVOLUTION_API_URL` points at the public IP. This runbook closes the public port and fixes all of that.
 
-**Why v2.3.7, why the image renamed, why the stale env var matters.** At v2.3.0 the project moved its official Docker image from `atendai/evolution-api` (frozen at 2.2.3) to `evoapicloud/evolution-api`; v2.3.7 (2025-12-05) is the current stable tag. `CONFIG_SESSION_PHONE_VERSION` was **removed upstream in v2.3.1** (2025-07-29) after a stale pin silently broke sending — likely why `smartshape` is stuck "connecting": community reports describe this exact symptom tied to a stale phone-version pin. There is **no published upgrade/rollback doc** for 2.2.3 → 2.3.x — Evolution runs Prisma migrations automatically on container start with no documented way back — which is why step 2 backs up Postgres first. Per-instance RAM is not vendor-documented; community estimates are ~300–500 MB per linked Baileys session, so on this 3.9 GB VPS the app itself refuses to link a new number below 500 MB free (`RAM_HEADROOM_MIN_MB` in `backend/services/wa_config.py`) — treat that as the real go/no-go number in step 6, and again via the health probe installed in step 13. Sources: [releases](https://github.com/EvolutionAPI/evolution-api/releases), [CHANGELOG](https://github.com/EvolutionAPI/evolution-api/blob/main/CHANGELOG.md), [#1761](https://github.com/EvolutionAPI/evolution-api/issues/1761), [#1014](https://github.com/EvolutionAPI/evolution-api/issues/1014), [#1634](https://github.com/EvolutionAPI/evolution-api/issues/1634), [RAM estimate](https://horadecodar.com.br/requisitos-vps-evolution-api-ram-cpu-custos/).
+**Why v2.3.7, why the image renamed, why the stale env var matters.** At v2.3.0 the project moved its official Docker image from `atendai/evolution-api` (frozen at 2.2.3) to `evoapicloud/evolution-api`; v2.3.7 (2025-12-05) is the current stable tag. `CONFIG_SESSION_PHONE_VERSION` was **removed upstream in v2.3.1** (2025-07-29) after a stale pin silently broke sending — likely why `smartshape` is stuck "connecting": community reports describe this exact symptom tied to a stale phone-version pin. There is **no published upgrade/rollback doc** for 2.2.3 → 2.3.x — Evolution runs Prisma migrations automatically on container start with no documented way back — which is why step 2 backs up Postgres first. Per-instance RAM is not vendor-documented; community estimates are ~300–500 MB per linked Baileys session, so on this 3.9 GB VPS the app itself refuses to link a new number below 500 MB free (`RAM_HEADROOM_MIN_MB` in `backend/services/wa_config.py`) — treat that as the real go/no-go number in step 6, and again via the health probe installed in step 14. Sources: [releases](https://github.com/EvolutionAPI/evolution-api/releases), [CHANGELOG](https://github.com/EvolutionAPI/evolution-api/blob/main/CHANGELOG.md), [#1761](https://github.com/EvolutionAPI/evolution-api/issues/1761), [#1014](https://github.com/EvolutionAPI/evolution-api/issues/1014), [#1634](https://github.com/EvolutionAPI/evolution-api/issues/1634), [RAM estimate](https://horadecodar.com.br/requisitos-vps-evolution-api-ram-cpu-custos/).
 
 ## Step 0 — make the auto-deploy able to pull (5 min)
 
@@ -149,9 +149,27 @@ curl -s -X POST -H "apikey: $KEY" -H 'Content-Type: application/json' \
 
 **Expected:** the owner confirms the message arrived showing the company number as sender. **If this fails →** (a 4xx): the instance isn't actually `open` yet — recheck step 7.
 
-## Step 9 — point the backend at the new stack (5 min)
+## Step 9 — seed the webhook secret; do NOT repoint the backend yet (2 min)
 
-Harmless to run now — the backend code already deployed reads these same variable names.
+**Do not touch `EVOLUTION_API_URL` / `EVOLUTION_API_KEY` / `WHATSAPP_INSTANCE` here — that is step 10, run with the W1b code push.** Reason: the backend running right now is pre-W1b `origin/main`, whose FMS stage notifications, certificate sends and campaign task call Evolution directly with no opt-out, business-hours, warm-up or per-number cap and no `wa_messages` audit; pointed at the freshly linked company SIM it would send uncapped from that number until W1b lands. Left as is, it still points at the public `:8080` URL that step 5 closed, so every pre-W1b send fails harmlessly. Only the two variables the old code never reads are written now; they take effect when step 10 recreates the container.
+
+```bash
+BE=backend/.env
+setbe() { grep -q "^$1=" $BE && sed -i "s|^$1=.*|$1=$2|" $BE || echo "$1=$2" >> $BE; }
+setbe WA_WEBHOOK_SECRET "$(openssl rand -hex 24)"
+setbe WA_WEBHOOK_BASE https://app.smartshape.in
+grep -E '^(EVOLUTION_API_URL|WA_WEBHOOK_BASE)=' $BE
+```
+
+**Expected:** `WA_WEBHOOK_BASE` prints the new value; `EVOLUTION_API_URL` still prints the **old** public-IP value (it was not changed). **If this fails →** (`EVOLUTION_API_URL` already shows `smartshape_evolution`): someone repointed it early — restore `backend.env.bak.$D`'s three `EVOLUTION_*`/`WHATSAPP_INSTANCE` lines by hand now, before leaving this session. End of W1a.
+
+---
+
+## Steps 10–15 belong to W1b: step 10 runs in the SAME session as Task 13's code push; 11–15 after that deploy is live
+
+## Step 10 — point the backend at the new stack, then push the W1b code at once (Task 13 step 3/5) (5 min)
+
+Run this immediately before the `git push` of Task 13 step 3, in the same session, and never on a day the push is not happening. The edit only reaches the running container when it is recreated — which the auto-deploy of that push does — so the pre-W1b code never runs on the new URL.
 
 ```bash
 BE=backend/.env
@@ -159,23 +177,20 @@ setbe() { grep -q "^$1=" $BE && sed -i "s|^$1=.*|$1=$2|" $BE || echo "$1=$2" >> 
 setbe EVOLUTION_API_URL http://smartshape_evolution:8080
 setbe EVOLUTION_API_KEY "$KEY"
 setbe WHATSAPP_INSTANCE smartshape
-setbe WA_WEBHOOK_SECRET "$(openssl rand -hex 24)"
-setbe WA_WEBHOOK_BASE https://app.smartshape.in
-docker compose -f docker-compose.prod.yml up -d backend        # recreate with the new env, no rebuild
+grep -E '^(EVOLUTION_API_URL|WHATSAPP_INSTANCE|WA_WEBHOOK_BASE)=' $BE
+# NOW push the W1b backend commit (Task 13 step 3) and wait for the auto-deploy:
+tail -f /var/log/ss-autodeploy.log        # until it reports the new commit; Ctrl-C
+git log -1 --oneline                      # the W1b commit
+docker compose -f docker-compose.prod.yml up -d backend        # recreate on the new env (no-op if the deploy already did)
 sleep 20
 curl -s -o /dev/null -w '%{http_code}\n' -X POST -H 'Content-Type: application/json' -d '{}' https://app.smartshape.in/api/auth/login   # expect 422
-grep -E '^(EVOLUTION_API_URL|WHATSAPP_INSTANCE|WA_WEBHOOK_BASE)=' $BE
 ```
 
-**Expected:** `422` from the login probe (the app is up); the three lines print the new values. **If this fails →** (the app returns 502 after the recreate): the backend container failed to start on the new env — `docker logs smartshape-backend --tail 50`; if unresolved in a few minutes, restore `backend.env.bak.$D` and `docker compose -f docker-compose.prod.yml up -d backend` again.
+**Expected:** the three lines print the new values; `git log -1` is the W1b commit; `422` from the login probe (the app is up). **If this fails →** (the app returns 502 after the recreate): the backend container failed to start on the new env — `docker logs smartshape-backend --tail 50`; if unresolved in a few minutes, restore `backend.env.bak.$D` and `docker compose -f docker-compose.prod.yml up -d backend` again. **If the push cannot happen in this session →** undo this step's three lines (restore them from `backend.env.bak.$D`) before leaving: the old code must not be left pointed at the live SIM.
 
----
+By the end of this step Task 13's backend deploy has shipped `WA_WEBHOOK_APIKEY_CHECK` (env, default on) and the admin routes `POST /api/wa/instances/{name}/rewebhook` / `POST /api/wa/instances/rewebhook-all` (re-register a webhook with the current secret header, no relink) — see `backend/routes/wa_routes.py`. The owner then runs Settings → WhatsApp → Link company number, which calls `wa_link_company` and registers the webhook automatically. Steps 11–15 follow.
 
-## Steps 10–14 run AFTER Task 13 ships the W1 backend code (not part of W1a)
-
-By this point Task 13's backend deploy has shipped `WA_WEBHOOK_APIKEY_CHECK` (env, default on) and the admin routes `POST /api/wa/instances/{name}/rewebhook` / `POST /api/wa/instances/rewebhook-all` (re-register a webhook with the current secret header, no relink) — see `backend/routes/wa_routes.py`. The owner has run Settings → WhatsApp → Link company number, which calls `wa_link_company` and registers the webhook automatically.
-
-## Step 10 — confirm the webhook, nginx logging, and the hairpin path (ruling a) (10 min)
+## Step 11 — confirm the webhook, nginx logging, and the hairpin path (ruling a) (10 min)
 
 ```bash
 curl -s -H "apikey: $KEY" http://127.0.0.1:8080/webhook/find/smartshape | python3 -m json.tool
@@ -199,7 +214,7 @@ rm -f /tmp/wa.cookies
 
 **Never paste the password into the command itself** — `read -s` keeps it off the screen, out of `~/.bash_history`, and out of `ps`. (If JSON-escaping a password with a `"` or `\` in it worries you, build the body with `python3 -c 'import json,os;print(json.dumps({"email":"info@smartshape.in","password":os.environ["WA_PW"]}))'` against an *exported* `WA_PW` instead of `printf` — either is fine, just use one approach.) **If the hairpin `wget` fails/times out →** add the host's public IP to the compose file's `evolution-api` service on the VPS: `extra_hosts: ["app.smartshape.in:<VPS_PUBLIC_IP>"]`, then `docker compose -p "$EVO_PROJECT" -f docker-compose.evolution.yml up -d evolution-api` to apply it, and re-run this step.
 
-## Step 11 — verify Evolution sends the per-instance `apikey` (ruling b) (5 min)
+## Step 12 — verify Evolution sends the per-instance `apikey` (ruling b) (5 min)
 
 Trigger a real event (send yourself a WhatsApp message to `smartshape`), then:
 
@@ -209,11 +224,11 @@ docker logs --since 2m smartshape-backend 2>&1 | grep -i "wa-webhook"
 
 **Expected:** no `"apikey does not match the token"` line. **If this fails →** (that line appears): Evolution is very likely sending its *global* `AUTHENTICATION_API_KEY`, not this instance's per-instance token. Primary fix — turn the compare off, keep the shared-secret header check: `BE=backend/.env; grep -q '^WA_WEBHOOK_APIKEY_CHECK=' $BE && sed -i 's|^WA_WEBHOOK_APIKEY_CHECK=.*|WA_WEBHOOK_APIKEY_CHECK=off|' $BE || echo 'WA_WEBHOOK_APIKEY_CHECK=off' >> $BE; docker compose -f docker-compose.prod.yml up -d backend`. Confirm: `docker logs --since 1m smartshape-backend 2>&1 | grep -i "apikey check is"` should print `OFF`. Last resort only, if the switch itself misbehaves: clear the instance's stored token so the compare is skipped — `docker exec smartshape-backend python -c "import asyncio,database; asyncio.run(database.db.wa_instances.update_one({'instance_name':'smartshape'}, {'\$set':{'instance_token':''}}))"`.
 
-## Step 12 — set a higher daily cap if a number has already been sending (ruling c) (2 min)
+## Step 13 — set a higher daily cap if a number has already been sending (ruling c) (2 min)
 
 Adopting an already-open number counts it as warmed (Task 7) — nothing else is required. To raise the cap above the warm-up ramp: in the app, Settings → WhatsApp → that number → **Limit** → enter 1–2000. **Expected:** the number's card shows the new limit immediately. **If this fails →** (a 400 "must be 1-2000"): clear the field instead to return it to the automatic warm-up ramp — this calls `PUT /api/wa/instances/{name}` with `daily_cap_override`.
 
-## Step 13 — install the 15-minute host health cron (ruling d) (3 min)
+## Step 14 — install the 15-minute host health cron (ruling d) (3 min)
 
 ```bash
 chmod +x /var/www/smartshape/scripts/ss-wa-health.sh
@@ -223,7 +238,7 @@ echo '*/15 * * * * root /var/www/smartshape/scripts/ss-wa-health.sh >> /var/log/
 
 **Expected:** the manual run prints three numbers (avail/total/evolution MB); Settings → WhatsApp shows "Server memory: … MB free" within 15 minutes. **If this fails →** (the manual run errors): re-check `BACKEND_CONTAINER`/`EVOLUTION_CONTAINER` names inside the script match `docker ps` (they default to `smartshape-backend`/`smartshape_evolution`). Note: the script's own header comment and Task 13's brief both say hourly (`7 * * * *`); this installs it every 15 minutes per the explicit ruling for this task.
 
-## Step 14 — recount the `whatsapp_scheduled` backlog before the Task 9 deploy (ruling e) (2 min)
+## Step 15 — recount the `whatsapp_scheduled` backlog before the Task 9 deploy (ruling e) (2 min)
 
 ```bash
 docker exec smartshape-backend python -c "import asyncio,database; print(asyncio.run(database.db.whatsapp_scheduled.count_documents({'status':'pending'})))"
@@ -264,5 +279,6 @@ git checkout -- docker-compose.evolution.yml       # leave the tracked file clea
 - [ ] Step 6: version confirmed twice; public port curl **fails**; free memory ≥ 500 MB (else STOP)
 - [ ] Step 7: company number `state: open`; no stray Evolution instance left behind
 - [ ] Step 8: owner confirmed the test message arrived
-- [ ] Step 9: backend recreated on the new env; login probe returns 422
-- [ ] Steps 10–14: done after Task 13's backend deploy, not before
+- [ ] Step 9: `WA_WEBHOOK_SECRET`/`WA_WEBHOOK_BASE` written; `EVOLUTION_API_URL` still the OLD value — end of W1a
+- [ ] Step 10: `EVOLUTION_*`/`WHATSAPP_INSTANCE` repointed in the same session as the W1b push; login probe returns 422
+- [ ] Steps 11–15: done after Task 13's backend deploy is live, not before
