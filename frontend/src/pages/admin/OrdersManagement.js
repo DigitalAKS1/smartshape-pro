@@ -116,7 +116,7 @@ export default function OrdersManagement() {
         {om.activeTab === 'kanban' && (
           <KanbanBoard
             columns={PROD_STAGES}
-            items={om.ordersList}
+            items={om.ordersList.filter(o => o.order_status !== 'awaiting_confirmation')}
             getItemId={(o) => o.order_id}
             getItemColumnId={(o) => o.production_stage || 'order_created'}
             onMove={async ({ itemId, to }) => {

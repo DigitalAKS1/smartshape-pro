@@ -16,7 +16,7 @@ const DIES = [
 
 let root, container, onToggle, onQtyChange;
 
-async function mount(qtyByDie = {}) {
+async function mount(qtyByDie = {}, extraProps = {}) {
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
@@ -24,7 +24,7 @@ async function mount(qtyByDie = {}) {
   onQtyChange = jest.fn();
   await act(async () => {
     root.render(
-      <DieSelectionGrid dies={DIES} qtyByDie={qtyByDie} onToggle={onToggle} onQtyChange={onQtyChange} backendUrl="" />
+      <DieSelectionGrid dies={DIES} qtyByDie={qtyByDie} onToggle={onToggle} onQtyChange={onQtyChange} backendUrl="" {...extraProps} />
     );
   });
 }
@@ -60,4 +60,27 @@ test('the increase button calls onQtyChange with qty + 1', async () => {
   await mount({ d1: 3 });
   await click(container.querySelector('[aria-label="Increase quantity"]'));
   expect(onQtyChange).toHaveBeenCalledWith('d1', 4);
+});
+
+// The default (dark=true) rendering must be byte-for-byte what CataloguePage
+// already relies on — it is always on a dark page, so this must not change.
+test('by default (no dark prop) it uses the original hard-coded dark styling', async () => {
+  await mount();
+  const heading = container.querySelector('h2');
+  expect(heading.className).toContain('text-white');
+  const card = container.querySelector('[data-testid="die-card-D-1"]');
+  expect(card.className).toContain('bg-[#1a1a2e]');
+});
+
+// The School Portal mounts this inside a themed light/dark card (ThemeContext
+// defaults to light) — dark=false must not render white-on-white text or
+// hard-coded dark tiles inside that light card.
+test('dark=false uses theme tokens instead of the hard-coded dark palette', async () => {
+  await mount({}, { dark: false });
+  const heading = container.querySelector('h2');
+  expect(heading.className).not.toContain('text-white');
+  expect(heading.className).toContain('var(--text-primary)');
+  const card = container.querySelector('[data-testid="die-card-D-1"]');
+  expect(card.className).not.toContain('bg-[#1a1a2e]');
+  expect(card.className).toContain('var(--bg-card)');
 });

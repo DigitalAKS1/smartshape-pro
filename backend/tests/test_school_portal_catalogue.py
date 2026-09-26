@@ -101,3 +101,80 @@ def test_duplicate_die_ids_are_summed(db):
         assert len(items) == 1
         assert items[0]["quantity"] == 5
     _run(go())
+
+
+# ── Round 2 findings (Important): submit must validate what it's given ──────
+
+def test_submitting_only_an_inactive_die_is_a_400(db):
+    async def go():
+        await _seed_dies(db)
+        with pytest.raises(Exception) as exc:
+            await sr.school_catalogue_submit(FakeRequest({"selections": [{"die_id": "d2", "quantity": 1}]}))
+        assert exc.value.status_code == 400
+        assert (await db.orders.count_documents({})) == 0, "no zero-item order should be created"
+    _run(go())
+
+
+def test_submitting_only_unknown_die_ids_is_a_400(db):
+    async def go():
+        await _seed_dies(db)
+        with pytest.raises(Exception) as exc:
+            await sr.school_catalogue_submit(FakeRequest({"selections": [{"die_id": "no-such-die", "quantity": 1}]}))
+        assert exc.value.status_code == 400
+        assert (await db.orders.count_documents({})) == 0
+    _run(go())
+
+
+def test_a_mix_of_valid_and_invalid_dies_keeps_only_the_valid_ones(db):
+    async def go():
+        await _seed_dies(db)
+        await sr.school_catalogue_submit(FakeRequest({"selections": [
+            {"die_id": "d1", "quantity": 2}, {"die_id": "d2", "quantity": 5}]}))
+        items = await db.order_items.find({}, {"_id": 0}).to_list(10)
+        assert len(items) == 1
+        assert items[0]["die_id"] == "d1"
+    _run(go())
+
+
+def test_a_non_numeric_quantity_does_not_crash(db):
+    async def go():
+        await _seed_dies(db)
+        resp = await sr.school_catalogue_submit(FakeRequest({"selections": [{"die_id": "d1", "quantity": "not-a-number"}]}))
+        assert resp["order"]["order_id"]
+        items = await db.order_items.find({}, {"_id": 0}).to_list(10)
+        assert items[0]["quantity"] == 1, "an unparseable quantity falls back to 1, not a 500"
+    _run(go())
+
+
+# ── Round 2 finding (Important): reorder's placeholder quotation must not
+# pollute the school's or a rep's real quotation lists ──────────────────────
+
+def test_reorder_quotation_is_hidden_from_the_schools_quotes_tab(db):
+    async def go():
+        await _seed_dies(db)
+        await db.quotations.insert_one({"quotation_id": "q_real", "school_id": "s1", "source": "manual"})
+        await sr.school_catalogue_submit(FakeRequest({"selections": [{"die_id": "d1", "quantity": 1}]}))
+        quots = await sr.school_quotations(FakeRequest())
+        ids = {q["quotation_id"] for q in quots}
+        assert ids == {"q_real"}
+    _run(go())
+
+
+def test_reorder_quotation_is_hidden_from_the_sales_quotations_list(db, monkeypatch):
+    async def go():
+        import routes.quotation_routes as qr
+        monkeypatch.setattr(qr, "db", db, raising=False)
+
+        async def _admin(_request):
+            return {"email": "info@smartshape.in", "role": "admin"}
+        monkeypatch.setattr(qr, "get_current_user", _admin)
+
+        await _seed_dies(db)
+        await db.quotations.insert_one({"quotation_id": "q_real", "school_id": "s1",
+                                        "sales_person_email": "parul@ss.in", "source": "manual"})
+        await sr.school_catalogue_submit(FakeRequest({"selections": [{"die_id": "d1", "quantity": 1}]}))
+
+        quots = await qr.get_quotations(FakeRequest())
+        ids = {q["quotation_id"] for q in quots}
+        assert ids == {"q_real"}
+    _run(go())

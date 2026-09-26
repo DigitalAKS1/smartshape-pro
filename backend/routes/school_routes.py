@@ -85,7 +85,12 @@ async def school_order_detail(order_id: str, request: Request):
 @router.get("/school/quotations")
 async def school_quotations(request: Request):
     school = await get_current_school(request)
-    quots = await db.quotations.find({"school_id": school["school_id"]}, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    # A Portal Reorder submission creates a placeholder $0 quotation purely to
+    # reuse create_order_for_quotation — it was never sent to the school and
+    # must not appear as if it were a real quote.
+    quots = await db.quotations.find(
+        {"school_id": school["school_id"], "source": {"$ne": "school_portal_reorder"}},
+        {"_id": 0}).sort("created_at", -1).to_list(1000)
     return quots
 
 
@@ -222,10 +227,30 @@ async def school_catalogue_submit(request: Request):
         die_id = sel.get("die_id") if isinstance(sel, dict) else sel
         if not die_id:
             continue
-        qty = max(1, int(sel.get("quantity", 1) or 1) if isinstance(sel, dict) else 1)
+        raw_qty = sel.get("quantity", 1) if isinstance(sel, dict) else 1
+        try:
+            qty = max(1, int(raw_qty or 1))
+        except (TypeError, ValueError):
+            qty = 1  # an unparseable quantity from the client falls back to 1, not a 500
         qty_by_die[die_id] = qty_by_die.get(die_id, 0) + qty
     if not qty_by_die:
         raise HTTPException(status_code=400, detail="Select at least one item")
+
+    # Resolve to real, active, school-visible dies BEFORE creating anything —
+    # same visibility rule as GET /school/catalogue. An order must never be
+    # created for a die that's gone, deactivated, or hidden from schools; if
+    # every submitted id fails this, the whole submission is invalid rather
+    # than silently becoming a zero-item order.
+    visible_type_ids = {t["product_type_id"] async for t in db.product_types.find(
+        {"visible_to_schools": True, "is_active": {"$ne": False}}, {"product_type_id": 1, "_id": 0})}
+    visible_type_ids.add("ptype_dies")
+    valid_dies = {}
+    for die_id, qty in qty_by_die.items():
+        die = await db.dies.find_one({"die_id": die_id, "is_active": True}, {"_id": 0})
+        if die and die.get("product_type_id", "ptype_dies") in visible_type_ids:
+            valid_dies[die_id] = (die, qty)
+    if not valid_dies:
+        raise HTTPException(status_code=400, detail="None of the selected items are available")
 
     now_iso = datetime.now(timezone.utc).isoformat()
     quotation_id = f"quot_{uuid.uuid4().hex[:12]}"
@@ -248,10 +273,7 @@ async def school_catalogue_submit(request: Request):
         "selection_id": selection_id, "quotation_id": quotation_id,
         "submitted_at": now_iso, "source": "school_portal",
     })
-    for die_id, qty in qty_by_die.items():
-        die = await db.dies.find_one({"die_id": die_id}, {"_id": 0})
-        if not die:
-            continue
+    for die_id, (die, qty) in valid_dies.items():
         await db.catalogue_selection_items.insert_one({
             "catalogue_selection_id": selection_id, "die_id": die_id,
             "die_name": die["name"], "die_code": die["code"],

@@ -612,6 +612,9 @@ async def update_order_production_stage(order_id: str, request: Request):
     order = await db.orders.find_one({"order_id": order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
+    if order.get("order_status") == "awaiting_confirmation":
+        raise HTTPException(status_code=400,
+            detail="This order is awaiting confirmation and has no reserved stock — confirm it first")
     if new_stage == "dispatched":
         items = await db.order_items.find({"order_id": order_id}, {"_id": 0}).to_list(1000)
         await _assert_dispatchable(order, items, allow_credit=bool(body.get("dispatch_on_credit")))

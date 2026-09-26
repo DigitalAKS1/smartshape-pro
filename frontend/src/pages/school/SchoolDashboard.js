@@ -7,10 +7,11 @@ import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../components/ui/dialog';
 import { toast } from 'sonner';
-import { Package, Truck, CheckCircle, Clock, Bell, LogOut, FileText, Eye, GraduationCap, ShoppingCart, XCircle, CreditCard, Download, User, Upload, Plus, RefreshCw, Users, Send } from 'lucide-react';
+import { Package, Truck, CheckCircle, Clock, Bell, LogOut, FileText, Eye, GraduationCap, ShoppingCart, XCircle, CreditCard, Download, User, Upload, Plus, RefreshCw, Users, Send, AlertCircle } from 'lucide-react';
 import DieSelectionGrid from '../../components/catalogue/DieSelectionGrid';
 
 const STATUS_CONFIG = {
+  awaiting_confirmation: { icon: AlertCircle, color: 'text-amber-400 bg-amber-500/10 border-amber-500/30', label: 'Submitted — awaiting confirmation' },
   pending: { icon: Clock, color: 'text-yellow-400 bg-yellow-500/10 border-yellow-500/30', label: 'Pending' },
   confirmed: { icon: CheckCircle, color: 'text-blue-400 bg-blue-500/10 border-blue-500/30', label: 'Confirmed' },
   dispatched: { icon: Truck, color: 'text-purple-400 bg-purple-500/10 border-purple-500/30', label: 'Dispatched' },
@@ -153,6 +154,8 @@ export default function SchoolDashboard() {
       toast.success('Selection submitted — our team will confirm shortly.');
       setQtyByDie({});
       setCatalogueOpen(false);
+      const ord = await schoolAuth.orders();
+      setOrders(ord.data);
     } catch (e) { toast.error(e.response?.data?.detail || 'Failed to submit selection'); }
     finally { setCatalogueSubmitting(false); }
   };
@@ -488,6 +491,7 @@ export default function SchoolDashboard() {
                     onToggle={toggleCatalogueDie}
                     onQtyChange={setCatalogueQty}
                     backendUrl={process.env.REACT_APP_BACKEND_URL}
+                    dark={false}
                   />
                   <div className="flex items-center gap-2">
                     <Button onClick={submitCatalogueSelection} disabled={catalogueSubmitting || Object.keys(qtyByDie).length === 0}
