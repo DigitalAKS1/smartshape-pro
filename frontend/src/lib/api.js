@@ -539,6 +539,25 @@ export const waNumbers = {
   saveDefaultProxy:(data)         => API.post('/whatsapp/proxy-config', data),
 };
 
+// WhatsApp team inbox (W2)
+export const waInbox = {
+  chats:        (params)            => API.get('/wa/chats', { params }),
+  messages:     (chatId, params)    => API.get(`/wa/chats/${encodeURIComponent(chatId)}/messages`, { params }),
+  send:         (chatId, data)      => API.post(`/wa/chats/${encodeURIComponent(chatId)}/send`, data),
+  read:         (chatId)            => API.post(`/wa/chats/${encodeURIComponent(chatId)}/read`),
+  resolve:      (chatId)            => API.post(`/wa/chats/${encodeURIComponent(chatId)}/resolve`),
+  reopen:       (chatId)            => API.post(`/wa/chats/${encodeURIComponent(chatId)}/reopen`),
+  assign:       (chatId, email)     => API.post(`/wa/chats/${encodeURIComponent(chatId)}/assign`, { email }),
+  addNote:      (chatId, text)      => API.post(`/wa/chats/${encodeURIComponent(chatId)}/notes`, { text }),
+  link:         (chatId, data)      => API.post(`/wa/chats/${encodeURIComponent(chatId)}/link`, data),
+  byRecord:     (params)            => API.get('/wa/messages', { params }),
+  unreadCount:  ()                  => API.get('/wa/unread-count'),
+  streamUrl:    ()                  => `${BACKEND_URL}/api/wa/stream`,
+  templates:    ()                  => API.get('/whatsapp-templates'),
+  uploadAttachment: (file) => { const fd = new FormData(); fd.append('file', file);
+    return API.post('/whatsapp/attachments/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } }); },
+};
+
 // Email Marketing
 export const email = {
   getTemplates:   ()       => API.get('/email/templates'),
