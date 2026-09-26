@@ -760,6 +760,11 @@ export const orders = {
   reopen: (id) => API.post(`/orders/${id}/reopen`),
   // Owner-only (info@smartshape.in): permanent delete
   delete: (id, reason = '') => API.delete(`/orders/${id}`, { params: { reason } }),
+  // Awaiting-confirmation lifecycle (school/teacher submitted, staff review)
+  confirm: (id) => API.post(`/orders/${id}/confirm`),
+  reject: (id, reason) => API.post(`/orders/${id}/reject`, { reason }),
+  logCall: (id, data) => API.post(`/orders/${id}/calls`, data),
+  getCalls: (id) => API.get(`/orders/${id}/calls`),
 };
 
 // Invoices — bulk JSON/XML import auto-mapped to school + sales order
@@ -835,6 +840,9 @@ export const schoolAuth = {
     fd.append('file', file);
     return API.post(`/school/quotations/${quotationId}/po`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
   },
+  // Portal Reorder — real item-picker (alongside the free-text box for anything not in the catalogue)
+  browseCatalogue: () => API.get('/school/catalogue'),
+  submitCatalogue: (selections) => API.post('/school/catalogue/submit', { selections }),
 };
 
 // Full URL for a school document download path (path already starts with /api)

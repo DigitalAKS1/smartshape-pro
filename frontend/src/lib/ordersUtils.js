@@ -1,5 +1,5 @@
 // ── Orders Management — constants & pure utilities ───────────────────────────
-import { Clock, ShieldCheck, Truck, PackageCheck, CheckCircle, XCircle } from 'lucide-react';
+import { Clock, ShieldCheck, Truck, PackageCheck, CheckCircle, XCircle, AlertCircle } from 'lucide-react';
 
 export const PROD_STAGES = [
   { id: 'order_created',     label: 'Order Created',     color: 'border-yellow-500/40' },
@@ -9,6 +9,7 @@ export const PROD_STAGES = [
 ];
 
 export const ORDER_STATUSES = [
+  { id: 'awaiting_confirmation', label: 'Awaiting Confirmation', icon: AlertCircle, color: 'text-amber-400 bg-amber-500/10 border-amber-500/30' },
   { id: 'pending',   label: 'Pending',   icon: Clock,       color: 'text-yellow-400 bg-yellow-500/10 border-yellow-500/30' },
   { id: 'confirmed', label: 'Confirmed', icon: ShieldCheck, color: 'text-blue-400 bg-blue-500/10 border-blue-500/30' },
   { id: 'partially_dispatched', label: 'Partially Dispatched', icon: PackageCheck, color: 'text-amber-400 bg-amber-500/10 border-amber-500/30' },
