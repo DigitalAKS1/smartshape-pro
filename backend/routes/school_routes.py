@@ -10,6 +10,7 @@ import hashlib
 from database import db
 from auth_utils import get_current_school, get_current_user, hash_password, verify_password, JWT_SECRET, JWT_ALGORITHM
 from services import teacher_auth
+from media_utils import gate_die_for_customer
 
 router = APIRouter()
 
@@ -182,6 +183,90 @@ async def school_reorder(request: Request):
     await db.school_requests.insert_one(doc)
     await _notify_admin_school_action(school, "requested a reorder / new quote")
     return await db.school_requests.find_one({"request_id": req_id}, {"_id": 0})
+
+
+@router.get("/school/catalogue")
+async def school_catalogue(request: Request):
+    """The School Portal's own item-picker source — every active die the
+    school is allowed to see, same visibility rule as the public catalogue
+    link (quotation_routes.py:1582) minus the package/machine_category
+    narrowing, since a Portal reorder isn't tied to one quotation."""
+    school = await get_current_school(request)
+    dies = await db.dies.find({"is_active": True}, {"_id": 0}).to_list(1000)
+    visible_type_ids = {t["product_type_id"] async for t in db.product_types.find(
+        {"visible_to_schools": True, "is_active": {"$ne": False}}, {"product_type_id": 1, "_id": 0})}
+    visible_type_ids.add("ptype_dies")
+    dies = [gate_die_for_customer(d) for d in dies
+            if d.get("product_type_id", "ptype_dies") in visible_type_ids]
+    company_s = await db.settings.find_one({"type": "company"}, {"_id": 0}) or {}
+    logo_raw = company_s.get("logo_url", "")
+    fe_url = os.environ.get("FRONTEND_URL", "").rstrip("/")
+    logo_url = (fe_url + logo_raw) if logo_raw.startswith("/") else logo_raw
+    return {"dies": dies, "logo_url": logo_url, "school_name": school.get("school_name", "")}
+
+
+@router.post("/school/catalogue/submit")
+async def school_catalogue_submit(request: Request):
+    """Submitting a Portal Reorder selection: builds a lightweight quotation +
+    catalogue selection on the fly (there is no pre-existing quotation to
+    submit against, unlike the token-based catalogue flow) and hands off to
+    create_order_for_quotation — same order-creation path, same
+    awaiting_confirmation deferred-reservation behaviour, no duplicated logic.
+    Pricing is intentionally left at 0: this is exactly the case the
+    Confirm-call workflow exists for — Sales quotes it when they call."""
+    school = await get_current_school(request)
+    body = await request.json()
+    raw_selections = body.get("selections") or []
+    qty_by_die = {}
+    for sel in raw_selections:
+        die_id = sel.get("die_id") if isinstance(sel, dict) else sel
+        if not die_id:
+            continue
+        qty = max(1, int(sel.get("quantity", 1) or 1) if isinstance(sel, dict) else 1)
+        qty_by_die[die_id] = qty_by_die.get(die_id, 0) + qty
+    if not qty_by_die:
+        raise HTTPException(status_code=400, detail="Select at least one item")
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    quotation_id = f"quot_{uuid.uuid4().hex[:12]}"
+    quote_num_count = await db.quotations.count_documents({})
+    await db.quotations.insert_one({
+        "quotation_id": quotation_id,
+        "quote_number": f"REORDER-{datetime.now(timezone.utc).year}-{quote_num_count + 1:04d}",
+        "school_id": school["school_id"],
+        "school_name": school.get("school_name", ""),
+        "sales_person_email": school.get("assigned_to", ""),
+        "package_id": None, "package_name": "",
+        "lines": [], "grand_total": 0,
+        "quotation_status": "pending",
+        "source": "school_portal_reorder",
+        "created_by": school["school_id"],
+        "created_at": now_iso, "updated_at": now_iso,
+    })
+    selection_id = f"sel_{uuid.uuid4().hex[:12]}"
+    await db.catalogue_selections.insert_one({
+        "selection_id": selection_id, "quotation_id": quotation_id,
+        "submitted_at": now_iso, "source": "school_portal",
+    })
+    for die_id, qty in qty_by_die.items():
+        die = await db.dies.find_one({"die_id": die_id}, {"_id": 0})
+        if not die:
+            continue
+        await db.catalogue_selection_items.insert_one({
+            "catalogue_selection_id": selection_id, "die_id": die_id,
+            "die_name": die["name"], "die_code": die["code"],
+            "die_type": die["type"], "die_image_url": die.get("image_url"),
+            "quantity": qty,
+        })
+
+    from routes.order_routes import create_order_for_quotation
+    order, created = await create_order_for_quotation(
+        quotation_id, created_by=school["school_id"], source="school_portal_reorder",
+        order_status="awaiting_confirmation",
+    )
+    await _notify_admin_school_action(school, "submitted a reorder selection")
+    return {"message": "Selection submitted successfully",
+            "order": {"order_id": order["order_id"], "order_number": order["order_number"]}}
 
 
 @router.post("/school/quotations/{quotation_id}/po")
