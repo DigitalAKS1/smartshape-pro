@@ -8,6 +8,7 @@ import { Input } from '../../components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../components/ui/dialog';
 import { toast } from 'sonner';
 import { Package, Truck, CheckCircle, Clock, Bell, LogOut, FileText, Eye, GraduationCap, ShoppingCart, XCircle, CreditCard, Download, User, Upload, Plus, RefreshCw, Users, Send } from 'lucide-react';
+import DieSelectionGrid from '../../components/catalogue/DieSelectionGrid';
 
 const STATUS_CONFIG = {
   pending: { icon: Clock, color: 'text-yellow-400 bg-yellow-500/10 border-yellow-500/30', label: 'Pending' },
@@ -42,6 +43,10 @@ export default function SchoolDashboard() {
   const [savingProfile, setSavingProfile] = useState(false);
   const [newContact, setNewContact] = useState({ name: '', phone: '', designation: '' });
   const [reorderMsg, setReorderMsg] = useState('');
+  const [catalogueDies, setCatalogueDies] = useState([]);
+  const [catalogueOpen, setCatalogueOpen] = useState(false);
+  const [qtyByDie, setQtyByDie] = useState({});
+  const [catalogueSubmitting, setCatalogueSubmitting] = useState(false);
   const [teachers, setTeachers] = useState([]);
   const [newTeacher, setNewTeacher] = useState({ name: '', email: '', phone: '', subject: '' });
 
@@ -50,6 +55,7 @@ export default function SchoolDashboard() {
   const textMuted = 'text-[var(--text-muted)]';
   const card = 'bg-[var(--bg-card)] border-[var(--border-color)]';
   const dlgCls = 'bg-[var(--bg-card)] border-[var(--border-color)] text-[var(--text-primary)]';
+  const inputCls = 'bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]';
 
   useEffect(() => {
     const fetchAll = async () => {
@@ -114,6 +120,41 @@ export default function SchoolDashboard() {
       setReorderMsg('');
       toast.success('Request sent — our team will get back to you.');
     } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+  };
+
+  const openCatalogue = async () => {
+    setCatalogueOpen(true);
+    if (catalogueDies.length) return;
+    try {
+      const res = await schoolAuth.browseCatalogue();
+      setCatalogueDies(res.data.dies || []);
+    } catch { toast.error('Could not load the catalogue'); }
+  };
+
+  const toggleCatalogueDie = (dieId) => {
+    setQtyByDie(prev => {
+      const next = { ...prev };
+      if (next[dieId] != null) { delete next[dieId]; } else { next[dieId] = 1; }
+      return next;
+    });
+  };
+
+  const setCatalogueQty = (dieId, qty) => {
+    const clamped = Math.max(1, parseInt(qty, 10) || 1);
+    setQtyByDie(prev => ({ ...prev, [dieId]: clamped }));
+  };
+
+  const submitCatalogueSelection = async () => {
+    const selections = Object.entries(qtyByDie).map(([die_id, quantity]) => ({ die_id, quantity }));
+    if (selections.length === 0) return toast.error('Select at least one item');
+    setCatalogueSubmitting(true);
+    try {
+      await schoolAuth.submitCatalogue(selections);
+      toast.success('Selection submitted — our team will confirm shortly.');
+      setQtyByDie({});
+      setCatalogueOpen(false);
+    } catch (e) { toast.error(e.response?.data?.detail || 'Failed to submit selection'); }
+    finally { setCatalogueSubmitting(false); }
   };
 
   const uploadPO = async (quotationId, file) => {
@@ -434,11 +475,38 @@ export default function SchoolDashboard() {
             </div>
 
             <div className={`${card} border rounded-md p-4 space-y-3`}>
-              <h3 className={`text-sm font-medium ${textPri} flex items-center gap-2`}><RefreshCw className="h-4 w-4" /> Request a reorder / new quote</h3>
-              <textarea value={reorderMsg} onChange={e => setReorderMsg(e.target.value)} rows={3}
-                placeholder="Tell us what you'd like to reorder…"
-                className="w-full rounded-md p-2 text-sm bg-[var(--bg-primary)] border border-[var(--border-color)] text-[var(--text-primary)]" />
-              <Button onClick={requestReorder} className="bg-[#e94560] hover:bg-[#f05c75] text-white">Send request</Button>
+              <h3 className={`text-sm font-medium ${textPri} flex items-center gap-2`}><RefreshCw className="h-4 w-4" /> Reorder dies</h3>
+              {!catalogueOpen ? (
+                <Button onClick={openCatalogue} className="bg-[#e94560] hover:bg-[#f05c75] text-white">
+                  Browse dies to reorder
+                </Button>
+              ) : (
+                <div className="space-y-3">
+                  <DieSelectionGrid
+                    dies={catalogueDies}
+                    qtyByDie={qtyByDie}
+                    onToggle={toggleCatalogueDie}
+                    onQtyChange={setCatalogueQty}
+                    backendUrl={process.env.REACT_APP_BACKEND_URL}
+                  />
+                  <div className="flex items-center gap-2">
+                    <Button onClick={submitCatalogueSelection} disabled={catalogueSubmitting || Object.keys(qtyByDie).length === 0}
+                      className="bg-[#e94560] hover:bg-[#f05c75] text-white">
+                      {catalogueSubmitting ? 'Submitting…' : `Submit selection (${Object.keys(qtyByDie).length})`}
+                    </Button>
+                    <Button variant="outline" onClick={() => { setCatalogueOpen(false); setQtyByDie({}); }}
+                      className={`border-[var(--border-color)] ${textSec}`}>Cancel</Button>
+                  </div>
+                </div>
+              )}
+
+              <div className="border-t border-[var(--border-color)] pt-3">
+                <p className={`text-xs ${textMuted} mb-2`}>Need something not in the catalogue?</p>
+                <textarea value={reorderMsg} onChange={e => setReorderMsg(e.target.value)} rows={2}
+                  placeholder="Tell us what you'd like…"
+                  className={`w-full p-2 rounded-md text-sm ${inputCls}`} />
+                <Button onClick={requestReorder} variant="outline" className={`mt-2 border-[var(--border-color)] ${textSec}`}>Send request</Button>
+              </div>
             </div>
           </div>
         )}
