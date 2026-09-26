@@ -1673,25 +1673,9 @@ async def submit_catalogue_selection(token: str, request: Request):
                 "die_image_url": die.get("image_url"),
                 "quantity": qty,
             })
-            # Reserve the real quantity the customer asked for (was a +1 bug).
-            await db.dies.update_one({"die_id": die_id}, {"$inc": {"reserved_qty": qty}})
-            updated_die = await db.dies.find_one({"die_id": die_id}, {"_id": 0})
-            available = updated_die["stock_qty"] - updated_die["reserved_qty"]
-            if available < 0:
-                await db.purchase_alerts.insert_one({
-                    "alert_id": f"alert_{uuid.uuid4().hex[:12]}",
-                    "die_id": die_id,
-                    "die_code": die["code"],
-                    "die_name": die["name"],
-                    "die_type": die["type"],
-                    "triggered_by_catalogue_selection_id": selection_id,
-                    "current_stock": updated_die["stock_qty"],
-                    "required_qty": updated_die["reserved_qty"],
-                    "shortage_qty": abs(available),
-                    "priority": "urgent" if abs(available) > 10 else "high",
-                    "status": "pending",
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                })
+            # Reservation now happens at POST /orders/{id}/confirm (Task 4), not
+            # here — an awaiting-confirmation selection must not commit stock
+            # before Sales/Store reviews it.
 
     await db.quotations.update_one(
         {"catalogue_token": token},
@@ -1718,6 +1702,7 @@ async def submit_catalogue_selection(token: str, request: Request):
             from routes.order_routes import create_order_for_quotation
             order, created = await create_order_for_quotation(
                 quot["quotation_id"], created_by="system", source="catalogue_submit",
+                order_status="awaiting_confirmation",
             )
             if created:
                 auto_order = {"order_id": order["order_id"], "order_number": order["order_number"]}

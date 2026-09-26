@@ -15,6 +15,7 @@ from rbac import get_team, require_teams, require_superadmin, require_module, se
 from audit_backup import snapshot_and_delete
 from tally_export import gather_so, build_json, build_voucher_xml, build_envelope
 from services.payment_ledger import recompute_and_sync
+import crm_contact_calls as cc
 
 router = APIRouter()
 
@@ -71,6 +72,26 @@ def _credit_stamp(user, body):
 
 # Order-item statuses that still hold stock (reserved but not yet fully dispatched).
 COMMITTING_ITEM_STATUSES = ["on_hold", "confirmed", "partially_dispatched"]
+
+# An order created from a school/teacher's own selection (catalogue link or
+# School Portal reorder) starts here, not "pending" — its lines do NOT commit
+# stock (see _is_committing) until Sales/Store calls POST /orders/{id}/confirm.
+AWAITING_ITEM_STATUS = "awaiting_confirmation"
+
+
+def _is_committing(status: str) -> bool:
+    """True when this order_item status holds stock — i.e. counts toward
+    compute_committed()/compute_availability(). Every place that increments or
+    decrements dies.reserved_qty alongside an item write must gate on this,
+    so an awaiting-confirmation line never reserves anything."""
+    return status in COMMITTING_ITEM_STATUSES
+
+
+def _active_item_status(order_status: str) -> str:
+    """The order_items.status a newly added/edited line should take: the
+    normal committing 'on_hold', unless the order itself is still awaiting
+    confirmation, in which case the line waits alongside it."""
+    return AWAITING_ITEM_STATUS if order_status == "awaiting_confirmation" else "on_hold"
 
 
 def _remaining_qty(it: dict) -> int:
@@ -221,10 +242,13 @@ async def cancel_order(order_id: str, request: Request):
     """Soft-cancel an order ('not finalising'): keep it visible, release held
     stock, free the quotation/lead. Reversible via /reopen. Admin & accounts."""
     user = await get_current_user(request)
-    require_module(user, "orders", "read_write")
     order = await db.orders.find_one({"order_id": order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
+    _assert_can_act_on_order(user, order)
+    if order.get("order_status") == "awaiting_confirmation":
+        raise HTTPException(status_code=400,
+            detail="This order is awaiting confirmation — use Reject instead of Cancel")
     if not can_cancel(order.get("order_status")):
         raise HTTPException(status_code=400,
                             detail="This order can't be cancelled — it's already cancelled or dispatched.")
@@ -265,10 +289,10 @@ async def cancel_order(order_id: str, request: Request):
 async def reopen_order(order_id: str, request: Request):
     """Re-open a cancelled order: re-reserve its stock and re-lock the lead. Admin & accounts."""
     user = await get_current_user(request)
-    require_module(user, "orders", "read_write")
     order = await db.orders.find_one({"order_id": order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
+    _assert_can_act_on_order(user, order)
     if not can_reopen(order.get("order_status")):
         raise HTTPException(status_code=400, detail="Only a cancelled order can be re-opened.")
 
@@ -306,10 +330,10 @@ class BulkExportInput(BaseModel):
 async def export_order(order_id: str, request: Request, format: str = "xml"):
     """Download a single Sales Order as a Tally-importable XML voucher or JSON."""
     user = await get_current_user(request)
-    require_module(user, "orders", "read")
     data = await gather_so(order_id)
     if not data:
         raise HTTPException(status_code=404, detail="Order not found")
+    _assert_can_read_order(user, data["order"])
     num = data["order"].get("order_number", order_id)
     if format == "json":
         content = json.dumps(build_json(data), indent=2, ensure_ascii=False, default=str)
@@ -331,6 +355,11 @@ async def export_orders_bulk(payload: BulkExportInput, request: Request):
     if not ids:
         raise HTTPException(status_code=400, detail="No orders selected")
     datas = [d for d in [await gather_so(i) for i in ids] if d]
+    # An 'own'-scoped user only ever gets their own orders out of a bulk
+    # request — silently dropped, not a 403, since the caller picked the ids
+    # from their own list and may have included a stray one by mistake.
+    if not sees_all(user, "orders"):
+        datas = [d for d in datas if _owns_order(user, d["order"])]
     if not datas:
         raise HTTPException(status_code=404, detail="No matching orders")
     company_name = datas[0]["company"].get("company_name", "SmartShape")
@@ -347,12 +376,15 @@ async def create_order_for_quotation(quotation_id: str, *, created_by: str,
                                      lead_id: Optional[str] = None,
                                      payment_threshold_pct: float = 50.0,
                                      payment_received: float = 0.0,
-                                     notes: str = "", source: str = "manual"):
+                                     notes: str = "", source: str = "manual",
+                                     order_status: str = "pending"):
     """Create a Sales Order from a quotation + its catalogue selection.
 
     Idempotent: returns (order, created=False) if an order already exists for the
     quotation. `source` is recorded for audit ('manual' | 'catalogue_submit').
     Shared by the manual admin route and the auto-generation on catalogue submit.
+    `order_status='awaiting_confirmation'` creates the order without committing
+    any stock — see _active_item_status and POST /orders/{id}/confirm.
     """
     quot = await db.quotations.find_one({"quotation_id": quotation_id}, {"_id": 0})
     if not quot:
@@ -373,8 +405,10 @@ async def create_order_for_quotation(quotation_id: str, *, created_by: str,
         ).to_list(1000)
 
     eff_lead_id = lead_id or quot.get("lead_id") or ""
-    note_text = notes or ("Auto-created from catalogue submission" if source == "catalogue_submit"
-                          else "Order created from quotation")
+    note_text = notes or (
+        "Submitted by school/teacher — awaiting confirmation" if order_status == "awaiting_confirmation"
+        else "Auto-created from catalogue submission" if source == "catalogue_submit"
+        else "Order created from quotation")
     now_iso = datetime.now(timezone.utc).isoformat()
     order_doc = {
         "order_id": order_id,
@@ -384,10 +418,11 @@ async def create_order_for_quotation(quotation_id: str, *, created_by: str,
         "school_id": quot.get("school_id", ""),
         "school_name": quot.get("school_name", ""),
         "lead_id": eff_lead_id,
+        "sales_person_email": quot.get("sales_person_email", ""),
         "package_name": quot.get("package_name", ""),
         "total_items": len(sel_items),
         "grand_total": quot.get("grand_total", 0),
-        "order_status": "pending",
+        "order_status": order_status,
         "production_stage": "order_created",
         "payment_threshold_pct": float(payment_threshold_pct),
         "payment_received": float(payment_received),
@@ -414,23 +449,35 @@ async def create_order_for_quotation(quotation_id: str, *, created_by: str,
         order_doc["payment_received"] = synced["total_paid"]
         order_doc["payment_status"] = synced["payment_status"]
 
+    item_status = _active_item_status(order_status)
     for item in sel_items:
+        order_item_id = f"oi_{uuid.uuid4().hex[:8]}"
+        qty = int(item.get("quantity", 1) or 1)
         await db.order_items.insert_one({
-            "order_item_id": f"oi_{uuid.uuid4().hex[:8]}",
+            "order_item_id": order_item_id,
             "order_id": order_id,
             "die_id": item.get("die_id"),
             "die_name": item.get("die_name"),
             "die_code": item.get("die_code"),
             "die_type": item.get("die_type"),
             "die_image_url": item.get("die_image_url"),
-            "quantity": int(item.get("quantity", 1) or 1),
-            "status": "on_hold",
+            "quantity": qty,
+            "status": item_status,
         })
+        # A caller creating the order directly at "pending"/"confirmed" (e.g.
+        # manual admin creation, or the auto-order path when it isn't left at
+        # awaiting_confirmation) bypasses Confirm entirely — reservation must
+        # happen here or it never happens at all.
+        if _is_committing(item_status) and item.get("die_id"):
+            await db.dies.update_one({"die_id": item["die_id"]}, {"$inc": {"reserved_qty": qty}})
+            die = await db.dies.find_one({"die_id": item["die_id"]}, {"_id": 0})
+            if die:
+                await _maybe_alert_shortage(die, order_item_id)
 
     await db.order_timeline.insert_one({
         "timeline_id": f"tl_{uuid.uuid4().hex[:8]}",
         "order_id": order_id,
-        "status": "pending",
+        "status": order_status,
         "note": note_text,
         "updated_by": created_by,
         "timestamp": now_iso,
@@ -496,6 +543,9 @@ async def update_order_status(order_id: str, request: Request):
     order = await db.orders.find_one({"order_id": order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
+    if order.get("order_status") == "awaiting_confirmation":
+        raise HTTPException(status_code=400,
+            detail="This order is awaiting confirmation — use Confirm or Reject, not a direct status change")
 
     update_data = {"order_status": new_status, "updated_at": datetime.now(timezone.utc).isoformat()}
     if new_status == "dispatched":
@@ -582,16 +632,171 @@ async def update_order_production_stage(order_id: str, request: Request):
     return await db.orders.find_one({"order_id": order_id}, {"_id": 0})
 
 
+@router.post("/orders/{order_id}/confirm")
+async def confirm_order(order_id: str, request: Request):
+    """Sales/Store confirms a school/teacher's submitted selection: locks in
+    quantities, reserves stock, and moves the order into the normal pending
+    lifecycle. A shortage does not block confirmation — it raises the same
+    purchase_alerts doc editing an existing order already would."""
+    user = await get_current_user(request)
+    order = await db.orders.find_one({"order_id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    _assert_can_act_on_order(user, order)
+    if order.get("order_status") != "awaiting_confirmation":
+        raise HTTPException(status_code=400,
+            detail=f"Only an order awaiting confirmation can be confirmed (this one is {order.get('order_status')})")
+
+    # Atomic claim: the filter re-checks order_status against the database at
+    # the moment of the write, not the read above — so a second, concurrent
+    # Confirm (or a Reject racing this one) modifies nothing and 400s cleanly
+    # instead of both callers reserving stock for the same order.
+    now_iso = datetime.now(timezone.utc).isoformat()
+    claim = await db.orders.update_one(
+        {"order_id": order_id, "order_status": "awaiting_confirmation"},
+        {"$set": {"order_status": "pending", "updated_at": now_iso}})
+    if claim.modified_count == 0:
+        raise HTTPException(status_code=400,
+            detail="Only an order awaiting confirmation can be confirmed")
+
+    items = await db.order_items.find(
+        {"order_id": order_id, "status": AWAITING_ITEM_STATUS}, {"_id": 0}).to_list(1000)
+    for it in items:
+        qty = int(it.get("quantity", 1) or 1)
+        await db.order_items.update_one({"order_item_id": it["order_item_id"]}, {"$set": {"status": "on_hold"}})
+        await db.dies.update_one({"die_id": it["die_id"]}, {"$inc": {"reserved_qty": qty}})
+        die = await db.dies.find_one({"die_id": it["die_id"]}, {"_id": 0})
+        if die:
+            await _maybe_alert_shortage(die, it["order_item_id"])
+
+    await db.order_timeline.insert_one({
+        "timeline_id": f"tl_{uuid.uuid4().hex[:8]}", "order_id": order_id,
+        "status": "pending", "note": "Selection confirmed — stock reserved.",
+        "updated_by": user["email"], "timestamp": now_iso,
+    })
+    await log_activity(user["email"], "confirm_order", "order", order_id, "")
+    return {"message": "Order confirmed", "items_reserved": len(items)}
+
+
+@router.post("/orders/{order_id}/reject")
+async def reject_order(order_id: str, request: Request):
+    """Sales/Store declines a submitted selection. Nothing was reserved for an
+    awaiting-confirmation order, so there is no stock to release — a reason is
+    mandatory so the school's record shows why."""
+    user = await get_current_user(request)
+    order = await db.orders.find_one({"order_id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    _assert_can_act_on_order(user, order)
+    if order.get("order_status") != "awaiting_confirmation":
+        raise HTTPException(status_code=400,
+            detail=f"Only an order awaiting confirmation can be rejected (this one is {order.get('order_status')})")
+
+    body = await request.json()
+    reason = (body.get("reason") or "").strip()
+    if not reason:
+        raise HTTPException(status_code=400, detail="A reason is required to reject a selection")
+
+    # Atomic claim — see confirm_order for why this can't be a plain read-then-write.
+    now_iso = datetime.now(timezone.utc).isoformat()
+    claim = await db.orders.update_one(
+        {"order_id": order_id, "order_status": "awaiting_confirmation"},
+        {"$set": {"order_status": "cancelled", "updated_at": now_iso}})
+    if claim.modified_count == 0:
+        raise HTTPException(status_code=400,
+            detail="Only an order awaiting confirmation can be rejected")
+    await db.order_items.update_many(
+        {"order_id": order_id, "status": AWAITING_ITEM_STATUS}, {"$set": {"status": "cancelled"}})
+    # Undo what order-creation did (mirrors cancel_order): a rejected selection
+    # never became real, so it must not leave the quotation "confirmed" or the
+    # lead locked as "won" — and the catalogue link must accept a resubmission.
+    if order.get("quotation_id"):
+        await db.quotations.update_one(
+            {"quotation_id": order["quotation_id"]},
+            {"$set": {"quotation_status": "sent", "catalogue_status": "sent"}})
+    if order.get("lead_id"):
+        await db.leads.update_one({"lead_id": order["lead_id"]}, {
+            "$set": {"is_locked": False, "stage": "negotiation", "updated_at": now_iso}})
+    await db.order_timeline.insert_one({
+        "timeline_id": f"tl_{uuid.uuid4().hex[:8]}", "order_id": order_id,
+        "status": "cancelled", "note": f"Selection rejected: {reason}",
+        "updated_by": user["email"], "timestamp": now_iso,
+    })
+    await log_activity(user["email"], "reject_order", "order", order_id, reason)
+    return {"message": "Order rejected"}
+
+
+@router.post("/orders/{order_id}/calls")
+async def log_order_call(order_id: str, request: Request):
+    """Optional call note about a submitted selection — never required to
+    Confirm, Edit, or Reject; purely a record of what was discussed."""
+    user = await get_current_user(request)
+    order = await db.orders.find_one({"order_id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    _assert_can_act_on_order(user, order)
+    body = await request.json()
+    outcome = (body.get("outcome") or "").strip()
+    if not cc.is_valid_outcome(outcome):
+        raise HTTPException(status_code=422, detail=f"outcome must be one of {list(cc.CALL_OUTCOMES)}")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    note = cc.build_order_call_note(order, user, outcome, body.get("content", ""), now_iso)
+    await db.call_notes.insert_one(dict(note))
+    await db.order_timeline.insert_one({
+        "timeline_id": f"tl_{uuid.uuid4().hex[:8]}", "order_id": order_id,
+        "status": order.get("order_status", "pending"),
+        "note": f"Call logged ({outcome}): {body.get('content', '')}".strip(),
+        "updated_by": user["email"], "timestamp": now_iso,
+    })
+    return await db.call_notes.find_one({"note_id": note["note_id"]}, {"_id": 0})
+
+
+@router.get("/orders/{order_id}/calls")
+async def list_order_calls(order_id: str, request: Request):
+    user = await get_current_user(request)
+    order = await db.orders.find_one({"order_id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    _assert_can_act_on_order(user, order)
+    return await db.call_notes.find({"order_id": order_id}, {"_id": 0}).sort("created_at", -1).to_list(200)
+
+
 # ==================== MANAGE SELECTION (order line items) ====================
 # Staff (admin/store/accounts) may add/remove dies and change quantities on a
 # submitted order until it begins dispatching. Reservations adjust automatically.
 
-EDITABLE_ORDER_STATUSES = ("pending", "confirmed")
-EDITABLE_ITEM_STATUSES = ("on_hold", "confirmed")
+EDITABLE_ORDER_STATUSES = ("awaiting_confirmation", "pending", "confirmed")
+EDITABLE_ITEM_STATUSES = ("awaiting_confirmation", "on_hold", "confirmed")
+
+
+def _owns_order(user: dict, order: dict) -> bool:
+    """True unless the user holds an 'own'-scoped orders grant (sales reps) for
+    a different rep's order. Ownership is the order's own sales_person_email,
+    denormalised from its quotation at creation — the same ownership rule the
+    quotations/leads grants already use (quotation_routes.py: sales_person_email
+    comparisons). An order with no sales_person_email (legacy data) fails
+    closed for an own-scoped user rather than granting access by default."""
+    return sees_all(user, "orders") or order.get("sales_person_email") == user.get("email")
+
+
+def _assert_can_act_on_order(user: dict, order: dict):
+    """Shared scope gate for confirm/reject/edit-selection/call-log/cancel/
+    reopen — every WRITE action on an order."""
+    require_module(user, "orders", "read_write")
+    if not _owns_order(user, order):
+        raise HTTPException(status_code=403, detail="You can only act on orders for your own schools")
+
+
+def _assert_can_read_order(user: dict, order: dict):
+    """Read-level sibling of _assert_can_act_on_order, for export/view actions
+    that don't need write access."""
+    require_module(user, "orders", "read")
+    if not _owns_order(user, order):
+        raise HTTPException(status_code=403, detail="You can only view orders for your own schools")
 
 
 def _assert_can_edit_selection(user, order):
-    require_module(user, "orders", "read_write")
+    _assert_can_act_on_order(user, order)
     if order.get("order_status") not in EDITABLE_ORDER_STATUSES:
         raise HTTPException(status_code=400,
             detail=f"Selection is locked once the order is {order.get('order_status')}")
@@ -646,14 +851,16 @@ async def add_order_item(order_id: str, request: Request):
             detail="Die already on this order — change its quantity instead")
 
     order_item_id = f"oi_{uuid.uuid4().hex[:8]}"
+    item_status = _active_item_status(order.get("order_status"))
     await db.order_items.insert_one({
         "order_item_id": order_item_id, "order_id": order_id,
         "die_id": die_id, "die_name": die["name"], "die_code": die["code"],
         "die_type": die["type"], "die_image_url": die.get("image_url"),
-        "quantity": qty, "status": "on_hold",
+        "quantity": qty, "status": item_status,
     })
-    await db.dies.update_one({"die_id": die_id}, {"$inc": {"reserved_qty": qty}})
-    await _maybe_alert_shortage({**die, "die_id": die_id}, order_item_id)
+    if _is_committing(item_status):
+        await db.dies.update_one({"die_id": die_id}, {"$inc": {"reserved_qty": qty}})
+        await _maybe_alert_shortage({**die, "die_id": die_id}, order_item_id)
     await _refresh_total_items(order_id)
     await log_activity(user["email"], "add_item", "order", order_id, f"+{qty} x {die['code']}")
     await _log_order_change(order_id, order, user["email"], "staff",
@@ -681,10 +888,11 @@ async def update_order_item_qty(order_id: str, order_item_id: str, request: Requ
     delta = new_qty - old_qty
     if delta != 0:
         await db.order_items.update_one({"order_item_id": order_item_id}, {"$set": {"quantity": new_qty}})
-        await db.dies.update_one({"die_id": item["die_id"]}, {"$inc": {"reserved_qty": delta}})
-        die = await db.dies.find_one({"die_id": item["die_id"]}, {"_id": 0})
-        if die:
-            await _maybe_alert_shortage(die, order_item_id)
+        if _is_committing(item.get("status")):
+            await db.dies.update_one({"die_id": item["die_id"]}, {"$inc": {"reserved_qty": delta}})
+            die = await db.dies.find_one({"die_id": item["die_id"]}, {"_id": 0})
+            if die:
+                await _maybe_alert_shortage(die, order_item_id)
         await log_activity(user["email"], "update_item_qty", "order", order_id,
                            f"{item.get('die_code','')} -> {new_qty}")
         await _log_order_change(order_id, order, user["email"], "staff",
@@ -708,8 +916,9 @@ async def remove_order_item(order_id: str, order_item_id: str, request: Request)
     if item.get("status") not in EDITABLE_ITEM_STATUSES:
         raise HTTPException(status_code=400, detail=f"Cannot remove a {item.get('status')} item")
 
-    await db.dies.update_one({"die_id": item["die_id"]},
-                             {"$inc": {"reserved_qty": -int(item.get("quantity", 1) or 1)}})
+    if _is_committing(item.get("status")):
+        await db.dies.update_one({"die_id": item["die_id"]},
+                                 {"$inc": {"reserved_qty": -int(item.get("quantity", 1) or 1)}})
     await db.order_items.update_one({"order_item_id": order_item_id}, {"$set": {"status": "removed"}})
     await _refresh_total_items(order_id)
     await log_activity(user["email"], "remove_item", "order", order_id, f"-{item.get('die_code','')}")
@@ -767,6 +976,7 @@ async def reconcile_order_to_selection(order_id: str, desired: dict, *, actor: s
     order = await db.orders.find_one({"order_id": order_id}, {"_id": 0})
     if not order:
         return {"added": 0, "removed": 0, "adjusted": 0}
+    item_status = _active_item_status(order.get("order_status"))
 
     all_items = await db.order_items.find(
         {"order_id": order_id, "status": {"$nin": ["removed", "cancelled", "released"]}}, {"_id": 0}
@@ -783,7 +993,8 @@ async def reconcile_order_to_selection(order_id: str, desired: dict, *, actor: s
     # Remove editable lines no longer desired (release their remaining reservation).
     for die_id, it in editable_by_die.items():
         if die_id not in desired:
-            await db.dies.update_one({"die_id": die_id}, {"$inc": {"reserved_qty": -_remaining_qty(it)}})
+            if _is_committing(it.get("status")):
+                await db.dies.update_one({"die_id": die_id}, {"$inc": {"reserved_qty": -_remaining_qty(it)}})
             await db.order_items.update_one({"order_item_id": it["order_item_id"]}, {"$set": {"status": "removed"}})
             changes.append({"action": "remove", "code": it.get("die_code"), "name": it.get("die_name")})
             removed += 1
@@ -798,9 +1009,10 @@ async def reconcile_order_to_selection(order_id: str, desired: dict, *, actor: s
                 "order_item_id": f"oi_{uuid.uuid4().hex[:8]}", "order_id": order_id,
                 "die_id": die_id, "die_name": die["name"], "die_code": die["code"],
                 "die_type": die["type"], "die_image_url": die.get("image_url"),
-                "quantity": qty, "status": "on_hold",
+                "quantity": qty, "status": item_status,
             })
-            await db.dies.update_one({"die_id": die_id}, {"$inc": {"reserved_qty": qty}})
+            if _is_committing(item_status):
+                await db.dies.update_one({"die_id": die_id}, {"$inc": {"reserved_qty": qty}})
             changes.append({"action": "add", "qty": qty, "code": die["code"], "name": die["name"]})
             added += 1
         elif die_id in editable_by_die:
@@ -808,7 +1020,8 @@ async def reconcile_order_to_selection(order_id: str, desired: dict, *, actor: s
             if qty != cur:
                 await db.order_items.update_one(
                     {"order_item_id": editable_by_die[die_id]["order_item_id"]}, {"$set": {"quantity": qty}})
-                await db.dies.update_one({"die_id": die_id}, {"$inc": {"reserved_qty": qty - cur}})
+                if _is_committing(editable_by_die[die_id].get("status")):
+                    await db.dies.update_one({"die_id": die_id}, {"$inc": {"reserved_qty": qty - cur}})
                 changes.append({"action": "adjust", "code": editable_by_die[die_id].get("die_code"),
                                 "name": editable_by_die[die_id].get("die_name"), "old": cur, "new": qty})
                 adjusted += 1

@@ -53,6 +53,26 @@ def build_call_note(contact: Dict[str, Any], user: Dict[str, Any],
     }
 
 
+def build_order_call_note(order: Dict[str, Any], user: Dict[str, Any],
+                          outcome: str, content: str, now_iso: str) -> Dict[str, Any]:
+    """Same shape as build_call_note, keyed on an order instead of a contact —
+    for a call logged about a school/teacher's submitted item selection.
+    Never required before Confirm/Edit/Reject; purely a record of what was
+    discussed."""
+    return {
+        "note_id": f"note_{uuid.uuid4().hex[:12]}",
+        "contact_id": None,
+        "lead_id": None,
+        "order_id": order["order_id"],
+        "type": "call",
+        "content": content or "",
+        "outcome": outcome,
+        "created_by": user.get("email", ""),
+        "created_by_name": user.get("name", ""),
+        "created_at": now_iso,
+    }
+
+
 def build_followup(contact: Dict[str, Any], user: Dict[str, Any], date: str, time: str,
                    ftype: str, notes: str, now_iso: str) -> Dict[str, Any]:
     owner_email, _ = resolve_task_owner(contact, user)

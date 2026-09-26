@@ -19,6 +19,9 @@ node_modules/
 # Testing
 /coverage
 
+# superpowers inline-execution scratch (ledger, briefs, review packages) — not project output
+.superpowers/sdd/
+
 # Next.js
 /.next/
 /out/
@@ -86,7 +89,12 @@ app/
 memory/
 test_reports/
 backend_test.py
-tests/
+# Root-level legacy scratch tests only — NOT backend/tests/ or frontend/src/**/__tests__/,
+# which are the real, committed pytest/Jest suites. A bare `tests/` here was silently
+# gitignoring every new file added to backend/tests/ (discovered 2026-09-25: three
+# already-written test files — test_order_cancel.py, test_order_diff.py,
+# test_orders_holds.py — existed locally but were never actually committed).
+/tests/
 
 # Archive files and large assets
 **/*.zip
