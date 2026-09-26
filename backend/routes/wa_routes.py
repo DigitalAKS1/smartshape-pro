@@ -386,9 +386,13 @@ async def _on_send_message(inst: dict, data) -> None:
         log.debug("[wa-webhook] SEND_MESSAGE on %s to %s ignored (group/status, or not connected: %s)",
                   name, remote[:40], inst.get("state"))
         return
-    await wa_inbox.ingest_message(db, inst, d)
-    # A receipt may have beaten this event here (parked by _on_messages_update).
-    await wa_send.apply_parked_receipts(db, {"instance_name": name, "provider_msg_id": pmid})
+    try:
+        await wa_inbox.ingest_message(db, inst, d)
+        # A receipt may have beaten this event here (parked by _on_messages_update).
+        await wa_send.apply_parked_receipts(db, {"instance_name": name, "provider_msg_id": pmid})
+    except Exception as e:
+        # Never a 500: Evolution retries a non-2xx forever, and a redelivery is dedup'd by provider id.
+        log.error("[wa-webhook] ingest failed on %s for %s (SEND_MESSAGE): %s", name, pmid[:40], str(e)[:200])
 
 
 # ── MESSAGES_UPSERT (W2: ingest) ──────────────────────────────────────────────

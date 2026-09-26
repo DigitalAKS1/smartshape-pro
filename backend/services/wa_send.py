@@ -690,6 +690,10 @@ async def _merge_into_existing(db, row: dict) -> None:
     # Update the survivor FIRST: if that fails, our 'sending' row is still there and nothing is lost.
     await db.wa_messages.update_one({"message_id": existing["message_id"]}, {"$set": merged})
     row["message_id"] = existing["message_id"]
+    # In-memory only (set AFTER the write, never persisted): the webhook already ingested and
+    # published this message; _land_on_inbox publishes again only when the status moved.
+    row["_merged_into_existing"] = True
+    row["_merge_changed_status"] = status != (existing.get("status") or "")
     try:
         await db.wa_messages.delete_one({"message_id": ours})
     except Exception as e:
@@ -865,6 +869,8 @@ async def _land_on_inbox(db, row: dict, status: str) -> None:
         chat = await wa_inbox.touch_chat_after_send(db, row) or {}
     except Exception as e:
         log.warning("[wa] chat not updated after %s: %s", row["message_id"], str(e)[:160])
+    if row.get("_merged_into_existing") and not row.get("_merge_changed_status"):
+        return      # D9 race, webhook first: the ingest already published this message at this status
     try:
         await wa_events.publish({
             "type": "message_new" if status in ("sent", "queued") else "message_status",

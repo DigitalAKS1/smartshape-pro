@@ -362,6 +362,59 @@ def test_our_send_racing_its_own_send_message_webhook_leaves_one_row(env):
     _run(go())
 
 
+def test_a_send_racing_its_phone_webhook_publishes_one_message_new_in_both_orders(env):
+    # Task 3 fix round 1: D9 race. Whichever side writes the row first, the bus carries exactly
+    # ONE message_new for that message (the merge must not re-announce what the ingest published).
+    db = env.db
+
+    def phone_event(pmid):
+        return {"event": "send.message", "data": {"key": {"id": pmid, "fromMe": True,
+                                                           "remoteJid": "919811111111@s.whatsapp.net"},
+                                                  "message": {"conversation": "x"}}}
+
+    async def go():
+        await seed_wa(db)
+        await db.wa_messages.create_index([("instance_name", 1), ("provider_msg_id", 1)], unique=True,
+                                          partialFilterExpression={"provider_msg_id": {"$type": "string"}})
+        q = asyncio.Queue()
+        wa_events._queues.add(q)
+        try:
+            # send first (PMID1), then its webhook: the ingest sees the id and is a no-op
+            a = await send_whatsapp(db, to="9811111111", text="x", kind="dispatch")
+            await _hook(COMPANY, phone_event("PMID1"))
+            # webhook first (PMID2), then our own write merges into the ingested row
+            await _hook(COMPANY, phone_event("PMID2"))
+            b = await send_whatsapp(db, to="9811111111", text="x", kind="dispatch")
+        finally:
+            wa_events._queues.discard(q)
+        assert a["status"] == "sent" and b["status"] == "sent"
+        assert await db.wa_messages.count_documents({}) == 2
+        new = [e for e in _events(q) if e["type"] == "message_new"]
+        assert sorted(e["message_id"] for e in new) == sorted([a["message_id"], b["message_id"]])
+        assert [e["status"] for e in new] == ["sent", "sent"]
+        # the merged row still landed on the chat
+        chat = await db.wa_chats.find_one({"chat_id": f"{COMPANY}:919811111111@s.whatsapp.net"}, {"_id": 0})
+        assert chat["last_message_id"] == b["message_id"] and chat["last_direction"] == "out"
+    _run(go())
+
+
+def test_a_bad_send_message_is_acknowledged_and_never_raises(env, monkeypatch):
+    db = env.db
+
+    async def boom(db_, inst, data):
+        raise RuntimeError("mongo went away")
+    monkeypatch.setattr(wa_inbox, "ingest_message", boom)
+
+    async def go():
+        await seed_instance(db, "rep_parul", owner_email=PARUL, state="connected", phone="919000000111")
+        with caplog_at("wa_routes") as records:
+            out = await _hook("rep_parul", {"event": "send.message", "data": PHONE_MSG})
+        assert out == {"ok": True}
+        assert any("ingest failed" in r.getMessage() for r in records)
+        assert await db.wa_messages.count_documents({}) == 0
+    _run(go())
+
+
 # ── MESSAGES_UPSERT (W2 task 3: the W1 raw stub is gone, the webhook ingests) ─
 
 INBOUND = {"key": {"id": "IN1", "fromMe": False, "remoteJid": "919811111111@s.whatsapp.net"},
