@@ -3,7 +3,8 @@ attributed reply, read / resolve / reopen / assign / notes / link, the per-recor
 unread badge and the SSE stream.
 
 Scope (the one rule every route applies):
-    a manager (admin, or `leads` scope "all")  -> every chat.
+    a manager (admin, or CRM reader with `leads` scope "all") -> every chat.
+    a user who cannot read the CRM (accounts, store) -> nothing, anywhere.
     a rep                                       -> chats on their own number(s), plus chats on the
                                                    COMPANY number whose contact / school / lead is
                                                    one they can see in the CRM (crm_routes rules).
@@ -27,7 +28,7 @@ from fastapi.responses import StreamingResponse
 import routes.crm_routes as crm
 from auth_utils import get_current_user
 from database import db
-from rbac import get_team, sees_all  # noqa: F401  (get_team: the same admin test wa_routes uses)
+from rbac import can_read_crm, get_team, sees_all  # noqa: F401  (get_team: the same admin test wa_routes uses)
 from routes.wa_routes import _body, _is_admin, _my_instance  # noqa: F401
 from services import wa_events, wa_send
 from services.wa_config import COMPANY_INSTANCE
@@ -40,7 +41,10 @@ PAGE_SIZE_DEFAULT, PAGE_SIZE_MAX = 50, 200
 MESSAGES_DEFAULT, MESSAGES_MAX = 50, 200
 RECORD_DEFAULT, RECORD_MAX = 20, 100
 NOTE_MAX = 2000
-READ_BATCH = 50                    # inbound rows marked read (locally and on Evolution) per read call
+TEXT_MAX = 4096                    # WhatsApp's own limit for one text message
+QUOTED_ID_MAX = 128
+NONE_SCOPE = {"chat_id": "__none__"}   # a user outside the CRM: nothing, anywhere
+READ_BATCH = 50                   # inbound rows marked read (locally and on Evolution) per read call
 PING_S = 25.0                      # SSE comment frame cadence while nothing happens
 RESCOPE_S = 300.0                  # how often an open stream re-reads the rep's CRM scope
 _LINK_KEYS = ("contact_id", "lead_id", "school_id")
@@ -66,9 +70,11 @@ def _missing(field: str) -> dict:
 # ── Scope ─────────────────────────────────────────────────────────────────────
 
 def is_manager(user: dict) -> bool:
-    """Admins (the owner has role admin and no module_permissions) and anyone whose `leads`
-    grant is org-wide: they see every chat and may assign."""
-    return _is_admin(user) or sees_all(user, "leads")
+    """Admins (the owner has role admin and no module_permissions) and anyone who can read the
+    CRM with an org-wide `leads` scope: they see every chat and may assign. The `can_read_crm`
+    guard matters: `sees_all` alone answers "all" for an accounts/store user (the legacy
+    "not sales-only" fallback), who must see no chats at all (fix round 1 ruling)."""
+    return _is_admin(user) or (can_read_crm(user) and sees_all(user, "leads"))
 
 
 async def _my_instance_names(email: str) -> list:
@@ -94,25 +100,31 @@ async def scope_ctx(user: dict) -> dict:
     instance, and the ids of the contacts / schools / leads they can see (empty for a manager,
     who is not filtered). The stream keeps one of these and refreshes it every RESCOPE_S."""
     email = str(user.get("email") or "")
-    ctx = {"manager": is_manager(user), "email": email, "my_instances": await _my_instance_names(email),
-           "company": await _company_instance_name(), "contact_ids": set(), "school_ids": set(), "lead_ids": set()}
-    if ctx["manager"]:
+    manager = is_manager(user)
+    ctx = {"manager": manager, "none": not manager and not can_read_crm(user), "email": email,
+           "my_instances": await _my_instance_names(email), "company": await _company_instance_name(),
+           "contact_ids": set(), "school_ids": set(), "lead_ids": set()}
+    if manager or ctx["none"]:
         return ctx
     vis = await crm._contacts_visibility_or(email, dbh=db)
     async for c in db.contacts.find({"$or": vis, "is_deleted": {"$ne": True}}, {"_id": 0, "contact_id": 1}):
         if c.get("contact_id"):
             ctx["contact_ids"].add(c["contact_id"])
     ctx["school_ids"] = {s for s in await crm._owned_school_ids(email, dbh=db) if s}
-    async for ld in db.leads.find({**crm._owner_clause(email), "is_deleted": {"$ne": True}}, {"_id": 0, "lead_id": 1}):
+    lead_vis = await crm._leads_visibility_or(email, dbh=db)      # assigned to me, or at a school I own
+    async for ld in db.leads.find({"$or": lead_vis, "is_deleted": {"$ne": True}}, {"_id": 0, "lead_id": 1}):
         if ld.get("lead_id"):
             ctx["lead_ids"].add(ld["lead_id"])
     return ctx
 
 
 def _scope_query(ctx: dict) -> Optional[dict]:
-    """The wa_chats filter for this scope: None for a manager (no filter)."""
+    """The wa_chats filter for this scope: None for a manager (no filter); a filter nothing
+    matches for someone outside the CRM."""
     if ctx["manager"]:
         return None
+    if ctx.get("none"):
+        return dict(NONE_SCOPE)
     return {"$or": [
         {"instance_name": {"$in": list(ctx["my_instances"])}},
         {"$and": [{"instance_name": ctx["company"]},
@@ -132,6 +144,8 @@ def _in_scope(doc: dict, ctx: dict) -> bool:
     """A chat, a message row or a bus event (they all carry instance_name + the record ids)."""
     if ctx is None or ctx.get("manager"):
         return True
+    if ctx.get("none"):
+        return False
     inst = str(doc.get("instance_name") or "")
     if inst in ctx["my_instances"]:
         return True
@@ -147,6 +161,8 @@ def _event_in_scope(event: dict, ctx: Optional[dict]) -> bool:
     everything else follows the chat rule."""
     if ctx is None or ctx.get("manager"):
         return True
+    if ctx.get("none"):
+        return False
     if (event or {}).get("type") == "instance_state":
         return str(event.get("instance_name") or "") in ctx["my_instances"]
     return _in_scope(event or {}, ctx)
@@ -274,20 +290,34 @@ async def wa_chats(request: Request):
 
 @router.get("/wa/chats/{chat_id}/messages")
 async def wa_chat_messages(chat_id: str, request: Request):
-    """?before=<created_at iso> &limit=50 -> the `limit` rows before the cursor, oldest -> newest."""
+    """?before=<created_at iso> &before_id=<message_id> &limit=50 -> the `limit` rows before the
+    cursor, oldest -> newest. The cursor is the pair (created_at, message_id) — rows that share a
+    timestamp (a burst, a history sync) are never skipped or repeated; the response hands back
+    `next_before` / `next_before_id` (the oldest row returned) for the next page."""
     user = await get_current_user(request)
     await _chat_or_403(chat_id, user)
     qp = request.query_params
     limit = _int(qp.get("limit"), MESSAGES_DEFAULT, 1, MESSAGES_MAX)
     before = str(qp.get("before") or "").strip()
+    before_id = str(qp.get("before_id") or "").strip()
     q = {"chat_id": chat_id, **NOT_HIDDEN}
     if before:
-        q["created_at"] = {"$lt": before}
-    rows = await db.wa_messages.find(q, {"_id": 0}).sort("created_at", -1).limit(limit + 1).to_list(limit + 1)
+        try:
+            wa_send._parse(before)
+        except Exception:
+            raise HTTPException(400, "before must be an ISO datetime")
+        if before_id:
+            q["$or"] = [{"created_at": {"$lt": before}}, {"created_at": before, "message_id": {"$lt": before_id}}]
+        else:
+            q["created_at"] = {"$lt": before}
+    rows = await db.wa_messages.find(q, {"_id": 0}).sort([("created_at", -1), ("message_id", -1)]) \
+        .limit(limit + 1).to_list(limit + 1)
     has_more = len(rows) > limit
     rows = rows[:limit]
     rows.reverse()
-    return {"items": [_clean_row(r) for r in rows], "has_more": has_more}
+    oldest = rows[0] if rows else {}
+    return {"items": [_clean_row(r) for r in rows], "has_more": has_more,
+            "next_before": oldest.get("created_at") or None, "next_before_id": oldest.get("message_id") or None}
 
 
 # ── Send ──────────────────────────────────────────────────────────────────────
@@ -325,6 +355,10 @@ async def wa_chat_send(chat_id: str, request: Request):
     quoted = str(body.get("quoted_provider_msg_id") or "").strip()
     if not (text or attachment_id or template_id):
         raise HTTPException(400, "Type a message or attach a file.")
+    if len(text) > TEXT_MAX:
+        raise HTTPException(400, f"A WhatsApp message can be at most {TEXT_MAX} characters")
+    if len(quoted) > QUOTED_ID_MAX:
+        raise HTTPException(400, "quoted_provider_msg_id is not a valid message id")
     ctx = await scope_ctx(user)
     chat = await _chat_or_403(chat_id, user, ctx)
     name = str(chat.get("instance_name") or "")
@@ -334,11 +368,16 @@ async def wa_chat_send(chat_id: str, request: Request):
         raise HTTPException(409, f"{label} is not connected")
     if not ctx["manager"] and name not in ctx["my_instances"] and name != ctx["company"]:
         raise HTTPException(403, "You can reply only from your own number or the company number")
+    rendered = False
     if template_id:
         tpl = await db.whatsapp_templates.find_one({"template_id": template_id}, {"_id": 0, "body": 1})
         if not tpl:
             raise HTTPException(404, "Template not found")
-        text = text or await _render(tpl.get("body") or "", chat, user, inst)
+        if not text:
+            text = await _render(tpl.get("body") or "", chat, user, inst)
+            rendered = True
+        if len(text) > TEXT_MAX:
+            raise HTTPException(400, f"A WhatsApp message can be at most {TEXT_MAX} characters")
     media = None
     if attachment_id:
         att = await db.whatsapp_attachments.find_one({"attachment_id": attachment_id}, {"_id": 0})
@@ -348,7 +387,8 @@ async def wa_chat_send(chat_id: str, request: Request):
                  "filename": att.get("filename") or "", "mime": att.get("content_type") or ""}
     if not (text or (media and media.get("url"))):
         raise HTTPException(400, "Type a message or attach a file.")
-    ref = {k: v for k, v in (("template_id", template_id), ("attachment_id", attachment_id)) if v}
+    # ref.template_id only when the text really came from the template (an edited text is the person's)
+    ref = {k: v for k, v in (("template_id", template_id if rendered else ""), ("attachment_id", attachment_id)) if v}
     try:
         res = await wa_send.send_whatsapp(
             db, to=chat.get("phone_e164") or "", text=text, media=media, kind="chat", ref=ref,
@@ -376,7 +416,7 @@ async def wa_chat_read(chat_id: str, request: Request):
     now = _now_iso()
     await db.wa_chats.update_one({"chat_id": chat_id}, {"$set": {"unread_count": 0, "updated_at": now}})
     rows = await db.wa_messages.find(
-        {"chat_id": chat_id, "direction": "in", **_missing("read_at")},
+        {"chat_id": chat_id, "direction": "in", **NOT_HIDDEN, **_missing("read_at")},
         {"_id": 0, "message_id": 1, "provider_msg_id": 1}).sort("created_at", -1).limit(READ_BATCH).to_list(READ_BATCH)
     if rows:
         await db.wa_messages.update_many({"message_id": {"$in": [r["message_id"] for r in rows]}},
@@ -420,18 +460,20 @@ async def wa_chat_reopen(chat_id: str, request: Request):
 
 @router.post("/wa/chats/{chat_id}/assign")
 async def wa_chat_assign(chat_id: str, request: Request):
-    """{email} — managers only; the email must be an active user ("" clears the assignee)."""
+    """{email} — managers only; the email must be an active user who is a manager or has this
+    chat in their own scope (a rep cannot be handed a chat they could never open); "" clears."""
     user = await get_current_user(request)
     if not is_manager(user):
         raise HTTPException(403, "Only a manager can assign chats")
-    await _chat_or_403(chat_id, user)
+    chat = await _chat_or_403(chat_id, user)
     email = wa_send._norm_email((await _body(request)).get("email"))
     if email:
-        u = await db.users.find_one({"email": wa_send._email_q(email), "is_active": {"$ne": False}},
-                                    {"_id": 0, "email": 1})
+        u = await db.users.find_one({"email": wa_send._email_q(email), "is_active": {"$ne": False}}, {"_id": 0})
         if not u:
             raise HTTPException(400, "No active user with that email")
         email = wa_send._norm_email(u.get("email")) or email
+        if not is_manager(u) and not _in_scope(chat, await scope_ctx(u)):
+            raise HTTPException(400, f"{email} cannot see this chat")
     await db.wa_chats.update_one({"chat_id": chat_id}, {"$set": {
         "assignee_email": email, "assigned_by": user["email"], "assigned_at": _now_iso(), "updated_at": _now_iso()}})
     return await _publish_chat(chat_id)
@@ -504,9 +546,13 @@ async def wa_chat_link(chat_id: str, request: Request):
         name = str(spec.get("name") or "").strip()[:120]
         if not name:
             raise HTTPException(400, "The contact needs a name")
-        school_id = str(spec.get("school_id") or chat.get("school_id") or "").strip()
+        # Only a school the caller picked is checked; the chat's own school (the chat may be in
+        # their scope through its contact, not its school) is carried over as-is.
+        school_id = str(spec.get("school_id") or "").strip()
         if school_id:
             await _visible_school(school_id, ctx)
+        else:
+            school_id = str(chat.get("school_id") or "")
         inst = await db.wa_instances.find_one({"instance_name": chat.get("instance_name")}, {"_id": 0}) or {}
         owner = (wa_send._norm_email(inst.get("owner_email")) if inst.get("kind") == "rep" else "") or user["email"]
         owner_doc = await db.users.find_one({"email": wa_send._email_q(owner)}, {"_id": 0, "name": 1}) or {}

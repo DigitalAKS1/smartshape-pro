@@ -174,6 +174,31 @@ def test_manager_sees_everything_including_the_owner_with_no_module_permissions(
     _run(go())
 
 
+@pytest.mark.parametrize("user", [{"email": "acc@smartshape.in", "name": "Acc", "role": "accounts"},
+                                  {"email": "store@smartshape.in", "name": "Store", "role": "store"}])
+def test_a_user_outside_the_crm_sees_nothing(env, monkeypatch, user):                  # fix round 1 ruling
+    db = env.db
+    _as(user, monkeypatch)
+
+    async def go():
+        await _seed(db)
+        assert wi.is_manager(user) is False and await wi.chat_scope(user) == {"chat_id": "__none__"}
+        out = await wi.wa_chats(FakeRequest(query_params={"status": "all"}))
+        assert out["items"] == [] and out["total"] == 0 and out["unread_total"] == 0
+        assert await wi.wa_unread_count(FakeRequest()) == {"unread": 0}
+        assert (await wi.wa_messages_by_record(FakeRequest(query_params={"contact_id": "con_a"})))["items"] == []
+        for coro in (wi.wa_chat_send(CHAT_PA, FakeRequest({"text": "hi"})), wi.wa_chat_messages(CHAT_PA, FakeRequest()),
+                     wi.wa_chat_send(CHAT_CA, FakeRequest({"text": "hi"}))):
+            with pytest.raises(HTTPException) as e:
+                await coro
+            assert e.value.status_code == 403
+        assert env.evo.sends == []
+        ctx = await wi.scope_ctx(user)
+        assert wi._event_in_scope({"type": "message_new", "instance_name": COMPANY, "contact_id": "con_a"}, ctx) is False
+        assert wi._event_in_scope({"type": "instance_state", "instance_name": COMPANY}, ctx) is False
+    _run(go())
+
+
 def test_scope_filters_mine_unassigned_and_status(env, monkeypatch):
     db = env.db
     _as(OWNER, monkeypatch)
@@ -227,6 +252,40 @@ def test_messages_are_paged_oldest_to_newest_with_before_cursor(env, monkeypatch
         older = await wi.wa_chat_messages(CHAT_PA, FakeRequest(query_params={"before": ats[0]}))
         assert len(older["items"]) == 20 and older["has_more"] is False
         assert older["items"][0]["text"] == "msg 0" and older["items"][-1]["text"] == "msg 19"
+    _run(go())
+
+
+def test_messages_cursor_walks_rows_that_share_a_timestamp(env, monkeypatch):           # fix round 1
+    db = env.db
+    _as(PARUL, monkeypatch)
+
+    async def go():
+        chats = await _seed(db)
+        await db.wa_messages.delete_many({"chat_id": CHAT_PA})
+        rows = [_row(chats[CHAT_PA], i) for i in range(52)]
+        for r in rows[40:46]:                                       # a burst: six rows, one created_at
+            r["created_at"] = rows[40]["created_at"]
+        await db.wa_messages.insert_many(rows)
+        seen, cursor, pages = [], {}, 0
+        while True:
+            page = await wi.wa_chat_messages(CHAT_PA, FakeRequest(query_params={"limit": "10", **cursor}))
+            pages += 1
+            seen += [r["message_id"] for r in page["items"]]
+            if not page["has_more"]:
+                break
+            assert page["next_before"] == page["items"][0]["created_at"]
+            assert page["next_before_id"] == page["items"][0]["message_id"]
+            cursor = {"before": page["next_before"], "before_id": page["next_before_id"]}
+            assert pages < 20
+        assert len(seen) == 52 and len(set(seen)) == 52 and set(seen) == {r["message_id"] for r in rows}
+        assert pages == 6
+        # `before` alone (the old cursor) still works, and must be a datetime
+        first = await wi.wa_chat_messages(CHAT_PA, FakeRequest(query_params={"limit": "10"}))
+        older = await wi.wa_chat_messages(CHAT_PA, FakeRequest(query_params={"before": first["next_before"]}))
+        assert older["items"] and all(r["created_at"] < first["next_before"] for r in older["items"])
+        with pytest.raises(HTTPException) as e:
+            await wi.wa_chat_messages(CHAT_PA, FakeRequest(query_params={"before": "yesterday"}))
+        assert e.value.status_code == 400
     _run(go())
 
 
@@ -322,9 +381,30 @@ def test_send_with_template_renders_contact_and_my_phone(env, monkeypatch):
         assert out["status"] == "sent"
         text = env.evo.sends[-1]["text"]
         assert text.startswith("Hi Anita from Owner ") and "919000000100" in text and text.endswith("re St Mary")
+        assert out["message"]["ref"] == {"template_id": "wat_1"}
         with pytest.raises(HTTPException) as e:
             await wi.wa_chat_send(CHAT_PA, FakeRequest({"template_id": "wat_missing"}))
         assert e.value.status_code == 404
+        # an edited text wins over the template, and is the person's own: no ref.template_id (fix round 1)
+        out = await wi.wa_chat_send(CHAT_PA, FakeRequest({"template_id": "wat_1", "text": "Edited by hand"}))
+        assert env.evo.sends[-1]["text"] == "Edited by hand" and out["message"]["ref"] == {}
+    _run(go())
+
+
+def test_send_rejects_an_overlong_text_or_quote_id(env, monkeypatch):                   # fix round 1
+    db = env.db
+    _as(OWNER, monkeypatch)
+
+    async def go():
+        await _seed(db)
+        with pytest.raises(HTTPException) as e:
+            await wi.wa_chat_send(CHAT_PA, FakeRequest({"text": "x" * 4097}))
+        assert e.value.status_code == 400
+        with pytest.raises(HTTPException) as e:
+            await wi.wa_chat_send(CHAT_PA, FakeRequest({"text": "hi", "quoted_provider_msg_id": "q" * 129}))
+        assert e.value.status_code == 400
+        assert env.evo.sends == [] and await db.wa_messages.count_documents({"direction": "out"}) == 0
+        assert (await wi.wa_chat_send(CHAT_PA, FakeRequest({"text": "x" * 4096})))["status"] == "sent"
     _run(go())
 
 
@@ -398,6 +478,23 @@ def test_read_marks_locally_and_calls_evolution(env, monkeypatch):
     _run(go())
 
 
+def test_read_skips_hidden_rows(env, monkeypatch):                                     # fix round 1
+    db = env.db
+    _as(PARUL, monkeypatch)
+
+    async def go():
+        chats = await _seed(db)
+        ghost = {**_row(chats[CHAT_PA], 7, text=""), "hidden": True, "contentless": True, "raw_type": "reactionMessage"}
+        await db.wa_messages.insert_one(dict(ghost))
+        out = await wi.wa_chat_read(CHAT_PA, FakeRequest())
+        assert out["marked"] == 3
+        keys = env.evo.read_marks[-1]["readMessages"]
+        assert len(keys) == 3 and ghost["provider_msg_id"] not in {k["id"] for k in keys}
+        stored = await db.wa_messages.find_one({"message_id": ghost["message_id"]}, {"_id": 0})
+        assert "read_at" not in stored
+    _run(go())
+
+
 def test_read_survives_an_evolution_error(env, monkeypatch):
     db = env.db
     _as(PARUL, monkeypatch)
@@ -446,9 +543,16 @@ def test_resolve_reopen_assign_notes(env, monkeypatch):
         long = await wi.wa_chat_notes(CHAT_PA, FakeRequest({"text": "x" * 5000}))
         assert len(long["notes"][-1]["text"]) == 2000
         _as(OWNER, monkeypatch)
-        out = await wi.wa_chat_assign(CHAT_PA, FakeRequest({"email": KALPANA["email"]}))
-        assert out["assignee_email"] == KALPANA["email"]
-        assert (await db.wa_chats.find_one({"chat_id": CHAT_PA}))["assignee_email"] == KALPANA["email"]
+        # fix round 1 ruling: the assignee must be a manager or have the chat in their own scope
+        with pytest.raises(HTTPException) as e:
+            await wi.wa_chat_assign(CHAT_PA, FakeRequest({"email": KALPANA["email"]}))
+        assert e.value.status_code == 400 and "cannot see this chat" in e.value.detail
+        assert (await db.wa_chats.find_one({"chat_id": CHAT_PA}))["assignee_email"] == PARUL["email"]   # unchanged
+        out = await wi.wa_chat_assign(CHAT_PA, FakeRequest({"email": OWNER["email"]}))     # an admin: always
+        assert out["assignee_email"] == OWNER["email"]
+        assert (await db.wa_chats.find_one({"chat_id": CHAT_PA}))["assignee_email"] == OWNER["email"]
+        out = await wi.wa_chat_assign(CHAT_CA, FakeRequest({"email": PARUL["email"]}))     # her own record
+        assert out["assignee_email"] == PARUL["email"]
         with pytest.raises(HTTPException) as e:
             await wi.wa_chat_assign(CHAT_PA, FakeRequest({"email": "ghost@smartshape.in"}))
         assert e.value.status_code == 400
@@ -495,6 +599,30 @@ def test_link_sets_record_on_chat_and_rows_and_create_contact_makes_one(env, mon
             await wi.wa_chat_link(CHAT_PA, FakeRequest({"school_id": "sch_2"}))
         assert e.value.status_code == 403
         assert chats  # fixture used
+    _run(go())
+
+
+def test_create_contact_carries_the_chats_school_without_a_visibility_check(env, monkeypatch):  # fix round 1
+    db = env.db
+    _as(PARUL, monkeypatch)
+    jid = "919855555555@s.whatsapp.net"
+    cid = f"{COMPANY}:{jid}"
+
+    async def go():
+        await _seed(db)
+        # in parul's scope through its contact (hers), at a school she cannot see (S2 is unowned)
+        await db.contacts.insert_one({"contact_id": "con_d", "name": "Deepa", "phone": "9855555555", "school_id": "",
+                                      "assigned_to": PARUL["email"], "is_deleted": False})
+        await db.wa_chats.insert_one(_chat(cid, COMPANY, jid, "919855555555", "919855555555",
+                                           contact_id="con_d", school_id="sch_2"))
+        out = await wi.wa_chat_link(cid, FakeRequest({"create_contact": {"name": "Deepa Rao"}}))
+        assert out["school_id"] == "sch_2" and out["contact_id"] != "con_d"
+        c = await db.contacts.find_one({"contact_id": out["contact_id"]}, {"_id": 0})
+        assert c["school_id"] == "sch_2" and c["assigned_to"] == PARUL["email"] and c["phone"] == "919855555555"
+        # a school SHE picks is still checked
+        with pytest.raises(HTTPException) as e:
+            await wi.wa_chat_link(cid, FakeRequest({"create_contact": {"name": "Again", "school_id": "sch_2"}}))
+        assert e.value.status_code == 403
     _run(go())
 
 
