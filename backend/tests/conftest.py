@@ -75,6 +75,11 @@ class FakeEvolution:
         self.fail_if = None
         self.create_status = None
         self._n = 0
+        self.media = {}
+        self.read_marks = []
+        self.chats = {}
+        self.messages = {}
+        self.media_raises = False
 
     async def request(self, method, path, json=None, token=None):
         self.calls.append({"method": method, "path": path, "json": json, "token": token})
@@ -113,6 +118,20 @@ class FakeEvolution:
         if path.startswith("/instance/logout/"):
             self.state[tail] = "close"
             return {"status": "SUCCESS"}
+        if path.startswith("/chat/markMessageAsRead/"):
+            self.read_marks.append(json); return {"read": "success"}
+        if path.startswith("/chat/getBase64FromMediaMessage/"):
+            if self.media_raises: raise _ec.EvolutionError(500, "media download failed")
+            mid = ((json or {}).get("message") or {}).get("key", {}).get("id")
+            if mid not in self.media: raise _ec.EvolutionError(404, "media not found")
+            return dict(self.media[mid])
+        if path.startswith("/chat/findChats/"):
+            return list(self.chats.get(tail, []))
+        if path.startswith("/chat/findMessages/"):
+            jid = (((json or {}).get("where") or {}).get("key") or {}).get("remoteJid", "")
+            allm = self.messages.get((tail, jid), []); page = int((json or {}).get("page") or 1); off = int((json or {}).get("offset") or 50)
+            return {"messages": {"records": allm[(page - 1) * off: page * off], "total": len(allm),
+                                 "pages": max(1, -(-len(allm) // off))}}
         return {}
 
 

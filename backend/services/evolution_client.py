@@ -191,6 +191,37 @@ class EvolutionClient:
                 out[num] = bool(item.get("exists"))
         return out
 
+    async def mark_read(self, instance: Optional[str], keys: list, *, token: Optional[str] = None) -> dict:
+        """POST /chat/markMessageAsRead/{instance}: tell Evolution these messages were read."""
+        return await self._request("POST", f"/chat/markMessageAsRead/{self._inst(instance)}",
+                                   token=token, json={"readMessages": list(keys)})
+
+    async def get_media_base64(self, instance: Optional[str], message_key_id: str, *,
+                               convert_to_mp4: bool = False, token: Optional[str] = None) -> dict:
+        """POST /chat/getBase64FromMediaMessage/{instance}: download a message's media as base64."""
+        return await self._request("POST", f"/chat/getBase64FromMediaMessage/{self._inst(instance)}",
+                                   token=token, timeout=_TIMEOUT_SEND,
+                                   json={"message": {"key": {"id": message_key_id}},
+                                         "convertToMp4": convert_to_mp4})
+
+    async def find_chats(self, instance: Optional[str] = None, *, token: Optional[str] = None) -> list:
+        """POST /chat/findChats/{instance}: the instance's chat list."""
+        data = await self._request("POST", f"/chat/findChats/{self._inst(instance)}", token=token, json={})
+        if isinstance(data, dict):
+            return data.get("records") or data.get("chats") or []
+        return data or []
+
+    async def find_messages(self, instance: Optional[str], remote_jid: str, *, page: int = 1,
+                            offset: int = 50, token: Optional[str] = None) -> dict:
+        """POST /chat/findMessages/{instance}: one chat's message history, paged."""
+        data = await self._request("POST", f"/chat/findMessages/{self._inst(instance)}", token=token,
+                                   json={"where": {"key": {"remoteJid": remote_jid}}, "page": page, "offset": offset})
+        if isinstance(data, list):
+            return {"records": data, "total": len(data), "pages": 1}
+        if isinstance(data, dict) and "messages" in data:
+            data = data["messages"]
+        return data or {"records": [], "total": 0, "pages": 1}
+
     # ── Send ───────────────────────────────────────────────────────────────────
 
     async def send_text(self, phone: str, message: str, *, instance: Optional[str] = None,

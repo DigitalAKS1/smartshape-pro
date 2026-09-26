@@ -102,3 +102,37 @@ def test_http_errors_become_evolution_error(monkeypatch):
     with pytest.raises(ec.EvolutionError) as e:
         _run(ec.EvolutionClient().create_instance("rep_u1"))
     assert e.value.status_code == 403
+
+
+def test_mark_read_posts_the_keys(fake_evolution):
+    c = ec.EvolutionClient(base="http://evo", key="k")
+    asyncio.run(c.mark_read("rep_parul", [{"remoteJid": "919800000001@s.whatsapp.net", "fromMe": False, "id": "IN1"}], token="tok"))
+    call = fake_evolution.calls[-1]
+    assert call["path"] == "/chat/markMessageAsRead/rep_parul" and call["token"] == "tok"
+    assert call["json"] == {"readMessages": [{"remoteJid": "919800000001@s.whatsapp.net", "fromMe": False, "id": "IN1"}]}
+    assert fake_evolution.read_marks == [call["json"]]
+
+
+def test_get_media_base64_returns_the_fake_media_or_404(fake_evolution):
+    c = ec.EvolutionClient(base="http://evo", key="k")
+    fake_evolution.media["IN2"] = {"mediaType": "image", "fileName": "a.jpg", "mimetype": "image/jpeg", "base64": "QUJD"}
+    out = asyncio.run(c.get_media_base64("rep_parul", "IN2"))
+    assert out["base64"] == "QUJD" and fake_evolution.calls[-1]["json"] == {"message": {"key": {"id": "IN2"}}, "convertToMp4": False}
+    with pytest.raises(ec.EvolutionError) as e:
+        asyncio.run(c.get_media_base64("rep_parul", "missing"))
+    assert e.value.status_code == 404
+
+
+def test_find_messages_pages_the_fake(fake_evolution):
+    c = ec.EvolutionClient(base="http://evo", key="k")
+    fake_evolution.messages[("rep_parul", "919800000001@s.whatsapp.net")] = [{"key": {"id": f"M{i}"}} for i in range(120)]
+    p1 = asyncio.run(c.find_messages("rep_parul", "919800000001@s.whatsapp.net", page=1))
+    p3 = asyncio.run(c.find_messages("rep_parul", "919800000001@s.whatsapp.net", page=3))
+    assert p1["total"] == 120 and p1["pages"] == 3 and len(p1["records"]) == 50 and len(p3["records"]) == 20
+    assert fake_evolution.calls[-1]["json"]["where"] == {"key": {"remoteJid": "919800000001@s.whatsapp.net"}}
+
+
+def test_find_chats_unwraps_a_dict_answer(fake_evolution):
+    c = ec.EvolutionClient(base="http://evo", key="k")
+    fake_evolution.chats["rep_parul"] = [{"remoteJid": "919800000001@s.whatsapp.net", "name": "Sunita"}]
+    assert asyncio.run(c.find_chats("rep_parul"))[0]["name"] == "Sunita"
