@@ -21,6 +21,7 @@ import useOrdersManagement from '../../hooks/useOrdersManagement';
 import { PROD_STAGES, ORDER_STATUSES, buildDispatchMessage } from '../../lib/ordersUtils';
 import WaPickerButton from '../../components/orders/WaPickerButton';
 import HoldsTab from '../../components/orders/HoldsTab';
+import AwaitingConfirmationTab from '../../components/orders/AwaitingConfirmationTab';
 import OrderDetailPanel from '../../components/orders/OrderDetailPanel';
 import InvoiceBulkImport from '../../components/crm/InvoiceBulkImport';
 import UnmatchedInvoices from '../../components/crm/UnmatchedInvoices';
@@ -30,7 +31,7 @@ export default function OrdersManagement() {
   const om = useOrdersManagement();
   const { user } = useAuth();
   const canExport = user?.role === 'admin' || user?.role === 'accounts';
-  const canManageSelection = ['admin', 'accounts', 'store'].includes(user?.role);
+  const canManageSelection = ['admin', 'accounts', 'store', 'sales_person'].includes(user?.role);
   const [invKey, setInvKey] = React.useState(0);
 
   const inputCls = 'bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]';
@@ -64,20 +65,21 @@ export default function OrdersManagement() {
         </div>
 
         {/* Stats — each tile filters the list below (Holds jumps to the Holds tab) */}
-        <div className="grid grid-cols-3 sm:grid-cols-6 gap-3">
+        <div className="grid grid-cols-3 sm:grid-cols-7 gap-3">
           {[
             { label: 'Total',      value: om.stats.total,       color: textPri,          filter: 'all' },
+            { label: 'Awaiting',   value: om.stats.awaitingConfirmation, color: 'text-amber-400', tab: 'awaiting' },
             { label: 'Pending',    value: om.stats.pending,     color: 'text-yellow-400', filter: 'pending' },
             { label: 'Confirmed',  value: om.stats.confirmed,   color: 'text-blue-400',   filter: 'confirmed' },
             { label: 'Dispatched', value: om.stats.dispatched,  color: 'text-purple-400', filter: 'dispatched' },
             { label: 'Delivered',  value: om.stats.delivered,   color: 'text-green-400',  filter: 'delivered' },
             { label: 'Holds',      value: om.stats.activeHolds, color: 'text-orange-400', tab: 'holds' },
           ].map(s => {
-            const active = s.tab ? om.activeTab === 'holds' : (om.activeTab === 'orders' && om.statusFilter === s.filter);
+            const active = s.tab ? om.activeTab === s.tab : (om.activeTab === 'orders' && om.statusFilter === s.filter);
             return (
               <button key={s.label} type="button"
                 onClick={() => {
-                  if (s.tab) { om.setActiveTab('holds'); }
+                  if (s.tab) { om.setActiveTab(s.tab); }
                   else { om.setActiveTab('orders'); om.setStatusFilter(s.filter); }
                 }}
                 className={`${card} border rounded-md p-3 text-center transition-all hover:border-[#e94560]/50 hover:bg-[var(--bg-hover)] ${active ? 'ring-1 ring-[#e94560]/60 border-[#e94560]/50' : ''}`}
@@ -96,15 +98,15 @@ export default function OrdersManagement() {
 
         {/* Tabs */}
         <div className={`flex gap-1 ${card} border rounded-md p-1`}>
-          {['orders', 'kanban', 'holds', 'dispatches'].map(tab => (
+          {['orders', 'awaiting', 'kanban', 'holds', 'dispatches'].map(tab => (
             <button key={tab} onClick={() => om.setActiveTab(tab)}
               className={`flex-1 px-1 sm:px-4 py-2 rounded text-xs sm:text-sm font-medium transition-all ${om.activeTab === tab ? 'bg-[#e94560] text-white' : `${textSec} hover:bg-[var(--bg-hover)]`}`}
               data-testid={`tab-${tab}`}>
               <span className="sm:hidden">
-                {tab === 'orders' ? `Orders (${om.ordersList.length})` : tab === 'kanban' ? 'Pipeline' : tab === 'holds' ? `Holds (${om.holdsList.length})` : `Dispatch (${om.dispatchList.length})`}
+                {tab === 'orders' ? `Orders (${om.ordersList.length})` : tab === 'awaiting' ? `Awaiting (${om.stats.awaitingConfirmation})` : tab === 'kanban' ? 'Pipeline' : tab === 'holds' ? `Holds (${om.holdsList.length})` : `Dispatch (${om.dispatchList.length})`}
               </span>
               <span className="hidden sm:inline">
-                {tab === 'orders' ? `Orders (${om.ordersList.length})` : tab === 'kanban' ? 'Production Pipeline' : tab === 'holds' ? `Hold Monitor (${om.holdsList.length})` : `Dispatches (${om.dispatchList.length})`}
+                {tab === 'orders' ? `Orders (${om.ordersList.length})` : tab === 'awaiting' ? `Awaiting Confirmation (${om.stats.awaitingConfirmation})` : tab === 'kanban' ? 'Production Pipeline' : tab === 'holds' ? `Hold Monitor (${om.holdsList.length})` : `Dispatches (${om.dispatchList.length})`}
               </span>
             </button>
           ))}
@@ -272,6 +274,19 @@ export default function OrdersManagement() {
               })
             )}
           </div>
+        )}
+
+        {/* Awaiting confirmation tab */}
+        {om.activeTab === 'awaiting' && (
+          <AwaitingConfirmationTab
+            orders={om.ordersList.filter(o => o.order_status === 'awaiting_confirmation')}
+            onConfirm={om.handleConfirmOrder}
+            onReject={om.handleRejectOrder}
+            onLogCall={om.handleLogCall}
+            onOpenDetail={om.openDetail}
+            textPri={textPri} textSec={textSec} textMuted={textMuted}
+            inputCls={inputCls} card={card} dlgCls={dlgCls}
+          />
         )}
 
         {/* Holds tab */}
@@ -541,7 +556,7 @@ export default function OrdersManagement() {
                   <Label className={`${textSec} text-xs`}>New Status</Label>
                   <select value={om.newStatus} onChange={e => om.setNewStatus(e.target.value)} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`} data-testid="new-status-select">
                     <option value="">Select</option>
-                    {ORDER_STATUSES.filter(s => s.id !== om.statusTarget.order_status).map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
+                    {ORDER_STATUSES.filter(s => s.id !== om.statusTarget.order_status && s.id !== 'awaiting_confirmation').map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
                   </select>
                 </div>
                 <div><Label className={`${textSec} text-xs`}>Note</Label><Input value={om.statusNote} onChange={e => om.setStatusNote(e.target.value)} className={inputCls} placeholder="Optional note..." /></div>
