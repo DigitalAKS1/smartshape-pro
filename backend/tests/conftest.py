@@ -80,6 +80,7 @@ class FakeEvolution:
         self.chats = {}
         self.messages = {}
         self.media_raises = False
+        self.fail_find_for = set()      # jids for which findMessages raises (W2 task 5)
 
     async def request(self, method, path, json=None, token=None):
         self.calls.append({"method": method, "path": path, "json": json, "token": token})
@@ -129,6 +130,8 @@ class FakeEvolution:
             return list(self.chats.get(tail, []))
         if path.startswith("/chat/findMessages/"):
             jid = (((json or {}).get("where") or {}).get("key") or {}).get("remoteJid", "")
+            if jid in self.fail_find_for:
+                raise _ec.EvolutionError(500, "find failed")
             allm = self.messages.get((tail, jid), []); page = int((json or {}).get("page") or 1); off = int((json or {}).get("offset") or 50)
             return {"messages": {"records": allm[(page - 1) * off: page * off], "total": len(allm),
                                  "pages": max(1, -(-len(allm) // off))}}

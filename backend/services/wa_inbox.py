@@ -14,13 +14,16 @@ own storage, never left as WhatsApp's encrypted reference).
 
     backfill_raw_events(db)        -> the W1 stub parked inbound events raw; run them through ingest once.
     touch_chat_after_send(db, row) -> wa_send._finish: an app send lands on its chat.
+    sync_history(db, inst)         -> W2 task 5: the last 90 days of chats on first link (wa_routes._on_open).
+        ingest_message(..., quiet=True, history=True) for every record: no engagement event, no bus
+        event, no unread bump, media deferred to W4 (a stub is written, never 5,000 Evolution calls).
 """
 import base64
 import logging
 import mimetypes
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from pymongo.errors import DuplicateKeyError
@@ -398,14 +401,22 @@ async def _log_inbound_event(row: dict) -> None:
         dedup_key=f"wa:{row['message_id']}")
 
 
-async def ingest_message(db, inst: dict, data: dict) -> Optional[dict]:
+async def ingest_message(db, inst: dict, data: dict, *, quiet: bool = False, history: bool = False) -> Optional[dict]:
     """The one entry point. Returns the stored row, {"duplicate": True} for a provider id already
     held, or None when the event carries nothing to store. A list `data` (Evolution sometimes
-    batches) ingests every item and returns the last item's result."""
+    batches) ingests every item and returns the last item's result.
+
+    `quiet` (W2 task 5): no engagement event, nothing published on the bus — for a history import,
+    where nobody should be notified of a message that already happened.
+    `history` (W2 task 5): the chat upsert never bumps unread_count (last_direction still reflects
+    the row's real direction — see `_chat_update`, which reads it off the row, not off `inbound`);
+    media is never downloaded — a `{"pending": True, "skipped": "history", "url": ""}` stub is
+    written instead, so importing thousands of history messages never calls Evolution once per
+    message (W4 fetches history media lazily)."""
     if isinstance(data, list):
         last = None
         for item in data:
-            last = await ingest_message(db, inst, item)
+            last = await ingest_message(db, inst, item, quiet=quiet, history=history)
         return last
     n = normalise_upsert(inst, data)
     if n is None:
@@ -431,6 +442,11 @@ async def ingest_message(db, inst: dict, data: dict) -> Optional[dict]:
             row["media"] = {"type": n["media_ref"].get("type") or "document",
                             "caption": n["media_ref"].get("caption") or "", "url": "", "pending": True,
                             "skipped": "hidden"}
+        elif history:
+            # A history import: never download media inline (W2 task 5) — W4 fetches it lazily.
+            row["media"] = {"type": n["media_ref"].get("type") or "document",
+                            "caption": n["media_ref"].get("caption") or "", "url": "", "pending": True,
+                            "skipped": "history"}
         else:
             row["media"] = await store_media(inst, n["provider_msg_id"], n["media_ref"])
         try:
@@ -443,20 +459,23 @@ async def ingest_message(db, inst: dict, data: dict) -> Optional[dict]:
         return row
     chat = {}
     try:
-        chat = await upsert_chat(db, inst, row, inbound=inbound, match=match)
+        # A history row is never inbound as far as the chat is concerned (no unread bump) —
+        # `_chat_update` still reads the real direction off `row["direction"]` for last_direction.
+        chat = await upsert_chat(db, inst, row, inbound=(inbound and not history), match=match)
     except Exception as e:
         log.error("[wa-inbox] chat upsert failed for %s: %s", row["message_id"], str(e)[:160])
-    if inbound:
+    if inbound and not quiet:
         try:
             await _log_inbound_event(row)
         except Exception as e:
             log.error("[wa-inbox] engagement event failed for %s: %s", row["message_id"], str(e)[:160])
-    await wa_events.publish({
-        "type": "message_new", "instance_name": name, "chat_id": row["chat_id"],
-        "contact_id": chat.get("contact_id") or row["contact_id"], "lead_id": chat.get("lead_id") or row["lead_id"],
-        "school_id": chat.get("school_id") or row["school_id"], "message_id": row["message_id"],
-        "status": row["status"], "direction": row["direction"], "preview": _preview(row),
-        "unread_count": int(chat.get("unread_count") or 0)})
+    if not quiet:
+        await wa_events.publish({
+            "type": "message_new", "instance_name": name, "chat_id": row["chat_id"],
+            "contact_id": chat.get("contact_id") or row["contact_id"], "lead_id": chat.get("lead_id") or row["lead_id"],
+            "school_id": chat.get("school_id") or row["school_id"], "message_id": row["message_id"],
+            "status": row["status"], "direction": row["direction"], "preview": _preview(row),
+            "unread_count": int(chat.get("unread_count") or 0)})
     return row
 
 
@@ -544,3 +563,124 @@ async def backfill_raw_events(db, *, limit: int = 500) -> int:
         await db.wa_events_raw.update_one({"_id": ev["_id"]}, {"$set": marks})
         done += 1
     return done
+
+
+# ── History sync on first link (W2 task 5) ────────────────────────────────────
+
+def _history_jid(chat: dict) -> str:
+    """A `findChats` record's jid: `remoteJid` (Evolution 2.3.x), else `id` (some builds put the
+    jid there)."""
+    c = chat if isinstance(chat, dict) else {}
+    return str(c.get("remoteJid") or c.get("id") or "").strip()
+
+
+def _history_chat_sort_key(chat: dict) -> datetime:
+    """Newest first: `updatedAt`, else `lastMessage.messageTimestamp`, else the epoch (last)."""
+    c = chat if isinstance(chat, dict) else {}
+    iso = c.get("updatedAt")
+    if not iso:
+        last = c.get("lastMessage")
+        if isinstance(last, dict):
+            iso = _provider_ts(last.get("messageTimestamp"))
+    if iso:
+        try:
+            return wa_send._parse(iso)
+        except Exception:
+            pass
+    return datetime.min.replace(tzinfo=timezone.utc)
+
+
+async def _pull_chat_history(db, inst: dict, name: str, jid: str, *, token, client, cutoff: datetime,
+                             max_messages: int, stats: dict) -> None:
+    """One chat's messages, newest page first, fed through `ingest_message(quiet=True,
+    history=True)`. Stops on the first record older than `cutoff` (records come newest first) or
+    once `stats["messages"]` reaches `max_messages`. A `find_messages` failure on any page is
+    counted and ends this chat only — the caller moves on to the next one."""
+    page, pages = 1, 1
+    while page <= pages:
+        try:
+            res = await client.find_messages(name, jid, page=page, token=token)
+        except Exception as e:
+            stats["errors"] += 1
+            log.warning("[wa-inbox] history: find_messages failed for %s/%s p%s: %s",
+                        name, jid, page, str(e)[:160])
+            return
+        res = res if isinstance(res, dict) else {}
+        records = res.get("records") or []
+        if not records:
+            return
+        pages = max(1, int(res.get("pages") or 1))
+        for rec in records:
+            if not isinstance(rec, dict):
+                continue
+            ts = _provider_ts(rec.get("messageTimestamp"))
+            if ts and wa_send._parse(ts) < cutoff:
+                return                            # older than the window: nothing past here matters
+            try:
+                await ingest_message(db, inst, rec, quiet=True, history=True)
+            except Exception as e:
+                stats["errors"] += 1
+                log.warning("[wa-inbox] history: ingest failed for %s/%s: %s", name, jid, str(e)[:160])
+                continue
+            stats["messages"] += 1
+            if stats["messages"] >= max_messages:
+                stats["truncated"] = True
+                return
+        page += 1
+
+
+async def _pull_history(db, inst: dict, name: str, *, days: int, max_chats: int, max_messages: int,
+                        stats: dict) -> None:
+    token = inst.get("instance_token") or None
+    client = wa_send._client()
+    cutoff = wa_send._now() - timedelta(days=max(0, int(days)))
+    try:
+        raw_chats = await client.find_chats(name, token=token)
+    except Exception as e:
+        stats["errors"] += 1
+        log.warning("[wa-inbox] history: find_chats failed for %s: %s", name, str(e)[:160])
+        return
+    chats = sorted(
+        (c for c in (raw_chats or []) if isinstance(c, dict) and _history_jid(c).endswith("@s.whatsapp.net")),
+        key=_history_chat_sort_key, reverse=True)[:max(0, int(max_chats))]
+    for chat in chats:
+        if stats["messages"] >= max_messages:
+            stats["truncated"] = True
+            break
+        jid = _history_jid(chat)
+        if not jid:
+            continue
+        stats["chats"] += 1
+        await _pull_chat_history(db, inst, name, jid, token=token, client=client, cutoff=cutoff,
+                                 max_messages=max_messages, stats=stats)
+
+
+async def sync_history(db, inst: dict, *, days: int = 90, max_chats: int = 200,
+                       max_messages: int = 5000) -> dict:
+    """W2 task 5 (spec D6): the last `days` of chats on first link, called from
+    `wa_routes._on_open`. `find_chats` -> keep 1:1 chats (`@s.whatsapp.net`; groups and
+    newsletters skipped), newest first, up to `max_chats`; for each, page `find_messages` until a
+    record older than `now - days` or `max_messages` overall — every record goes through
+    `ingest_message(quiet=True, history=True)`, so a message a webhook already delivered is a
+    no-op (idempotent on provider_msg_id), and nobody is notified of history landing.
+
+    Returns {"chats", "messages", "truncated", "errors"} and ALWAYS `$set`s `history_synced_at`
+    and `history_stats` on the instance — even when every call to Evolution failed — so
+    `_on_open` (which only starts this while `history_synced_at` is unset) does not restart it on
+    every reconnect. Never raises: a bad chat, page or record is counted in `errors` and the rest
+    of the sync continues."""
+    name = str(inst.get("instance_name") or "")
+    stats = {"chats": 0, "messages": 0, "truncated": False, "errors": 0}
+    if name:
+        try:
+            await _pull_history(db, inst, name, days=days, max_chats=max_chats,
+                                max_messages=max_messages, stats=stats)
+        except Exception as e:
+            stats["errors"] += 1
+            log.error("[wa-inbox] history sync for %s aborted: %s", name, str(e)[:160])
+        try:
+            await db.wa_instances.update_one({"instance_name": name}, {"$set": {
+                "history_synced_at": wa_send._iso(wa_send._now()), "history_stats": stats}})
+        except Exception as e:
+            log.error("[wa-inbox] history: stats not saved for %s: %s", name, str(e)[:160])
+    return stats

@@ -189,6 +189,42 @@ def test_media_download_failure_still_stores_the_row(env):
     _run(go())
 
 
+def test_history_flags_skip_unread_media_events_and_publish(env):
+    """W2 task 5: quiet=True, history=True (a history-sync record) never bumps unread, never
+    downloads media (a `skipped: history` stub instead), never logs an engagement event, and
+    never publishes on the bus — but the row and chat are still written, exactly as a live
+    message idempotent on provider_msg_id would be."""
+    db = env.db
+
+    async def go():
+        inst = await _setup(db)
+        q = asyncio.Queue()
+        wa_events._queues.add(q)
+        try:
+            row = await wa_inbox.ingest_message(db, inst, inbound(
+                "IH1", PHONE, "", message={"imageMessage": {"caption": "old pic", "mimetype": "image/jpeg",
+                                                             "url": "https://mmg.whatsapp.net/enc"}},
+                messageType="imageMessage"), quiet=True, history=True)
+            saw_anything = not q.empty()
+        finally:
+            wa_events._queues.discard(q)
+        assert row["media"] == {"type": "image", "caption": "old pic", "url": "", "pending": True,
+                                "skipped": "history"}
+        assert saw_anything is False                          # no message_new (quiet)
+        chat = await _chat(db)
+        assert chat["unread_count"] == 0                       # never bumped (history)
+        assert chat["last_direction"] == "in"                  # but still the row's real direction
+        assert await db.engagement_events.count_documents({}) == 0
+        stored = await db.wa_messages.find_one({"provider_msg_id": "IH1"}, {"_id": 0})
+        assert stored["media"]["skipped"] == "history"
+        # A second delivery of the SAME provider id (a live webhook catching up with the history
+        # import) is still the ordinary idempotent no-op.
+        again = await wa_inbox.ingest_message(db, inst, inbound(
+            "IH1", PHONE, "", message={"imageMessage": {"caption": "old pic"}}, messageType="imageMessage"))
+        assert again == {"duplicate": True}
+    _run(go())
+
+
 def test_quoted_message_id_is_kept(env):
     db = env.db
 

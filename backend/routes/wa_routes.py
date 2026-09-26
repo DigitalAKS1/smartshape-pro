@@ -201,13 +201,13 @@ async def _on_open(inst: dict, data: dict) -> None:
             {"$unset": {"phone_e164": "", "jid": ""}})
     await _publish_state(inst, sets["state"])
     if not inst.get("history_synced_at"):
-        # W2 task 5 adds wa_inbox.sync_history (the first link pulls the recent chats in); until
-        # then the guard keeps this a no-op. Task 5 removes the guard.
-        if hasattr(wa_inbox, "sync_history"):
-            try:
-                asyncio.create_task(wa_inbox.sync_history(db, {**inst, **sets}))
-            except Exception as e:
-                log.warning("[wa-webhook] history sync for %s not started: %s", name, str(e)[:120])
+        # W2 task 5: the first link pulls the last 90 days of chats in, in the background —
+        # sync_history always $sets history_synced_at itself (even on failure), so this never
+        # restarts on a later reconnect.
+        try:
+            asyncio.create_task(wa_inbox.sync_history(db, {**inst, **sets}))
+        except Exception as e:
+            log.warning("[wa-webhook] history sync for %s not started: %s", name, str(e)[:120])
 
 
 async def _publish_state(inst: dict, state: str) -> None:
@@ -916,6 +916,18 @@ async def wa_instance_unlink(name: str, request: Request):
     if inst.get("state") == "unlinked":
         return {"instance_name": name, "state": "unlinked"}
     return await _unlink(inst, user["email"])
+
+
+@router.post("/wa/instances/{name}/resync-history")
+async def wa_instance_resync_history(name: str, request: Request):
+    """Admin retry for W2 task 5's history sync: clears `history_synced_at` and starts it again
+    in the background. Returns immediately — `history_stats` on the instance shows how it went."""
+    user = await get_current_user(request)
+    _require_admin(user)
+    inst = await _instance_or_404(name)
+    await db.wa_instances.update_one({"instance_name": name}, {"$unset": {"history_synced_at": ""}})
+    asyncio.create_task(wa_inbox.sync_history(db, inst))
+    return {"ok": True, "started": True}
 
 
 async def _rewebhook(name: str) -> dict:
