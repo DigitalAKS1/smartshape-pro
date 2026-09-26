@@ -136,3 +136,26 @@ def test_find_chats_unwraps_a_dict_answer(fake_evolution):
     c = ec.EvolutionClient(base="http://evo", key="k")
     fake_evolution.chats["rep_parul"] = [{"remoteJid": "919800000001@s.whatsapp.net", "name": "Sunita"}]
     assert asyncio.run(c.find_chats("rep_parul"))[0]["name"] == "Sunita"
+
+
+def test_find_messages_wraps_a_flat_list_under_messages(monkeypatch):
+    # Some Evolution builds answer findMessages with {"messages": [...]} — a bare list under
+    # the key, not the {"records","total","pages"} shape. find_messages must still wrap it.
+    c = ec.EvolutionClient(base="http://evo", key="k")
+
+    async def _fake_request(self, method, path, *, json=None, token=None, timeout=None):
+        return {"messages": [{"key": {"id": "M1"}}]}
+    monkeypatch.setattr(ec.EvolutionClient, "_request", _fake_request)
+    out = asyncio.run(c.find_messages("rep_parul", "919800000001@s.whatsapp.net"))
+    assert out == {"records": [{"key": {"id": "M1"}}], "total": 1, "pages": 1}
+
+
+def test_find_messages_wraps_a_top_level_list(monkeypatch):
+    # And some builds answer with a bare list at the top level (no "messages" key at all).
+    c = ec.EvolutionClient(base="http://evo", key="k")
+
+    async def _fake_request(self, method, path, *, json=None, token=None, timeout=None):
+        return [{"key": {"id": "M1"}}]
+    monkeypatch.setattr(ec.EvolutionClient, "_request", _fake_request)
+    out = asyncio.run(c.find_messages("rep_parul", "919800000001@s.whatsapp.net"))
+    assert out == {"records": [{"key": {"id": "M1"}}], "total": 1, "pages": 1}

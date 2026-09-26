@@ -204,7 +204,7 @@ class EvolutionClient:
                                    json={"message": {"key": {"id": message_key_id}},
                                          "convertToMp4": convert_to_mp4})
 
-    async def find_chats(self, instance: Optional[str] = None, *, token: Optional[str] = None) -> list:
+    async def find_chats(self, instance: Optional[str], *, token: Optional[str] = None) -> list:
         """POST /chat/findChats/{instance}: the instance's chat list."""
         data = await self._request("POST", f"/chat/findChats/{self._inst(instance)}", token=token, json={})
         if isinstance(data, dict):
@@ -220,6 +220,8 @@ class EvolutionClient:
             return {"records": data, "total": len(data), "pages": 1}
         if isinstance(data, dict) and "messages" in data:
             data = data["messages"]
+        if isinstance(data, list):
+            return {"records": data, "total": len(data), "pages": 1}
         return data or {"records": [], "total": 0, "pages": 1}
 
     # ── Send ───────────────────────────────────────────────────────────────────
