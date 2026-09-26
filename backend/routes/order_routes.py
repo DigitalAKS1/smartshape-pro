@@ -242,10 +242,13 @@ async def cancel_order(order_id: str, request: Request):
     """Soft-cancel an order ('not finalising'): keep it visible, release held
     stock, free the quotation/lead. Reversible via /reopen. Admin & accounts."""
     user = await get_current_user(request)
-    require_module(user, "orders", "read_write")
     order = await db.orders.find_one({"order_id": order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
+    _assert_can_act_on_order(user, order)
+    if order.get("order_status") == "awaiting_confirmation":
+        raise HTTPException(status_code=400,
+            detail="This order is awaiting confirmation — use Reject instead of Cancel")
     if not can_cancel(order.get("order_status")):
         raise HTTPException(status_code=400,
                             detail="This order can't be cancelled — it's already cancelled or dispatched.")
@@ -286,10 +289,10 @@ async def cancel_order(order_id: str, request: Request):
 async def reopen_order(order_id: str, request: Request):
     """Re-open a cancelled order: re-reserve its stock and re-lock the lead. Admin & accounts."""
     user = await get_current_user(request)
-    require_module(user, "orders", "read_write")
     order = await db.orders.find_one({"order_id": order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
+    _assert_can_act_on_order(user, order)
     if not can_reopen(order.get("order_status")):
         raise HTTPException(status_code=400, detail="Only a cancelled order can be re-opened.")
 
@@ -327,10 +330,10 @@ class BulkExportInput(BaseModel):
 async def export_order(order_id: str, request: Request, format: str = "xml"):
     """Download a single Sales Order as a Tally-importable XML voucher or JSON."""
     user = await get_current_user(request)
-    require_module(user, "orders", "read")
     data = await gather_so(order_id)
     if not data:
         raise HTTPException(status_code=404, detail="Order not found")
+    _assert_can_read_order(user, data["order"])
     num = data["order"].get("order_number", order_id)
     if format == "json":
         content = json.dumps(build_json(data), indent=2, ensure_ascii=False, default=str)
@@ -352,6 +355,11 @@ async def export_orders_bulk(payload: BulkExportInput, request: Request):
     if not ids:
         raise HTTPException(status_code=400, detail="No orders selected")
     datas = [d for d in [await gather_so(i) for i in ids] if d]
+    # An 'own'-scoped user only ever gets their own orders out of a bulk
+    # request — silently dropped, not a 403, since the caller picked the ids
+    # from their own list and may have included a stray one by mistake.
+    if not sees_all(user, "orders"):
+        datas = [d for d in datas if _owns_order(user, d["order"])]
     if not datas:
         raise HTTPException(status_code=404, detail="No matching orders")
     company_name = datas[0]["company"].get("company_name", "SmartShape")
@@ -443,17 +451,28 @@ async def create_order_for_quotation(quotation_id: str, *, created_by: str,
 
     item_status = _active_item_status(order_status)
     for item in sel_items:
+        order_item_id = f"oi_{uuid.uuid4().hex[:8]}"
+        qty = int(item.get("quantity", 1) or 1)
         await db.order_items.insert_one({
-            "order_item_id": f"oi_{uuid.uuid4().hex[:8]}",
+            "order_item_id": order_item_id,
             "order_id": order_id,
             "die_id": item.get("die_id"),
             "die_name": item.get("die_name"),
             "die_code": item.get("die_code"),
             "die_type": item.get("die_type"),
             "die_image_url": item.get("die_image_url"),
-            "quantity": int(item.get("quantity", 1) or 1),
+            "quantity": qty,
             "status": item_status,
         })
+        # A caller creating the order directly at "pending"/"confirmed" (e.g.
+        # manual admin creation, or the auto-order path when it isn't left at
+        # awaiting_confirmation) bypasses Confirm entirely — reservation must
+        # happen here or it never happens at all.
+        if _is_committing(item_status) and item.get("die_id"):
+            await db.dies.update_one({"die_id": item["die_id"]}, {"$inc": {"reserved_qty": qty}})
+            die = await db.dies.find_one({"die_id": item["die_id"]}, {"_id": 0})
+            if die:
+                await _maybe_alert_shortage(die, order_item_id)
 
     await db.order_timeline.insert_one({
         "timeline_id": f"tl_{uuid.uuid4().hex[:8]}",
@@ -628,6 +647,18 @@ async def confirm_order(order_id: str, request: Request):
         raise HTTPException(status_code=400,
             detail=f"Only an order awaiting confirmation can be confirmed (this one is {order.get('order_status')})")
 
+    # Atomic claim: the filter re-checks order_status against the database at
+    # the moment of the write, not the read above — so a second, concurrent
+    # Confirm (or a Reject racing this one) modifies nothing and 400s cleanly
+    # instead of both callers reserving stock for the same order.
+    now_iso = datetime.now(timezone.utc).isoformat()
+    claim = await db.orders.update_one(
+        {"order_id": order_id, "order_status": "awaiting_confirmation"},
+        {"$set": {"order_status": "pending", "updated_at": now_iso}})
+    if claim.modified_count == 0:
+        raise HTTPException(status_code=400,
+            detail="Only an order awaiting confirmation can be confirmed")
+
     items = await db.order_items.find(
         {"order_id": order_id, "status": AWAITING_ITEM_STATUS}, {"_id": 0}).to_list(1000)
     for it in items:
@@ -638,9 +669,6 @@ async def confirm_order(order_id: str, request: Request):
         if die:
             await _maybe_alert_shortage(die, it["order_item_id"])
 
-    now_iso = datetime.now(timezone.utc).isoformat()
-    await db.orders.update_one({"order_id": order_id},
-        {"$set": {"order_status": "pending", "updated_at": now_iso}})
     await db.order_timeline.insert_one({
         "timeline_id": f"tl_{uuid.uuid4().hex[:8]}", "order_id": order_id,
         "status": "pending", "note": "Selection confirmed — stock reserved.",
@@ -669,11 +697,26 @@ async def reject_order(order_id: str, request: Request):
     if not reason:
         raise HTTPException(status_code=400, detail="A reason is required to reject a selection")
 
+    # Atomic claim — see confirm_order for why this can't be a plain read-then-write.
     now_iso = datetime.now(timezone.utc).isoformat()
-    await db.orders.update_one({"order_id": order_id},
+    claim = await db.orders.update_one(
+        {"order_id": order_id, "order_status": "awaiting_confirmation"},
         {"$set": {"order_status": "cancelled", "updated_at": now_iso}})
+    if claim.modified_count == 0:
+        raise HTTPException(status_code=400,
+            detail="Only an order awaiting confirmation can be rejected")
     await db.order_items.update_many(
         {"order_id": order_id, "status": AWAITING_ITEM_STATUS}, {"$set": {"status": "cancelled"}})
+    # Undo what order-creation did (mirrors cancel_order): a rejected selection
+    # never became real, so it must not leave the quotation "confirmed" or the
+    # lead locked as "won" — and the catalogue link must accept a resubmission.
+    if order.get("quotation_id"):
+        await db.quotations.update_one(
+            {"quotation_id": order["quotation_id"]},
+            {"$set": {"quotation_status": "sent", "catalogue_status": "sent"}})
+    if order.get("lead_id"):
+        await db.leads.update_one({"lead_id": order["lead_id"]}, {
+            "$set": {"is_locked": False, "stage": "negotiation", "updated_at": now_iso}})
     await db.order_timeline.insert_one({
         "timeline_id": f"tl_{uuid.uuid4().hex[:8]}", "order_id": order_id,
         "status": "cancelled", "note": f"Selection rejected: {reason}",
@@ -726,16 +769,30 @@ EDITABLE_ORDER_STATUSES = ("awaiting_confirmation", "pending", "confirmed")
 EDITABLE_ITEM_STATUSES = ("awaiting_confirmation", "on_hold", "confirmed")
 
 
-def _assert_can_act_on_order(user: dict, order: dict):
-    """Shared scope gate for confirm/reject/edit-selection/call-log. The module
-    grant decides whether staff may touch orders at all; for an 'own'-scoped
-    grant (sales reps) ownership is the order's own sales_person_email,
+def _owns_order(user: dict, order: dict) -> bool:
+    """True unless the user holds an 'own'-scoped orders grant (sales reps) for
+    a different rep's order. Ownership is the order's own sales_person_email,
     denormalised from its quotation at creation — the same ownership rule the
     quotations/leads grants already use (quotation_routes.py: sales_person_email
-    comparisons)."""
+    comparisons). An order with no sales_person_email (legacy data) fails
+    closed for an own-scoped user rather than granting access by default."""
+    return sees_all(user, "orders") or order.get("sales_person_email") == user.get("email")
+
+
+def _assert_can_act_on_order(user: dict, order: dict):
+    """Shared scope gate for confirm/reject/edit-selection/call-log/cancel/
+    reopen — every WRITE action on an order."""
     require_module(user, "orders", "read_write")
-    if not sees_all(user, "orders") and order.get("sales_person_email") != user.get("email"):
+    if not _owns_order(user, order):
         raise HTTPException(status_code=403, detail="You can only act on orders for your own schools")
+
+
+def _assert_can_read_order(user: dict, order: dict):
+    """Read-level sibling of _assert_can_act_on_order, for export/view actions
+    that don't need write access."""
+    require_module(user, "orders", "read")
+    if not _owns_order(user, order):
+        raise HTTPException(status_code=403, detail="You can only view orders for your own schools")
 
 
 def _assert_can_edit_selection(user, order):

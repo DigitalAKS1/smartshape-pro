@@ -54,7 +54,105 @@ def test_a_different_rep_is_blocked(db):
     order = {"order_id": "o1", "sales_person_email": "parul@ss.in", "order_status": "awaiting_confirmation"}
     with pytest.raises(Exception) as exc:
         ordr._assert_can_act_on_order(OTHER_REP, order)
-    assert "403" in str(exc.value) or "own" in str(exc.value).lower()
+    assert exc.value.status_code == 403
+
+
+class _FakeRequest:
+    def __init__(self, body=None):
+        self._body = body or {}
+
+    async def json(self):
+        return self._body
+
+
+def _as(monkeypatch, user):
+    async def _me(_request):
+        return user
+    monkeypatch.setattr(ordr, "get_current_user", _me)
+
+
+async def _awaiting_order_owned_by_parul(db):
+    await db.dies.insert_one({"die_id": "d1", "name": "Star", "code": "D-1",
+                              "type": "standard", "stock_qty": 10, "reserved_qty": 0})
+    await db.orders.insert_one({
+        "order_id": "o1", "order_number": "ORD-1", "school_id": "s1",
+        "sales_person_email": "parul@ss.in", "order_status": "awaiting_confirmation",
+        "grand_total": 1000, "total_items": 1,
+    })
+    await db.order_items.insert_one({
+        "order_item_id": "o1_i1", "order_id": "o1", "die_id": "d1",
+        "die_name": "Star", "die_code": "D-1", "die_type": "standard",
+        "quantity": 3, "status": "awaiting_confirmation",
+    })
+
+
+def test_a_different_rep_cannot_confirm(db, monkeypatch):
+    async def go():
+        await _awaiting_order_owned_by_parul(db)
+        _as(monkeypatch, OTHER_REP)
+        with pytest.raises(Exception) as exc:
+            await ordr.confirm_order("o1", _FakeRequest())
+        assert exc.value.status_code == 403
+    _run(go())
+
+
+def test_a_different_rep_cannot_reject(db, monkeypatch):
+    async def go():
+        await _awaiting_order_owned_by_parul(db)
+        _as(monkeypatch, OTHER_REP)
+        with pytest.raises(Exception) as exc:
+            await ordr.reject_order("o1", _FakeRequest({"reason": "no"}))
+        assert exc.value.status_code == 403
+    _run(go())
+
+
+def test_a_different_rep_cannot_add_an_item(db, monkeypatch):
+    async def go():
+        await _awaiting_order_owned_by_parul(db)
+        _as(monkeypatch, OTHER_REP)
+        with pytest.raises(Exception) as exc:
+            await ordr.add_order_item("o1", _FakeRequest({"die_id": "d1", "quantity": 1}))
+        assert exc.value.status_code == 403
+    _run(go())
+
+
+def test_a_different_rep_cannot_change_an_items_qty(db, monkeypatch):
+    async def go():
+        await _awaiting_order_owned_by_parul(db)
+        _as(monkeypatch, OTHER_REP)
+        with pytest.raises(Exception) as exc:
+            await ordr.update_order_item_qty("o1", "o1_i1", _FakeRequest({"quantity": 9}))
+        assert exc.value.status_code == 403
+    _run(go())
+
+
+def test_a_different_rep_cannot_remove_an_item(db, monkeypatch):
+    async def go():
+        await _awaiting_order_owned_by_parul(db)
+        _as(monkeypatch, OTHER_REP)
+        with pytest.raises(Exception) as exc:
+            await ordr.remove_order_item("o1", "o1_i1", _FakeRequest())
+        assert exc.value.status_code == 403
+    _run(go())
+
+
+def test_a_different_rep_cannot_log_a_call(db, monkeypatch):
+    async def go():
+        await _awaiting_order_owned_by_parul(db)
+        _as(monkeypatch, OTHER_REP)
+        with pytest.raises(Exception) as exc:
+            await ordr.log_order_call("o1", _FakeRequest({"outcome": "connected"}))
+        assert exc.value.status_code == 403
+    _run(go())
+
+
+def test_the_owning_rep_can_confirm(db, monkeypatch):
+    async def go():
+        await _awaiting_order_owned_by_parul(db)
+        _as(monkeypatch, REP_OWN)
+        resp = await ordr.confirm_order("o1", _FakeRequest())
+        assert resp["message"] == "Order confirmed"
+    _run(go())
 
 
 def test_order_creation_denormalizes_the_owning_reps_email(db):
