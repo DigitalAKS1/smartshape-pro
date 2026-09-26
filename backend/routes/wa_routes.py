@@ -14,7 +14,7 @@ from auth_utils import get_current_user
 from database import db
 from rbac import get_team
 from services import wa_send
-from services.evolution_client import EvolutionError, instance_token
+from services.evolution_client import EvolutionError, instance_token, webhook_url
 from services.wa_config import (COMPANY_INSTANCE, PRIVACY_NOTICE, RAM_HEADROOM_MIN_MB, SLOT_STATES,
                                 WaSettingsError, get_wa_settings, rep_instance_name, save_wa_settings)
 
@@ -70,10 +70,19 @@ class MaskWebhookSecret(logging.Filter):
 
 
 def install_access_log_mask() -> None:
-    """Idempotent. Called from main.py's startup hook (after uvicorn has configured logging)."""
+    """Idempotent. Called from main.py's startup hook (after uvicorn has configured logging).
+    Also logs, once, which webhook apikey mode is active."""
     lg = logging.getLogger("uvicorn.access")
     if not any(isinstance(f, MaskWebhookSecret) for f in lg.filters):
         lg.addFilter(MaskWebhookSecret())
+    log.warning("[wa-webhook] per-instance apikey check is %s (WA_WEBHOOK_APIKEY_CHECK)",
+                "ON" if apikey_check_on() else "OFF - only the X-WA-Secret secret is checked")
+
+
+def apikey_check_on() -> bool:
+    """WA_WEBHOOK_APIKEY_CHECK (default on). `off` skips the payload apikey == instance_token
+    compare (for an Evolution build that sends the global key); the shared secret is still required."""
+    return os.getenv("WA_WEBHOOK_APIKEY_CHECK", "on").strip().lower() not in ("off", "0", "false", "no")
 
 
 @router.post("/webhooks/whatsapp/{instance}")
@@ -108,7 +117,7 @@ async def wa_instance_webhook(instance: str, request: Request, t: str = ""):
         log.warning("[wa-webhook] event for unknown instance %r ignored", instance[:60])
         return {"ok": True, "ignored": "unknown_instance"}
     apikey = payload.get("apikey")
-    if apikey:
+    if apikey and apikey_check_on():
         stored = inst.get("instance_token") or ""
         if not stored:
             log.debug("[wa-webhook] %s has no stored instance_token; apikey not verified", instance[:60])
@@ -876,6 +885,40 @@ async def wa_instance_unlink(name: str, request: Request):
     if inst.get("state") == "unlinked":
         return {"instance_name": name, "state": "unlinked"}
     return await _unlink(inst, user["email"])
+
+
+async def _rewebhook(name: str) -> dict:
+    """Re-register one instance's webhook with the CURRENT WA_WEBHOOK_SECRET header (after a
+    secret rotation, or to move a pre-header `?t=` registration). No state change, no relink."""
+    try:
+        await _evo().set_webhook(name, url=webhook_url(name))
+        return {"instance_name": name, "ok": True, "error": ""}
+    except Exception as e:
+        log.warning("[wa] re-registering the webhook of %s failed: %s", name, str(e)[:160])
+        return {"instance_name": name, "ok": False, "error": str(e)[:200]}
+
+
+@router.post("/wa/instances/rewebhook-all")
+async def wa_instances_rewebhook_all(request: Request):
+    user = await get_current_user(request)
+    _require_admin(user)
+    _require_secret()
+    names = [i["instance_name"] async for i in db.wa_instances.find(
+        {"state": {"$ne": "unlinked"}}, {"_id": 0, "instance_name": 1}).sort("created_at", 1)]
+    results = [await _rewebhook(n) for n in names]          # one failure never stops the rest
+    return {"results": results, "ok": sum(1 for r in results if r["ok"]),
+            "failed": sum(1 for r in results if not r["ok"])}
+
+
+@router.post("/wa/instances/{name}/rewebhook")
+async def wa_instance_rewebhook(name: str, request: Request):
+    user = await get_current_user(request)
+    _require_admin(user)
+    _require_secret()
+    inst = await _instance_or_404(name)
+    if inst.get("state") == "unlinked":
+        raise HTTPException(409, "This number is not linked; its webhook is registered when it is linked again.")
+    return await _rewebhook(name)
 
 
 @router.put("/wa/instances/{name}/proxy")

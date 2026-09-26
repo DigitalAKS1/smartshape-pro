@@ -723,3 +723,42 @@ def test_the_close_from_our_own_relink_logout_is_logout_requested(env):
         i = await _inst(db, "rep_parul")
         assert i["state"] == "qr" and i["last_close_reason"] == "logout_requested"
     _run(go())
+
+
+# Task 7 follow-up: WA_WEBHOOK_APIKEY_CHECK switch
+
+def test_apikey_check_off_accepts_a_mismatched_apikey_but_still_needs_the_secret(env, monkeypatch):
+    db = env.db
+    monkeypatch.setenv("WA_WEBHOOK_APIKEY_CHECK", "off")
+
+    async def go():
+        await seed_instance(db, "rep_parul", owner_email=PARUL, state="connected", phone="919811111111")
+        ok = await _hook("rep_parul", {"event": "chats.update", "apikey": "GLOBAL_KEY", "data": {}})
+        assert ok["ok"] is True
+        with pytest.raises(HTTPException) as e:
+            await _hook("rep_parul", {"event": "chats.update", "apikey": "GLOBAL_KEY", "data": {}}, t="wrong")
+        assert e.value.status_code == 401
+    _run(go())
+
+
+@pytest.mark.parametrize("mode", [None, "on", "ON"])
+def test_apikey_check_on_by_default_rejects_a_mismatched_apikey(env, monkeypatch, mode):
+    db = env.db
+    if mode is None:
+        monkeypatch.delenv("WA_WEBHOOK_APIKEY_CHECK", raising=False)
+    else:
+        monkeypatch.setenv("WA_WEBHOOK_APIKEY_CHECK", mode)
+
+    async def go():
+        await seed_instance(db, "rep_parul", owner_email=PARUL, state="connected", phone="919811111111")
+        with pytest.raises(HTTPException) as e:
+            await _hook("rep_parul", {"event": "chats.update", "apikey": "GLOBAL_KEY", "data": {}})
+        assert e.value.status_code == 401
+    _run(go())
+
+
+def test_startup_logs_the_apikey_mode(env, monkeypatch, caplog):
+    monkeypatch.setenv("WA_WEBHOOK_APIKEY_CHECK", "off")
+    with caplog.at_level(logging.WARNING, logger="wa_routes"):
+        wr.install_access_log_mask()
+    assert any("apikey check is OFF" in r.getMessage() for r in caplog.records)

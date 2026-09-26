@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Hourly host-side WhatsApp health probe (spec 2026-09-24, W1 Health).
+# Host-side WhatsApp health probe, every 15 minutes (spec 2026-09-24, W1 Health).
 #
 # The backend container cannot see the VPS's real free memory, so the HOST reads it and hands
 # it to the backend, which stores settings{type:"wa_health"} (read by Settings → WhatsApp and
@@ -7,7 +7,7 @@
 #
 # Install (once, as root on the VPS):
 #   chmod +x /var/www/smartshape/scripts/ss-wa-health.sh
-#   echo '7 * * * * root /var/www/smartshape/scripts/ss-wa-health.sh >> /var/log/ss-wa-health.log 2>&1' \
+#   echo '*/15 * * * * root /var/www/smartshape/scripts/ss-wa-health.sh >> /var/log/ss-wa-health.log 2>&1' \
 #     > /etc/cron.d/ss-wa-health
 set -uo pipefail
 

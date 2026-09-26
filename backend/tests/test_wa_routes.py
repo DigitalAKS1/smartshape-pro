@@ -517,3 +517,66 @@ def test_legacy_status_reads_the_company_row(env, monkeypatch):
         assert await old.wa_instance_status(FakeRequest()) == {"state": "open", "connected": True,
                                                                "instance": COMPANY}
     _run(go())
+
+
+# ── Follow-up: re-register webhooks ──────────────────────────────────────────
+
+def test_a_rep_cannot_rewebhook(env, monkeypatch):
+    _as(PARUL, monkeypatch)
+    assert _status(wr.wa_instance_rewebhook("rep_kalpana", FakeRequest())) == 403
+    assert _status(wr.wa_instances_rewebhook_all(FakeRequest())) == 403
+    assert env.evo.calls == []
+
+
+def test_admin_rewebhooks_every_linked_number_with_the_current_secret(env, monkeypatch):
+    db = env.db
+    _as(OWNER, monkeypatch)
+    monkeypatch.setenv("WA_WEBHOOK_SECRET", "rotated")
+
+    async def go():
+        await seed_wa(db, reps={PARUL["email"]: "connected", KALPANA["email"]: "unlinked"})
+        before = await db.wa_instances.find({}, {"_id": 0}).to_list(None)
+        out = await wr.wa_instances_rewebhook_all(FakeRequest())
+        assert {r["instance_name"] for r in out["results"]} == {COMPANY, "rep_parul"}
+        assert out["ok"] == 2 and out["failed"] == 0
+        hooks = [c for c in env.evo.calls if c["path"].startswith("/webhook/set/")]
+        assert {c["path"] for c in hooks} == {f"/webhook/set/{COMPANY}", "/webhook/set/rep_parul"}
+        for c in hooks:
+            assert c["json"]["webhook"]["headers"] == {"X-WA-Secret": "rotated"}
+            assert "?t=" not in c["json"]["webhook"]["url"]
+        assert [c["path"] for c in env.evo.calls if not c["path"].startswith("/webhook/set/")] == []
+        assert await db.wa_instances.find({}, {"_id": 0}).to_list(None) == before     # no state change
+        one = await wr.wa_instance_rewebhook("rep_parul", FakeRequest())
+        assert one == {"instance_name": "rep_parul", "ok": True, "error": ""}
+        with pytest.raises(HTTPException) as e:
+            await wr.wa_instance_rewebhook("rep_kalpana", FakeRequest())
+        assert e.value.status_code == 409
+    _run(go())
+
+
+def test_an_evolution_error_on_one_number_is_reported_and_the_rest_continue(env, monkeypatch):
+    db = env.db
+    _as(OWNER, monkeypatch)
+    real = env.evo.request
+
+    async def flaky(method, path, json=None, token=None):
+        if path == f"/webhook/set/{COMPANY}":
+            from services.evolution_client import EvolutionError
+            raise EvolutionError(404, "instance not found")
+        return await real(method, path, json=json, token=token)
+    monkeypatch.setattr(env.evo, "request", flaky)
+
+    async def go():
+        await seed_wa(db, reps={PARUL["email"]: "connected", KALPANA["email"]: "disconnected"})
+        out = await wr.wa_instances_rewebhook_all(FakeRequest())
+        by = {r["instance_name"]: r for r in out["results"]}
+        assert by[COMPANY]["ok"] is False and "404" in by[COMPANY]["error"]
+        assert by["rep_parul"]["ok"] is True and by["rep_kalpana"]["ok"] is True
+        assert out["ok"] == 2 and out["failed"] == 1
+    _run(go())
+
+
+def test_rewebhook_refuses_without_a_secret(env, monkeypatch):
+    _as(OWNER, monkeypatch)
+    monkeypatch.delenv("WA_WEBHOOK_SECRET")
+    assert _status(wr.wa_instances_rewebhook_all(FakeRequest())) == 500
