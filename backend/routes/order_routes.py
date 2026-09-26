@@ -15,6 +15,7 @@ from rbac import get_team, require_teams, require_superadmin, require_module, se
 from audit_backup import snapshot_and_delete
 from tally_export import gather_so, build_json, build_voucher_xml, build_envelope
 from services.payment_ledger import recompute_and_sync
+import crm_contact_calls as cc
 
 router = APIRouter()
 
@@ -680,6 +681,41 @@ async def reject_order(order_id: str, request: Request):
     })
     await log_activity(user["email"], "reject_order", "order", order_id, reason)
     return {"message": "Order rejected"}
+
+
+@router.post("/orders/{order_id}/calls")
+async def log_order_call(order_id: str, request: Request):
+    """Optional call note about a submitted selection — never required to
+    Confirm, Edit, or Reject; purely a record of what was discussed."""
+    user = await get_current_user(request)
+    order = await db.orders.find_one({"order_id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    _assert_can_act_on_order(user, order)
+    body = await request.json()
+    outcome = (body.get("outcome") or "").strip()
+    if not cc.is_valid_outcome(outcome):
+        raise HTTPException(status_code=422, detail=f"outcome must be one of {list(cc.CALL_OUTCOMES)}")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    note = cc.build_order_call_note(order, user, outcome, body.get("content", ""), now_iso)
+    await db.call_notes.insert_one(dict(note))
+    await db.order_timeline.insert_one({
+        "timeline_id": f"tl_{uuid.uuid4().hex[:8]}", "order_id": order_id,
+        "status": order.get("order_status", "pending"),
+        "note": f"Call logged ({outcome}): {body.get('content', '')}".strip(),
+        "updated_by": user["email"], "timestamp": now_iso,
+    })
+    return await db.call_notes.find_one({"note_id": note["note_id"]}, {"_id": 0})
+
+
+@router.get("/orders/{order_id}/calls")
+async def list_order_calls(order_id: str, request: Request):
+    user = await get_current_user(request)
+    order = await db.orders.find_one({"order_id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    _assert_can_act_on_order(user, order)
+    return await db.call_notes.find({"order_id": order_id}, {"_id": 0}).sort("created_at", -1).to_list(200)
 
 
 # ==================== MANAGE SELECTION (order line items) ====================
