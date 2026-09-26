@@ -686,8 +686,8 @@ async def reject_order(order_id: str, request: Request):
 # Staff (admin/store/accounts) may add/remove dies and change quantities on a
 # submitted order until it begins dispatching. Reservations adjust automatically.
 
-EDITABLE_ORDER_STATUSES = ("pending", "confirmed")
-EDITABLE_ITEM_STATUSES = ("on_hold", "confirmed")
+EDITABLE_ORDER_STATUSES = ("awaiting_confirmation", "pending", "confirmed")
+EDITABLE_ITEM_STATUSES = ("awaiting_confirmation", "on_hold", "confirmed")
 
 
 def _assert_can_act_on_order(user: dict, order: dict):
@@ -758,14 +758,16 @@ async def add_order_item(order_id: str, request: Request):
             detail="Die already on this order — change its quantity instead")
 
     order_item_id = f"oi_{uuid.uuid4().hex[:8]}"
+    item_status = _active_item_status(order.get("order_status"))
     await db.order_items.insert_one({
         "order_item_id": order_item_id, "order_id": order_id,
         "die_id": die_id, "die_name": die["name"], "die_code": die["code"],
         "die_type": die["type"], "die_image_url": die.get("image_url"),
-        "quantity": qty, "status": "on_hold",
+        "quantity": qty, "status": item_status,
     })
-    await db.dies.update_one({"die_id": die_id}, {"$inc": {"reserved_qty": qty}})
-    await _maybe_alert_shortage({**die, "die_id": die_id}, order_item_id)
+    if _is_committing(item_status):
+        await db.dies.update_one({"die_id": die_id}, {"$inc": {"reserved_qty": qty}})
+        await _maybe_alert_shortage({**die, "die_id": die_id}, order_item_id)
     await _refresh_total_items(order_id)
     await log_activity(user["email"], "add_item", "order", order_id, f"+{qty} x {die['code']}")
     await _log_order_change(order_id, order, user["email"], "staff",
@@ -793,10 +795,11 @@ async def update_order_item_qty(order_id: str, order_item_id: str, request: Requ
     delta = new_qty - old_qty
     if delta != 0:
         await db.order_items.update_one({"order_item_id": order_item_id}, {"$set": {"quantity": new_qty}})
-        await db.dies.update_one({"die_id": item["die_id"]}, {"$inc": {"reserved_qty": delta}})
-        die = await db.dies.find_one({"die_id": item["die_id"]}, {"_id": 0})
-        if die:
-            await _maybe_alert_shortage(die, order_item_id)
+        if _is_committing(item.get("status")):
+            await db.dies.update_one({"die_id": item["die_id"]}, {"$inc": {"reserved_qty": delta}})
+            die = await db.dies.find_one({"die_id": item["die_id"]}, {"_id": 0})
+            if die:
+                await _maybe_alert_shortage(die, order_item_id)
         await log_activity(user["email"], "update_item_qty", "order", order_id,
                            f"{item.get('die_code','')} -> {new_qty}")
         await _log_order_change(order_id, order, user["email"], "staff",
@@ -820,8 +823,9 @@ async def remove_order_item(order_id: str, order_item_id: str, request: Request)
     if item.get("status") not in EDITABLE_ITEM_STATUSES:
         raise HTTPException(status_code=400, detail=f"Cannot remove a {item.get('status')} item")
 
-    await db.dies.update_one({"die_id": item["die_id"]},
-                             {"$inc": {"reserved_qty": -int(item.get("quantity", 1) or 1)}})
+    if _is_committing(item.get("status")):
+        await db.dies.update_one({"die_id": item["die_id"]},
+                                 {"$inc": {"reserved_qty": -int(item.get("quantity", 1) or 1)}})
     await db.order_items.update_one({"order_item_id": order_item_id}, {"$set": {"status": "removed"}})
     await _refresh_total_items(order_id)
     await log_activity(user["email"], "remove_item", "order", order_id, f"-{item.get('die_code','')}")
@@ -879,6 +883,7 @@ async def reconcile_order_to_selection(order_id: str, desired: dict, *, actor: s
     order = await db.orders.find_one({"order_id": order_id}, {"_id": 0})
     if not order:
         return {"added": 0, "removed": 0, "adjusted": 0}
+    item_status = _active_item_status(order.get("order_status"))
 
     all_items = await db.order_items.find(
         {"order_id": order_id, "status": {"$nin": ["removed", "cancelled", "released"]}}, {"_id": 0}
@@ -895,7 +900,8 @@ async def reconcile_order_to_selection(order_id: str, desired: dict, *, actor: s
     # Remove editable lines no longer desired (release their remaining reservation).
     for die_id, it in editable_by_die.items():
         if die_id not in desired:
-            await db.dies.update_one({"die_id": die_id}, {"$inc": {"reserved_qty": -_remaining_qty(it)}})
+            if _is_committing(it.get("status")):
+                await db.dies.update_one({"die_id": die_id}, {"$inc": {"reserved_qty": -_remaining_qty(it)}})
             await db.order_items.update_one({"order_item_id": it["order_item_id"]}, {"$set": {"status": "removed"}})
             changes.append({"action": "remove", "code": it.get("die_code"), "name": it.get("die_name")})
             removed += 1
@@ -910,9 +916,10 @@ async def reconcile_order_to_selection(order_id: str, desired: dict, *, actor: s
                 "order_item_id": f"oi_{uuid.uuid4().hex[:8]}", "order_id": order_id,
                 "die_id": die_id, "die_name": die["name"], "die_code": die["code"],
                 "die_type": die["type"], "die_image_url": die.get("image_url"),
-                "quantity": qty, "status": "on_hold",
+                "quantity": qty, "status": item_status,
             })
-            await db.dies.update_one({"die_id": die_id}, {"$inc": {"reserved_qty": qty}})
+            if _is_committing(item_status):
+                await db.dies.update_one({"die_id": die_id}, {"$inc": {"reserved_qty": qty}})
             changes.append({"action": "add", "qty": qty, "code": die["code"], "name": die["name"]})
             added += 1
         elif die_id in editable_by_die:
@@ -920,7 +927,8 @@ async def reconcile_order_to_selection(order_id: str, desired: dict, *, actor: s
             if qty != cur:
                 await db.order_items.update_one(
                     {"order_item_id": editable_by_die[die_id]["order_item_id"]}, {"$set": {"quantity": qty}})
-                await db.dies.update_one({"die_id": die_id}, {"$inc": {"reserved_qty": qty - cur}})
+                if _is_committing(editable_by_die[die_id].get("status")):
+                    await db.dies.update_one({"die_id": die_id}, {"$inc": {"reserved_qty": qty - cur}})
                 changes.append({"action": "adjust", "code": editable_by_die[die_id].get("die_code"),
                                 "name": editable_by_die[die_id].get("die_name"), "old": cur, "new": qty})
                 adjusted += 1
