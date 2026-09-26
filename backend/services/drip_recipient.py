@@ -45,7 +45,7 @@ async def resolve_drip_recipient(db, enrollment: dict):
         name, company, phone, email, school_id, assigned_to, assigned_name,
         lead_id, contact_id, wa_consent (only when the record has one)
     AND the lead-shaped aliases contact_name, contact_phone, contact_email,
-    company_name — so `create_physical_from_drip`, `_wa_consent_ok` and every
+    company_name — so `create_physical_from_drip`, `services.wa_send.consent_ok` and every
     executor branch take it unchanged. For a lead the whole lead document is
     kept underneath, so a lead-keyed enrolment reads exactly what it read
     before this module existed.
@@ -101,7 +101,7 @@ async def resolve_drip_recipient(db, enrollment: dict):
         "company_name": company,
     }
     # Contacts carry no wa_consent today; leaving the key unset makes
-    # _wa_consent_ok fall back to the school's consent, exactly as it does for
+    # wa_send.consent_ok fall back to the school's consent, exactly as it does for
     # a lead without one.
     if contact.get("wa_consent") is not None:
         rec["wa_consent"] = contact["wa_consent"]

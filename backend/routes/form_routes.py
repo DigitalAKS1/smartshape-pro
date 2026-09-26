@@ -710,10 +710,14 @@ async def list_responses(form_id: str, request: Request):
             k = (e.get("email") or "").lower()
             if e.get("status") == "failed" or k not in email_status:
                 email_status[k] = e.get("status")
+        # A WhatsApp row now ends sent / failed / skipped (refused: opt-out, not on WhatsApp, no
+        # number) / expired (too old to send), and may sit queued or sending on the way (Task 9).
+        # A problem outcome wins over a good one for the same phone.
+        _wa_bad = ("failed", "skipped", "expired")
         async for w in db.whatsapp_scheduled.find(
                 {"campaign_id": f"form_{form_id}"}, {"_id": 0, "phone": 1, "status": 1}):
             k = w.get("phone") or ""
-            if w.get("status") == "failed" or k not in wa_status:
+            if w.get("status") in _wa_bad or k not in wa_status:
                 wa_status[k] = w.get("status")
         by_map = {f["map_to"]: f["field_id"] for f in form.get("fields", []) if f.get("map_to")}
         for r in rows:
@@ -722,7 +726,7 @@ async def list_responses(form_id: str, request: Request):
             ph = str(ans.get(by_map.get("phone"), "") or "").strip()
             if d.get("email") == "queued" and email_status.get(em) in ("sent", "failed"):
                 d["email"] = email_status[em]
-            if d.get("whatsapp") == "queued" and wa_status.get(ph) in ("sent", "failed"):
+            if d.get("whatsapp") == "queued" and wa_status.get(ph) in ("sent", "failed", "skipped", "expired"):
                 d["whatsapp"] = wa_status[ph]
             r["delivery"] = d
     return {"form": form, "responses": rows, "count": len(rows)}

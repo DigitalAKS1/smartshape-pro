@@ -135,10 +135,21 @@ def test_greetings_and_delegation_alerts_still_fire(db, monkeypatch):
             "task_title": "Follow up", "emp_name": "Ravi",
         })
 
+        # Greetings are queued only while the owner has them on (wa.greetings_enabled, Task 9).
+        await db.settings.insert_one({"type": "wa", "greetings_enabled": True})
+
         await _run_one_iteration(monkeypatch)
 
         assert await db.greeting_logs.count_documents({"rule_id": "gr1"}) == 1
         assert await db.whatsapp_scheduled.count_documents({"rule_id": "gr1"}) == 1
+        # The greeting is queued AFTER this pass's scheduled-WA drain, so the NEXT pass hands it
+        # to send_whatsapp: no number is linked in this db -> refused (skipped), never sent.
+        await _run_one_iteration(monkeypatch)
+        assert await db.greeting_logs.count_documents({"rule_id": "gr1"}) == 1
+        row = await db.whatsapp_scheduled.find_one({"rule_id": "gr1"}, {"_id": 0})
+        assert row["status"] == "skipped"
+        glog = await db.greeting_logs.find_one({"rule_id": "gr1"}, {"_id": 0})
+        assert glog["status"] == "skipped"
         note = await db.notifications.find_one({"type": "delegation_overdue"})
         assert note is not None
         # The delegation-overdue push must have gone through the patched

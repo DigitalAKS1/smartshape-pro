@@ -405,57 +405,72 @@ async def repair_needs_address_touches(target_db=None) -> dict:
 import os as _os
 DEMO_WA_DRY_RUN = _os.getenv("DEMO_WA_DRY_RUN", "0") == "1"
 
-async def _send_demo_wa(phone: str, message: str) -> bool:
-    """Direct WhatsApp send via the configured provider (mirrors dispatch auto-WA)."""
+async def _send_lead_wa(phone: str, message: str, *, kind: str, send_mode: str,
+                        lead: Optional[dict] = None) -> bool:
+    """Lead-facing WhatsApp (demo link, intro) through the one door (W1, D3), from the lead
+    owner's number (else the company's). The log records the real outcome."""
+    from services.wa_send import send_whatsapp
+    lead = lead or {}
+    res = await send_whatsapp(db, to=phone, text=message, kind=kind, enforce_consent=False,
+                              owner_email=lead.get("assigned_to") or None, lead_id=lead.get("lead_id") or "",
+                              contact_id=lead.get("contact_id") or "", school_id=lead.get("school_id") or "",
+                              ref={"purpose": send_mode})
+    await db.whatsapp_logs.insert_one({
+        "log_id": f"wal_{uuid.uuid4().hex[:10]}", "phone": phone, "body": message, "lead_id": lead.get("lead_id"),
+        "send_mode": send_mode, "status": res["status"], "wa_message_id": res["message_id"],
+        "instance_name": res["instance_name"], "sent_by": "system",
+        "sent_at": datetime.now(timezone.utc).isoformat()})
+    return res["status"] in ("sent", "queued")
+
+
+async def _send_demo_wa(phone: str, message: str, *, lead: Optional[dict] = None) -> bool:
     if not phone:
         return False
     if DEMO_WA_DRY_RUN:
-        import logging as _log
-        _log.getLogger("crm").info(f"[demo][dry] WA -> {phone}: {message[:60]}")
+        logging.getLogger("crm").info(f"[demo][dry] WA -> {phone}: {message[:60]}")
         return True
-    wa = await db.settings.find_one({"type": "whatsapp"}, {"_id": 0})
-    if not wa or not wa.get("username"):
-        return False
-    import httpx as _httpx
-    try:
-        async with _httpx.AsyncClient(timeout=15) as client:
-            await client.post("https://app.messageautosender.com/message/new", data={
-                "username": wa["username"], "password": wa["password"],
-                "receiverMobileNo": phone, "message": message})
-        await db.whatsapp_logs.insert_one({
-            "log_id": f"wal_{uuid.uuid4().hex[:10]}", "phone": phone, "body": message,
-            "send_mode": "demo_link", "status": "sent", "sent_by": "system",
-            "sent_at": datetime.now(timezone.utc).isoformat()})
-        return True
-    except Exception:
-        return False
+    return await _send_lead_wa(phone, message, kind="demo", send_mode="demo_link", lead=lead)
 
 
 INTRO_WA_DRY_RUN = _os.getenv("INTRO_WA_DRY_RUN", "0") == "1"
 
-async def _send_intro_wa(phone: str, message: str) -> bool:
+
+async def _send_intro_wa(phone: str, message: str, *, lead: Optional[dict] = None) -> bool:
     if not phone or not message:
         return False
     if INTRO_WA_DRY_RUN:
-        import logging as _log
-        _log.getLogger("crm").info(f"[intro][dry] WA -> {phone}: {message[:60]}")
+        logging.getLogger("crm").info(f"[intro][dry] WA -> {phone}: {message[:60]}")
         return True
-    wa = await db.settings.find_one({"type": "whatsapp"}, {"_id": 0})
-    if not wa or not wa.get("username"):
-        return False
-    import httpx as _httpx
-    try:
-        async with _httpx.AsyncClient(timeout=15) as client:
-            await client.post("https://app.messageautosender.com/message/new", data={
-                "username": wa["username"], "password": wa["password"],
-                "receiverMobileNo": phone, "message": message})
-        await db.whatsapp_logs.insert_one({
-            "log_id": f"wal_{uuid.uuid4().hex[:10]}", "phone": phone, "body": message,
-            "send_mode": "lead_intro", "status": "sent", "sent_by": "system",
-            "sent_at": datetime.now(timezone.utc).isoformat()})
-        return True
-    except Exception:
-        return False
+    return await _send_lead_wa(phone, message, kind="intro", send_mode="lead_intro", lead=lead)
+
+
+_COURIER_TRACK = {
+    "delhivery": "https://www.delhivery.com/track/package/{tn}",
+    "blue dart": "https://bluedart.com/track-consignment?trackFor=0&HAWB={tn}",
+    "bluedart": "https://bluedart.com/track-consignment?trackFor=0&HAWB={tn}",
+    "dtdc": "https://tracking.dtdc.com/ctbs-tracking/customerInterface.tr?submitName=showCustInter&cType=Consignment&cnNo={tn}",
+}
+
+
+async def _send_dispatch_wa(lead_doc: dict, doc: dict, dispatch_id: str) -> dict:
+    """Dispatch tracking WhatsApp to the lead contact through the one door (W1, D3). The log
+    records the real outcome (the old block logged "sent" even when the HTTP call failed)."""
+    from services.wa_send import send_whatsapp
+    tn = doc.get("tracking_number", "")
+    url = _COURIER_TRACK.get(doc.get("courier_name", "").lower().strip(), "").format(tn=tn)
+    message = (f"Dear {lead_doc.get('contact_name', 'Sir/Madam')}, your {doc.get('material_type', 'material')} "
+               f"from SmartShape has been dispatched!\nCourier: {doc.get('courier_name', 'courier')}"
+               f"{(' | Tracking: ' + tn) if tn else ''}{chr(10) + 'Track here: ' + url if url else ''}")
+    res = await send_whatsapp(db, to=lead_doc["contact_phone"], text=message, kind="dispatch",
+                              enforce_consent=False, owner_email=lead_doc.get("assigned_to") or None,
+                              lead_id=lead_doc.get("lead_id") or "", school_id=lead_doc.get("school_id") or "",
+                              ref={"dispatch_id": dispatch_id, "dedup_key": f"dispatch:{dispatch_id}"})
+    await db.whatsapp_logs.insert_one({
+        "log_id": f"wal_{uuid.uuid4().hex[:10]}", "template_id": None, "phone": lead_doc["contact_phone"],
+        "body": message, "lead_id": lead_doc.get("lead_id"), "send_mode": "auto_dispatch",
+        "status": res["status"], "wa_message_id": res["message_id"], "sent_by": "system",
+        "sent_at": datetime.now(timezone.utc).isoformat()})
+    return res
 
 
 def _coerce_int(val, default=0):
@@ -3282,14 +3297,12 @@ async def mail_qr_respond(qr_token: str):
 
 
 async def _wa_notify(phone, message):
-    """Send an internal WhatsApp alert to a rep. Reuses the school_routes sender
-    (posts to messageautosender.com); safe no-op if WhatsApp isn't configured or
-    the phone is blank. Never raises into the caller."""
+    """Internal WhatsApp alert to a rep, from the company number. Never raises into the caller."""
     if not (phone or "").strip():
         return
     try:
-        from routes.school_routes import _wa_send  # lazy → avoids import cycle
-        await _wa_send(phone, message)
+        from services.wa_send import send_whatsapp
+        await send_whatsapp(db, to=phone, text=message, kind="alert", channel="company", enforce_consent=False)
     except Exception:
         pass
 
@@ -6460,7 +6473,7 @@ async def convert_contact_to_lead(contact_id: str, request: Request):
         await touch_last_activity("school", school_id)
     intro = (body.get("intro_message") or "").strip()
     if intro:
-        await _send_intro_wa(lead_doc.get("contact_phone", ""), intro)
+        await _send_intro_wa(lead_doc.get("contact_phone", ""), intro, lead=lead_doc)
     return await db.leads.find_one({"lead_id": lead_id}, {"_id": 0})
 
 
@@ -7651,7 +7664,7 @@ async def schedule_demo(lead_id: str, request: Request):
         contact_name = lead.get("contact_name", "Sir/Madam")
         msg = (f"Dear {contact_name}, your SmartShape online workshop is scheduled for "
                f"{demo_date} {demo_time}.\nJoin here: {link}")
-        sent = await _send_demo_wa(lead.get("contact_phone", ""), msg)
+        sent = await _send_demo_wa(lead.get("contact_phone", ""), msg, lead=lead)
         await log_activity(user["email"], "schedule_demo_online", "lead", lead_id,
                            details=f"Online workshop {demo_date} {demo_time} | WA sent={sent}")
 
@@ -8459,52 +8472,11 @@ async def create_physical_dispatch(request: Request):
     except Exception:
         pass  # never block dispatch creation
 
-    # Auto-WhatsApp: fire-and-forget tracking notification to the lead contact
+    # Auto-WhatsApp: tracking notification to the lead contact (non-blocking)
     try:
         lead_doc = await db.leads.find_one({"lead_id": body["lead_id"]}, {"_id": 0})
         if lead_doc and lead_doc.get("contact_phone"):
-            courier_key = doc.get("courier_name", "").lower().strip()
-            tn = doc.get("tracking_number", "")
-            _COURIER_URLS = {
-                "delhivery": f"https://www.delhivery.com/track/package/{tn}",
-                "blue dart": f"https://bluedart.com/track-consignment?trackFor=0&HAWB={tn}",
-                "bluedart": f"https://bluedart.com/track-consignment?trackFor=0&HAWB={tn}",
-                "dtdc": f"https://tracking.dtdc.com/ctbs-tracking/customerInterface.tr?submitName=showCustInter&cType=Consignment&cnNo={tn}",
-            }
-            tracking_url = _COURIER_URLS.get(courier_key, "")
-            track_part = f"\nTrack here: {tracking_url}" if tracking_url else ""
-            contact_name = lead_doc.get("contact_name", "Sir/Madam")
-            courier_name = doc.get("courier_name", "courier")
-            message = (
-                f"Dear {contact_name}, your {doc.get('material_type', 'material')} from SmartShape "
-                f"has been dispatched!\nCourier: {courier_name}"
-                f"{(' | Tracking: ' + tn) if tn else ''}"
-                f"{track_part}"
-            )
-            wa_settings = await db.settings.find_one({"type": "whatsapp"}, {"_id": 0})
-            if wa_settings and wa_settings.get("username"):
-                import httpx as _httpx
-                async with _httpx.AsyncClient(timeout=15) as client:
-                    await client.post(
-                        "https://app.messageautosender.com/message/new",
-                        data={
-                            "username": wa_settings["username"],
-                            "password": wa_settings["password"],
-                            "receiverMobileNo": lead_doc["contact_phone"],
-                            "message": message,
-                        },
-                    )
-                await db.whatsapp_logs.insert_one({
-                    "log_id": f"wal_{uuid.uuid4().hex[:10]}",
-                    "template_id": None,
-                    "phone": lead_doc["contact_phone"],
-                    "body": message,
-                    "lead_id": body["lead_id"],
-                    "send_mode": "auto_dispatch",
-                    "status": "sent",
-                    "sent_by": "system",
-                    "sent_at": datetime.now(timezone.utc).isoformat(),
-                })
+            await _send_dispatch_wa(lead_doc, doc, dispatch_id)
     except Exception:
         pass  # Dispatch is already saved — WA failure is non-blocking
 

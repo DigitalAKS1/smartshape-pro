@@ -1,16 +1,14 @@
 from fastapi import APIRouter, HTTPException, Request, UploadFile, File, BackgroundTasks
-from fastapi.responses import JSONResponse
 from typing import Optional
 from datetime import datetime, timezone
 import uuid
 import os
 import asyncio
 import logging
-import httpx
 
 from database import db
 from auth_utils import get_current_user
-from services.evolution_client import evolution
+from services.wa_send import send_whatsapp, consent_ok, campaign_final_status
 from services.ai_personalizer import personalize_message
 from services.tag_scope import resolve_tag_scope
 
@@ -554,7 +552,6 @@ async def launch_campaign(campaign_id: str, request: Request, background_tasks: 
 
     # Fire-and-forget background task — does AI personalisation + Evolution API sending
     ai_enabled = camp.get("ai_personalization", True)
-    send_delay = float(os.getenv("WA_SEND_DELAY_SECONDS", "3"))
     background_tasks.add_task(
         _send_campaign_background,
         campaign_id=campaign_id,
@@ -562,108 +559,65 @@ async def launch_campaign(campaign_id: str, request: Request, background_tasks: 
         template=message,
         attachment_doc=attachment_doc,
         ai_enabled=ai_enabled,
-        send_delay=send_delay,
     )
 
-    return {"queued": queued, "status": new_status, "ai_enabled": ai_enabled}
+    # A campaign is not consent-gated (only drips and greetings are, D10), but the launcher is
+    # told how many recipients have no WhatsApp consent on record.
+    no_consent = 0
+    for contact in contacts:
+        if (contact.get("phone") or contact.get("whatsapp") or "").strip() and not await consent_ok(
+                db, lead_id=contact.get("lead_id") or "", contact_id=contact.get("contact_id") or "",
+                school_id=contact.get("school_id") or ""):
+            no_consent += 1
+
+    return {"queued": queued, "status": new_status, "ai_enabled": ai_enabled, "no_consent": no_consent}
 
 
-async def _send_campaign_background(
-    campaign_id: str,
-    sched_ids: list,
-    template: str,
-    attachment_doc: Optional[dict],
-    ai_enabled: bool,
-    send_delay: float,
-):
-    """
-    Background task: AI-personalise → Evolution API send → update status.
-    Runs after the HTTP response has been returned to the frontend.
-    Rate-limited to `send_delay` seconds between messages (default 3 s).
-    """
-    connected = await evolution.is_connected()
-    if not connected:
-        logger.warning(f"Campaign {campaign_id}: Evolution API not connected — messages will stay 'pending' until WhatsApp is linked")
-
-    sent = failed = 0
-    now_iso = datetime.now(timezone.utc).isoformat()
-
+async def _send_campaign_background(campaign_id: str, sched_ids: list, template: str,
+                                    attachment_doc: Optional[dict], ai_enabled: bool):
+    """AI-personalise each message, then hand it to send_whatsapp (W1, D3): each contact is sent
+    from its owner's number (contact owner, else school owner, else the company's; a rep number
+    still warming up -> the company's), with opt-out, caps and business hours enforced by the
+    service - which also paces and queues the sends, so there is no fixed delay here any more."""
+    # Counters move with $inc, per row: the drainer may settle an early queued row (and move it
+    # from queued_count to sent_count) while this loop is still personalising later ones.
+    field = {"sent": "sent_count", "queued": "queued_count", "skipped": "skipped_count", "failed": "failed_count"}
+    await db.whatsapp_campaigns.update_one({"campaign_id": campaign_id}, {"$set": {
+        "sent_count": 0, "queued_count": 0, "skipped_count": 0, "failed_count": 0}})
+    counts = {"sent": 0, "queued": 0, "skipped": 0, "failed": 0}
     for sched_id in sched_ids:
         doc = await db.whatsapp_scheduled.find_one({"scheduled_id": sched_id}, {"_id": 0})
         if not doc:
             continue
-
-        phone    = doc["phone"]
-        contact  = doc.get("contact_snapshot", {})
-        camp_name = doc.get("campaign_name", "")
-
-        # 1. Personalise with Claude (or fallback)
         try:
-            personalised_msg = await personalize_message(
-                template=template,
-                contact=contact,
-                campaign_name=camp_name,
-                ai_enabled=ai_enabled,
-            )
+            personalised_msg = await personalize_message(template=template, contact=doc.get("contact_snapshot", {}),
+                                                         campaign_name=doc.get("campaign_name", ""),
+                                                         ai_enabled=ai_enabled)
         except Exception as exc:
             logger.error(f"Personalisation error for {sched_id}: {exc}")
-            personalised_msg = template   # last-resort fallback
-
-        # Store the personalised message
-        await db.whatsapp_scheduled.update_one(
-            {"scheduled_id": sched_id},
-            {"$set": {"message": personalised_msg}},
-        )
-
-        # 2. Send via Evolution API (if connected)
-        if not connected:
-            await asyncio.sleep(0)
-            continue
-
+            personalised_msg = template
         try:
-            att_type = (attachment_doc or {}).get("attachment_type", "none")
-            att_url  = (attachment_doc or {}).get("url", "")
-            att_name = (attachment_doc or {}).get("filename", "attachment")
-
-            result = await evolution.send_message_with_attachment(
-                phone=phone,
-                text=personalised_msg,
-                attachment_url=att_url or None,
-                attachment_type=att_type if att_url else "none",
-                attachment_filename=att_name,
-            )
-            wa_id = (result.get("key") or {}).get("id") or result.get("id", "")
-            await db.whatsapp_scheduled.update_one(
-                {"scheduled_id": sched_id},
-                {"$set": {
-                    "status": "sent",
-                    "sent_at": datetime.now(timezone.utc).isoformat(),
-                    "wa_message_id": wa_id,
-                }},
-            )
-            sent += 1
+            res = await send_whatsapp(db, to=doc["phone"], text=personalised_msg, media=attachment_doc, kind="campaign",
+                                      contact_id=doc.get("contact_id") or "",
+                                      ref={"campaign_id": campaign_id, "scheduled_id": sched_id,
+                                           "writeback": "whatsapp_scheduled",
+                                           "dedup_key": f"camp:{campaign_id}:{sched_id}"})
         except Exception as exc:
-            logger.error(f"Evolution send failed for {sched_id} ({phone}): {exc}")
-            await db.whatsapp_scheduled.update_one(
-                {"scheduled_id": sched_id},
-                {"$set": {"status": "failed", "error": str(exc)[:200]}},
-            )
-            failed += 1
-
-        await asyncio.sleep(send_delay)  # rate-limit: don't flood WhatsApp
-
-    # Final campaign status update
-    final_status = "sent" if sent > 0 else ("failed" if failed == len(sched_ids) else "queued")
-    await db.whatsapp_campaigns.update_one(
-        {"campaign_id": campaign_id},
-        {"$set": {
-            "status": final_status,
-            "sent_count": sent,
-            "failed_count": failed,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        }},
-    )
-    logger.info(f"Campaign {campaign_id} complete — sent={sent} failed={failed}")
+            res = {"status": "failed", "message_id": "", "reason": str(exc)[:200]}
+        counts[res["status"]] = counts.get(res["status"], 0) + 1
+        upd = {"message": personalised_msg, "status": res["status"], "wa_msg_id": res.get("message_id", ""),
+               "error": res.get("reason", "")}
+        if res["status"] == "sent":
+            upd["sent_at"] = datetime.now(timezone.utc).isoformat()
+        await db.whatsapp_scheduled.update_one({"scheduled_id": sched_id}, {"$set": upd})
+        await db.whatsapp_campaigns.update_one({"campaign_id": campaign_id},
+                                               {"$inc": {field.get(res["status"], "failed_count"): 1}})
+    # sent_count = actually sent; a queued row stays in queued_count until the drainer settles it
+    # (services.wa_send._writeback_scheduled moves it across and closes the campaign then).
+    camp = await db.whatsapp_campaigns.find_one({"campaign_id": campaign_id}, {"_id": 0}) or {}
+    await db.whatsapp_campaigns.update_one({"campaign_id": campaign_id}, {"$set": {
+        "status": campaign_final_status(camp), "updated_at": datetime.now(timezone.utc).isoformat()}})
+    logger.info(f"Campaign {campaign_id} complete — {counts}")
 
 
 # ── Analytics endpoint ─────────────────────────────────────────────────────────
@@ -714,180 +668,16 @@ async def get_queue(request: Request):
     return await db.whatsapp_scheduled.find(filt, {"_id": 0}).sort("queued_at", -1).to_list(300)
 
 
-# ── Evolution API — Instance management ───────────────────────────────────────
-
-@router.post("/whatsapp/instance/create")
-async def wa_instance_create(request: Request):
-    """Create the Evolution API WhatsApp instance and return QR code."""
-    await get_current_user(request)
-    try:
-        result = await evolution.create_instance()
-        return {"ok": True, "instance": result}
-    except Exception as e:
-        # Instance may already exist — return current status instead
-        try:
-            status = await evolution.get_status()
-            return {"ok": True, "instance": status, "note": "already exists"}
-        except Exception:
-            raise HTTPException(502, f"Evolution API unreachable: {e}")
-
-
-@router.get("/whatsapp/instance/qr")
-async def wa_instance_qr(request: Request):
-    """Fetch the current QR code (base64 PNG) for WhatsApp scanning."""
-    await get_current_user(request)
-    try:
-        data = await evolution.get_qr()
-        return data  # { code, base64 }
-    except Exception as e:
-        raise HTTPException(502, f"Could not fetch QR: {e}")
-
+# ── Company number state (read-only) ──────────────────────────────────────────
+# Instance management moved to routes/wa_routes.py (/wa/me*, /wa/instances*), which is
+# owner/admin-gated. This read-only route stays for MarketingHub's connection badge.
 
 @router.get("/whatsapp/instance/status")
 async def wa_instance_status(request: Request):
-    """Return connection state: open | connecting | close."""
     await get_current_user(request)
-    try:
-        data = await evolution.get_status()
-        state = (data.get("instance") or data).get("state", "close")
-        return {"state": state, "connected": state == "open", "instance": evolution.instance}
-    except Exception:
-        return {"state": "close", "connected": False, "instance": evolution.instance}
-
-
-@router.delete("/whatsapp/instance/logout")
-async def wa_instance_logout(request: Request):
-    """Log out the WhatsApp Web session."""
-    await get_current_user(request)
-    try:
-        result = await evolution.logout()
-        return {"ok": True, **result}
-    except Exception as e:
-        raise HTTPException(502, f"Logout failed: {e}")
-
-
-@router.get("/whatsapp/instances")
-async def wa_list_instances(request: Request):
-    """List all Evolution API instances."""
-    await get_current_user(request)
-    try:
-        async with httpx.AsyncClient(timeout=15) as c:
-            r = await c.get(
-                f"{evolution.base}/instance/fetchInstances",
-                headers={"apikey": evolution._headers["apikey"]},
-            )
-            r.raise_for_status()
-            return r.json()
-    except Exception as e:
-        return []
-
-
-@router.post("/whatsapp/instances/{instance_name}")
-async def wa_create_named_instance(request: Request, instance_name: str):
-    """Create a named Evolution API instance."""
-    await get_current_user(request)
-    try:
-        async with httpx.AsyncClient(timeout=15) as c:
-            r = await c.post(
-                f"{evolution.base}/instance/create",
-                headers={**evolution._headers},
-                json={"instanceName": instance_name, "qrcode": True, "integration": "WHATSAPP-BAILEYS"},
-            )
-            r.raise_for_status()
-            return {"ok": True, "instance": r.json()}
-    except Exception as e:
-        raise HTTPException(502, f"Create failed: {e}")
-
-
-@router.delete("/whatsapp/instances/{instance_name}")
-async def wa_delete_named_instance(request: Request, instance_name: str):
-    """Delete a named Evolution API instance."""
-    await get_current_user(request)
-    try:
-        async with httpx.AsyncClient(timeout=15) as c:
-            r = await c.delete(
-                f"{evolution.base}/instance/delete/{instance_name}",
-                headers={**evolution._headers},
-            )
-            r.raise_for_status()
-            return {"ok": True}
-    except Exception as e:
-        raise HTTPException(502, f"Delete failed: {e}")
-
-
-@router.get("/whatsapp/instances/{instance_name}/qr")
-async def wa_named_instance_qr(request: Request, instance_name: str):
-    """Get QR for a specific named instance."""
-    await get_current_user(request)
-    try:
-        async with httpx.AsyncClient(timeout=15) as c:
-            r = await c.get(
-                f"{evolution.base}/instance/connect/{instance_name}",
-                headers={**evolution._headers},
-            )
-            r.raise_for_status()
-            return r.json()
-    except Exception as e:
-        raise HTTPException(502, f"QR fetch failed: {e}")
-
-
-@router.get("/whatsapp/instances/{instance_name}/status")
-async def wa_named_instance_status(request: Request, instance_name: str):
-    """Get connection status for a specific named instance."""
-    await get_current_user(request)
-    try:
-        async with httpx.AsyncClient(timeout=15) as c:
-            r = await c.get(
-                f"{evolution.base}/instance/connectionState/{instance_name}",
-                headers={**evolution._headers},
-            )
-            r.raise_for_status()
-            data = r.json()
-            state = (data.get("instance") or data).get("state", "close")
-            return {"state": state, "connected": state == "open", "instance": instance_name}
-    except Exception:
-        return {"state": "close", "connected": False, "instance": instance_name}
-
-
-@router.get("/whatsapp/proxy/{instance_name}")
-async def wa_get_proxy(request: Request, instance_name: str):
-    """Get proxy config for an Evolution instance."""
-    await get_current_user(request)
-    try:
-        async with httpx.AsyncClient(timeout=15) as c:
-            r = await c.get(
-                f"{evolution.base}/proxy/find/{instance_name}",
-                headers={**evolution._headers},
-            )
-            r.raise_for_status()
-            return r.json() or {}
-    except Exception:
-        return {}
-
-
-@router.post("/whatsapp/proxy/{instance_name}")
-async def wa_set_proxy(request: Request, instance_name: str):
-    """Set SOCKS5 proxy for an Evolution instance to bypass IP restrictions."""
-    await get_current_user(request)
-    body = await request.json()
-    try:
-        async with httpx.AsyncClient(timeout=15) as c:
-            r = await c.post(
-                f"{evolution.base}/proxy/set/{instance_name}",
-                headers={**evolution._headers},
-                json={
-                    "enabled": body.get("enabled", True),
-                    "host": body.get("host", ""),
-                    "port": str(body.get("port", "1080")),
-                    "protocol": body.get("protocol", "socks5"),
-                    "username": body.get("username", ""),
-                    "password": body.get("password", ""),
-                },
-            )
-            r.raise_for_status()
-            return {"ok": True, "proxy": r.json()}
-    except Exception as e:
-        raise HTTPException(502, f"Proxy set failed: {e}")
+    inst = await db.wa_instances.find_one({"kind": "company"}, {"_id": 0, "instance_name": 1, "state": 1}) or {}
+    state = {"connected": "open", "qr": "connecting"}.get(inst.get("state"), "close")
+    return {"state": state, "connected": state == "open", "instance": inst.get("instance_name", "")}
 
 
 # ── Attachment upload ──────────────────────────────────────────────────────────
@@ -943,53 +733,6 @@ async def wa_upload_attachment(request: Request, file: UploadFile = File(...)):
 async def wa_list_attachments(request: Request):
     await get_current_user(request)
     return await db.whatsapp_attachments.find({}, {"_id": 0}).sort("uploaded_at", -1).to_list(100)
-
-
-# ── Evolution API webhook (no auth — called by Evolution API server) ───────────
-
-@router.post("/webhooks/whatsapp/{event_name:path}")
-@router.post("/webhooks/whatsapp")
-async def wa_webhook(request: Request, event_name: str = ""):
-    """
-    Receives delivery/connection events from Evolution API.
-    Silently accepts all payloads and updates message statuses.
-    """
-    try:
-        payload = await request.json()
-    except Exception:
-        return JSONResponse({"ok": True})
-
-    event = payload.get("event", "")
-
-    # Message delivery update: MESSAGES_UPDATE
-    if event in ("messages.update", "MESSAGES_UPDATE"):
-        for update in (payload.get("data") or []):
-            key    = update.get("key", {})
-            status_raw = (update.get("update") or {}).get("status", "")
-            wa_id  = key.get("id", "")
-            # Evolution status → our status
-            status_map = {
-                "PENDING": "pending", "SERVER_ACK": "sent",
-                "DELIVERY_ACK": "delivered", "READ": "read", "PLAYED": "read",
-                "ERROR": "failed",
-            }
-            new_status = status_map.get(status_raw.upper(), "")
-            if wa_id and new_status:
-                await db.whatsapp_scheduled.update_many(
-                    {"wa_message_id": wa_id},
-                    {"$set": {"status": new_status, "updated_at": datetime.now(timezone.utc).isoformat()}},
-                )
-
-    # Connection state change: CONNECTION_UPDATE
-    if event in ("connection.update", "CONNECTION_UPDATE"):
-        state = (payload.get("data") or {}).get("state", "")
-        await db.settings.update_one(
-            {"type": "wa_connection"},
-            {"$set": {"state": state, "updated_at": datetime.now(timezone.utc).isoformat()}},
-            upsert=True,
-        )
-
-    return JSONResponse({"ok": True})
 
 
 # ── WhatsApp Provider Settings ─────────────────────────────────────────────────

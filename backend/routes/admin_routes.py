@@ -1519,45 +1519,54 @@ async def run_auto_reminders():
                 )
                 await _push_admins("🎉 School Anniversary", s["school_name"], "/leads", "anniversary")
 
-            # ── Scheduled WhatsApp messages ──────────────────────────────
+            # ── Scheduled WhatsApp messages (+ greetings queued below) ───
+            # Through the one door (W1, D3). Only schedule_id rows are ours; scheduled_id rows
+            # belong to scheduler.process_wa_queue. Claimed pending -> sending before sending.
+            from services.wa_send import send_whatsapp as _send_wa_one
+            from scheduler import prepare_wa_scheduled   # legacy expiry, 7-day floor, stuck sweep
+            await prepare_wa_scheduled(db)
             now_iso_full = datetime.now(timezone.utc).isoformat()
             due_scheduled = await db.whatsapp_scheduled.find(
-                {"status": "pending", "scheduled_at": {"$lte": now_iso_full}},
-                {"_id": 0}
-            ).to_list(100)
-
-            wa_cfg = await db.settings.find_one({"type": "whatsapp"}, {"_id": 0})
+                {"status": "pending", "schedule_id": {"$exists": True}, "is_demo": {"$ne": True},
+                 "scheduled_at": {"$lte": now_iso_full}},
+                {"_id": 0}).to_list(100)
             for sched in due_scheduled:
+                claimed = await db.whatsapp_scheduled.update_one(
+                    {"schedule_id": sched["schedule_id"], "status": "pending"},
+                    {"$set": {"status": "sending", "claimed_at": now_iso_full}, "$inc": {"claim_count": 1}})
+                if getattr(claimed, "modified_count", 0) != 1:
+                    continue
                 phone = sched.get("phone", "")
                 message = sched.get("message", "")
-                new_status = "failed"
-                if phone and message and wa_cfg and wa_cfg.get("username"):
-                    try:
-                        import httpx as _httpx
-                        async with _httpx.AsyncClient(timeout=15) as client:
-                            resp = await client.post(
-                                "https://app.messageautosender.com/message/new",
-                                data={"username": wa_cfg["username"], "password": wa_cfg["password"],
-                                      "receiverMobileNo": phone, "message": message},
-                            )
-                        new_status = "sent" if 200 <= resp.status_code < 300 else "failed"
-                    except Exception:
-                        new_status = "failed"
+                is_greeting = bool(sched.get("rule_id"))
+                try:
+                    res = await _send_wa_one(
+                        db, to=phone, text=message, kind="greeting" if is_greeting else "scheduled",
+                        # `writeback`: a `queued` outcome is settled on this row, its greeting log
+                        # and its whatsapp_logs entry by the wa_messages drainer when it sends.
+                        ref={"schedule_id": sched["schedule_id"], "rule_id": sched.get("rule_id"),
+                             "writeback": "whatsapp_scheduled"},
+                        owner_email=None if is_greeting else (sched.get("created_by") or None),
+                        typed_by=None if is_greeting else sched.get("created_by"),
+                        contact_id=sched.get("contact_id") or "", lead_id=sched.get("lead_id") or "",
+                        enforce_consent=is_greeting)
+                except Exception as exc:
+                    res = {"status": "failed", "message_id": "", "reason": str(exc)[:200]}
+                new_status = res["status"]
                 await db.whatsapp_scheduled.update_one(
                     {"schedule_id": sched["schedule_id"]},
-                    {"$set": {"status": new_status, "sent_at": now_iso_full}}
-                )
+                    {"$set": {"status": new_status, "sent_at": now_iso_full, "wa_msg_id": res.get("message_id", ""),
+                              "error": res.get("reason", "")}})
+                if is_greeting:
+                    await db.greeting_logs.update_one(
+                        {"rule_id": sched["rule_id"], "contact_id": sched.get("contact_id"),
+                         "year": int(now_iso_full[:4])},
+                        {"$set": {"status": new_status, "wa_msg_id": res.get("message_id", "")}})
                 await db.whatsapp_logs.insert_one({
-                    "log_id": f"wal_{uuid.uuid4().hex[:10]}",
-                    "template_id": sched.get("template_id"),
-                    "phone": phone,
-                    "body": message,
-                    "lead_id": sched.get("lead_id"),
-                    "send_mode": "scheduled",
-                    "status": new_status,
-                    "sent_by": sched.get("created_by", "system"),
-                    "sent_at": now_iso_full,
-                })
+                    "log_id": f"wal_{uuid.uuid4().hex[:10]}", "template_id": sched.get("template_id"),
+                    "phone": phone, "body": message, "lead_id": sched.get("lead_id"), "send_mode": "scheduled",
+                    "status": new_status, "wa_message_id": res.get("message_id", ""),
+                    "sent_by": sched.get("created_by", "system"), "sent_at": now_iso_full})
 
             # NOTE: drip sequence step advancement used to run here. Removed —
             # it duplicated backend/scheduler.py's real drip executor (which
@@ -1572,11 +1581,15 @@ async def run_auto_reminders():
 
             # ── Greeting rules auto-fire (festival + birthday WhatsApp) ─────
             this_year = int(today[:4])
+            # Rollout step 2: greetings stay off WhatsApp until W3's single engine; the owner can
+            # switch them on in Settings -> WhatsApp (wa.greetings_enabled).
+            from services.wa_config import get_wa_settings as _wa_settings
+            greetings_on = (await _wa_settings(db)).get("greetings_enabled")
 
-            active_greeting_rules = await db.greeting_rules.find(
+            active_greeting_rules = (await db.greeting_rules.find(
                 {"is_active": True, "trigger": "fixed_date", "fixed_date": today_mmdd},
                 {"_id": 0}
-            ).to_list(10)
+            ).to_list(10)) if greetings_on else []
 
             greetings_queued = 0
             for grule in active_greeting_rules:
@@ -1648,9 +1661,9 @@ async def run_auto_reminders():
                     greetings_queued += rule_queued
 
             # Birthday greetings via greeting_rules (WhatsApp, deduped per year)
-            bday_grule = await db.greeting_rules.find_one(
+            bday_grule = (await db.greeting_rules.find_one(
                 {"is_active": True, "trigger": "birthday"}, {"_id": 0}
-            )
+            )) if greetings_on else None
             if bday_grule:
                 bday_for_greet = await db.contacts.find(
                     {"birthday": {"$regex": f"-{today_mmdd}$"},

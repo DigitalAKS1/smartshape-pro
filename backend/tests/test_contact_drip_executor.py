@@ -9,7 +9,7 @@ raised KeyError on `enr["lead_id"]` every hour forever (swallowed by the
 executor's blanket except, so it never advanced and never said why).
 
 No outward side effects: mongomock for every db handle the executor reaches,
-SMTP and the WhatsApp sender replaced by recorders, `notify_user` (bell + push)
+SMTP replaced by a recorder, WhatsApp sent to the `fake_evolution` recorder, `notify_user` (bell + push)
 replaced, and the real smtplib / httpx entry points booby-trapped so anything
 that slips past the stubs fails the test instead of sending.
 
@@ -41,10 +41,12 @@ SCHOOL_OWNER = "vivek@smartshape.in"
 
 
 @pytest.fixture()
-def env(monkeypatch):
+def env(monkeypatch, fake_evolution):
     d = AsyncMongoMockClient()["smartshape_test"]
     for mod in (crm, drip, sched, engagement):
         monkeypatch.setattr(mod, "db", d, raising=False)
+    from wa_fixtures import wire_wa
+    wire_wa(monkeypatch, d, fake_evolution)
     monkeypatch.setattr(rbac, "MODULE_RBAC_MODE", "enforce", raising=False)
 
     sent = {"email": [], "wa": [], "notify": [], "errors": []}
@@ -53,17 +55,18 @@ def env(monkeypatch):
                    body_html=None, reply_to=None):
         sent["email"].append({"to": to_email, "subject": subject, "body": body})
 
-    async def _fake_wa(cfg, to_phone, message):
-        if sent.get("wa_raises"):
-            raise RuntimeError("provider rejected the message")
-        sent["wa"].append({"to": to_phone, "text": message})
+    # WhatsApp goes through services.wa_send.send_whatsapp to the fake Evolution server;
+    # record what it was asked to send (the 10-digit national number, as the tests expect).
+    async def _rec(s):
+        sent["wa"].append({"to": s["number"][2:], "text": s["text"]})
+    fake_evolution.on_send = _rec
+    fake_evolution.fail_if = lambda: bool(sent.get("wa_raises"))
 
     async def _fake_notify(email, **kw):
         sent["notify"].append({"email": email, **kw})
         return "n1"
 
     monkeypatch.setattr(sched, "_smtp_send", _fake_smtp)
-    monkeypatch.setattr(sched, "_send_wa", _fake_wa)
     monkeypatch.setattr(sched, "notify_user", _fake_notify)
 
     # Anything that gets past the stubs must fail loudly, never send.
@@ -95,7 +98,8 @@ PAST = (NOW - timedelta(minutes=5)).isoformat()
 async def _providers(db):
     await db.settings.insert_one({"type": "email", "sender_email": "hello@smartshape.in",
                                   "gmail_app_password": "x", "sender_name": "SmartShape"})
-    await db.settings.insert_one({"type": "whatsapp_provider", "provider": "meta", "api_key": "k"})
+    from wa_fixtures import seed_wa
+    await seed_wa(db, settings={"drip_wa_enabled": True})
 
 
 async def _school(db, *, wa_consent=False):

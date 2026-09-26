@@ -117,6 +117,41 @@ async def _wait_for_db_ready(target_db, timeout_s: float = _WAIT_TIMEOUT_S,
             return
 
 
+async def ensure_wa_indexes(target_db):
+    """WhatsApp collections (spec 2026-09-24, W1). All via _i(): an index that cannot be built
+    over existing data logs and moves on instead of crashing startup."""
+    # D9: one row per (instance, provider message id). PARTIAL: queued/skipped/failed rows have
+    # no provider id yet, and a plain unique index would reject the second such row.
+    await _i(target_db.wa_messages.create_index(
+        [("instance_name", 1), ("provider_msg_id", 1)], unique=True,
+        partialFilterExpression={"provider_msg_id": {"$type": "string"}}, background=True))
+    await _i(target_db.wa_messages.create_index("message_id", unique=True, background=True))
+    await _i(target_db.wa_messages.create_index([("chat_id", 1), ("created_at", -1)], background=True))
+    await _i(target_db.wa_messages.create_index([("contact_id", 1), ("created_at", -1)], background=True))
+    await _i(target_db.wa_messages.create_index([("school_id", 1), ("created_at", -1)], background=True))
+    await _i(target_db.wa_messages.create_index(     # queue drainer claim (due, oldest first)
+        [("status", 1), ("instance_name", 1), ("send_after", 1), ("created_at", 1)], background=True))
+    await _i(target_db.wa_messages.create_index(     # stale-`sending` sweeper
+        [("status", 1), ("sending_at", 1)], background=True))
+    await _i(target_db.wa_messages.create_index(     # one marketing message per contact per number per day
+        [("instance_name", 1), ("to_jid", 1), ("sent_day", 1)], background=True))
+    await _i(target_db.wa_chats.create_index([("instance_name", 1), ("last_message_at", -1)], background=True))
+    await _i(target_db.wa_chats.create_index("contact_id", background=True))
+    await _i(target_db.wa_send_ledger.create_index([("instance_name", 1), ("day", 1)], unique=True, background=True))
+    await _i(target_db.wa_instances.create_index("instance_name", unique=True, background=True))
+    await _i(target_db.wa_instances.create_index("owner_email", background=True))
+    await _i(target_db.wa_instances.create_index("phone_e164", background=True))
+    await _i(target_db.wa_number_cache.create_index("phone_e164", unique=True, background=True))
+    await _i(target_db.wa_opt_outs.create_index("phone_e164", background=True))
+    await _i(target_db.wa_events_raw.create_index([("instance_name", 1), ("received_at", -1)], background=True))
+    # TTLs need a real datetime field. Raw inbound events are kept 30 days (W2 back-fills from
+    # them); a receipt parked for a row still `sending` is useless after a day.
+    await _i(target_db.wa_events_raw.create_index("received_at", expireAfterSeconds=30 * 86400, background=True))
+    await _i(target_db.wa_receipts_pending.create_index("at", expireAfterSeconds=86400, background=True))
+    await _i(target_db.wa_receipts_pending.create_index([("instance_name", 1), ("provider_msg_id", 1)],
+                                                        background=True))
+
+
 async def connect_db():
     """Called on startup — creates indexes (best-effort) and verifies connection.
 
@@ -331,6 +366,9 @@ async def connect_db():
     await _i(db.engagement_events.create_index([("lead_id", 1), ("at", -1)], background=True))
     await _i(db.engagement_events.create_index([("contact_id", 1), ("at", -1)], background=True))
     await _i(db.engagement_events.create_index("dedup_key", unique=True, sparse=True, background=True))
+
+    # ── WhatsApp team numbers (spec 2026-09-24, W1) ───────────────────────────
+    await ensure_wa_indexes(db)
 
     logging.info("Database indexes created/verified (%d collections indexed)", 32)
 

@@ -87,7 +87,9 @@ async def _exec_send_message(action, flow, stage):
     notif_id = _gen_id("fanotif")
     results = []
     if "whatsapp" in channels and phone:
-        ok, _ = await _fms_send_wa(phone, text); results.append(ok)
+        # A customer message goes from the flow's lead/school owner's number (D2); staff: company.
+        links = {} if to == "staff" else {"lead_id": flow.get("lead_id") or "", "school_id": flow.get("school_id") or ""}
+        ok, _ = await _fms_send_wa(phone, text, kind="alert" if to == "staff" else "fms", **links); results.append(ok)
     if "email" in channels and email and "@" in email:
         ok, _ = await _fms_send_email(email, "Update", text); results.append(ok)
     if results and not any(results):

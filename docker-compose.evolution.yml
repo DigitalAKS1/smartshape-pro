@@ -1,77 +1,31 @@
-version: '3.8'
-
-# ────────────────────────────────────────────────────────────────────
-# SmartShape — Evolution API WhatsApp Stack (with built-in Tor proxy)
+# SmartShape — Evolution API (WhatsApp) stack. Spec 2026-09-24, W1 / D6.
 #
-# Usage:
-#   1. Copy .env.evolution.example → .env.evolution and fill in values
-#   2. docker compose -f docker-compose.evolution.yml up -d --build
-#   3. Open SmartShape → Marketing → WhatsApp Setup → Connect → scan QR
+# The image is PINNED to evoapicloud/evolution-api:v2.3.7 so a redeploy from this file can never
+# bring back atendai v2.2.3 (the build whose instances stuck at "connecting"). The old official
+# image (atendai/evolution-api) stops at 2.2.3; the project renamed its Docker Hub image to
+# evoapicloud/evolution-api starting at v2.3.0.
+# https://github.com/EvolutionAPI/evolution-api/releases
+# https://github.com/EvolutionAPI/evolution-api/blob/main/CHANGELOG.md
 #
-# Tor routes Baileys through a non-datacenter IP so WhatsApp accepts it.
-# No SSH proxy scripts needed — Tor runs as a container in this stack.
+# Run from /var/www/smartshape, with the SAME compose project the running stack already uses, so
+# the Postgres and session volumes are the SAME volumes (see docs/ops/evolution-upgrade-runbook.md,
+# step 1):
+#   export APP_NETWORK=<the backend's network>  EVO_PROJECT=<the evolution containers' project>
+#   docker compose -p "$EVO_PROJECT" -f docker-compose.evolution.yml up -d
+# NEVER pass --remove-orphans: the app's own containers can share the project name.
 #
-# To use a paid residential proxy instead (Settings → WhatsApp tab):
-#   Simply configure it in the app — it overrides the Tor routing.
-# ────────────────────────────────────────────────────────────────────
+# Changed from the old file: no warp / tor-sidecar (they routed WhatsApp through a blocked IP);
+# no Redis of its own (reuses smartshape-redis, db 6); port 8080 bound to 127.0.0.1 only; Evolution
+# also joins the app's network, so the backend reaches it as http://smartshape_evolution:8080.
 
 services:
 
-  # ── Cloudflare WARP proxy (free, bypasses WhatsApp VPS block) ──────
-  # Uses Cloudflare's legitimate network IPs — not blocked by WhatsApp.
-  # Falls back to residential proxy if PROXY_HOST is set in .env.evolution.
-  warp:
-    image: caomingjun/warp
-    container_name: smartshape_warp
-    restart: unless-stopped
-    cap_add:
-      - NET_ADMIN
-    sysctls:
-      - net.ipv6.conf.all.disable_ipv6=0
-      - net.ipv4.conf.all.src_valid_mark=1
-    networks:
-      - smartshape_net
-    healthcheck:
-      test: ["CMD", "curl", "-sx", "socks5h://127.0.0.1:1080", "https://ifconfig.io"]
-      interval: 15s
-      timeout: 10s
-      retries: 10
-      start_period: 30s
-
-  # ── Transparent proxy sidecar ─────────────────────────────────────
-  # Shares Evolution API's network namespace. Sets iptables OUTPUT
-  # rules so all Evolution TCP goes through redsocks → WARP / residential proxy.
-  tor-sidecar:
-    build:
-      context: .
-      dockerfile: Dockerfile.redsocks
-    container_name: smartshape_tor_sidecar
-    network_mode: "service:evolution-api"
-    cap_add:
-      - NET_ADMIN
-    environment:
-      # Residential proxy credentials (from .env.evolution) — if set, used instead of WARP
-      PROXY_HOST: ${PROXY_HOST:-}
-      PROXY_PORT: ${PROXY_PORT:-10001}
-      PROXY_USER: ${PROXY_USER:-}
-      PROXY_PASS: ${PROXY_PASS:-}
-      # WARP fallback (used when PROXY_HOST is empty)
-      TOR_HOST: warp
-      TOR_PORT: "1080"
-    depends_on:
-      evolution-api:
-        condition: service_started
-      warp:
-        condition: service_healthy
-    restart: unless-stopped
-
-  # ── Evolution API ─────────────────────────────────────────────────
   evolution-api:
-    image: atendai/evolution-api:v2.2.3
+    image: evoapicloud/evolution-api:v2.3.7
     container_name: smartshape_evolution
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     env_file:
       - .env.evolution
     volumes:
@@ -80,44 +34,25 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
-        condition: service_healthy
     networks:
       - smartshape_net
+      - app
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080"]
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 20s
+      start_period: 30s
 
-  # ── Redis ─────────────────────────────────────────────────────────
-  redis:
-    image: redis:7-alpine
-    container_name: smartshape_redis_wa
-    restart: unless-stopped
-    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
-    volumes:
-      - redis_data:/data
-    networks:
-      - smartshape_net
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-
-  # ── PostgreSQL ────────────────────────────────────────────────────
   postgres:
     image: postgres:15-alpine
     container_name: smartshape_postgres_wa
     restart: unless-stopped
     env_file:
-      - .env.evolution
+      - .env.evolution          # POSTGRES_PASSWORD comes from here (only read when the volume is empty)
     environment:
-      POSTGRES_DB:       evolution
-      POSTGRES_USER:     evolution
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: evolution
+      POSTGRES_USER: evolution
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
@@ -131,10 +66,12 @@ services:
 volumes:
   evolution_instances:
   evolution_store:
-  redis_data:
   postgres_data:
 
 networks:
   smartshape_net:
     name: smartshape_net
     driver: bridge
+  app:
+    name: ${APP_NETWORK:-smartshape_default}
+    external: true

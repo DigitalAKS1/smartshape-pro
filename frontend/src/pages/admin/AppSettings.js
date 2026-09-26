@@ -16,7 +16,7 @@ import KeepInTouchSection from '../../components/settings/KeepInTouchSection';
 import BalanceReminderSection from '../../components/settings/BalanceReminderSection';
 import OrdersReportSection from '../../components/settings/OrdersReportSection';
 import SchoolPortalSection from '../../components/settings/SchoolPortalSection';
-import WhatsAppConnectionSection from '../../components/settings/WhatsAppConnectionSection';
+import WhatsAppNumbersSection from '../../components/settings/WhatsAppNumbersSection';
 import CallingSection from '../../components/settings/CallingSection';
 import SecurityTab from '../../components/settings/SecurityTab';
 import IntegrationsOverview from '../../components/settings/IntegrationsOverview';
@@ -56,14 +56,15 @@ const ALL_ITEMS = GROUPS.flatMap(g => g.items);
 const titleFor = (id) => (ALL_ITEMS.find(i => i.id === id) || {}).label || 'Settings';
 
 export default function AppSettings() {
-  const s = useAppSettings();
-  const status = s.integrationStatus || {};
   const isOwner = useIsOwner();
 
   // Drop owner-only entries for everyone else, and drop a group that empties out.
   const groups = GROUPS
     .map(g => ({ ...g, items: g.items.filter(i => !i.ownerOnly || isOwner) }))
     .filter(g => g.items.length > 0);
+  // `?tab=` must name one of these; anything else opens the default tab.
+  const s = useAppSettings({ tabs: groups.flatMap(g => g.items.map(i => i.id)) });
+  const status = s.integrationStatus || {};
 
   const textPri = 'text-[var(--text-primary)]';
   const textSec = 'text-[var(--text-secondary)]';
@@ -144,7 +145,7 @@ export default function AppSettings() {
 
             {s.activeTab === 'whatsapp' && (
               <div className="mb-4">
-                <WhatsAppConnectionSection />
+                <WhatsAppNumbersSection />
               </div>
             )}
 

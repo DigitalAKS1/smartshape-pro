@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Sun, Moon, X, LogOut, CalendarDays, ChevronDown } from 'lucide-react';
+import { Sun, Moon, X, LogOut, CalendarDays, ChevronDown, MessageCircle } from 'lucide-react';
 import { useTheme } from '../../contexts/ThemeContext';
 import NotificationBell from './NotificationBell';
 import { TODAY_ITEM } from './AdminNavItems';
@@ -187,6 +187,16 @@ export default function AdminSidebar({ sidebarGroups, user, initials, onClose, o
             <p className="text-[12px] font-semibold text-[var(--text-primary)] truncate leading-tight">{user?.name}</p>
             <p className="text-[10px] text-[var(--text-muted)] truncate leading-tight capitalize">{user?.role || 'Admin'}</p>
           </div>
+          <Link
+            to="/me/whatsapp"
+            onClick={onClose}
+            className="w-7 h-7 rounded-lg flex items-center justify-center text-[var(--text-muted)] hover:text-green-600 hover:bg-green-50 transition-colors flex-shrink-0"
+            title="My WhatsApp"
+            aria-label="My WhatsApp"
+            data-testid="my-whatsapp-link"
+          >
+            <MessageCircle className="h-3.5 w-3.5" />
+          </Link>
           <button
             onClick={onLogout}
             className="w-7 h-7 rounded-lg flex items-center justify-center text-[var(--text-muted)] hover:text-red-500 hover:bg-red-50 transition-colors flex-shrink-0"

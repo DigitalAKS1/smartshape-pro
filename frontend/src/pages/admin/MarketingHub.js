@@ -5,15 +5,15 @@ import {
   dripSequences as dripApi, greetingRules as greetingsApi,
   whatsApp as waApi, tags as tagsApi, demo as demoApi,
 } from '../../lib/api';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '../../components/ui/dialog';
-import { Button } from '../../components/ui/button';
 import { toast } from 'sonner';
 import {
   BarChart2, Megaphone, FileText, Gift, Zap, PieChart, Mail,
-  Wifi, QrCode, RefreshCw, Loader2, Smartphone as PhoneIcon, Target,
+  Wifi, QrCode, Smartphone as PhoneIcon, Target,
 } from 'lucide-react';
 
 import { useTk, mapCampaign, mapRule, mapSeq } from '../../lib/marketingUtils';
+import { waLinkTarget } from '../../lib/waStatus';
+import { useTeam } from '../../hooks/usePermission';
 import OverviewTab    from '../../components/marketing/OverviewTab';
 import CampaignsTab  from '../../components/marketing/CampaignsTab';
 import TemplatesTab  from '../../components/marketing/TemplatesTab';
@@ -38,13 +38,12 @@ const TABS = [
 
 export default function MarketingHub() {
   const tk = useTk();
+  // Admin test as the backend's (_is_admin: get_team == admin); useTeam mirrors get_team.
+  const waLink = waLinkTarget(useTeam() === 'admin');
 
   const [tab, setTab] = useState('overview');
   const [waConnected, setWaConnected] = useState(false);
   const [evolutionState, setEvolutionState] = useState('close');
-  const [qrDialog, setQrDialog] = useState(false);
-  const [qrData, setQrData] = useState(null);
-  const [qrLoading, setQrLoading] = useState(false);
 
   const [campaigns, setCampaigns] = useState([]);
   const [templates, setTemplates] = useState([]);
@@ -71,51 +70,9 @@ export default function MarketingHub() {
     }).catch(() => {});
   }
 
-  async function openQrDialog() {
-    setQrDialog(true);
-    setQrLoading(true);
-    setQrData(null);
-    try {
-      await waApi.instanceConnect().catch(() => {});
-      const r = await waApi.instanceQR();
-      setQrData(r.data);
-    } catch (err) {
-      const msg = err?.response?.data?.detail || '';
-      if (msg.includes('QR') || msg.includes('502')) {
-        toast.error('QR blocked — VPS IP flagged by WhatsApp. Go to Settings → WhatsApp to configure a residential SOCKS5 proxy.');
-      } else {
-        toast.error('Could not fetch QR — is Evolution API running?');
-      }
-    }
-    finally { setQrLoading(false); }
-  }
-
-  async function refreshQr() {
-    setQrLoading(true);
-    try {
-      const r = await waApi.instanceQR();
-      setQrData(r.data);
-    } catch { toast.error('Failed to refresh QR'); }
-    finally { setQrLoading(false); }
-  }
-
-  // Poll evolution status every 10s while QR dialog is open
-  useEffect(() => {
-    if (!qrDialog) return;
-    const iv = setInterval(async () => {
-      try {
-        const r = await waApi.instanceStatus();
-        const state = r.data?.state || 'close';
-        setEvolutionState(state);
-        if (state === 'open') {
-          setWaConnected(true);
-          setQrDialog(false);
-          toast.success('WhatsApp connected! Ready to send campaigns.');
-        }
-      } catch { /* ignore */ }
-    }, 10000);
-    return () => clearInterval(iv);
-  }, [qrDialog]); // eslint-disable-line
+  // Numbers are linked in Settings → WhatsApp (admins) or My WhatsApp (everyone else) since W1;
+  // every "Connect" button goes there.
+  const openQrDialog = () => { window.location.assign(waLink.href); };
 
   useEffect(() => { reload(); }, []); // eslint-disable-line
 
@@ -161,7 +118,7 @@ export default function MarketingHub() {
                 ? <Wifi className="h-3 w-3 text-green-600 flex-shrink-0" />
                 : <QrCode className="h-3 w-3 text-amber-600 flex-shrink-0" />}
               <span className={`text-[11px] font-semibold tracking-tight ${waConnected ? 'text-green-700' : 'text-amber-700'}`}>
-                {waConnected ? 'WhatsApp On' : 'Scan QR to Connect'}
+                {waConnected ? 'WhatsApp On' : (waLink.href === '/me/whatsapp' ? waLink.label : 'Scan QR to Connect')}
               </span>
             </button>
           </div>
@@ -201,81 +158,10 @@ export default function MarketingHub() {
           {tab === 'drips'     && <DripsTab      tk={tk} drips={drips} setDrips={setDrips} />}
           {tab === 'analytics' && <AnalyticsTab  tk={tk} analytics={analytics} campaigns={campaigns} />}
           {tab === 'engagement' && <EngagementDashboardTab />}
-          {tab === 'setup'     && <SetupTab      tk={tk} waConnected={waConnected} setWaConnected={setWaConnected} evolutionState={evolutionState} openQrDialog={openQrDialog} />}
+          {tab === 'setup'     && <SetupTab      tk={tk} waConnected={waConnected} setWaConnected={setWaConnected} evolutionState={evolutionState} openQrDialog={openQrDialog} connectLabel={waLink.label} />}
           {tab === 'email'     && <EmailHubTab   tk={tk} />}
         </div>
       </div>
-
-      {/* Evolution API QR Connect Dialog */}
-      <Dialog open={qrDialog} onOpenChange={setQrDialog}>
-        <DialogContent className={`${tk.card} border ${tk.bdr} w-[calc(100vw-2rem)] max-w-sm`}>
-          <DialogHeader>
-            <DialogTitle className={`flex items-center gap-2 ${tk.t1}`}>
-              <QrCode className="h-5 w-5 text-[var(--accent)]" />
-              Connect WhatsApp
-            </DialogTitle>
-            <DialogDescription className={tk.tm}>
-              Open WhatsApp on your phone → Linked Devices → Link a Device → scan QR
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="py-2 space-y-4">
-            <div className={`flex items-center justify-center rounded-2xl border-2 border-dashed ${tk.bdr} p-4 min-h-[200px]`}>
-              {qrLoading ? (
-                <div className="flex flex-col items-center gap-3">
-                  <Loader2 className="h-10 w-10 animate-spin text-[var(--accent)]" />
-                  <p className={`text-xs ${tk.tm}`}>Generating QR code…</p>
-                </div>
-              ) : qrData?.base64 ? (
-                <img src={qrData.base64} alt="WhatsApp QR" className="w-48 h-48 rounded-xl" />
-              ) : (
-                <div className="flex flex-col items-center gap-3 text-center max-w-xs">
-                  <PhoneIcon className="h-10 w-10 text-amber-400" />
-                  <p className={`text-sm font-semibold ${tk.t1}`}>QR Generation Blocked</p>
-                  <p className={`text-[11px] ${tk.tm} leading-relaxed`}>
-                    WhatsApp rejects connections from datacenter IPs. Configure a <strong>residential SOCKS5 proxy</strong> to fix this.
-                  </p>
-                  <a href="/settings" className="text-[11px] px-3 py-1.5 rounded-lg bg-amber-500/15 text-amber-600 hover:bg-amber-500/25 transition-colors font-medium">
-                    Go to Settings → WhatsApp →
-                  </a>
-                </div>
-              )}
-            </div>
-
-            <div className={`flex items-center gap-2 text-xs p-3 rounded-xl ${
-              evolutionState === 'open' ? 'bg-green-500/10 text-green-600' :
-              evolutionState === 'connecting' ? 'bg-blue-500/10 text-blue-600' :
-              'bg-amber-500/10 text-amber-600'
-            }`}>
-              <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
-                evolutionState === 'open' ? 'bg-green-500 animate-pulse' :
-                evolutionState === 'connecting' ? 'bg-blue-500 animate-pulse' :
-                'bg-amber-500'
-              }`} />
-              <span className="font-medium">
-                {evolutionState === 'open' ? 'Connected — closing dialog…' :
-                 evolutionState === 'connecting' ? 'Connecting to WhatsApp…' :
-                 'Waiting for QR scan…'}
-              </span>
-            </div>
-
-            <p className={`text-[11px] ${tk.tm} text-center`}>
-              QR expires in ~40 seconds. The dialog closes automatically once connected.
-            </p>
-          </div>
-
-          <DialogFooter className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={refreshQr} disabled={qrLoading}
-              className={`border-[var(--border-color)] ${tk.t2} gap-1.5`}>
-              <RefreshCw className={`h-3.5 w-3.5 ${qrLoading ? 'animate-spin' : ''}`} /> Refresh QR
-            </Button>
-            <Button variant="outline" size="sm" onClick={() => setQrDialog(false)}
-              className={`border-[var(--border-color)] ${tk.t2}`}>
-              Close
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </AppShell>
   );
 }
