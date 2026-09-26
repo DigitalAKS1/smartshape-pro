@@ -17,6 +17,7 @@ from services import wa_send
 from services.evolution_client import EvolutionError, instance_token, webhook_url
 from services.wa_config import (COMPANY_INSTANCE, PRIVACY_NOTICE, RAM_HEADROOM_MIN_MB, SLOT_STATES,
                                 WaSettingsError, get_wa_settings, rep_instance_name, save_wa_settings)
+from services.wa_inbox import _text_of
 
 router = APIRouter()
 log = logging.getLogger("wa_routes")
@@ -331,15 +332,7 @@ async def _park_receipt(name: str, pmid: str, new: str) -> None:
 
 
 # ── SEND_MESSAGE (sent from the phone) ────────────────────────────────────────
-
-def _text_of(message) -> str:
-    m = message if isinstance(message, dict) else {}
-    return str(m.get("conversation")
-               or (m.get("extendedTextMessage") or {}).get("text")
-               or (m.get("imageMessage") or {}).get("caption")
-               or (m.get("videoMessage") or {}).get("caption")
-               or (m.get("documentMessage") or {}).get("caption") or "")
-
+# `_text_of` moved to services.wa_inbox (W2 task 2) and is imported back at the top.
 
 async def _on_send_message(inst: dict, data) -> None:
     """A message this number sent. Our own API sends already have their row (wa_send._finish

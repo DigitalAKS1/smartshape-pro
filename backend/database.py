@@ -137,6 +137,15 @@ async def ensure_wa_indexes(target_db):
         [("instance_name", 1), ("to_jid", 1), ("sent_day", 1)], background=True))
     await _i(target_db.wa_chats.create_index([("instance_name", 1), ("last_message_at", -1)], background=True))
     await _i(target_db.wa_chats.create_index("contact_id", background=True))
+    # W2 inbox: one chat per (instance, remote jid); the inbox lists by status, newest first;
+    # filters by assignee / school / lead.
+    await _i(target_db.wa_chats.create_index("chat_id", unique=True, background=True))
+    await _i(target_db.wa_chats.create_index([("status", 1), ("last_message_at", -1)], background=True))
+    await _i(target_db.wa_chats.create_index("assignee_email", background=True))
+    await _i(target_db.wa_chats.create_index("school_id", background=True))
+    await _i(target_db.wa_chats.create_index("lead_id", background=True))
+    # W2 back-fill of the raw stub: unprocessed events, oldest first.
+    await _i(target_db.wa_events_raw.create_index([("processed", 1), ("received_at", 1)], background=True))
     await _i(target_db.wa_send_ledger.create_index([("instance_name", 1), ("day", 1)], unique=True, background=True))
     await _i(target_db.wa_instances.create_index("instance_name", unique=True, background=True))
     await _i(target_db.wa_instances.create_index("owner_email", background=True))
