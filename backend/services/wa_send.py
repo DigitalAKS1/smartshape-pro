@@ -394,12 +394,16 @@ async def wa_available(db) -> bool:
 # ── Per-number ledger (wa_send_ledger, one row per instance per IST day) ──────
 
 async def _ledger(db, name: str, now: datetime) -> dict:
+    from pymongo.errors import DuplicateKeyError
     day = ist_day(now)                                  # RF5: the IST date, never the UTC one
-    await db.wa_send_ledger.update_one(
-        {"instance_name": name, "day": day},
-        {"$setOnInsert": {"instance_name": name, "day": day, "sent_count": 0, "hour_bucket": {},
-                          "last_sent_at": None}},
-        upsert=True)
+    try:
+        await db.wa_send_ledger.update_one(
+            {"instance_name": name, "day": day},
+            {"$setOnInsert": {"instance_name": name, "day": day, "sent_count": 0, "hour_bucket": {},
+                              "last_sent_at": None}},
+            upsert=True)
+    except DuplicateKeyError:
+        pass        # the upsert race on the unique (instance_name, day) index: the other caller won
     return await db.wa_send_ledger.find_one({"instance_name": name, "day": day}, {"_id": 0}) or {}
 
 
@@ -440,6 +444,7 @@ async def _contacted_today(db, name: str, to_jid: str, now: datetime, cfg: dict)
 #   hourly cap                        queue      queue          queue         queue
 #   daily cap / warm-up                 –        queue          queue         queue
 #   one per contact per number per day  –          –              –           queue
+#     (except `greeting`: skip - a festival wish delivered tomorrow is wrong)
 #   jittered gap                        –        queue          queue         queue
 
 async def _policy(db, row: dict, inst: Optional[dict], cfg: dict, *, gap_s: Optional[float] = None):
@@ -480,6 +485,11 @@ async def _policy(db, row: dict, inst: Optional[dict], cfg: dict, *, gap_s: Opti
         if not to_staff and int(led.get("sent_count", 0)) >= daily_cap(inst, cfg, now):
             return "queue", "daily_cap", _tomorrow_open(now, cfg)
         if kind in MARKETING_KINDS and await _contacted_today(db, inst["instance_name"], row["to_jid"], now, cfg):
+            if kind == "greeting":
+                # A greeting is for today: refused, never carried over to tomorrow (both W1
+                # greeting engines may pick the same contact; the second must not wish them
+                # "happy birthday" a day late).
+                return "skip", "per_contact_per_day", None
             return "queue", "per_contact_per_day", _tomorrow_open(now, cfg)
         ok, opens_at = await _claim_gap(db, inst["instance_name"], now, cfg, gap_s)
         if not ok:
@@ -734,22 +744,39 @@ async def _mark_sent_minimal(db, message_id: str, row: dict) -> None:
 
 
 async def _writeback_scheduled(db, row: dict) -> None:
-    """A campaign row that was QUEUED (Task 9 fix 4): its `whatsapp_scheduled` row said `queued`
-    when the campaign task finished; when the drainer settles the message, the outcome goes back
-    onto that row (and the campaign's counters). Only a row still reading `queued` is touched,
-    so a direct send - whose caller writes the row itself - is never written twice."""
+    """A `whatsapp_scheduled` row that was QUEUED (Task 9 fix 4): its row said `queued` when its
+    drainer (the campaign task, scheduler.process_wa_queue, admin_routes.run_auto_reminders)
+    finished; when the wa_messages drainer settles the message, the outcome goes back onto that
+    row - keyed by `scheduled_id` (campaign / queue rows) or `schedule_id` (admin scheduled and
+    greeting rows) - onto its greeting log when there is a `rule_id`, and onto the campaign's
+    counters. Only a row still reading `queued` is touched, so a direct send - whose caller
+    writes the row itself - is never written twice."""
     ref = row.get("ref") or {}
-    sid = ref.get("scheduled_id")
+    key = "scheduled_id" if ref.get("scheduled_id") else "schedule_id"
+    sid = ref.get(key)
     if ref.get("writeback") != "whatsapp_scheduled" or not sid:
         return
     status = row["status"]
     upd = {"status": status, "wa_msg_id": row["message_id"], "error": row.get("fail_reason") or ""}
     if status == "sent":
         upd.update({"wa_message_id": row.get("provider_msg_id") or "", "sent_at": row.get("sent_at")})
-    res = await db.whatsapp_scheduled.update_one({"scheduled_id": sid, "status": "queued"}, {"$set": upd})
-    cid = ref.get("campaign_id")
-    if getattr(res, "modified_count", 0) != 1 or not cid:
+    res = await db.whatsapp_scheduled.update_one({key: sid, "status": "queued"}, {"$set": upd})
+    if getattr(res, "modified_count", 0) != 1:
         return
+    if ref.get("rule_id"):
+        # run_auto_reminders keys its greeting log on (rule, contact, year of the queueing pass)
+        year = int(str(row.get("created_at") or "")[:4] or _now().year)
+        await db.greeting_logs.update_one(
+            {"rule_id": ref["rule_id"], "contact_id": row.get("contact_id") or None, "year": year,
+             "status": "queued"},
+            {"$set": {"status": status, "wa_msg_id": row["message_id"]}})
+    await db.whatsapp_logs.update_one({"wa_message_id": row["message_id"], "status": "queued"},
+                                      {"$set": {"status": status}})
+    cid = ref.get("campaign_id")
+    if not cid:
+        return
+    # A queue row's campaign_id ("daily_digest", "form_<id>") matches no campaign: every write
+    # below is then a no-op.
     field = {"sent": "sent_count", "skipped": "skipped_count"}.get(status, "failed_count")
     await db.whatsapp_campaigns.update_one({"campaign_id": cid}, {"$inc": {"queued_count": -1, field: 1}})
     if not await db.whatsapp_scheduled.find_one(

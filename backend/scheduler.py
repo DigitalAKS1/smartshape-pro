@@ -370,6 +370,7 @@ async def process_wa_queue():
     now_iso = datetime.now(timezone.utc).isoformat()
     rows = await db.whatsapp_scheduled.find({
         "status": "pending", "scheduled_id": {"$exists": True}, "type": {"$ne": "campaign"},
+        "is_demo": {"$ne": True},                       # demo-seed rows carry fake numbers: never sent
         "$or": [{"scheduled_at": {"$exists": False}}, {"scheduled_at": None}, {"scheduled_at": {"$lte": now_iso}}],
     }, {"_id": 0}).limit(50).to_list(50)
     for msg in rows:
@@ -382,7 +383,10 @@ async def process_wa_queue():
         try:
             res = await send_whatsapp(
                 db, to=(msg.get("phone") or msg.get("to_phone") or ""), text=msg.get("message", ""), kind=kind,
-                ref={"scheduled_id": msg["scheduled_id"], "campaign_id": msg.get("campaign_id")},
+                # `writeback`: a `queued` outcome is settled on this row by the wa_messages
+                # drainer when it sends (wa_send._writeback_scheduled).
+                ref={"scheduled_id": msg["scheduled_id"], "campaign_id": msg.get("campaign_id"),
+                     "writeback": "whatsapp_scheduled"},
                 channel="company" if kind in ("digest", "alert") else "auto",
                 contact_id=msg.get("contact_id") or "", enforce_consent=False)
         except Exception as exc:
@@ -582,6 +586,7 @@ async def _drip_executor_pass():
             sent = False
             skipped = False          # refused on policy, not a send failure
             err_detail = ""
+            wa_message_id = ""       # the wa_messages row a WhatsApp step was accepted as (sent/queued)
 
             if msg_type == "physical_material":
                 try:
@@ -606,6 +611,7 @@ async def _drip_executor_pass():
                     school_id=lead.get("school_id") or "")
                 if res["status"] in ("sent", "queued"):
                     sent = True                      # queued = accepted; the drainer sends it in hours
+                    wa_message_id = res.get("message_id") or ""     # the key to the real outcome
                 elif res["status"] == "skipped" and res["reason"] in _WA_HOLD_REASONS:
                     # No number to send from (none linked, or it is down): the step is HELD like
                     # the off-switch - pushed an hour, no log, no failure - not closed.
@@ -689,6 +695,7 @@ async def _drip_executor_pass():
                 "message_type": msg_type,
                 "status": "sent" if sent else ("skipped" if skipped else "failed"),
                 "error": err_detail,
+                "wa_message_id": wa_message_id,
                 "fired_at": now_iso,
             })
 

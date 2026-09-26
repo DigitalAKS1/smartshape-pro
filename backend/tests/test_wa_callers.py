@@ -495,3 +495,133 @@ def test_the_migration_marker_is_written_only_after_the_expiry_succeeds(env, mon
         assert (await db.settings.find_one({"type": "wa_queue_migrated"}, {"_id": 0}))["expired"] == 1
         assert await sched.expire_legacy_wa_backlog(db) == 0                        # once only
     _run(go())
+
+
+# ── Final review fix wave ─────────────────────────────────────────────────────
+
+def test_a_queued_queue_row_is_settled_on_its_scheduled_row_when_the_drainer_sends_it(env):
+    # I-1: process_wa_queue hands a form auto-reply to the door at 20:00 IST -> queued; when the
+    # wa_messages drainer sends it next morning, whatsapp_scheduled must say `sent` too.
+    db = env.db
+
+    async def go():
+        import services.wa_send as ws
+        await seed_wa(db)
+        env.clock["now"] = AT_2000_IST
+        await db.whatsapp_scheduled.insert_one({"scheduled_id": "q1", "campaign_id": "form_f1", "status": "pending",
+                                                "phone": "9811111111", "message": "Thanks for your response"})
+        await sched.process_wa_queue()
+        row = await db.whatsapp_scheduled.find_one({"scheduled_id": "q1"}, {"_id": 0})
+        msg = await db.wa_messages.find_one({}, {"_id": 0})
+        assert (row["status"], row["wa_msg_id"], msg["status"]) == ("queued", msg["message_id"], "queued")
+        assert msg["ref"] == {"scheduled_id": "q1", "campaign_id": "form_f1", "writeback": "whatsapp_scheduled"}
+
+        env.clock["now"] = NEXT_1000_IST
+        await ws.run_wa_queue_pass(db, budget_s=5)
+        row = await db.whatsapp_scheduled.find_one({"scheduled_id": "q1"}, {"_id": 0})
+        assert (row["status"], row["wa_message_id"], row["error"]) == ("sent", "PMID1", "")
+        assert row["sent_at"] == NEXT_1000_IST.isoformat()
+        assert await db.whatsapp_campaigns.count_documents({}) == 0      # no campaign was invented
+    _run(go())
+
+
+class _StopLoop(Exception):
+    pass
+
+
+async def _one_admin_pass(monkeypatch, db):
+    """One iteration of admin_routes.run_auto_reminders (an endless loop that sleeps 60 s)."""
+    import routes.admin_routes as admin
+    monkeypatch.setattr(admin, "db", db, raising=False)
+
+    async def _noop(*a, **k):
+        pass
+    monkeypatch.setattr(admin, "_push", _noop)
+    monkeypatch.setattr(admin, "_push_admins", _noop)
+
+    async def _stop(_seconds):
+        raise _StopLoop()
+    monkeypatch.setattr(admin.asyncio, "sleep", _stop)
+    with pytest.raises(_StopLoop):
+        await admin.run_auto_reminders()
+
+
+def test_a_queued_admin_greeting_row_its_greeting_log_and_its_log_entry_are_settled_by_the_drainer(env, monkeypatch):
+    # I-1, the schedule_id path: run_auto_reminders queues a greeting at 20:00 IST; the drainer's
+    # send next morning settles whatsapp_scheduled (by schedule_id), greeting_logs and whatsapp_logs.
+    # M-5: a demo-seed schedule_id row is never handed to the door.
+    db = env.db
+
+    async def go():
+        import services.wa_send as ws
+        await seed_wa(db)
+        await db.settings.insert_one({"type": "notifications", "require_wa_consent": False})
+        env.clock["now"] = AT_2000_IST
+        await db.greeting_logs.insert_one({"log_id": "glog1", "rule_id": "gr1", "contact_id": "c1", "year": 2026,
+                                           "phone": "9811111111", "message": "Happy Diwali", "status": "queued"})
+        await db.whatsapp_scheduled.insert_many([
+            {"schedule_id": "greet_1", "phone": "9811111111", "message": "Happy Diwali", "status": "pending",
+             "scheduled_at": PAST, "rule_id": "gr1", "contact_id": "c1", "created_by": "system"},
+            {"schedule_id": "demo_1", "phone": "9822222222", "message": "demo", "status": "pending",
+             "scheduled_at": PAST, "created_by": "system", "is_demo": True}])
+        await _one_admin_pass(monkeypatch, db)
+        row = await db.whatsapp_scheduled.find_one({"schedule_id": "greet_1"}, {"_id": 0})
+        msg = await db.wa_messages.find_one({}, {"_id": 0})
+        assert (row["status"], msg["kind"], msg["status"]) == ("queued", "greeting", "queued")
+        assert msg["ref"] == {"schedule_id": "greet_1", "rule_id": "gr1", "writeback": "whatsapp_scheduled"}
+        assert (await db.greeting_logs.find_one({"log_id": "glog1"}, {"_id": 0}))["status"] == "queued"
+        assert (await db.whatsapp_scheduled.find_one({"schedule_id": "demo_1"}, {"_id": 0}))["status"] == "pending"
+        assert await db.wa_messages.count_documents({}) == 1
+
+        env.clock["now"] = NEXT_1000_IST
+        await ws.run_wa_queue_pass(db, budget_s=5)
+        row = await db.whatsapp_scheduled.find_one({"schedule_id": "greet_1"}, {"_id": 0})
+        assert (row["status"], row["wa_message_id"], row["wa_msg_id"]) == ("sent", "PMID1", msg["message_id"])
+        glog = await db.greeting_logs.find_one({"log_id": "glog1"}, {"_id": 0})
+        assert (glog["status"], glog["wa_msg_id"]) == ("sent", msg["message_id"])
+        wlog = await db.whatsapp_logs.find_one({"wa_message_id": msg["message_id"]}, {"_id": 0})
+        assert wlog["status"] == "sent" and wlog["send_mode"] == "scheduled"
+        assert [s["text"] for s in env.evo.sends] == ["Happy Diwali"]
+    _run(go())
+
+
+def test_a_demo_seed_queue_row_is_never_sent(env):
+    # M-5: demo_routes seeds `type: drip, is_demo: True` rows with fake numbers
+    db = env.db
+
+    async def go():
+        await seed_wa(db)
+        await db.settings.insert_one({"type": "wa_queue_migrated"})          # one-time expiry already done
+        await db.whatsapp_scheduled.insert_many([
+            {"scheduled_id": "demo", "campaign_id": None, "type": "drip", "is_demo": True, "status": "pending",
+             "phone": "9811111111", "message": "demo drip", "queued_at": _ago(days=2)},     # inside the 7-day floor
+            {"scheduled_id": "real", "campaign_id": "daily_digest", "status": "pending",
+             "phone": "9822222222", "message": "real digest"}])
+        await sched.process_wa_queue()
+        st = {r["scheduled_id"]: r["status"] for r in await db.whatsapp_scheduled.find({}, {"_id": 0}).to_list(None)}
+        assert st == {"demo": "pending", "real": "sent"}
+        assert [s["text"] for s in env.evo.sends] == ["real digest"]
+    _run(go())
+
+
+def test_a_drip_step_log_carries_the_wa_messages_id(env):
+    # M-4: the step log keeps the key to the message's real outcome (a queued row may still end
+    # skipped/failed in the drainer; the evidence is on wa_messages)
+    db = env.db
+
+    async def go():
+        await seed_wa(db, settings={"drip_wa_enabled": True})
+        await db.schools.insert_one({"school_id": "s1", "school_name": "DPS", "wa_consent": True, "is_deleted": False})
+        await db.contacts.insert_one({"contact_id": "c1", "name": "Ritu", "phone": "9811111111", "school_id": "s1",
+                                      "is_deleted": False})
+        await db.drip_sequences.insert_one({"sequence_id": "seq1", "name": "S", "is_active": True, "steps": [
+            {"step_number": 1, "delay_days": 0, "message_type": "whatsapp", "message_template": "Hi {name}"}]})
+        await db.drip_enrollments.insert_one({"enrollment_id": "e1", "sequence_id": "seq1", "contact_id": "c1",
+                                              "lead_id": None, "school_id": "s1", "current_step": 0,
+                                              "status": "active", "enrolled_at": PAST, "next_step_at": PAST})
+        await sched.run_drip_executor()
+        msg = await db.wa_messages.find_one({}, {"_id": 0})
+        step_log = await db.drip_step_logs.find_one({"enrollment_id": "e1"}, {"_id": 0})
+        assert msg["status"] == "sent" and msg["ref"]["dedup_key"] == "drip:e1:1"
+        assert (step_log["status"], step_log["wa_message_id"]) == ("sent", msg["message_id"])
+    _run(go())

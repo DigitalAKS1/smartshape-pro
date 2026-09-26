@@ -136,9 +136,9 @@ def test_one_marketing_message_per_contact_per_number_per_day(wa_env):
         await seed_wa(db)
         await db.settings.insert_one({"type": "notifications", "require_wa_consent": False})
         a = await send_whatsapp(db, to="9811111111", text="step 1", kind="drip")
-        b = await send_whatsapp(db, to="+91 98111 11111", text="festival", kind="greeting")
+        b = await send_whatsapp(db, to="+91 98111 11111", text="festival", kind="greeting")   # M-3: skipped
         c = await send_whatsapp(db, to="9811111111", text="your kit shipped", kind="dispatch")
-        assert (a["status"], b["status"], b["reason"], c["status"]) == ("sent", "queued", "per_contact_per_day", "sent")
+        assert (a["status"], b["status"], b["reason"], c["status"]) == ("sent", "skipped", "per_contact_per_day", "sent")
     _run(go())
 
 
@@ -619,3 +619,70 @@ def test_the_queue_and_ledger_queries_have_indexes():                           
                  [("status", 1), ("instance_name", 1), ("send_after", 1), ("created_at", 1)],
                  [("status", 1), ("sending_at", 1)]):
         assert ("wa_messages", str(keys)) in calls
+
+
+# ── Final review fix wave ─────────────────────────────────────────────────────
+
+def test_a_second_greeting_to_a_contact_today_is_skipped_but_a_drip_is_deferred(wa_env):
+    # M-3: per_contact_per_day defers a drip to tomorrow; a greeting is for today, so it is refused
+    db = wa_env.db
+
+    async def go():
+        await seed_wa(db)
+        await db.settings.insert_one({"type": "notifications", "require_wa_consent": False})
+        await send_whatsapp(db, to="9811111111", text="festival", kind="greeting")
+        g = await send_whatsapp(db, to="+91 98111 11111", text="festival again", kind="greeting")
+        d = await send_whatsapp(db, to="9811111111", text="step 2", kind="drip")
+        assert (g["status"], g["reason"]) == ("skipped", "per_contact_per_day")
+        assert (d["status"], d["reason"]) == ("queued", "per_contact_per_day")
+        rows = {r["text"]: r for r in await db.wa_messages.find({}, {"_id": 0}).to_list(None)}
+        assert rows["festival again"]["fail_reason"] == "per_contact_per_day"
+        assert rows["festival again"]["send_after"] is None
+        assert rows["step 2"]["send_after"] == "2026-09-25T03:30:00+00:00"       # 09:00 IST tomorrow
+        assert [s["text"] for s in wa_env.evo.sends] == ["festival"]
+    _run(go())
+
+
+class _LedgerRaisesOnce:
+    """wa_send_ledger whose first upsert loses the (instance_name, day) unique-index race."""
+
+    def __init__(self, coll):
+        self._coll, self.calls = coll, 0
+
+    async def update_one(self, *a, **k):
+        self.calls += 1
+        if self.calls == 1:
+            from pymongo.errors import DuplicateKeyError
+            raise DuplicateKeyError("E11000 duplicate key error collection: wa_send_ledger")
+        return await self._coll.update_one(*a, **k)
+
+    def __getattr__(self, name):
+        return getattr(self._coll, name)
+
+
+class _DbWith:
+    def __init__(self, db, **colls):
+        self._db, self._colls = db, colls
+
+    def __getattr__(self, name):
+        return self._colls.get(name) or getattr(self._db, name)
+
+
+def test_the_ledger_upsert_race_does_not_raise_out_of_the_policy(wa_env):
+    # M-2: two first sends of an IST day on one number can both miss the ledger row; the loser's
+    # upsert raises DuplicateKeyError, which must be swallowed (the row is there) - not surface
+    # from send_whatsapp as a failed step / a 500.
+    db = wa_env.db
+
+    async def go():
+        await seed_wa(db)
+        first = await send_whatsapp(db, to="9811111111", text="first", kind="dispatch")
+        assert first["status"] == "sent"
+        ledger = _LedgerRaisesOnce(db.wa_send_ledger)
+        second = await send_whatsapp(_DbWith(db, wa_send_ledger=ledger), to="9822222222", text="second",
+                                     kind="dispatch")
+        assert second["status"] == "sent" and ledger.calls >= 2
+        led = await db.wa_send_ledger.find_one({"instance_name": COMPANY}, {"_id": 0})
+        assert led["sent_count"] == 2
+        assert [s["text"] for s in wa_env.evo.sends] == ["first", "second"]
+    _run(go())

@@ -1527,7 +1527,8 @@ async def run_auto_reminders():
             await prepare_wa_scheduled(db)
             now_iso_full = datetime.now(timezone.utc).isoformat()
             due_scheduled = await db.whatsapp_scheduled.find(
-                {"status": "pending", "schedule_id": {"$exists": True}, "scheduled_at": {"$lte": now_iso_full}},
+                {"status": "pending", "schedule_id": {"$exists": True}, "is_demo": {"$ne": True},
+                 "scheduled_at": {"$lte": now_iso_full}},
                 {"_id": 0}).to_list(100)
             for sched in due_scheduled:
                 claimed = await db.whatsapp_scheduled.update_one(
@@ -1541,7 +1542,10 @@ async def run_auto_reminders():
                 try:
                     res = await _send_wa_one(
                         db, to=phone, text=message, kind="greeting" if is_greeting else "scheduled",
-                        ref={"schedule_id": sched["schedule_id"], "rule_id": sched.get("rule_id")},
+                        # `writeback`: a `queued` outcome is settled on this row, its greeting log
+                        # and its whatsapp_logs entry by the wa_messages drainer when it sends.
+                        ref={"schedule_id": sched["schedule_id"], "rule_id": sched.get("rule_id"),
+                             "writeback": "whatsapp_scheduled"},
                         owner_email=None if is_greeting else (sched.get("created_by") or None),
                         typed_by=None if is_greeting else sched.get("created_by"),
                         contact_id=sched.get("contact_id") or "", lead_id=sched.get("lead_id") or "",

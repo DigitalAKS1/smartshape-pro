@@ -762,3 +762,56 @@ def test_startup_logs_the_apikey_mode(env, monkeypatch, caplog):
     with caplog.at_level(logging.WARNING, logger="wa_routes"):
         wr.install_access_log_mask()
     assert any("apikey check is OFF" in r.getMessage() for r in caplog.records)
+
+
+# ── Final review fix wave ─────────────────────────────────────────────────────
+
+def test_open_on_an_adopted_number_with_no_stored_phone_keeps_its_warmup(env):
+    # M-1: wa_link_company's adopt path may store warmup_started_at without a phone (Evolution
+    # returned no ownerJid). The next `open` fills the phone in; it does not restart the warm-up.
+    db = env.db
+
+    async def go():
+        await seed_instance(db, COMPANY, kind="company", state="connected", phone="",
+                            warmup_started_at="2026-09-10T00:00:00+00:00")
+        await _hook(COMPANY, {"event": "connection.update", "data": {"state": "open",
+                                                                     "wuid": "919000000001@s.whatsapp.net"}})
+        i = await _inst(db, COMPANY)
+        assert (i["phone_e164"], i["warmup_started_at"]) == ("919000000001", "2026-09-10T00:00:00+00:00")
+        # a different SIM on the same instance still starts a fresh warm-up
+        await _hook(COMPANY, {"event": "connection.update", "data": {"state": "open",
+                                                                     "wuid": "919000000002@s.whatsapp.net"}})
+        i = await _inst(db, COMPANY)
+        assert (i["phone_e164"], i["warmup_started_at"]) == ("919000000002", env.clock["now"].isoformat())
+        # and a row with no warm-up at all gets one on open
+        await seed_instance(db, "rep_parul", owner_email=PARUL, state="qr", phone="", warmup_started_at=None)
+        await _hook("rep_parul", {"event": "connection.update", "data": {"state": "open",
+                                                                         "wuid": "919811111111@s.whatsapp.net"}})
+        assert (await _inst(db, "rep_parul"))["warmup_started_at"] == env.clock["now"].isoformat()
+    _run(go())
+
+
+def test_receipts_for_inbound_and_group_messages_are_not_parked(env):
+    # M-7: MESSAGES_UPDATE also arrives for inbound messages we mark read (fromMe false) and for
+    # group messages typed on the phone (remoteJid @g.us); neither can be a send of ours.
+    db = env.db
+
+    async def go():
+        await seed_wa(db)
+        await _hook(COMPANY, {"event": "messages.update", "data": {
+            "keyId": "IN1", "status": "READ", "key": {"id": "IN1", "fromMe": False,
+                                                       "remoteJid": "919811111111@s.whatsapp.net"}}})
+        await _hook(COMPANY, {"event": "messages.update", "data": {
+            "keyId": "IN2", "status": "READ", "fromMe": False, "remoteJid": "919811111111@s.whatsapp.net"}})
+        await _hook(COMPANY, {"event": "messages.update", "data": {
+            "keyId": "GRP1", "status": "DELIVERY_ACK", "key": {"id": "GRP1", "fromMe": True,
+                                                                "remoteJid": "120363012345678901@g.us"}}})
+        assert await db.wa_receipts_pending.count_documents({}) == 0
+        # our own outbound message with no row yet is still parked
+        await _hook(COMPANY, {"event": "messages.update", "data": {
+            "keyId": "OUT1", "status": "DELIVERY_ACK", "key": {"id": "OUT1", "fromMe": True,
+                                                                "remoteJid": "919811111111@s.whatsapp.net"}}})
+        await _hook(COMPANY, {"event": "messages.update", "data": {"keyId": "OUT2", "status": "DELIVERY_ACK"}})
+        parked = sorted(r["provider_msg_id"] for r in await db.wa_receipts_pending.find({}, {"_id": 0}).to_list(None))
+        assert parked == ["OUT1", "OUT2"]
+    _run(go())

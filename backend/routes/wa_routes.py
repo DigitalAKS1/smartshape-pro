@@ -186,8 +186,10 @@ async def _on_open(inst: dict, data: dict) -> None:
         sets["profile_name"] = str(data["profileName"])[:120]
     if phone:
         sets.update({"phone_e164": phone, "jid": f"{phone}@s.whatsapp.net"})
-        if phone != inst.get("phone_e164") or not inst.get("warmup_started_at"):
-            sets["warmup_started_at"] = now          # a new SIM starts its own warm-up (D5)
+        # A new SIM starts its own warm-up (D5). A row that never stored a phone (an adopted,
+        # already-open number whose ownerJid Evolution did not return) keeps the warm-up it has.
+        if (inst.get("phone_e164") and phone != inst["phone_e164"]) or not inst.get("warmup_started_at"):
+            sets["warmup_started_at"] = now
     await db.wa_instances.update_one({"instance_name": name}, {
         "$set": sets, "$unset": {"unlinked_reason": "", "unlinked_detail": "", "paused_before_unlink": ""}})
     if phone:
@@ -304,8 +306,16 @@ async def _on_messages_update(inst: dict, data) -> None:
             {"$set": {"status": new, "updated_at": now}})
         if getattr(res, "matched_count", 0) or getattr(legacy, "matched_count", 0):
             continue
-        # Nothing moved. Park it only when NO row holds the id (an ignored regression is not parked).
-        if not await db.wa_messages.find_one({"instance_name": name, "provider_msg_id": pmid}, {"_id": 1})                 and not await db.whatsapp_scheduled.find_one({"wa_message_id": pmid}, {"_id": 1}):
+        # Nothing moved. Park it only when NO row holds the id (an ignored regression is not parked)
+        # and it can be one of ours: a receipt for an inbound message (fromMe false - we marked it
+        # read) or for a group message typed on the phone is never a send of ours.
+        key = item.get("key") if isinstance(item.get("key"), dict) else {}
+        from_me = item.get("fromMe") if item.get("fromMe") is not None else key.get("fromMe")
+        remote = str(item.get("remoteJid") or key.get("remoteJid") or "")
+        if from_me is False or remote.endswith("@g.us"):
+            continue
+        if not await db.wa_messages.find_one({"instance_name": name, "provider_msg_id": pmid}, {"_id": 1}) \
+                and not await db.whatsapp_scheduled.find_one({"wa_message_id": pmid}, {"_id": 1}):
             await _park_receipt(name, pmid, new)
 
 
