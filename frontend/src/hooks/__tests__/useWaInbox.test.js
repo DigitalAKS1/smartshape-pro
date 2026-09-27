@@ -335,6 +335,57 @@ test('select ignores a page that resolves after the selection moved on', async (
   expect(hookResult.messages.map((m) => m.message_id)).toEqual(['x1']);
 });
 
+test('loadOlder ignores an older page that resolves after the selection moved on', async () => {
+  mockChats.mockReturnValue(ok({
+    items: [{ chat_id: 'A', unread_count: 0 }, { chat_id: 'B', unread_count: 0 }],
+    total: 2, page: 1, unread_total: 0,
+  }));
+  let resolveOlderA;
+  mockMessages.mockImplementation((chatId, params) => {
+    if (chatId === 'A' && params.before) return new Promise((resolve) => { resolveOlderA = resolve; });
+    if (chatId === 'A') {
+      return ok({
+        items: [{ message_id: 'a2', chat_id: 'A', direction: 'in', text: 'a2', created_at: '2026-01-01T00:00:02Z' }],
+        has_more: true, next_before: '2026-01-01T00:00:02Z', next_before_id: 'a2',
+      });
+    }
+    return ok({
+      items: [{ message_id: 'b1', chat_id: 'B', direction: 'in', text: 'b1', created_at: '2026-01-01T00:00:01Z' }],
+      has_more: false, next_before: null, next_before_id: null,
+    });
+  });
+  await mount();
+
+  await act(async () => { await hookResult.select('A'); });
+  expect(hookResult.hasMore).toBe(true);
+
+  let olderPromise;
+  act(() => { olderPromise = hookResult.loadOlder(); });
+  await flush();
+  expect(mockMessages).toHaveBeenCalledWith('A', { before: '2026-01-01T00:00:02Z', before_id: 'a2', limit: 50 });
+
+  await act(async () => { await hookResult.select('B'); });
+  expect(hookResult.selectedId).toBe('B');
+  expect(hookResult.messages.map((m) => m.message_id)).toEqual(['b1']);
+  expect(hookResult.hasMore).toBe(false);
+
+  await act(async () => {
+    resolveOlderA({ data: {
+      items: [{ message_id: 'a1', chat_id: 'A', direction: 'in', text: 'a1', created_at: '2026-01-01T00:00:01Z' }],
+      has_more: true, next_before: '2026-01-01T00:00:01Z', next_before_id: 'a1',
+    } });
+    await olderPromise;
+  });
+
+  // B's thread and cursor are untouched by A's late page
+  expect(hookResult.messages.map((m) => m.message_id)).toEqual(['b1']);
+  expect(hookResult.hasMore).toBe(false);
+  // loadOlder on B is a no-op (has_more false) — A's cursor did not leak into a new request
+  const callsBefore = mockMessages.mock.calls.length;
+  await act(async () => { await hookResult.loadOlder(); });
+  expect(mockMessages.mock.calls.length).toBe(callsBefore);
+});
+
 test('send: a message_new with the real id arriving before the POST resolves yields one row, no tmp left', async () => {
   mockChats.mockReturnValue(ok({ items: [{ chat_id: 'c1', unread_count: 0 }], total: 1, page: 1, unread_total: 0 }));
   mockMessages.mockReturnValue(ok({ items: [], has_more: false }));

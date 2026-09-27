@@ -207,15 +207,22 @@ export default function useWaInbox() {
 
   const loadOlder = useCallback(async () => {
     if (!selectedId || !hasMore) return;
+    const chatId = selectedIdRef.current;
+    if (!chatId) return;
     const { before, before_id } = cursorRef.current || {};
+    // Same stale guard as select(): a slow older page for chat A must not
+    // land in chat B's thread or overwrite B's cursor.
+    const mine = ++msgSeq.current;
     try {
-      const res = await waInbox.messages(selectedId, { before, before_id, limit: 50 });
+      const res = await waInbox.messages(chatId, { before, before_id, limit: 50 });
+      if (!alive.current || mine !== msgSeq.current || selectedIdRef.current !== chatId) return;
       const data = res?.data || {};
-      setMessages((prev) => mergeMessages(data.items || [], prev));
+      const items = (data.items || []).filter((m) => !m.chat_id || m.chat_id === chatId);
+      setMessages((prev) => mergeMessages(items, prev));
       setHasMore(!!data.has_more);
       cursorRef.current = { before: data.next_before, before_id: data.next_before_id };
     } catch (e) {
-      toast.error(errText(e, 'Could not load older messages'));
+      if (alive.current && mine === msgSeq.current) toast.error(errText(e, 'Could not load older messages'));
     }
   }, [selectedId, hasMore]);
 
