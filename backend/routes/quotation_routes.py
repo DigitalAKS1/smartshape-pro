@@ -406,7 +406,10 @@ async def backfill_quotation_leads(request: Request):
 @router.get("/quotations")
 async def get_quotations(request: Request, sales_person_id: Optional[str] = None):
     user = await get_current_user(request)
-    query = {}
+    # A Portal Reorder submission creates a placeholder $0 quotation purely to
+    # reuse create_order_for_quotation — it was never authored by a rep and
+    # must not appear in the quotations pipeline as if it were.
+    query = {"source": {"$ne": "school_portal_reorder"}}
     if sales_person_id:
         query["sales_person_id"] = sales_person_id
     elif not sees_all(user, "quotations"):

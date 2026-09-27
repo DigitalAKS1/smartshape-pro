@@ -236,3 +236,19 @@ def test_cancel_refuses_an_awaiting_confirmation_order(db):
         order = await db.orders.find_one({"order_id": "o1"}, {"_id": 0})
         assert order["order_status"] == "awaiting_confirmation", "must be untouched — use Reject instead"
     _run(go())
+
+
+# ── Round 2 finding (Important): production-stage change must refuse an
+# awaiting-confirmation order — it has no reserved stock, so moving it into
+# production makes no sense and update_order_status already refuses it. ────
+
+def test_production_stage_refuses_an_awaiting_confirmation_order(db):
+    async def go():
+        CURRENT_USER["user"] = STORE
+        await _awaiting_order(db)
+        with pytest.raises(Exception) as exc:
+            await ordr.update_order_production_stage("o1", FakeRequest({"production_stage": "in_production"}))
+        assert exc.value.status_code == 400
+        order = await db.orders.find_one({"order_id": "o1"}, {"_id": 0})
+        assert order.get("production_stage") is None, "must be untouched"
+    _run(go())

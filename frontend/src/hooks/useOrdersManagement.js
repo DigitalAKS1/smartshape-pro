@@ -113,6 +113,31 @@ export default function useOrdersManagement() {
     } catch (err) { toast.error(err.response?.data?.detail || 'Failed to remove item'); }
   };
 
+  // ── Awaiting-confirmation lifecycle ──────────────────────────────────────
+  const handleConfirmOrder = async (orderId) => {
+    try {
+      await ordersApi.confirm(orderId);
+      toast.success('Order confirmed — stock reserved');
+      fetchData();
+    } catch (err) { toast.error(err.response?.data?.detail || 'Failed to confirm order'); }
+  };
+
+  const handleRejectOrder = async (orderId, reason) => {
+    try {
+      await ordersApi.reject(orderId, reason);
+      toast.success('Order rejected');
+      fetchData();
+    } catch (err) { toast.error(err.response?.data?.detail || 'Failed to reject order'); }
+  };
+
+  const handleLogCall = async (orderId, data) => {
+    try {
+      await ordersApi.logCall(orderId, data);
+      toast.success('Call logged');
+      fetchData();
+    } catch (err) { toast.error(err.response?.data?.detail || 'Failed to log call'); }
+  };
+
   useEffect(() => { fetchData(); }, []);
   // Live-sync: refetch when any order/dispatch/hold mutation fires (this tab or
   // another) + on tab focus — no manual refresh needed.
@@ -343,6 +368,7 @@ export default function useOrdersManagement() {
 
   // ── Filtered / computed ──────────────────────────────────────────────────
   const filteredOrders = ordersList.filter(o => {
+    if (statusFilter === 'all' && o.order_status === 'awaiting_confirmation') return false;
     if (statusFilter !== 'all' && o.order_status !== statusFilter) return false;
     if (searchTerm) {
       const s = searchTerm.toLowerCase();
@@ -357,6 +383,7 @@ export default function useOrdersManagement() {
 
   const stats = {
     total:       ordersList.length,
+    awaitingConfirmation: ordersList.filter(o => o.order_status === 'awaiting_confirmation').length,
     pending:     ordersList.filter(o => o.order_status === 'pending').length,
     confirmed:   ordersList.filter(o => o.order_status === 'confirmed').length,
     dispatched:  ordersList.filter(o => o.order_status === 'dispatched').length,
@@ -380,6 +407,7 @@ export default function useOrdersManagement() {
     detailOrder, detailOpen, setDetailOpen,
     diesList,
     handleAddItem, handleUpdateItemQty, handleRemoveItem,
+    handleConfirmOrder, handleRejectOrder, handleLogCall,
     // status
     statusOpen, setStatusOpen,
     statusTarget,

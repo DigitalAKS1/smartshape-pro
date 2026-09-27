@@ -10,9 +10,9 @@ import { useAuth } from '../../contexts/AuthContext';
 import { orders as ordersApi } from '../../lib/api';
 import { toast } from 'sonner';
 
-const CANCEL_BLOCK = ['cancelled', 'dispatched', 'delivered'];
+const CANCEL_BLOCK = ['cancelled', 'dispatched', 'delivered', 'awaiting_confirmation'];
 
-const EDITABLE_ORDER_STATUSES = ['pending', 'confirmed'];
+const EDITABLE_ORDER_STATUSES = ['pending', 'confirmed', 'awaiting_confirmation'];
 const EDITABLE_ITEM_STATUSES = ['on_hold', 'confirmed'];
 
 /**
