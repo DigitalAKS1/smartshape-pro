@@ -30,6 +30,18 @@ export function dayLabel(iso, now = new Date()) {
   return new Date(iso).toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
+/** The "History before <date> may be incomplete" banner is only useful right after a number's
+ *  first sync (the 90-day import may have been truncated); a week later every chat has moved
+ *  on and it would just be permanent noise. Shown while `history_synced_at` is within the
+ *  last HISTORY_BANNER_DAYS (a stamp slightly in the future — clock skew — still counts). */
+export const HISTORY_BANNER_DAYS = 7;
+export function showHistoryBanner(historySyncedAt, now = Date.now()) {
+  if (!historySyncedAt) return false;
+  const t = new Date(historySyncedAt).getTime();
+  if (Number.isNaN(t)) return false;
+  return now - t <= HISTORY_BANNER_DAYS * 24 * 60 * 60 * 1000;
+}
+
 /** Messages + notes in one ascending timeline, with a date separator before each new day.
  *  An OUTBOUND `preview_only` stub (from the stream) is hidden while an optimistic `tmp_`
  *  bubble is still pending (`queued`) in the same chat — the stub is our own send echoed
@@ -225,7 +237,7 @@ export default function ChatView({
   const title = chatTitle(chat);
   const phone = prettyPhone(chat.phone_e164);
   const resolved = chat.status === 'resolved';
-  const historyFrom = chat.history_synced_at;
+  const historyFrom = showHistoryBanner(chat.history_synced_at) ? chat.history_synced_at : null;
   const stateOff = instanceState && instanceState !== 'connected';
 
   return (

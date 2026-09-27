@@ -58,18 +58,45 @@ export function applyMessageStatus(messages, ev) {
   ));
 }
 
+/** Delivery states in the order a message moves through them. `failed` and
+ *  `skipped` are terminal: they beat a still-pending `queued` / `sending`,
+ *  and nothing beats them. */
+export const STATUS_RANK = { queued: 0, sending: 0, sent: 1, delivered: 2, read: 3 };
+const TERMINAL_STATUS = new Set(['failed', 'skipped']);
+
+/** True when `next` is a later delivery state than `prev` — the only case in
+ *  which a `preview_only` stub may touch a full row (the backend re-announces
+ *  a `queued` row with `message_new {status: sent}` once the drainer sends it). */
+export function statusOutranks(next, prev) {
+  if (!next || next === prev) return false;
+  if (TERMINAL_STATUS.has(prev)) return false;
+  const prevRank = Object.prototype.hasOwnProperty.call(STATUS_RANK, prev) ? STATUS_RANK[prev] : -1;
+  if (TERMINAL_STATUS.has(next)) return prevRank <= 0;
+  if (!Object.prototype.hasOwnProperty.call(STATUS_RANK, next)) return false;
+  return STATUS_RANK[next] > prevRank;
+}
+
 /** Combines two message arrays, de-duping by `message_id` (the later entry
  *  wins) and returning them in ascending (oldest → newest) order.
  *  Rows synthesised from a `message_new` stream frame carry
  *  `preview_only: true` — they never overwrite a full row with the same id
- *  (a later full row does replace the stub, and clears the flag). */
+ *  (a later full row does replace the stub, and clears the flag). The one
+ *  thing a stub may change on a full row is its `status` / `fail_reason`,
+ *  and only forwards (`statusOutranks`): text, media and created_at stay. */
 export function mergeMessages(existing, incoming) {
   const map = new Map();
   [...(existing || []), ...(incoming || [])].forEach((m) => {
     if (!m || !m.message_id) return;
     const prev = map.get(m.message_id);
     if (!prev) { map.set(m.message_id, { ...m }); return; }
-    if (m.preview_only && !prev.preview_only) return;          // stub must not clobber a full row
+    if (m.preview_only && !prev.preview_only) {                // stub must not clobber a full row
+      if (statusOutranks(m.status, prev.status)) {
+        const patched = { ...prev, status: m.status };
+        if (m.fail_reason !== undefined) patched.fail_reason = m.fail_reason;
+        map.set(m.message_id, patched);
+      }
+      return;
+    }
     const merged = { ...prev, ...m };
     if (!m.preview_only) delete merged.preview_only;           // full row replaces a stub
     map.set(m.message_id, merged);
@@ -328,12 +355,16 @@ export default function useWaInbox() {
       const canInsertLocally = filters.scope === 'all' && filters.status === 'open';
       if (!known && !canInsertLocally) scheduleRefetch();
       if (data.chat_id === selectedIdRef.current && data.message_id) {
+        // A row already in the thread (the backend re-announces a queued send
+        // once it goes out) only takes the newer status from this stub —
+        // mergeMessages leaves its text / media / created_at alone.
         setMessages((prev) => mergeMessages(prev, [{
           message_id: data.message_id,
           chat_id: data.chat_id,
           direction: data.direction,
           text: data.preview,
           status: data.status || 'delivered',
+          fail_reason: data.fail_reason,
           typed_by: data.typed_by,
           created_at: new Date().toISOString(),
           preview_only: true,

@@ -5,7 +5,7 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { act } from 'react';
-import ChatView, { buildTimeline, dayLabel } from '../ChatView';
+import ChatView, { buildTimeline, dayLabel, showHistoryBanner, HISTORY_BANNER_DAYS } from '../ChatView';
 
 global.IS_REACT_ACT_ENVIRONMENT = true;
 jest.setTimeout(30000);                      // cold transform on a busy machine
@@ -115,7 +115,8 @@ test('internal notes show as yellow bubbles in time order with the messages', as
 
 test('date separators, quoted context, opt-out and history banners, Load older', async () => {
   const onLoadOlder = jest.fn();
-  const c = { ...chat, opted_out: true, history_synced_at: '2026-09-20T00:00:00Z' };
+  // synced two days ago → the banner is still within its 7-day window
+  const c = { ...chat, opted_out: true, history_synced_at: new Date(Date.now() - 2 * 86400000).toISOString() };
   const messages = [
     { message_id: 'p1', provider_msg_id: 'PROV1', direction: 'in', text: 'Original question', created_at: '2026-09-26T08:00:00Z' },
     out('m2', 'sent', { quoted_provider_msg_id: 'PROV1', created_at: '2026-09-27T08:00:00Z' }),
@@ -190,6 +191,27 @@ test('media with a non-http URL is never a link or a src — the filename shows 
   expect(media[2].tagName).toBe('A');
   expect(media[2].getAttribute('href')).toBe('/uploads/ok.pdf');
   expect(media[3].tagName).toBe('A');
+});
+
+test('the history banner shows only while the sync is less than a week old', async () => {
+  const now = new Date('2026-09-28T12:00:00Z').getTime();
+  const DAY = 86400000;
+  expect(showHistoryBanner(undefined, now)).toBe(false);
+  expect(showHistoryBanner('', now)).toBe(false);
+  expect(showHistoryBanner('not a date', now)).toBe(false);
+  expect(showHistoryBanner(new Date(now - 1000).toISOString(), now)).toBe(true);
+  expect(showHistoryBanner(new Date(now - 6 * DAY).toISOString(), now)).toBe(true);
+  expect(showHistoryBanner(new Date(now - HISTORY_BANNER_DAYS * DAY).toISOString(), now)).toBe(true);   // edge: exactly 7 d
+  expect(showHistoryBanner(new Date(now - HISTORY_BANNER_DAYS * DAY - 1).toISOString(), now)).toBe(false);
+  expect(showHistoryBanner(new Date(now - 30 * DAY).toISOString(), now)).toBe(false);
+  expect(showHistoryBanner(new Date(now + 60000).toISOString(), now)).toBe(true);                       // clock skew
+  // rendered: an old sync stamp shows no banner at all
+  const old = { ...chat, history_synced_at: new Date(Date.now() - 30 * DAY).toISOString() };
+  const v = await render(<ChatView chat={old} messages={[]} />);
+  expect(v.q('chat-history-banner')).toBeNull();
+  const fresh = { ...chat, history_synced_at: new Date(Date.now() - DAY).toISOString() };
+  const w = await render(<ChatView chat={fresh} messages={[]} />);
+  expect(w.q('chat-history-banner')).not.toBeNull();
 });
 
 test('dayLabel says Today / Yesterday, else the date', () => {

@@ -4,7 +4,7 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { act } from 'react';
-import useWaInbox, { applyMessageNew, applyMessageStatus, mergeMessages } from '../useWaInbox';
+import useWaInbox, { applyMessageNew, applyMessageStatus, mergeMessages, statusOutranks } from '../useWaInbox';
 
 global.IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -500,10 +500,14 @@ test('pure helper: mergeMessages never lets a preview_only stub overwrite a full
   const full = { message_id: 'm1', text: 'full text', media: { url: 'x' }, status: 'sent', created_at: '2026-01-01T00:00:01Z' };
   const stub = { message_id: 'm1', text: 'full…', status: 'delivered', preview_only: true, created_at: '2026-01-02T00:00:00Z' };
 
-  // full first, stub later → full kept untouched
+  // full first, stub later → full kept: only the status moves forward (sent → delivered),
+  // text / media / created_at are the full row's
   const a = mergeMessages([full], [stub]);
   expect(a).toHaveLength(1);
-  expect(a[0]).toEqual(full);
+  expect(a[0]).toEqual({ ...full, status: 'delivered' });
+  // a stub that does not outrank the row changes nothing at all
+  expect(mergeMessages([full], [{ ...stub, status: 'sent' }])[0]).toEqual(full);
+  expect(mergeMessages([full], [{ ...stub, status: 'queued' }])[0]).toEqual(full);
 
   // stub first, full later → full replaces and the flag is cleared
   const b = mergeMessages([stub], [full]);
@@ -536,6 +540,76 @@ test('stream: a message_new stub does not overwrite the full row already in the 
   expect(hookResult.messages[0].text).toBe('the whole message body');
   expect(hookResult.messages[0].media).toEqual({ url: 'u' });
   expect(hookResult.messages[0].preview_only).toBeUndefined();
+});
+
+// ── Final review I2: a re-announced row takes the newer status, nothing else ──
+
+test('pure helper: statusOutranks follows queued/sending < sent < delivered < read; failed/skipped are terminal', () => {
+  expect(statusOutranks('sent', 'queued')).toBe(true);
+  expect(statusOutranks('sent', 'sending')).toBe(true);
+  expect(statusOutranks('delivered', 'sent')).toBe(true);
+  expect(statusOutranks('read', 'delivered')).toBe(true);
+  expect(statusOutranks('read', 'queued')).toBe(true);
+  expect(statusOutranks('sent', undefined)).toBe(true);
+  // never backwards, never sideways
+  expect(statusOutranks('queued', 'sent')).toBe(false);
+  expect(statusOutranks('sending', 'queued')).toBe(false);
+  expect(statusOutranks('sent', 'sent')).toBe(false);
+  expect(statusOutranks('delivered', 'read')).toBe(false);
+  expect(statusOutranks(undefined, 'queued')).toBe(false);
+  expect(statusOutranks('bogus', 'queued')).toBe(false);
+  // terminal: beats a pending state, not a delivered one, and is never overturned
+  expect(statusOutranks('failed', 'queued')).toBe(true);
+  expect(statusOutranks('skipped', 'sending')).toBe(true);
+  expect(statusOutranks('failed', undefined)).toBe(true);
+  expect(statusOutranks('failed', 'sent')).toBe(false);
+  expect(statusOutranks('sent', 'failed')).toBe(false);
+  expect(statusOutranks('skipped', 'failed')).toBe(false);
+});
+
+test('pure helper: mergeMessages lets a stub move a full row queued → sent (status only) and never back', () => {
+  const row = { message_id: 'm1', chat_id: 'c1', direction: 'out', text: 'the real text', media: { url: 'u' }, status: 'queued', created_at: '2026-01-01T00:00:01Z' };
+  const sent = { message_id: 'm1', text: 'the re…', status: 'sent', preview_only: true, created_at: '2026-01-01T00:05:00Z' };
+  const up = mergeMessages([row], [sent]);
+  expect(up).toHaveLength(1);
+  expect(up[0]).toEqual({ ...row, status: 'sent' });
+  expect(up[0].preview_only).toBeUndefined();
+  // a later queued announcement does not downgrade
+  const again = mergeMessages(up, [{ ...sent, status: 'queued' }]);
+  expect(again[0]).toEqual({ ...row, status: 'sent' });
+  // a terminal stub carries its reason
+  const failed = mergeMessages([row], [{ ...sent, status: 'failed', fail_reason: 'Number not on WhatsApp' }]);
+  expect(failed[0]).toEqual({ ...row, status: 'failed', fail_reason: 'Number not on WhatsApp' });
+  // a stub with no fail_reason key leaves an existing reason alone
+  const kept = mergeMessages([{ ...row, status: 'queued', fail_reason: 'earlier' }], [sent]);
+  expect(kept[0].fail_reason).toBe('earlier');
+});
+
+test('stream: message_new for a queued row already in the thread flips it to sent, keeps the text, and never downgrades', async () => {
+  mockChats.mockReturnValue(ok({ items: [{ chat_id: 'c1', unread_count: 0 }], total: 1, page: 1, unread_total: 0 }));
+  mockMessages.mockReturnValue(ok({
+    items: [{ message_id: 'm1', chat_id: 'c1', direction: 'out', text: 'please confirm the order', status: 'queued', created_at: '2026-01-01T00:00:01Z' }],
+    has_more: false,
+  }));
+  await mount();
+  await act(async () => { await hookResult.select('c1'); });
+
+  const es = FakeEventSource.instances[0];
+  await act(async () => {
+    es.emit('message_new', { chat_id: 'c1', message_id: 'm1', direction: 'out', preview: 'please co…', status: 'sent' });
+  });
+  expect(hookResult.messages).toHaveLength(1);
+  expect(hookResult.messages[0].status).toBe('sent');
+  expect(hookResult.messages[0].text).toBe('please confirm the order');
+  expect(hookResult.messages[0].created_at).toBe('2026-01-01T00:00:01Z');
+  expect(hookResult.messages[0].preview_only).toBeUndefined();
+
+  await act(async () => {
+    es.emit('message_new', { chat_id: 'c1', message_id: 'm1', direction: 'out', preview: 'please co…', status: 'queued' });
+  });
+  expect(hookResult.messages).toHaveLength(1);
+  expect(hookResult.messages[0].status).toBe('sent');
+  expect(hookResult.messages[0].text).toBe('please confirm the order');
 });
 
 test('unreadTotal is derived from the chat list (no side effects in updaters)', async () => {
