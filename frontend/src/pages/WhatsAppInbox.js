@@ -10,7 +10,18 @@ import ChatView from '../components/whatsapp/ChatView';
 import Composer from '../components/whatsapp/Composer';
 import ChatRail from '../components/whatsapp/ChatRail';
 import useWaInbox from '../hooks/useWaInbox';
+import { useAuth } from '../contexts/AuthContext';
 import { salesPersons } from '../lib/api';
+
+/** A sales-portal user (role `sales`, or no `leads` module): their CRM lives at /sales/leads
+ *  and there is no school-profile page for them. */
+export function isSalesOnly(user) {
+  if (!user) return false;
+  if (user.role === 'admin') return false;
+  if (user.role === 'sales') return true;
+  const modules = Array.isArray(user.assigned_modules) ? user.assigned_modules : [];
+  return !modules.includes('leads');
+}
 
 export const MOBILE_QUERY = '(max-width: 767px)';
 
@@ -46,8 +57,10 @@ export default function WhatsAppInbox() {
   const inbox = useWaInbox();
   const {
     filters, setFilters, chats, selectedId, messages, hasMore, loading, sending, isManager, degraded,
-    instanceStates, select, loadOlder, send, resolve, reopen, assign, addNote, link,
+    instanceStates, select, loadOlder, send, markRead, resolve, reopen, assign, addNote, link,
   } = inbox;
+  const { user } = useAuth();
+  const salesOnly = isSalesOnly(user);
   const isMobile = useIsMobile();
   const [searchParams, setSearchParams] = useSearchParams();
   const [railOpen, setRailOpen] = useState(!isMobile);
@@ -79,6 +92,17 @@ export default function WhatsAppInbox() {
     setFilters({ scope: 'all', status: 'all' });
   }, [wanted, loading, chats, setFilters]);
 
+  // The open chat is being read: once its row is in the list with unread > 0 (the list
+  // arrived after a deep-link `select`, or a new inbound message just landed), mark it read.
+  useEffect(() => {
+    if (!selectedId || typeof markRead !== 'function') return;
+    const row = chats.find((c) => c.chat_id === selectedId);
+    if (row && row.unread_count > 0) markRead(selectedId);
+  }, [chats, selectedId, markRead]);
+
+  // A phone starts with the rail closed (it is a sheet there); a desktop keeps its own state.
+  useEffect(() => { if (isMobile) setRailOpen(false); }, [isMobile]);
+
   useEffect(() => {
     if (!isManager) return undefined;
     let on = true;
@@ -89,6 +113,7 @@ export default function WhatsAppInbox() {
   }, [isManager]);
 
   const onSelect = useCallback((chatId) => {
+    widened.current = true;                 // a row the user picked is on the page by definition
     select(chatId);
     if (isMobile) setMobilePane('chat');
     setSearchParams((prev) => {
@@ -120,7 +145,7 @@ export default function WhatsAppInbox() {
 
   const rail = (
     <ChatRail chat={chat} isManager={isManager} users={users} onAssign={assign} onAddNote={addNote} onLink={link}
-      onClose={isMobile ? () => setRailOpen(false) : undefined} />
+      salesOnly={salesOnly} onClose={isMobile ? () => setRailOpen(false) : undefined} />
   );
 
   // Height: the shell's own header/bottom nav take the rest of the viewport.

@@ -9,7 +9,8 @@ import AdminTopbar from './AdminTopbar';
 import TaskReminderPopup from '../notifications/TaskReminderPopup';
 import { BOTTOM_NAV_ITEMS, MORE_ITEM, buildSidebarGroups } from './AdminNavItems';
 
-export default function AdminLayout({ children }) {
+/** `waUnread` — unread WhatsApp chats (AppShell polls it); badged on the sidebar's WhatsApp Inbox item. */
+export default function AdminLayout({ children, waUnread = 0 }) {
   const { user, logout } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
@@ -50,6 +51,7 @@ export default function AdminLayout({ children }) {
           sidebarGroups={sidebarGroups}
           user={user}
           initials={initials}
+          waUnread={waUnread}
           onClose={() => setSidebarOpen(false)}
           onLogout={handleLogout}
         />
@@ -64,6 +66,7 @@ export default function AdminLayout({ children }) {
               sidebarGroups={sidebarGroups}
               user={user}
               initials={initials}
+              waUnread={waUnread}
               onClose={() => setSidebarOpen(false)}
               onLogout={handleLogout}
             />

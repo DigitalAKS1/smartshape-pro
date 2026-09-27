@@ -150,6 +150,29 @@ test('select does not call read when the chat has no unread messages', async () 
   expect(mockRead).not.toHaveBeenCalled();
 });
 
+test('markRead zeroes the row and calls read only while the loaded row still shows unread', async () => {
+  mockChats.mockReturnValue(ok({
+    items: [{ chat_id: 'c1', unread_count: 3 }, { chat_id: 'c2', unread_count: 0 }],
+    total: 2, page: 1, unread_total: 3,
+  }));
+  mockRead.mockReturnValue(ok({ ok: true }));
+  await mount();
+  expect(hookResult.unreadTotal).toBe(3);
+
+  await act(async () => { await hookResult.markRead('c2'); });      // nothing unread → no call
+  expect(mockRead).not.toHaveBeenCalled();
+  await act(async () => { await hookResult.markRead('c9'); });      // not loaded → no call
+  expect(mockRead).not.toHaveBeenCalled();
+
+  await act(async () => { await hookResult.markRead('c1'); });
+  expect(mockRead).toHaveBeenCalledTimes(1);
+  expect(mockRead).toHaveBeenCalledWith('c1');
+  expect(hookResult.chats.find((c) => c.chat_id === 'c1').unread_count).toBe(0);
+  expect(hookResult.unreadTotal).toBe(0);
+  await act(async () => { await hookResult.markRead('c1'); });      // already zero → idempotent
+  expect(mockRead).toHaveBeenCalledTimes(1);
+});
+
 test('send inserts an optimistic bubble then replaces it with the server row', async () => {
   mockChats.mockReturnValue(ok({ items: [{ chat_id: 'c1', unread_count: 0 }], total: 1, page: 1, unread_total: 0 }));
   mockMessages.mockReturnValue(ok({ items: [], has_more: false }));

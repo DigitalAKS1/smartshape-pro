@@ -14,8 +14,9 @@ import { TODAY_ITEM } from './AdminNavItems';
  *   initials        — string, 1-2 char initials
  *   onClose         — called when X or a link is clicked (mobile close)
  *   onLogout        — async logout handler
+ *   waUnread        — number, unread WhatsApp chats; badged on the WhatsApp Inbox item
  */
-export default function AdminSidebar({ sidebarGroups, user, initials, onClose, onLogout }) {
+export default function AdminSidebar({ sidebarGroups, user, initials, onClose, onLogout, waUnread = 0 }) {
   const { toggleTheme, isDark } = useTheme();
   const location = useLocation();
 
@@ -139,6 +140,12 @@ export default function AdminSidebar({ sidebarGroups, user, initials, onClose, o
                       strokeWidth={isActive ? 2 : 1.7}
                     />
                     <span className="truncate leading-none">{item.label}</span>
+                    {item.path === '/whatsapp' && waUnread > 0 && (
+                      <span data-testid="admin-sidebar-whatsapp-badge"
+                        className="ml-auto min-w-[18px] h-[18px] px-1 bg-[#e94560] text-white text-[10px] font-bold rounded-full flex items-center justify-center leading-none flex-shrink-0">
+                        {waUnread > 99 ? '99+' : waUnread}
+                      </span>
+                    )}
                   </Link>
                 );
               })}

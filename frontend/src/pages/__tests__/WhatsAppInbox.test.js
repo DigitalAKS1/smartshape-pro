@@ -27,9 +27,11 @@ jest.mock('../../lib/api', () => ({
   contacts: { getAll: jest.fn() },
 }));
 jest.mock('sonner', () => ({ toast: { success: jest.fn(), error: jest.fn() } }));
+const mockAuth = { user: { email: 'admin@x.in', role: 'admin', name: 'Admin' } };
+jest.mock('../../contexts/AuthContext', () => ({ useAuth: () => mockAuth }));
 
 // eslint-disable-next-line import/first
-import WhatsAppInbox from '../WhatsAppInbox';
+import WhatsAppInbox, { isSalesOnly } from '../WhatsAppInbox';
 // eslint-disable-next-line import/first
 import useWaInbox from '../../hooks/useWaInbox';
 // eslint-disable-next-line import/first
@@ -57,7 +59,7 @@ function hookState(extra = {}) {
     chats, total: 2, unreadTotal: 2,
     selectedId: 'c1', messages, hasMore: false,
     loading: false, sending: false, isManager: false, connected: true, degraded: false, instanceStates: {},
-    select: jest.fn(), loadOlder: jest.fn(), send: jest.fn(),
+    select: jest.fn(), loadOlder: jest.fn(), send: jest.fn(), markRead: jest.fn(),
     resolve: jest.fn(), reopen: jest.fn(), assign: jest.fn(), addNote: jest.fn(), link: jest.fn(), reloadChats: jest.fn(),
     ...extra,
   };
@@ -71,6 +73,7 @@ beforeEach(() => {
   mounted = [];
   mockRouter.search = '';
   mockRouter.setSearchParams.mockReset();
+  mockAuth.user = { email: 'admin@x.in', role: 'admin', name: 'Admin' };
   matchMediaBackup = window.matchMedia;
   salesPersons.getAll.mockResolvedValue({ data: [{ email: 'priya@x.in', name: 'Priya' }, { email: 'amit@x.in', name: 'Amit' }] });
 });
@@ -188,6 +191,58 @@ test('phone width: the list alone, then the conversation alone with a back butto
   act(() => { v.q('chat-back').click(); });
   expect(v.q('wa-pane-list')).not.toBeNull();
   expect(v.q('wa-pane-chat')).toBeNull();
+});
+
+test('a row the user picks never triggers the deep-link filter widening', async () => {
+  mockRouter.search = 'chat=c_hidden';
+  const s = hookState({ selectedId: null, messages: [], loading: true });   // list still loading
+  useWaInbox.mockReturnValue(s);
+  const v = await render();
+  expect(s.setFilters).not.toHaveBeenCalled();
+  act(() => { v.qa('chat-row')[0].click(); });          // the user moves on before the list settles
+  useWaInbox.mockReturnValue(hookState({ ...s, selectedId: 'c1', loading: false }));
+  await act(async () => { v.root.render(<WhatsAppInbox />); });
+  await flush();
+  expect(s.setFilters).not.toHaveBeenCalled();
+});
+
+test('the open chat is marked read once its row arrives with unread > 0 (deep link before the list loaded)', async () => {
+  mockRouter.search = 'chat=c1';
+  const s = hookState({ selectedId: 'c1', chats: [], loading: true, messages: [] });
+  useWaInbox.mockReturnValue(s);
+  const v = await render();
+  expect(s.markRead).not.toHaveBeenCalled();
+  // the list lands: c1 has 2 unread
+  useWaInbox.mockReturnValue(hookState({ ...s, chats, loading: false }));
+  await act(async () => { v.root.render(<WhatsAppInbox />); });
+  await flush();
+  expect(s.markRead).toHaveBeenCalledWith('c1');
+  // a row with unread 0 never triggers it
+  s.markRead.mockClear();
+  useWaInbox.mockReturnValue(hookState({ ...s, chats: chats.map((c) => ({ ...c, unread_count: 0 })), loading: false }));
+  await act(async () => { v.root.render(<WhatsAppInbox />); });
+  await flush();
+  expect(s.markRead).not.toHaveBeenCalled();
+});
+
+test('a sales-portal user gets /sales/leads for the contact and no school-profile link', async () => {
+  const linked = [{ ...chats[0], contact_id: 'con_1', school_id: 'sch_1' }, chats[1]];
+  useWaInbox.mockReturnValue(hookState({ chats: linked }));
+  const a = await render();
+  expect(a.q('rail-open-contact').getAttribute('href')).toBe('/leads?contact=con_1');
+  expect(a.q('rail-open-school').getAttribute('href')).toBe('/school-profile/sch_1');
+  mockAuth.user = { email: 'rep@x.in', role: 'sales', name: 'Rep' };
+  const b = await render();
+  expect(b.q('rail-open-contact').getAttribute('href')).toBe('/sales/leads');
+  expect(b.q('rail-open-school')).toBeNull();
+});
+
+test('isSalesOnly: sales role, or a non-admin without the leads module', () => {
+  expect(isSalesOnly({ role: 'sales' })).toBe(true);
+  expect(isSalesOnly({ role: 'admin' })).toBe(false);
+  expect(isSalesOnly({ role: 'sales_person', assigned_modules: ['leads'] })).toBe(false);
+  expect(isSalesOnly({ role: 'sales_person', assigned_modules: ['delegation'] })).toBe(true);
+  expect(isSalesOnly(null)).toBe(false);
 });
 
 test('?chat=<id> selects that chat once on load', async () => {

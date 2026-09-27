@@ -80,6 +80,8 @@ test('scope and status tabs emit a filter patch', async () => {
   expect(onFiltersChange).toHaveBeenCalledWith({ scope: 'unassigned' });
   act(() => { v.q('status-resolved').click(); });
   expect(onFiltersChange).toHaveBeenCalledWith({ status: 'resolved' });
+  act(() => { v.q('status-all').click(); });
+  expect(onFiltersChange).toHaveBeenCalledWith({ status: 'all' });
 });
 
 test('a manager sees the instance chip and a rep select built from the list', async () => {

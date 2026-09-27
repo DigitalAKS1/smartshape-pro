@@ -207,7 +207,8 @@ async def _decorate(rows: list) -> list:
     insts, contacts, schools, opted = {}, {}, {}, set()
     if inst_names:
         async for i in db.wa_instances.find({"instance_name": {"$in": sorted(inst_names)}},
-                                            {"_id": 0, "instance_name": 1, "label": 1, "owner_email": 1, "kind": 1}):
+                                            {"_id": 0, "instance_name": 1, "label": 1, "owner_email": 1, "kind": 1,
+                                             "history_synced_at": 1}):
             insts[i["instance_name"]] = i
     if contact_ids:
         async for c in db.contacts.find({"contact_id": {"$in": sorted(contact_ids)}}, {"_id": 0, "contact_id": 1, "name": 1}):
@@ -226,6 +227,8 @@ async def _decorate(rows: list) -> list:
                     "instance_label": inst.get("label") or r.get("instance_name") or "",
                     "instance_kind": inst.get("kind") or "",
                     "owner_email": inst.get("owner_email") or "",
+                    # the inbox shows "History before <date> may be incomplete" from this
+                    "history_synced_at": inst.get("history_synced_at"),
                     "contact_name": contacts.get(r.get("contact_id"), ""),
                     "school_name": schools.get(r.get("school_id"), ""),
                     "opted_out": r.get("phone_e164") in opted})

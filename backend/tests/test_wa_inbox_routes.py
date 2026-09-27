@@ -149,6 +149,7 @@ def test_rep_sees_own_instance_chats_and_company_chats_for_own_records_only(env,
 
     async def go():
         await _seed(db)
+        await db.wa_instances.update_one({"instance_name": "rep_parul"}, {"$set": {"history_synced_at": T0}})
         out = await wi.wa_chats(FakeRequest())
         assert _ids(out) == [CHAT_PA, CHAT_CA] and out["total"] == 2          # last_message_at desc
         assert CHAT_KB not in _ids(out) and CHAT_CC not in _ids(out) and CHAT_GROUP not in _ids(out)
@@ -156,6 +157,8 @@ def test_rep_sees_own_instance_chats_and_company_chats_for_own_records_only(env,
         assert first["contact_name"] == "Anita" and first["school_name"] == "St Mary"
         assert first["instance_label"] == "rep_parul" and first["owner_email"] == PARUL["email"]
         assert first["opted_out"] is False and "instance_token" not in first
+        assert first["history_synced_at"] == T0                                # task 7 fix round 1: the history banner
+        assert "history_synced_at" in out["items"][1]                          # every row carries the key (None when unsynced)
         assert out["unread_total"] == 5
     _run(go())
 

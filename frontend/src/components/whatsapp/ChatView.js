@@ -31,14 +31,15 @@ export function dayLabel(iso, now = new Date()) {
 }
 
 /** Messages + notes in one ascending timeline, with a date separator before each new day.
- *  A `preview_only` stub (from the stream) is hidden while an optimistic `tmp_` bubble is
- *  still pending in the same chat — the stub is our own send echoed back; the server row
- *  replaces both a moment later. */
+ *  An OUTBOUND `preview_only` stub (from the stream) is hidden while an optimistic `tmp_`
+ *  bubble is still pending (`queued`) in the same chat — the stub is our own send echoed
+ *  back; the server row replaces both a moment later. An inbound stub is always shown, and
+ *  a failed tmp bubble suppresses nothing. */
 export function buildTimeline(messages = [], notes = []) {
-  const pendingTmp = messages.some((m) => String(m.message_id || '').startsWith('tmp_'));
+  const pendingTmp = messages.some((m) => String(m.message_id || '').startsWith('tmp_') && m.status === 'queued');
   const rows = [];
   messages.forEach((m) => {
-    if (m.preview_only && pendingTmp) return;
+    if (m.preview_only && m.direction === 'out' && pendingTmp) return;
     rows.push({ kind: 'message', at: m.created_at || '', key: `m-${m.message_id}`, data: m });
   });
   (notes || []).forEach((n, i) => {
@@ -86,6 +87,12 @@ export function Tick({ status, reason }) {
   }
 }
 
+/** Only http(s), protocol-relative or site-relative URLs are ever rendered as a link/src. */
+export function safeMediaUrl(url) {
+  const u = String(url || '').trim();
+  return /^(https?:)?\/\//i.test(u) || (u.startsWith('/') && !u.startsWith('//'));
+}
+
 export function Media({ media }) {
   if (!media) return null;
   if (media.pending || !media.url) {
@@ -96,6 +103,13 @@ export function Media({ media }) {
     );
   }
   const name = media.filename || media.type || 'file';
+  if (!safeMediaUrl(media.url)) {
+    return (
+      <span data-testid="msg-media" data-kind="unsafe" className="inline-flex items-center gap-1.5 text-xs">
+        <FileText className="h-3.5 w-3.5 flex-shrink-0" /> {name}
+      </span>
+    );
+  }
   switch (media.type) {
     case 'image':
     case 'sticker':

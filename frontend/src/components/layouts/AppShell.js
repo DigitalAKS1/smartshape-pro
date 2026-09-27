@@ -187,7 +187,7 @@ export default function AppShell({ children }) {
   // Desktop → existing layout
   if (!isMobile) {
     if (user?.role === 'sales') return <SalesLayout waUnread={waUnread}>{children}</SalesLayout>;
-    return <AdminLayout>{children}</AdminLayout>;
+    return <AdminLayout waUnread={waUnread}>{children}</AdminLayout>;
   }
 
   const isSalesUser = user?.role === 'sales';
@@ -226,6 +226,7 @@ export default function AppShell({ children }) {
               sidebarGroups={sidebarGroups}
               user={user}
               initials={initials}
+              waUnread={waUnread}
               onClose={() => setMenuOpen(false)}
               onLogout={handleMenuLogout}
             />

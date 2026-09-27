@@ -64,6 +64,7 @@ export default function Composer({ chat, instanceState, sending, onSend }) {
 
   const pickTemplate = async (tpl) => {
     setPickerOpen(false);
+    if (text.trim() && !window.confirm('Replace your draft?')) return;
     setBusy('render');
     try {
       const res = await waInbox.renderTemplate({
@@ -76,7 +77,8 @@ export default function Composer({ chat, instanceState, sending, onSend }) {
         textarea.current?.focus();
       }
     } catch (e) {
-      if (alive.current) { setText(tpl.body || ''); toast.error(errText(e, 'Could not render the template')); }
+      // The draft is left alone — never overwrite what the rep typed with a broken render.
+      if (alive.current) toast.error(errText(e, 'Could not render the template'));
     } finally {
       if (alive.current) setBusy('');
     }
@@ -90,6 +92,8 @@ export default function Composer({ chat, instanceState, sending, onSend }) {
   };
 
   const onKeyDown = (e) => {
+    // An IME (Hindi / Japanese …) commits its candidate with Enter — that is not a send.
+    if (e.nativeEvent?.isComposing || e.keyCode === 229) return;
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       submit();

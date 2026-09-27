@@ -149,14 +149,47 @@ test('no Load older without more history; Resolve/Reopen follow the chat status;
   expect(onBack).toHaveBeenCalledTimes(1);
 });
 
-test('a streamed preview stub is hidden while our optimistic bubble is still pending', () => {
+test('an outbound preview stub is hidden only while our optimistic bubble is still pending; inbound stubs always show', () => {
+  const ids = (list) => buildTimeline(list).filter((r) => r.kind === 'message').map((r) => r.data.message_id);
   const pending = [
     { message_id: 'tmp_1', direction: 'out', text: 'hi', status: 'queued', created_at: at(1) },
     { message_id: 'real_1', direction: 'out', text: 'hi', status: 'sent', created_at: at(1), preview_only: true },
   ];
-  expect(buildTimeline(pending).filter((r) => r.kind === 'message').map((r) => r.data.message_id)).toEqual(['tmp_1']);
+  expect(ids(pending)).toEqual(['tmp_1']);
+  // pending tmp + INBOUND stub → the stub (their reply) must render
+  const inboundStub = [
+    { message_id: 'tmp_1', direction: 'out', text: 'hi', status: 'queued', created_at: at(1) },
+    { message_id: 'in_1', direction: 'in', text: 'yes?', status: 'delivered', created_at: at(2), preview_only: true },
+  ];
+  expect(ids(inboundStub)).toEqual(['tmp_1', 'in_1']);
+  // a FAILED tmp bubble suppresses nothing — an inbound stub and an outbound stub both render
+  const failedTmp = [
+    { message_id: 'tmp_1', direction: 'out', text: 'hi', status: 'failed', fail_reason: 'cap', created_at: at(1) },
+    { message_id: 'in_1', direction: 'in', text: 'yes?', status: 'delivered', created_at: at(2), preview_only: true },
+    { message_id: 'out_2', direction: 'out', text: 'again', status: 'sent', created_at: at(3), preview_only: true },
+  ];
+  expect(ids(failedTmp)).toEqual(['tmp_1', 'in_1', 'out_2']);
   const settled = [{ message_id: 'real_1', direction: 'out', text: 'hi', status: 'sent', created_at: at(1), preview_only: true }];
   expect(buildTimeline(settled).filter((r) => r.kind === 'message').map((r) => r.data.message_id)).toEqual(['real_1']);
+});
+
+test('media with a non-http URL is never a link or a src — the filename shows as plain text', async () => {
+  const messages = [
+    { message_id: 'x1', direction: 'in', created_at: at(1), media: { type: 'document', url: 'javascript:alert(1)', filename: 'evil.pdf' } },
+    { message_id: 'x2', direction: 'in', created_at: at(2), media: { type: 'image', url: 'data:text/html,hi', filename: 'pic.jpg' } },
+    { message_id: 'x3', direction: 'in', created_at: at(3), media: { type: 'document', url: '/uploads/ok.pdf', filename: 'ok.pdf' } },
+    { message_id: 'x4', direction: 'in', created_at: at(4), media: { type: 'document', url: '//cdn.x/ok2.pdf', filename: 'ok2.pdf' } },
+  ];
+  const v = await render(<ChatView chat={chat} messages={messages} />);
+  const media = v.qa('msg-media');
+  expect(media[0].tagName).toBe('SPAN');
+  expect(media[0].getAttribute('data-kind')).toBe('unsafe');
+  expect(media[0].textContent).toMatch(/evil\.pdf/);
+  expect(media[1].tagName).toBe('SPAN');
+  expect(v.el.querySelectorAll('a[href^="javascript"], img[src^="data"]')).toHaveLength(0);
+  expect(media[2].tagName).toBe('A');
+  expect(media[2].getAttribute('href')).toBe('/uploads/ok.pdf');
+  expect(media[3].tagName).toBe('A');
 });
 
 test('dayLabel says Today / Yesterday, else the date', () => {

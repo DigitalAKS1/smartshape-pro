@@ -61,6 +61,22 @@ test('Shift+Enter does not send', async () => {
   expect(ta.value).toBe('line one');
 });
 
+test('Enter while an IME is composing (isComposing / keyCode 229) does not send', async () => {
+  const onSend = jest.fn();
+  const v = await render(<Composer chat={chat} onSend={onSend} />);
+  const ta = v.q('composer-text');
+  act(() => { type(ta, 'नमस्ते'); });
+  act(() => { key(ta, { isComposing: true }); });
+  expect(onSend).not.toHaveBeenCalled();
+  const legacy = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
+  Object.defineProperty(legacy, 'keyCode', { value: 229 });
+  act(() => { ta.dispatchEvent(legacy); });
+  expect(onSend).not.toHaveBeenCalled();
+  expect(ta.value).toBe('नमस्ते');
+  act(() => { key(ta); });                                  // the real Enter after composition
+  expect(onSend).toHaveBeenCalledWith({ text: 'नमस्ते' });
+});
+
 test('the send button sends too, and an empty box never sends', async () => {
   const onSend = jest.fn();
   const v = await render(<Composer chat={chat} onSend={onSend} />);
@@ -122,16 +138,49 @@ test('picking a template pre-fills the box with the rendered body for this chat'
   expect(onSend).toHaveBeenCalledWith({ text: 'Hi Ravi, quick update' });
 });
 
-test('a failed render falls back to the raw template body and reports it', async () => {
+test('a failed render leaves the draft alone and reports it', async () => {
   waInbox.templates.mockResolvedValue({ data: [{ template_id: 'tpl_1', name: 'Follow-up', body: 'Hi {contact_name}' }] });
   waInbox.renderTemplate.mockRejectedValue({ response: { data: { detail: 'Template not found' } } });
+  window.confirm = jest.fn(() => true);
   const v = await render(<Composer chat={chat} onSend={jest.fn()} />);
+  act(() => { type(v.q('composer-text'), 'my draft'); });
   await act(async () => { v.q('composer-template').click(); });
   await flush();
   await act(async () => { v.q('template-option').click(); });
   await flush();
   expect(toast.error).toHaveBeenCalledWith('Template not found');
-  expect(v.q('composer-text').value).toBe('Hi {contact_name}');
+  expect(v.q('composer-text').value).toBe('my draft');
+});
+
+test('a non-empty draft asks before a template replaces it; declining keeps the draft', async () => {
+  waInbox.templates.mockResolvedValue({ data: [{ template_id: 'tpl_1', name: 'Follow-up', body: 'Hi {contact_name}' }] });
+  waInbox.renderTemplate.mockResolvedValue({ data: { body: 'Hi Ravi' } });
+  window.confirm = jest.fn(() => false);
+  const v = await render(<Composer chat={chat} onSend={jest.fn()} />);
+  act(() => { type(v.q('composer-text'), 'my draft'); });
+  await act(async () => { v.q('composer-template').click(); });
+  await flush();
+  await act(async () => { v.q('template-option').click(); });
+  await flush();
+  expect(window.confirm).toHaveBeenCalledWith('Replace your draft?');
+  expect(waInbox.renderTemplate).not.toHaveBeenCalled();
+  expect(v.q('composer-text').value).toBe('my draft');
+  // accepting replaces it
+  window.confirm = jest.fn(() => true);
+  await act(async () => { v.q('composer-template').click(); });
+  await flush();
+  await act(async () => { v.q('template-option').click(); });
+  await flush();
+  expect(v.q('composer-text').value).toBe('Hi Ravi');
+  // an empty box never asks
+  act(() => { type(v.q('composer-text'), ''); });
+  window.confirm = jest.fn(() => false);
+  await act(async () => { v.q('composer-template').click(); });
+  await flush();
+  await act(async () => { v.q('template-option').click(); });
+  await flush();
+  expect(window.confirm).not.toHaveBeenCalled();
+  expect(v.q('composer-text').value).toBe('Hi Ravi');
 });
 
 test('a picked file is uploaded and sent with the typed text as caption', async () => {

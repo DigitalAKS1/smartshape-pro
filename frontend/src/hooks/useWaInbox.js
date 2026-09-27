@@ -129,6 +129,7 @@ export default function useWaInbox() {
   const cursorRef = useRef({});   // next_before / next_before_id for loadOlder
   const refetchTimerRef = useRef(null);
   const loadChatsRef = useRef(null);
+  const markReadRef = useRef(async () => {});
 
   useEffect(() => {
     alive.current = true;
@@ -198,12 +199,20 @@ export default function useWaInbox() {
       if (alive.current && mine === msgSeq.current) toast.error(errText(e, 'Could not load messages'));
     }
 
-    const chat = chatsRef.current.find((c) => c.chat_id === chatId);
-    if (chat && chat.unread_count > 0) {
-      setChats((prev) => prev.map((c) => (c.chat_id === chatId ? { ...c, unread_count: 0 } : c)));
-      try { await waInbox.read(chatId); } catch { /* non-critical, next refetch will settle it */ }
-    }
+    await markReadRef.current(chatId);
   }, []);
+
+  /** Zero the row's unread and tell the server — only when the loaded row still shows unread.
+   *  `select` calls it; the page calls it again when the list arrives after a deep-link
+   *  selection (the row was not loaded when `select` ran), and when a new inbound message
+   *  lands on the chat that is open. */
+  const markRead = useCallback(async (chatId) => {
+    const chat = chatsRef.current.find((c) => c.chat_id === chatId);
+    if (!chat || !(chat.unread_count > 0)) return;
+    setChats((prev) => prev.map((c) => (c.chat_id === chatId ? { ...c, unread_count: 0 } : c)));
+    try { await waInbox.read(chatId); } catch { /* non-critical, next refetch will settle it */ }
+  }, []);
+  markReadRef.current = markRead;
 
   const loadOlder = useCallback(async () => {
     if (!selectedId || !hasMore) return;
@@ -356,7 +365,7 @@ export default function useWaInbox() {
     isManager,
     connected, degraded,
     instanceStates,
-    select, loadOlder, send,
+    select, loadOlder, send, markRead,
     resolve, reopen, assign, addNote, link,
     reloadChats: loadChats,
   };

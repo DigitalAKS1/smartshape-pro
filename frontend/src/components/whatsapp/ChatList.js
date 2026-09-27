@@ -57,6 +57,7 @@ const SCOPES = [
 const STATUSES = [
   { value: 'open', label: 'Open' },
   { value: 'resolved', label: 'Resolved' },
+  { value: 'all', label: 'All' },
 ];
 
 const seg = (active) => `min-h-[36px] px-3 rounded-lg text-xs font-semibold transition-colors ${active

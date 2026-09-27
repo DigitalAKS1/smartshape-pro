@@ -41,9 +41,10 @@ const INPUT = 'w-full min-h-[40px] rounded-xl border border-[var(--border-color)
 
 /**
  * Props: chat, isManager, users [{email,name}], onAssign(chatId, email), onAddNote(chatId, text),
- * onLink(chatId, data), onClose (mobile sheet).
+ * onLink(chatId, data), onClose (mobile sheet), salesOnly (a sales-portal user: the contact
+ * opens in /sales/leads and there is no school-profile page for them).
  */
-export default function ChatRail({ chat, isManager, users = [], onAssign, onAddNote, onLink, onClose }) {
+export default function ChatRail({ chat, isManager, users = [], onAssign, onAddNote, onLink, onClose, salesOnly = false }) {
   const [mode, setMode] = useState('');            // '' | 'search' | 'create'
   const [query, setQuery] = useState('');
   const [all, setAll] = useState(null);            // contacts, loaded on first search
@@ -127,14 +128,14 @@ export default function ChatRail({ chat, isManager, users = [], onAssign, onAddN
               {chat.school_name && <p className="text-xs text-[var(--text-secondary)]" data-testid="rail-school">{chat.school_name}</p>}
               {chat.phone_e164 && <p className="text-xs text-[var(--text-secondary)]">{prettyPhone(chat.phone_e164)}</p>}
               <div className="flex flex-wrap gap-2 pt-1">
-                {chat.school_id && (
+                {chat.school_id && !salesOnly && (
                   <Link to={`/school-profile/${encodeURIComponent(chat.school_id)}`} data-testid="rail-open-school"
                     className="inline-flex items-center gap-1 text-xs font-semibold text-[#e94560] hover:underline">
                     <ExternalLink className="h-3 w-3" /> Open school in CRM
                   </Link>
                 )}
                 {chat.contact_id && (
-                  <Link to={`/leads?contact=${encodeURIComponent(chat.contact_id)}`} data-testid="rail-open-contact"
+                  <Link to={salesOnly ? '/sales/leads' : `/leads?contact=${encodeURIComponent(chat.contact_id)}`} data-testid="rail-open-contact"
                     className="inline-flex items-center gap-1 text-xs font-semibold text-[#e94560] hover:underline">
                     <ExternalLink className="h-3 w-3" /> Open contact in CRM
                   </Link>
