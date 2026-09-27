@@ -48,6 +48,9 @@ async function render(ui) {
 const NOW = new Date('2026-09-27T10:00:00Z').getTime();
 const ago = (mins) => new Date(NOW - mins * 60000).toISOString();
 
+// The real contract: GET /wa/messages answers {items: [...]} (routes/wa_inbox_routes.py).
+const api = (rows) => ({ data: { items: rows } });
+
 // Newest first, as the API returns them.
 const ROWS = [
   { message_id: 'm4', chat_id: 'chat_9', direction: 'out', text: 'Sending the PDF', status: 'failed', fail_reason: 'number not on WhatsApp',
@@ -61,7 +64,7 @@ const ROWS = [
 ];
 
 test('asks for only the id it was given, plus the limit', async () => {
-  waInbox.byRecord.mockResolvedValue({ data: [] });
+  waInbox.byRecord.mockResolvedValue(api([]));
   await render(<RecentWhatsApp contactId="c1" />);
   expect(waInbox.byRecord).toHaveBeenCalledTimes(1);
   expect(waInbox.byRecord).toHaveBeenCalledWith({ contact_id: 'c1', limit: 20 });
@@ -73,8 +76,16 @@ test('asks for only the id it was given, plus the limit', async () => {
   expect(waInbox.byRecord).toHaveBeenLastCalledWith({ lead_id: 'l1', limit: 20 });
 });
 
+test('no id set: no request, just the empty state', async () => {
+  const v = await render(<RecentWhatsApp />);
+  expect(waInbox.byRecord).not.toHaveBeenCalled();
+  expect(v.q('rw-empty').textContent).toBe('No WhatsApp messages yet');
+  expect(v.q('rw-loading')).toBeNull();
+  expect(v.q('rw-open-chat')).toBeNull();
+});
+
 test('rows render newest last, with the outbound ticks and the failure reason', async () => {
-  waInbox.byRecord.mockResolvedValue({ data: ROWS });
+  waInbox.byRecord.mockResolvedValue(api(ROWS));
   const v = await render(<RecentWhatsApp contactId="c1" />);
   const texts = v.qa('rw-text').map((n) => n.textContent);
   expect(texts).toEqual(['Hi from SmartShape', 'Hello, price list?', 'Read this one', 'Sending the PDF']);
@@ -88,8 +99,14 @@ test('rows render newest last, with the outbound ticks and the failure reason', 
   expect(v.q('rw-loading')).toBeNull();
 });
 
+test('a bare array in data is tolerated too', async () => {
+  waInbox.byRecord.mockResolvedValue({ data: [ROWS[3]] });
+  const v = await render(<RecentWhatsApp contactId="c1" />);
+  expect(v.qa('rw-text').map((n) => n.textContent)).toEqual(['Hi from SmartShape']);
+});
+
 test('media shows as a paperclip link to the file', async () => {
-  waInbox.byRecord.mockResolvedValue({ data: ROWS });
+  waInbox.byRecord.mockResolvedValue(api(ROWS));
   const v = await render(<RecentWhatsApp contactId="c1" />);
   const media = v.q('rw-media');
   expect(media.tagName).toBe('A');
@@ -99,8 +116,23 @@ test('media shows as a paperclip link to the file', async () => {
   expect(media.textContent).toBe('📎 photo.jpg');
 });
 
+test('media still downloading, or without a url, is a labelled span rather than a link', async () => {
+  waInbox.byRecord.mockResolvedValue(api([
+    { ...ROWS[2], message_id: 'p1', media: { type: 'document', url: 'https://cdn/later.pdf', pending: true } },
+    { ...ROWS[2], message_id: 'p2', media: { type: 'audio' } },
+  ]));
+  const v = await render(<RecentWhatsApp contactId="c1" />);
+  const spans = v.qa('rw-media');
+  expect(spans).toHaveLength(2);
+  spans.forEach((s) => {
+    expect(s.tagName).toBe('SPAN');
+    expect(s.getAttribute('title')).toBe('This file has not been downloaded from WhatsApp yet');
+  });
+  expect(spans.map((s) => s.textContent)).toEqual(['📎 audio (not downloaded)', '📎 document (not downloaded)']);
+});
+
 test('a message typed by someone else than the number owner is attributed; own messages are not', async () => {
-  waInbox.byRecord.mockResolvedValue({ data: ROWS });
+  waInbox.byRecord.mockResolvedValue(api(ROWS));
   const v = await render(<RecentWhatsApp contactId="c1" />);
   const tags = v.qa('rw-attribution');
   expect(tags).toHaveLength(1);
@@ -108,13 +140,13 @@ test('a message typed by someone else than the number owner is attributed; own m
 });
 
 test('Open chat links to the inbox for the newest row\'s chat', async () => {
-  waInbox.byRecord.mockResolvedValue({ data: [{ ...ROWS[0], chat_id: 'chat a/b' }, ROWS[1]] });
+  waInbox.byRecord.mockResolvedValue(api([{ ...ROWS[0], chat_id: 'chat a/b' }, ROWS[1]]));
   const v = await render(<RecentWhatsApp contactId="c1" />);
   expect(v.q('rw-open-chat').getAttribute('href')).toBe('/whatsapp?chat=chat%20a%2Fb');
 });
 
 test('no rows: the empty state and no Open chat link', async () => {
-  waInbox.byRecord.mockResolvedValue({ data: [] });
+  waInbox.byRecord.mockResolvedValue(api([]));
   const v = await render(<RecentWhatsApp contactId="c1" />);
   expect(v.q('rw-empty').textContent).toBe('No WhatsApp messages yet');
   expect(v.q('rw-open-chat')).toBeNull();
@@ -130,9 +162,9 @@ test('a failed load shows the error state', async () => {
 });
 
 test('refetches when the contact changes and shows the new contact\'s rows', async () => {
-  waInbox.byRecord.mockImplementation(({ contact_id }) => Promise.resolve({
-    data: contact_id === 'c1' ? [ROWS[3]] : [{ ...ROWS[2], message_id: 'z1', chat_id: 'chat_other', text: 'Other contact' }],
-  }));
+  waInbox.byRecord.mockImplementation(({ contact_id }) => Promise.resolve(api(
+    contact_id === 'c1' ? [ROWS[3]] : [{ ...ROWS[2], message_id: 'z1', chat_id: 'chat_other', text: 'Other contact' }],
+  )));
   const v = await render(<RecentWhatsApp contactId="c1" />);
   expect(v.qa('rw-text').map((n) => n.textContent)).toEqual(['Hi from SmartShape']);
   await v.rerender(<RecentWhatsApp contactId="c2" />);
@@ -146,20 +178,40 @@ test('a slow earlier load cannot overwrite a newer one', async () => {
   let resolveFirst;
   waInbox.byRecord
     .mockImplementationOnce(() => new Promise((res) => { resolveFirst = res; }))
-    .mockImplementationOnce(() => Promise.resolve({ data: [{ ...ROWS[1], text: 'second' }] }));
+    .mockImplementationOnce(() => Promise.resolve(api([{ ...ROWS[1], text: 'second' }])));
   const v = await render(<RecentWhatsApp contactId="c1" />);
   await v.rerender(<RecentWhatsApp contactId="c2" />);
   expect(v.qa('rw-text').map((n) => n.textContent)).toEqual(['second']);
-  await act(async () => { resolveFirst({ data: [{ ...ROWS[1], text: 'first (stale)' }] }); });
+  await act(async () => { resolveFirst(api([{ ...ROWS[1], text: 'first (stale)' }])); });
   await flush();
   expect(v.qa('rw-text').map((n) => n.textContent)).toEqual(['second']);
 });
 
+test('switching contact clears the old rows and link while the next load is pending; a failure keeps the link hidden', async () => {
+  let rejectSecond;
+  waInbox.byRecord
+    .mockImplementationOnce(() => Promise.resolve(api([ROWS[3]])))
+    .mockImplementationOnce(() => new Promise((_, rej) => { rejectSecond = rej; }));
+  const v = await render(<RecentWhatsApp contactId="c1" />);
+  expect(v.q('rw-open-chat').getAttribute('href')).toBe('/whatsapp?chat=chat_9');
+  await v.rerender(<RecentWhatsApp contactId="c2" />);
+  expect(v.q('rw-loading')).not.toBeNull();
+  expect(v.q('rw-open-chat')).toBeNull();                  // A's chat must not be offered as B's
+  expect(v.qa('rw-text')).toHaveLength(0);
+  await act(async () => { rejectSecond(new Error('boom')); });
+  await flush();
+  expect(v.q('rw-error').textContent).toBe('Could not load WhatsApp messages');
+  expect(v.q('rw-open-chat')).toBeNull();
+  expect(v.q('rw-loading')).toBeNull();
+});
+
 test('the tick and relative-time helpers', () => {
   expect(statusTick('queued')).toBe('⏱');
+  expect(statusTick('sending')).toBe('⏱');
   expect(statusTick('sent')).toBe('✓');
   expect(statusTick('delivered')).toBe('✓✓');
   expect(statusTick('read')).toBe('✓✓ read');
+  expect(statusTick('played')).toBe('✓✓ read');
   expect(statusTick('failed')).toBe('!');
   expect(statusTick('skipped')).toBe('!');
   expect(statusTick('received')).toBe('');

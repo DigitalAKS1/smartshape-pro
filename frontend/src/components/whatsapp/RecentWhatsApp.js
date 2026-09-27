@@ -8,10 +8,12 @@ import { waInbox } from '../../lib/api';
 /** Outbound status → tick text. Anything unknown shows nothing. */
 export function statusTick(status) {
   switch (status) {
-    case 'queued':    return '⏱';
+    case 'queued':
+    case 'sending':   return '⏱';
     case 'sent':      return '✓';
     case 'delivered': return '✓✓';
-    case 'read':      return '✓✓ read';
+    case 'read':
+    case 'played':    return '✓✓ read';
     case 'failed':
     case 'skipped':   return '!';
     default:          return '';
@@ -36,15 +38,19 @@ export function relativeTime(iso, now = Date.now()) {
 
 function Media({ media }) {
   if (!media) return null;
-  const label = `📎 ${media.filename || media.type || 'attachment'}`;
-  if (media.url) {
+  if (media.url && !media.pending) {
     return (
       <a href={media.url} target="_blank" rel="noreferrer" className="underline break-all" data-testid="rw-media">
-        {label}
+        {`📎 ${media.filename || media.type || 'attachment'}`}
       </a>
     );
   }
-  return <span data-testid="rw-media">{label}</span>;
+  // Still being fetched from WhatsApp (or never was): nothing to open yet.
+  return (
+    <span data-testid="rw-media" title="This file has not been downloaded from WhatsApp yet">
+      {`📎 ${media.type || media.filename || 'attachment'} (not downloaded)`}
+    </span>
+  );
 }
 
 function Bubble({ m }) {
@@ -94,16 +100,20 @@ export default function RecentWhatsApp({ contactId, schoolId, leadId, limit = 20
     if (contactId) params.contact_id = contactId;
     if (schoolId) params.school_id = schoolId;
     if (leadId) params.lead_id = leadId;
+    setRows([]);                                  // never show the previous record's chat while the next loads
+    setError('');
     if (!contactId && !schoolId && !leadId) {
-      setRows([]); setLoading(false); setError('');
+      setLoading(false);
       return;
     }
     setLoading(true);
     waInbox.byRecord(params)
       .then((r) => {
         if (!alive.current || mine !== seq.current) return;
-        const list = Array.isArray(r?.data) ? r.data : (Array.isArray(r?.data?.messages) ? r.data.messages : []);
-        setRows(list);
+        // The API answers {items: [...]}; a bare array is tolerated.
+        const d = r?.data;
+        const list = Array.isArray(d) ? d : (d?.items || d?.messages || []);
+        setRows(Array.isArray(list) ? list : []);
         setError('');
       })
       .catch(() => {
@@ -117,7 +127,7 @@ export default function RecentWhatsApp({ contactId, schoolId, leadId, limit = 20
 
   const newest = rows[0];                       // the API returns newest first
   const ordered = rows.slice().reverse();       // chat order: newest at the bottom
-  const chatId = newest?.chat_id;
+  const chatId = !loading && !error ? newest?.chat_id : '';   // no link while loading or after a failure
 
   return (
     <div data-testid="recent-whatsapp">
