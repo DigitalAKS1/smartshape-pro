@@ -4,7 +4,7 @@ import {
   Smartphone, Layers, IndianRupee, UserCog, Store, MapPin, Target,
   CalendarDays, Calendar, ShoppingCart, Upload, Activity,
   Home, MoreHorizontal, Zap, Heart, Truck, Award, Video, Trophy, Inbox, CalendarClock,
-  SlidersHorizontal, FormInput, PhoneCall, Rocket,
+  SlidersHorizontal, FormInput, PhoneCall, Rocket, MessageCircle,
 } from 'lucide-react';
 
 /**
@@ -50,6 +50,7 @@ export const MODULE_ROUTE_MAP = {
     { path: '/offline-mail', icon: MapPin, label: 'Offline Mail' },
     { path: '/activity-monitor', icon: ClipboardList, label: 'Activity Monitor' },
     { path: '/marketing', icon: Zap, label: 'Marketing & WhatsApp' },
+    { path: '/whatsapp', icon: MessageCircle, label: 'WhatsApp Inbox' },
   ],
   // School & Teacher portal admin — grouped in its own collapsible section.
   school_portal: [
@@ -103,7 +104,7 @@ export const TEAM_MODULES = {
 
 export const BOTTOM_NAV_ITEMS = [
   { path: '/today',       icon: Home,          label: 'Home',   module: 'dashboard',    related: ['/dashboard'] },
-  { path: '/leads',       icon: Target,        label: 'CRM',    module: 'leads',        related: ['/school-profile', '/crm-masters', '/dispatch-tracking', '/customer-engagement', '/marketing'] },
+  { path: '/leads',       icon: Target,        label: 'CRM',    module: 'leads',        related: ['/school-profile', '/crm-masters', '/dispatch-tracking', '/customer-engagement', '/marketing', '/whatsapp'] },
   { path: '/field-sales', icon: MapPin,        label: 'Field',  module: 'field_sales',  related: ['/visit-planning', '/visit-calendar'] },
   { path: '/delegation',  icon: ClipboardList, label: 'Tasks',  module: 'delegation',   related: [] },
   { path: '/sales',       icon: Smartphone,    label: 'Sales',  module: 'sales_portal', related: ['/quotations', '/create-quotation', '/view-quotation', '/edit-quotation', '/orders'] },
@@ -144,6 +145,7 @@ export function getPageTitle(pathname) {
   if (exact) return exact.label;
   if (pathname.startsWith('/school-profile/'))  return 'School Profile';
   if (pathname === '/marketing')                return 'Marketing & WhatsApp';
+  if (pathname === '/whatsapp')                 return 'WhatsApp Inbox';
   if (pathname.startsWith('/view-quotation/'))  return 'View Quotation';
   if (pathname.startsWith('/edit-quotation/'))  return 'Edit Quotation';
   if (pathname.startsWith('/catalogue/'))       return 'Catalogue';

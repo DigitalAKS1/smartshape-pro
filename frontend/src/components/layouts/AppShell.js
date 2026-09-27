@@ -9,7 +9,9 @@ import AppShellNotifDrawer from './AppShellNotifDrawer';
 import AdminSidebar from './AdminSidebar';
 import { buildSidebarGroups } from './AdminNavItems';
 import { useAuth } from '../../contexts/AuthContext';
-import { notificationsApi, pushApi } from '../../lib/api';
+import { notificationsApi, pushApi, waInbox } from '../../lib/api';
+
+export const WA_UNREAD_POLL_MS = 60000;
 
 function urlB64ToUint8Array(b64) {
   const pad = '='.repeat((4 - b64.length % 4) % 4);
@@ -40,6 +42,7 @@ export default function AppShell({ children }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [notifs, setNotifs] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [waUnread, setWaUnread] = useState(0);
 
   const [pushSubscribed, setPushSubscribed] = useState(false);
   const [pushEnabling, setPushEnabling] = useState(false);
@@ -86,6 +89,25 @@ export default function AppShell({ children }) {
     const t = setInterval(fetchUnread, 30000);
     return () => clearInterval(t);
   }, [fetchUnread]);
+
+  // Unread WhatsApp chats for the Chats badge — every 60 s. A 401/403 (not signed in, or no
+  // inbox access) ends the polling for this mount; anything else is retried next tick.
+  useEffect(() => {
+    let on = true;
+    let timer = null;
+    const tick = async () => {
+      try {
+        const r = await waInbox.unreadCount();
+        if (on) setWaUnread(Number(r?.data?.unread) || 0);
+      } catch (e) {
+        const st = e?.response?.status;
+        if (st === 401 || st === 403) { if (timer) clearInterval(timer); timer = null; }
+      }
+    };
+    tick();
+    timer = setInterval(tick, WA_UNREAD_POLL_MS);
+    return () => { on = false; if (timer) clearInterval(timer); };
+  }, []);
 
   useEffect(() => {
     if (!pushSupported) return;
@@ -164,8 +186,8 @@ export default function AppShell({ children }) {
 
   // Desktop → existing layout
   if (!isMobile) {
-    const Layout = user?.role === 'sales' ? SalesLayout : AdminLayout;
-    return <Layout>{children}</Layout>;
+    if (user?.role === 'sales') return <SalesLayout waUnread={waUnread}>{children}</SalesLayout>;
+    return <AdminLayout>{children}</AdminLayout>;
   }
 
   const isSalesUser = user?.role === 'sales';
@@ -228,7 +250,7 @@ export default function AppShell({ children }) {
         onNavigate={nav}
       />
 
-      <AppShellNav isSalesUser={isSalesUser} />
+      <AppShellNav isSalesUser={isSalesUser} waUnread={waUnread} />
     </div>
   );
 }

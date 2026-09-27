@@ -12,10 +12,12 @@ const ALL_NAV = [
   { path: '/sales/leads',      icon: Users,    label: 'Leads',  perm: 'leads_view' },
   { path: '/sales/visits',     icon: MapPin,   label: 'Visits', perm: 'visits_log' },
   { path: '/sales/quotations', icon: FileText, label: 'Quotes', perm: 'quotation_view' },
+  { path: '/whatsapp',         icon: MessageCircle, label: 'Chats', perm: null },
   { path: '/leave-management', icon: Calendar, label: 'Leave',  perm: 'leave_apply' },
 ];
 
-export default function SalesLayout({ children, title, showBack }) {
+/** `waUnread` — unread WhatsApp chats; the Chats tab shows it as a badge (AppShell polls it). */
+export default function SalesLayout({ children, title, showBack, waUnread = 0 }) {
   const { user, logout } = useAuth();
   const { isDark, toggleTheme } = useTheme();
   const location = useLocation();
@@ -132,6 +134,12 @@ export default function SalesLayout({ children, title, showBack }) {
                   }`}
                   strokeWidth={isActive ? 2.2 : 1.6}
                 />
+                {item.path === '/whatsapp' && waUnread > 0 && (
+                  <span data-testid="sales-nav-chats-badge"
+                    className="absolute top-1.5 left-1/2 ml-1 min-w-[14px] h-3.5 px-0.5 bg-[#e94560] text-white text-[8px] font-bold rounded-full flex items-center justify-center leading-none">
+                    {waUnread > 9 ? '9+' : waUnread}
+                  </span>
+                )}
                 <span className={`text-[10px] font-semibold leading-none ${
                   isActive ? 'text-[var(--accent)]' : 'text-[var(--text-muted)]'
                 }`}>{item.label}</span>
