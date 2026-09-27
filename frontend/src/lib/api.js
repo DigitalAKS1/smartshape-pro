@@ -554,6 +554,9 @@ export const waInbox = {
   unreadCount:  ()                  => API.get('/wa/unread-count'),
   streamUrl:    ()                  => `${BACKEND_URL}/api/wa/stream`,
   templates:    ()                  => API.get('/whatsapp-templates'),
+  // {template_id, contact_id?, school_id?, lead_id?} -> {body, phone, context}; the composer
+  // pre-fills the textarea with `body` so the rep can edit before sending.
+  renderTemplate: (data)            => API.post('/whatsapp/render-template', data),
   uploadAttachment: (file) => { const fd = new FormData(); fd.append('file', file);
     return API.post('/whatsapp/attachments/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } }); },
 };
