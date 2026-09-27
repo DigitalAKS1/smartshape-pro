@@ -127,6 +127,23 @@ test('closes the EventSource on unmount', async () => {
   root = createRoot(document.createElement('div'));
 });
 
+test('es.onopen marks connected even before any named event arrives', async () => {
+  await mount({ onEvent: jest.fn(), enabled: true });
+  const es = FakeEventSource.instances[0];
+  expect(hookResult.connected).toBe(false);
+  expect(typeof es.onopen).toBe('function');
+
+  await act(async () => { es.onopen(new Event('open')); });
+  expect(hookResult.connected).toBe(true);
+
+  // error → disconnected, browser reconnect → onopen again → connected
+  await act(async () => { es.error(); });
+  expect(hookResult.connected).toBe(false);
+  await act(async () => { es.onopen(new Event('open')); });
+  expect(hookResult.connected).toBe(true);
+  expect(hookResult.degraded).toBe(false);
+});
+
 test('after 3 consecutive errors, switches to degraded', async () => {
   await mount({ onEvent: jest.fn(), enabled: true });
   const es = FakeEventSource.instances[0];

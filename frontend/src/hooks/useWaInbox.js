@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { waInbox } from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
@@ -59,12 +59,20 @@ export function applyMessageStatus(messages, ev) {
 }
 
 /** Combines two message arrays, de-duping by `message_id` (the later entry
- *  wins) and returning them in ascending (oldest → newest) order. */
+ *  wins) and returning them in ascending (oldest → newest) order.
+ *  Rows synthesised from a `message_new` stream frame carry
+ *  `preview_only: true` — they never overwrite a full row with the same id
+ *  (a later full row does replace the stub, and clears the flag). */
 export function mergeMessages(existing, incoming) {
   const map = new Map();
   [...(existing || []), ...(incoming || [])].forEach((m) => {
     if (!m || !m.message_id) return;
-    map.set(m.message_id, { ...map.get(m.message_id), ...m });
+    const prev = map.get(m.message_id);
+    if (!prev) { map.set(m.message_id, { ...m }); return; }
+    if (m.preview_only && !prev.preview_only) return;          // stub must not clobber a full row
+    const merged = { ...prev, ...m };
+    if (!m.preview_only) delete merged.preview_only;           // full row replaces a stub
+    map.set(m.message_id, merged);
   });
   return Array.from(map.values()).sort((a, b) => {
     const ta = a.created_at ? new Date(a.created_at).getTime() : 0;
@@ -83,6 +91,12 @@ function buildChatParams(filters, page) {
 
 const DEFAULT_FILTERS = { scope: 'mine', status: 'open', instance: '', q: '' };
 
+// A `message_new` for a chat we don't have loaded, under a filter we can't
+// judge client-side, triggers one list refetch after this quiet period.
+export const UNKNOWN_CHAT_REFETCH_MS = 300;
+
+const sumUnread = (list) => list.reduce((n, c) => n + (Number(c?.unread_count) || 0), 0);
+
 export default function useWaInbox() {
   const { user } = useAuth();
   const isManager = user?.role === 'admin' || (Array.isArray(user?.roles) && user.roles.includes('admin'));
@@ -90,13 +104,21 @@ export default function useWaInbox() {
   const [filters, setFiltersState] = useState(DEFAULT_FILTERS);
   const [chats, setChats] = useState([]);
   const [total, setTotal] = useState(0);
-  const [unreadTotal, setUnreadTotal] = useState(0);
+  // Server-reported unread total for the whole scope, and how much of it sat
+  // on the page we loaded. `unreadTotal` is derived from these plus the live
+  // page so no updater ever has to touch a second state.
+  const [unreadBase, setUnreadBase] = useState({ total: 0, pageSum: 0 });
   const [selectedId, setSelectedId] = useState(null);
   const [messages, setMessages] = useState([]);
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [instanceStates, setInstanceStates] = useState({});
+
+  const unreadTotal = useMemo(
+    () => Math.max(0, unreadBase.total - unreadBase.pageSum + sumUnread(chats)),
+    [unreadBase, chats],
+  );
 
   const alive = useRef(true);
   const seq = useRef(0);          // guards chat-list loads
@@ -105,10 +127,15 @@ export default function useWaInbox() {
   const chatsRef = useRef([]);
   const pageRef = useRef(1);
   const cursorRef = useRef({});   // next_before / next_before_id for loadOlder
+  const refetchTimerRef = useRef(null);
+  const loadChatsRef = useRef(null);
 
   useEffect(() => {
     alive.current = true;
-    return () => { alive.current = false; };
+    return () => {
+      alive.current = false;
+      if (refetchTimerRef.current) { clearTimeout(refetchTimerRef.current); refetchTimerRef.current = null; }
+    };
   }, []);
 
   useEffect(() => { selectedIdRef.current = selectedId; }, [selectedId]);
@@ -125,9 +152,10 @@ export default function useWaInbox() {
       const res = await waInbox.chats(buildChatParams(filters, page));
       if (!alive.current || mine !== seq.current) return;
       const data = res?.data || {};
-      setChats(data.items || []);
+      const items = data.items || [];
+      setChats(items);
       setTotal(data.total || 0);
-      setUnreadTotal(data.unread_total || 0);
+      setUnreadBase({ total: data.unread_total || 0, pageSum: sumUnread(items) });
       pageRef.current = page;
     } catch (e) {
       if (alive.current && mine === seq.current) toast.error(errText(e, 'Could not load WhatsApp chats'));
@@ -135,10 +163,20 @@ export default function useWaInbox() {
       if (alive.current && mine === seq.current) setLoading(false);
     }
   }, [filters]);
+  loadChatsRef.current = loadChats;
 
   useEffect(() => { loadChats(1); }, [loadChats]);
 
+  const scheduleRefetch = useCallback(() => {
+    if (refetchTimerRef.current) clearTimeout(refetchTimerRef.current);
+    refetchTimerRef.current = setTimeout(() => {
+      refetchTimerRef.current = null;
+      if (alive.current) loadChatsRef.current?.(pageRef.current || 1);
+    }, UNKNOWN_CHAT_REFETCH_MS);
+  }, []);
+
   const select = useCallback(async (chatId) => {
+    selectedIdRef.current = chatId;
     setSelectedId(chatId);
     setMessages([]);
     setHasMore(false);
@@ -146,9 +184,14 @@ export default function useWaInbox() {
     const mine = ++msgSeq.current;
     try {
       const res = await waInbox.messages(chatId, { limit: 50 });
-      if (!alive.current || mine !== msgSeq.current) return;
+      if (!alive.current || mine !== msgSeq.current || selectedIdRef.current !== chatId) return;
       const data = res?.data || {};
-      setMessages(mergeMessages([], data.items || []));
+      // Anything the stream appended for this chat while the page was in
+      // flight is already in `messages` (we emptied it above) — merge, don't
+      // replace, so those rows survive and server rows win by id. The
+      // functional form reads the truly current list, even mid-batch.
+      const items = data.items || [];
+      setMessages((prev) => mergeMessages(prev.filter((m) => !m.chat_id || m.chat_id === chatId), items));
       setHasMore(!!data.has_more);
       cursorRef.current = { before: data.next_before, before_id: data.next_before_id };
     } catch (e) {
@@ -157,9 +200,7 @@ export default function useWaInbox() {
 
     const chat = chatsRef.current.find((c) => c.chat_id === chatId);
     if (chat && chat.unread_count > 0) {
-      const priorUnread = chat.unread_count;
       setChats((prev) => prev.map((c) => (c.chat_id === chatId ? { ...c, unread_count: 0 } : c)));
-      setUnreadTotal((ut) => Math.max(0, ut - priorUnread));
       try { await waInbox.read(chatId); } catch { /* non-critical, next refetch will settle it */ }
     }
   }, []);
@@ -199,11 +240,21 @@ export default function useWaInbox() {
       const res = await waInbox.send(chatId, { text, attachment_id, template_id });
       const data = res?.data || {};
       const row = data.message;
-      setMessages((prev) => prev.map((m) => {
-        if (m.message_id !== tmpId) return m;
-        if (row) return row;
-        return { ...m, status: data.status || m.status, fail_reason: data.reason };
-      }));
+      // The backend also publishes `message_new` for our own send (with the
+      // real id), unordered relative to this response — so never `.map` the
+      // tmp bubble into the server row: drop the tmp and merge by id, which
+      // collapses onto the streamed stub if it got here first.
+      setMessages((prev) => {
+        const withoutTmp = prev.filter((m) => m.message_id !== tmpId);
+        if (row && row.message_id) return mergeMessages(withoutTmp, [row]);
+        const patch = { status: data.status || 'queued', fail_reason: data.reason };
+        const realId = data.message_id;
+        if (realId && withoutTmp.some((m) => m.message_id === realId)) {
+          // streamed stub already represents this send — patch it, tmp goes
+          return mergeMessages(withoutTmp, [{ message_id: realId, ...patch }]);
+        }
+        return prev.map((m) => (m.message_id === tmpId ? { ...m, ...patch } : m));
+      });
     } catch (e) {
       setMessages((prev) => prev.map((m) => (
         m.message_id === tmpId ? { ...m, status: 'failed', fail_reason: errText(e, 'Send failed') } : m
@@ -250,16 +301,17 @@ export default function useWaInbox() {
   }, [patchChat]);
 
   const handleStreamEvent = useCallback((type, data) => {
+    if (!data) return;
     if (type === 'message_new') {
-      setChats((prev) => {
-        const next = applyMessageNew(prev, data, filters);
-        const oldChat = prev.find((c) => c.chat_id === data.chat_id);
-        const newChat = next.find((c) => c.chat_id === data.chat_id);
-        const delta = (newChat?.unread_count || 0) - (oldChat?.unread_count || 0);
-        if (delta) setUnreadTotal((ut) => Math.max(0, ut + delta));
-        return next;
-      });
-      if (data.chat_id === selectedIdRef.current) {
+      // Unread total is derived from `chats`, so the updater stays pure.
+      setChats((prev) => applyMessageNew(prev, data, filters));
+      // A chat we don't have loaded, under a filter we can't judge from the
+      // frame alone ('mine'/'unassigned', or a non-open status view): ask the
+      // server once, debounced, rather than dropping the event.
+      const known = chatsRef.current.some((c) => c.chat_id === data.chat_id);
+      const canInsertLocally = filters.scope === 'all' && filters.status === 'open';
+      if (!known && !canInsertLocally) scheduleRefetch();
+      if (data.chat_id === selectedIdRef.current && data.message_id) {
         setMessages((prev) => mergeMessages(prev, [{
           message_id: data.message_id,
           chat_id: data.chat_id,
@@ -268,24 +320,17 @@ export default function useWaInbox() {
           status: data.status || 'delivered',
           typed_by: data.typed_by,
           created_at: new Date().toISOString(),
+          preview_only: true,
         }]));
       }
     } else if (type === 'message_status') {
       setMessages((prev) => applyMessageStatus(prev, data));
     } else if (type === 'chat_updated') {
-      setChats((prev) => {
-        const oldChat = prev.find((c) => c.chat_id === data.chat_id);
-        const next = prev.map((c) => (c.chat_id === data.chat_id ? { ...c, ...data } : c));
-        if (oldChat && data.unread_count !== undefined) {
-          const delta = data.unread_count - (oldChat.unread_count || 0);
-          if (delta) setUnreadTotal((ut) => Math.max(0, ut + delta));
-        }
-        return next;
-      });
+      setChats((prev) => prev.map((c) => (c.chat_id === data.chat_id ? { ...c, ...data } : c)));
     } else if (type === 'instance_state') {
       setInstanceStates((prev) => ({ ...prev, [data.instance_name]: data.state }));
     }
-  }, [filters]);
+  }, [filters, scheduleRefetch]);
 
   const { connected, degraded } = useWaStream(handleStreamEvent, { enabled: true });
 

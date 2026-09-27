@@ -272,6 +272,245 @@ test('pure helper: applyMessageStatus patches only the matching message', () => 
   expect(next[1].status).toBe('read');
 });
 
+// ── Fix round 1 ─────────────────────────────────────────────────────────────
+
+test('select merges rows the stream appended while the page was loading (no duplicates)', async () => {
+  mockChats.mockReturnValue(ok({ items: [{ chat_id: 'c1', unread_count: 0 }], total: 1, page: 1, unread_total: 0 }));
+  let resolveMessages;
+  mockMessages.mockReturnValue(new Promise((resolve) => { resolveMessages = resolve; }));
+  await mount();
+
+  let selectPromise;
+  act(() => { selectPromise = hookResult.select('c1'); });
+  await flush();
+  expect(hookResult.selectedId).toBe('c1');
+
+  const es = FakeEventSource.instances[0];
+  await act(async () => {
+    es.emit('message_new', { chat_id: 'c1', message_id: 'm3', direction: 'in', preview: 'live one', status: 'delivered' });
+  });
+  expect(hookResult.messages.map((m) => m.message_id)).toEqual(['m3']);
+
+  await act(async () => {
+    resolveMessages({ data: {
+      items: [
+        { message_id: 'm1', chat_id: 'c1', direction: 'in', text: 'first', created_at: '2026-01-01T00:00:01Z' },
+        { message_id: 'm2', chat_id: 'c1', direction: 'in', text: 'second', created_at: '2026-01-01T00:00:02Z' },
+      ],
+      has_more: false,
+    } });
+    await selectPromise;
+  });
+
+  const ids = hookResult.messages.map((m) => m.message_id);
+  expect(ids).toEqual(['m1', 'm2', 'm3']);
+  expect(ids.filter((id) => id === 'm3')).toHaveLength(1);
+  expect(hookResult.messages.find((m) => m.message_id === 'm3').preview_only).toBe(true);
+});
+
+test('select ignores a page that resolves after the selection moved on', async () => {
+  mockChats.mockReturnValue(ok({
+    items: [{ chat_id: 'c1', unread_count: 0 }, { chat_id: 'c2', unread_count: 0 }],
+    total: 2, page: 1, unread_total: 0,
+  }));
+  let resolveC1;
+  mockMessages.mockImplementation((chatId) => (
+    chatId === 'c1'
+      ? new Promise((resolve) => { resolveC1 = resolve; })
+      : ok({ items: [{ message_id: 'x1', chat_id: 'c2', direction: 'in', text: 'c2 row', created_at: '2026-01-01T00:00:01Z' }], has_more: false })
+  ));
+  await mount();
+
+  let p1;
+  act(() => { p1 = hookResult.select('c1'); });
+  await flush();
+  await act(async () => { await hookResult.select('c2'); });
+  expect(hookResult.messages.map((m) => m.message_id)).toEqual(['x1']);
+
+  await act(async () => {
+    resolveC1({ data: { items: [{ message_id: 'old1', chat_id: 'c1', direction: 'in', text: 'stale', created_at: '2026-01-01T00:00:00Z' }], has_more: false } });
+    await p1;
+  });
+  expect(hookResult.selectedId).toBe('c2');
+  expect(hookResult.messages.map((m) => m.message_id)).toEqual(['x1']);
+});
+
+test('send: a message_new with the real id arriving before the POST resolves yields one row, no tmp left', async () => {
+  mockChats.mockReturnValue(ok({ items: [{ chat_id: 'c1', unread_count: 0 }], total: 1, page: 1, unread_total: 0 }));
+  mockMessages.mockReturnValue(ok({ items: [], has_more: false }));
+  await mount();
+  await act(async () => { await hookResult.select('c1'); });
+
+  let resolveSend;
+  mockSend.mockReturnValue(new Promise((resolve) => { resolveSend = resolve; }));
+  let sendPromise;
+  act(() => { sendPromise = hookResult.send({ text: 'hello there' }); });
+  await flush();
+  expect(hookResult.messages).toHaveLength(1);
+  expect(hookResult.messages[0].message_id).toMatch(/^tmp_/);
+
+  // Our own send is echoed on the stream, and it beats the HTTP response.
+  const es = FakeEventSource.instances[0];
+  await act(async () => {
+    es.emit('message_new', { chat_id: 'c1', message_id: 'srv-1', direction: 'out', preview: 'hello there', status: 'sent', typed_by: 'rep@smartshape.in' });
+  });
+
+  await act(async () => {
+    resolveSend({ data: { status: 'sent', message_id: 'srv-1', message: { message_id: 'srv-1', chat_id: 'c1', direction: 'out', text: 'hello there', status: 'sent', created_at: '2026-01-01T00:00:05Z' } } });
+    await sendPromise;
+  });
+
+  expect(hookResult.messages.map((m) => m.message_id)).toEqual(['srv-1']);
+  expect(hookResult.messages.some((m) => String(m.message_id).startsWith('tmp_'))).toBe(false);
+  expect(hookResult.messages[0].preview_only).toBeUndefined();
+  expect(hookResult.messages[0].created_at).toBe('2026-01-01T00:00:05Z');
+});
+
+test('a message_new for an unknown chat under scope=mine schedules one debounced chats refetch', async () => {
+  jest.useFakeTimers();
+  try {
+    mockChats.mockReturnValue(ok({ items: [{ chat_id: 'c1', unread_count: 0 }], total: 1, page: 1, unread_total: 0 }));
+    await mount();
+    expect(mockChats).toHaveBeenCalledTimes(1);
+
+    const es = FakeEventSource.instances[0];
+    await act(async () => {
+      es.emit('message_new', { chat_id: 'zz', message_id: 'mz1', direction: 'in', preview: 'who dis', unread_count: 1 });
+      es.emit('message_new', { chat_id: 'zz', message_id: 'mz2', direction: 'in', preview: 'hello?', unread_count: 2 });
+    });
+    // not inserted client-side, and not refetched synchronously
+    expect(hookResult.chats.map((c) => c.chat_id)).toEqual(['c1']);
+    expect(mockChats).toHaveBeenCalledTimes(1);
+
+    await act(async () => { jest.advanceTimersByTime(299); });
+    expect(mockChats).toHaveBeenCalledTimes(1);
+
+    await act(async () => { jest.advanceTimersByTime(1); });
+    await flush();
+    // two events inside the window → exactly one extra load
+    expect(mockChats).toHaveBeenCalledTimes(2);
+    expect(mockChats).toHaveBeenLastCalledWith({ scope: 'mine', status: 'open', page: 1 });
+
+    // a known chat does not schedule a refetch
+    await act(async () => {
+      es.emit('message_new', { chat_id: 'c1', message_id: 'mc1', direction: 'in', preview: 'known', unread_count: 1 });
+    });
+    await act(async () => { jest.advanceTimersByTime(1000); });
+    expect(mockChats).toHaveBeenCalledTimes(2);
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+test('the pending unknown-chat refetch timer is cleared on unmount', async () => {
+  jest.useFakeTimers();
+  try {
+    mockChats.mockReturnValue(ok({ items: [], total: 0, page: 1, unread_total: 0 }));
+    await mount();
+    const es = FakeEventSource.instances[0];
+    await act(async () => {
+      es.emit('message_new', { chat_id: 'zz', message_id: 'mz1', direction: 'in', preview: 'x', unread_count: 1 });
+    });
+    expect(mockChats).toHaveBeenCalledTimes(1);
+
+    act(() => { root.unmount(); });
+    root = createRoot(document.createElement('div'));
+    await act(async () => { jest.advanceTimersByTime(1000); });
+    expect(mockChats).toHaveBeenCalledTimes(1);
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+test('pure helper: mergeMessages never lets a preview_only stub overwrite a full row', () => {
+  const full = { message_id: 'm1', text: 'full text', media: { url: 'x' }, status: 'sent', created_at: '2026-01-01T00:00:01Z' };
+  const stub = { message_id: 'm1', text: 'full…', status: 'delivered', preview_only: true, created_at: '2026-01-02T00:00:00Z' };
+
+  // full first, stub later → full kept untouched
+  const a = mergeMessages([full], [stub]);
+  expect(a).toHaveLength(1);
+  expect(a[0]).toEqual(full);
+
+  // stub first, full later → full replaces and the flag is cleared
+  const b = mergeMessages([stub], [full]);
+  expect(b).toHaveLength(1);
+  expect(b[0].text).toBe('full text');
+  expect(b[0].media).toEqual({ url: 'x' });
+  expect(b[0].preview_only).toBeUndefined();
+
+  // stub over stub still merges (later wins)
+  const c = mergeMessages([stub], [{ ...stub, status: 'read' }]);
+  expect(c[0].status).toBe('read');
+  expect(c[0].preview_only).toBe(true);
+});
+
+test('stream: a message_new stub does not overwrite the full row already in the thread', async () => {
+  mockChats.mockReturnValue(ok({ items: [{ chat_id: 'c1', unread_count: 0 }], total: 1, page: 1, unread_total: 0 }));
+  mockMessages.mockReturnValue(ok({
+    items: [{ message_id: 'm1', chat_id: 'c1', direction: 'in', text: 'the whole message body', media: { url: 'u' }, status: 'delivered', created_at: '2026-01-01T00:00:01Z' }],
+    has_more: false,
+  }));
+  await mount();
+  await act(async () => { await hookResult.select('c1'); });
+
+  const es = FakeEventSource.instances[0];
+  await act(async () => {
+    es.emit('message_new', { chat_id: 'c1', message_id: 'm1', direction: 'in', preview: 'the whole…', status: 'delivered' });
+  });
+
+  expect(hookResult.messages).toHaveLength(1);
+  expect(hookResult.messages[0].text).toBe('the whole message body');
+  expect(hookResult.messages[0].media).toEqual({ url: 'u' });
+  expect(hookResult.messages[0].preview_only).toBeUndefined();
+});
+
+test('unreadTotal is derived from the chat list (no side effects in updaters)', async () => {
+  mockChats.mockReturnValue(ok({
+    items: [{ chat_id: 'c1', unread_count: 2 }, { chat_id: 'c2', unread_count: 1 }],
+    total: 2, page: 1, unread_total: 10, // 7 unread live on other pages
+  }));
+  await mount();
+  expect(hookResult.unreadTotal).toBe(10);
+
+  const es = FakeEventSource.instances[0];
+  await act(async () => { es.emit('message_new', { chat_id: 'c2', message_id: 'n1', direction: 'in', preview: 'p', unread_count: 4 }); });
+  expect(hookResult.unreadTotal).toBe(13);
+
+  await act(async () => { es.emit('chat_updated', { chat_id: 'c1', unread_count: 0 }); });
+  expect(hookResult.unreadTotal).toBe(11);
+});
+
+test('degraded stream: refetches the list every 30 s and stops on unmount', async () => {
+  jest.useFakeTimers();
+  try {
+    mockChats.mockReturnValue(ok({ items: [], total: 0, page: 1, unread_total: 0 }));
+    await mount();
+    expect(mockChats).toHaveBeenCalledTimes(1);
+
+    const es = FakeEventSource.instances[0];
+    await act(async () => { es.error(); });
+    await act(async () => { es.error(); });
+    await act(async () => { es.error(); });
+    expect(hookResult.degraded).toBe(true);
+
+    await act(async () => { jest.advanceTimersByTime(29999); });
+    expect(mockChats).toHaveBeenCalledTimes(1);
+    await act(async () => { jest.advanceTimersByTime(1); });
+    await flush();
+    expect(mockChats).toHaveBeenCalledTimes(2);
+    await act(async () => { jest.advanceTimersByTime(30000); });
+    await flush();
+    expect(mockChats).toHaveBeenCalledTimes(3);
+
+    act(() => { root.unmount(); });
+    root = createRoot(document.createElement('div'));
+    await act(async () => { jest.advanceTimersByTime(90000); });
+    expect(mockChats).toHaveBeenCalledTimes(3);
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
 test('pure helper: mergeMessages dedupes by message_id and sorts ascending', () => {
   const existing = [
     { message_id: 'm1', created_at: '2026-01-01T00:00:01Z' },

@@ -41,6 +41,14 @@ export default function useWaStream(onEvent, { enabled = true } = {}) {
       es.addEventListener(type, handle(type));
     });
 
+    // A quiet-but-healthy connection (no events yet, but the socket is up) must
+    // still read as connected — don't wait for the first named event for that.
+    es.onopen = () => {
+      errorCountRef.current = 0;
+      setConnected(true);
+      setDegraded(false);
+    };
+
     es.onerror = (evt) => {
       setConnected(false);
       setLastError(evt);
