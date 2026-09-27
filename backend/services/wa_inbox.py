@@ -564,7 +564,12 @@ async def backfill_raw_events(db, *, limit: int = 500) -> int:
     first, marking each `processed`. A BAD event (malformed data, unknown instance, a value the
     normaliser cannot read) is marked `processed` WITH its error so the back-fill never loops on
     it; any other exception (a database/connection error) propagates so the next pass retries
-    from the same event. Returns how many events were marked this pass."""
+    from the same event. Returns how many events were marked this pass.
+
+    Runs `quiet`: the first W2 boot replays every event parked since W1 went live, and a burst of
+    engagement events + `message_new` frames for messages that already happened would only be
+    noise. Rows, chats and unread bumps are written as usual (the rows are not history — nobody
+    has seen them yet)."""
     events = await db.wa_events_raw.find(
         {"processed": {"$ne": True}, "event": "MESSAGES_UPSERT"}).sort("received_at", 1).to_list(max(1, int(limit)))
     insts: dict = {}
@@ -584,7 +589,7 @@ async def backfill_raw_events(db, *, limit: int = 500) -> int:
             if not items or not all(isinstance(i, dict) for i in items):
                 raise TypeError("malformed event data")
             for item in items:
-                await ingest_message(db, inst, item)
+                await ingest_message(db, inst, item, quiet=True)
         except (TypeError, LookupError, ValueError, AttributeError) as e:
             marks["error"] = (str(e)[:200] or type(e).__name__)
             log.warning("[wa-inbox] backfill: raw event %s skipped: %s", ev.get("_id"), marks["error"])

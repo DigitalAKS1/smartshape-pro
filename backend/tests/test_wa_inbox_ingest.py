@@ -300,13 +300,22 @@ def test_backfill_processes_raw_events_once_and_marks_bad_ones(env):
             await db.wa_events_raw.insert_one({"instance_name": "rep_parul", "event": "MESSAGES_UPSERT",
                                                "data": data, "received_at": base + timedelta(seconds=i),
                                                "processed": False})
-        n = await wa_inbox.backfill_raw_events(db)
+        q = asyncio.Queue()
+        wa_events._queues.add(q)
+        try:
+            n = await wa_inbox.backfill_raw_events(db)
+        finally:
+            wa_events._queues.discard(q)
         assert n == 3
         assert await db.wa_messages.count_documents({}) == 2
         raws = await db.wa_events_raw.find({}, {"_id": 0}).sort("received_at", 1).to_list(None)
         assert all(r["processed"] is True and r["processed_at"] for r in raws)
         assert raws[1]["error"] and "error" not in raws[0] and "error" not in raws[2]
+        # the rows land and the chat's unread bumps as usual ...
         assert (await _chat(db))["unread_count"] == 2
+        # ... but the replay is quiet: nothing on the bus, no engagement events (final review M9)
+        assert q.empty(), "backfill must not publish message_new for parked events"
+        assert await db.engagement_events.count_documents({}) == 0
         assert await wa_inbox.backfill_raw_events(db) == 0
         assert await db.wa_messages.count_documents({}) == 2
     _run(go())
@@ -598,7 +607,7 @@ def test_backfill_lets_a_connection_error_propagate_and_leaves_the_event_unproce
     # 8.
     db = env.db
 
-    async def boom(db_, inst, data):
+    async def boom(db_, inst, data, **_kw):
         raise ConnectionError("mongo went away")
     monkeypatch.setattr(wa_inbox, "ingest_message", boom)
 

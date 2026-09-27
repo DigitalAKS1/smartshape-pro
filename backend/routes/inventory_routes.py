@@ -6,6 +6,7 @@ import uuid
 import csv
 import io
 import os
+import posixpath
 import re
 import mimetypes
 
@@ -394,8 +395,24 @@ async def upload_file(file: UploadFile = File(...), request: Request = None):
 
 _EXTRA_MIME = {".jfif": "image/jpeg", ".webp": "image/webp", ".avif": "image/avif"}
 
+# Inbound WhatsApp media (services/wa_inbox.store_media writes `whatsapp/in/<instance>/<id>.<ext>`)
+# is a customer's document: served only to a logged-in user. Outbound attachments
+# (`uploads/whatsapp/...`) stay public because Evolution fetches them by URL.
+_WA_INBOUND_PREFIX = "whatsapp/in/"
+
+
+def is_inbound_wa_media(path: str) -> bool:
+    """True for a `/files/{path}` request that points inside `whatsapp/in/`. Normalised the way
+    the filesystem will read it (`\\` -> `/`, `//` and `.` segments collapsed, leading `/`
+    dropped) so `whatsapp//in/x` or `./whatsapp/in/x` cannot slip past the auth gate."""
+    p = posixpath.normpath("/" + str(path or "").replace("\\", "/")).lstrip("/")
+    return p.startswith(_WA_INBOUND_PREFIX)
+
+
 @router.get("/files/{path:path}")
-async def get_file(path: str):
+async def get_file(path: str, request: Request):
+    if is_inbound_wa_media(path):
+        await get_current_user(request)          # 401 when not logged in — before any disk read
     # Block path traversal: resolve the real path and confirm it stays inside the uploads
     # dir, so a crafted "../" link can't read server config/secrets outside the folder.
     base = os.path.realpath(UPLOADS_DIR)
