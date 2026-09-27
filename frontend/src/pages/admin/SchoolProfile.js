@@ -26,6 +26,7 @@ import ConvertContactDialog from '../../components/school/ConvertContactDialog';
 import EnrollDripDialog from '../../components/school/EnrollDripDialog';
 import SchoolPostOrderCard from '../../components/school/SchoolPostOrderCard';
 import SchoolActivitiesCard from '../../components/school/SchoolActivitiesCard';
+import RecentWhatsApp from '../../components/whatsapp/RecentWhatsApp';
 import SchoolEngagementTimeline from '../../components/school/SchoolEngagementTimeline';
 import ContactDetailPanel from '../../components/crm/ContactDetailPanel';
 import ShareBrochureDialog from '../../components/crm/ShareBrochureDialog';
@@ -373,6 +374,10 @@ export default function SchoolProfile() {
               <SchoolPostOrderCard flows={sp.profile?.fms_flows} />
               {/* Planned Activities (Bulk Activity Planner) — full-width row */}
               <SchoolActivitiesCard activities={sp.profile?.activities} onChanged={sp.reload} />
+              {/* Recent WhatsApp with this school (read-only; reply from the team inbox) — right column */}
+              <div className={`lg:col-span-3 lg:col-start-3 ${tk.card} border ${tk.border} rounded-2xl overflow-hidden p-5`}>
+                <RecentWhatsApp schoolId={school.school_id} />
+              </div>
             </div>
           )}
 

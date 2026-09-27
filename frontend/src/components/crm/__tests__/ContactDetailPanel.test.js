@@ -20,6 +20,7 @@ jest.mock('../../../lib/api', () => ({
 }));
 jest.mock('../../../lib/callBus', () => ({ startCall: jest.fn() }));
 jest.mock('../ShareBrochureDialog', () => () => null);
+jest.mock('../../whatsapp/RecentWhatsApp', () => (props) => <div data-testid="rw" data-contact-id={props.contactId} />);
 jest.mock('sonner', () => ({ toast: { success: jest.fn(), error: jest.fn() } }));
 
 const ROWS = [
@@ -114,5 +115,20 @@ test('the panel shows the Drip section on its Overview tab', async () => {
   await flush();
   expect(v.q('contact-drips')).toBeTruthy();
   expect(v.q('contact-drip-e_active')).toBeTruthy();
+  v.unmount();
+});
+
+test('the panel has a WhatsApp tab that mounts RecentWhatsApp for the contact (W2 task 8)', async () => {
+  const contact = { contact_id: 'c1', name: 'Ritu Sharma', company: 'DPS', phone: '98' };
+  const v = await mount(
+    <ContactDetailPanel detailContact={contact} setDetailContact={jest.fn()}
+      logContactCall={jest.fn()} addContactFollowup={jest.fn()} completeContactFollowup={jest.fn()} />);
+  expect(v.q('rw')).toBeNull();                       // default tab is still Call & Follow-up
+  const tab = Array.from(v.container.querySelectorAll('button')).find(b => b.textContent === 'WhatsApp');
+  expect(tab).toBeTruthy();
+  act(() => { tab.click(); });
+  await flush();
+  expect(v.q('rw')).toBeTruthy();
+  expect(v.q('rw').getAttribute('data-contact-id')).toBe('c1');
   v.unmount();
 });

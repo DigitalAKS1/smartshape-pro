@@ -6,6 +6,7 @@ import { Phone, PhoneCall, X, Clock, CheckCircle2, BookOpen, Zap } from 'lucide-
 import { startCall } from '../../lib/callBus';
 import { dealTypes as dealTypesApi, dripSequences as dripApi } from '../../lib/api';
 import ShareBrochureDialog from './ShareBrochureDialog';
+import RecentWhatsApp from '../whatsapp/RecentWhatsApp';
 
 /** Trigger a Bonvoice click-to-call and open the live call widget. Rings the rep's
  *  phone first, then the customer. Surfaces the backend's 409/422 message when
@@ -137,6 +138,7 @@ export function ContactDripSection({ contactId }) {
 const TABS = [
   { id: 'overview', label: 'Overview' },
   { id: 'call',     label: 'Call & Follow-up' },
+  { id: 'whatsapp', label: 'WhatsApp' },
   { id: 'history',  label: 'History' },
 ];
 
@@ -273,6 +275,10 @@ export default function ContactDetailPanel({
               </div>
             )}
           </div>
+        )}
+
+        {tab === 'whatsapp' && (
+          <div className="p-4"><RecentWhatsApp contactId={detailContact.contact_id} /></div>
         )}
 
         {tab === 'history' && (
