@@ -612,3 +612,99 @@ def test_backfill_lets_a_connection_error_propagate_and_leaves_the_event_unproce
         raw = await db.wa_events_raw.find_one({}, {"_id": 0})
         assert raw["processed"] is False and "error" not in raw
     _run(go())
+
+
+# ══ W2 task 5, fix round 1 — history rows never clobber a newer last_message ═══
+
+def test_history_rows_walk_newest_first_and_the_chat_keeps_the_newest(env):
+    # 1. History comes newest -> oldest. After three history rows the chat shows the NEWEST; a live
+    #    message newer still wins; a history row older than the chat's latest changes nothing.
+    db = env.db
+    T = 1790400000
+
+    async def go():
+        inst = await _setup(db)
+        for pmid, text, ts, name in (("H3", "newest", T + 300, "Sunita-new"),
+                                     ("H2", "middle", T + 200, "Sunita-mid"),
+                                     ("H1", "oldest", T + 100, "Sunita-old")):
+            await wa_inbox.ingest_message(db, inst, inbound(pmid, PHONE, text, messageTimestamp=ts, pushName=name),
+                                          quiet=True, history=True)
+        chat = await _chat(db)
+        newest_row = await db.wa_messages.find_one({"provider_msg_id": "H3"}, {"_id": 0})
+        assert chat["last_message_preview"] == "newest"
+        assert chat["last_message_id"] == newest_row["message_id"]
+        assert chat["last_message_at"] == newest_row["provider_ts"]
+        assert chat["push_name"] == "Sunita-new"
+        assert chat["unread_count"] == 0
+        assert await db.wa_messages.count_documents({}) == 3           # every row still stored
+
+        # A live message newer than everything: it wins (and bumps unread as usual).
+        live = await wa_inbox.ingest_message(db, inst, inbound("L1", PHONE, "live one", messageTimestamp=T + 400,
+                                                                pushName="Sunita-live"))
+        chat = await _chat(db)
+        assert chat["last_message_preview"] == "live one" and chat["last_message_id"] == live["message_id"]
+        assert chat["push_name"] == "Sunita-live" and chat["unread_count"] == 1
+
+        # A history row older than the live one (the import catching up): row stored, chat unchanged.
+        before = dict(chat)
+        await wa_inbox.ingest_message(db, inst, inbound("H0", PHONE, "ancient", messageTimestamp=T + 50,
+                                                        pushName="Sunita-ancient"), quiet=True, history=True)
+        chat = await _chat(db)
+        assert await db.wa_messages.count_documents({"provider_msg_id": "H0"}) == 1
+        for k in ("last_message_preview", "last_message_id", "last_message_at", "last_direction",
+                  "push_name", "unread_count"):
+            assert chat[k] == before[k], k
+    _run(go())
+
+
+def test_a_history_row_without_a_timestamp_never_becomes_the_latest(env):
+    # 5. No messageTimestamp -> no provider_ts -> older than anything the chat already shows.
+    db = env.db
+
+    async def go():
+        inst = await _setup(db)
+        await wa_inbox.ingest_message(db, inst, inbound("T1", PHONE, "dated", messageTimestamp=1790400000),
+                                      quiet=True, history=True)
+        d = dict(inbound("T0", PHONE, "undated"))
+        d.pop("messageTimestamp")
+        row = await wa_inbox.ingest_message(db, inst, d, quiet=True, history=True)
+        assert row["message_id"] and row["provider_ts"] is None       # stored, just not the latest
+        chat = await _chat(db)
+        assert chat["last_message_preview"] == "dated"
+        # ... but on a chat with nothing yet, it is the only thing known and does land.
+        other = "919800000009"
+        d2 = dict(inbound("T2", other, "only one")); d2.pop("messageTimestamp")
+        await wa_inbox.ingest_message(db, inst, d2, quiet=True, history=True)
+        c2 = await _chat(db, f"rep_parul:{other}@s.whatsapp.net")
+        assert c2["last_message_preview"] == "only one" and c2["last_message_at"]
+    _run(go())
+
+
+def test_chat_update_history_branches_keep_set_and_set_on_insert_disjoint(env):
+    inst = {"instance_name": "rep_parul", "owner_email": PARUL, "jid": "919000000111@s.whatsapp.net"}
+    match = {"contact_id": "c1", "lead_id": "", "school_id": "sch1", "display_name": "Sunita Verma"}
+    row = {"message_id": "wam_x", "chat_id": CHAT, "remote_jid": JID, "phone_e164": PHONE, "direction": "in",
+           "text": "hi", "push_name": "Sunita", "created_at": "2026-09-24T05:30:00+00:00", "hidden": False,
+           "provider_ts": "2026-09-20T00:00:00+00:00"}
+    older_chat = {"chat_id": CHAT, "phone_e164": PHONE, "status": "open", "display_name": "Sunita Verma",
+                  "contact_id": "c1", "last_message_at": "2026-09-10T00:00:00+00:00", "last_message_preview": "old"}
+    newer_chat = {**older_chat, "last_message_at": "2026-09-23T00:00:00+00:00", "last_message_preview": "new"}
+    cases = {
+        "history, new chat": wa_inbox._chat_update(inst, row, {}, inbound=False, match=match, history=True),
+        "history, newer than chat": wa_inbox._chat_update(inst, row, older_chat, inbound=False, match=match, history=True),
+        "history, older than chat": wa_inbox._chat_update(inst, row, newer_chat, inbound=False, match=match, history=True),
+        "history, no ts, chat has one": wa_inbox._chat_update(inst, {**row, "provider_ts": None}, older_chat,
+                                                              inbound=False, match=match, history=True),
+    }
+    for name, upd in cases.items():
+        assert _disjoint(upd) == set(), f"{name}: {_disjoint(upd)}"
+        assert "unread_count" not in upd["$set"] and "$inc" not in upd, name
+    assert cases["history, new chat"]["$set"]["last_message_preview"] == "hi"
+    assert cases["history, newer than chat"]["$set"]["last_message_preview"] == "hi"
+    for name in ("history, older than chat", "history, no ts, chat has one"):
+        s = cases[name]["$set"]
+        assert not ({"last_message_at", "last_message_preview", "last_message_id", "last_direction", "push_name"} & set(s)), name
+        assert "updated_at" in s
+    # A LIVE row always moves last_message_*, even when the chat shows something newer (webhook order).
+    live = wa_inbox._chat_update(inst, row, newer_chat, inbound=True, match=match)
+    assert live["$set"]["last_message_preview"] == "hi" and live["$inc"] == {"unread_count": 1}

@@ -122,7 +122,7 @@ def test_first_open_starts_a_sync_and_marks_the_instance(env, monkeypatch):
             wa_events._queues.discard(q)
         i = await _inst(db, "rep_parul")
         assert i["history_synced_at"]
-        assert i["history_stats"] == {"chats": 1, "messages": 1, "truncated": False, "errors": 0}
+        assert i["history_stats"] == {"chats": 1, "messages": 1, "records_seen": 1, "truncated": False, "errors": 0}
         row = await db.wa_messages.find_one({"provider_msg_id": "H1"}, {"_id": 0})
         assert row and row["text"] == "hi there"
         chat = await db.wa_chats.find_one({"chat_id": "rep_parul:" + JID}, {"_id": 0})
@@ -175,7 +175,7 @@ def test_sync_stops_at_the_day_window_and_the_message_cap(env):
             msg_rec("W3", PHONE, "too old", old_s),
         ]
         stats = await wa_inbox.sync_history(db, inst, days=90)
-        assert stats == {"chats": 1, "messages": 2, "truncated": False, "errors": 0}
+        assert stats == {"chats": 1, "messages": 2, "records_seen": 2, "truncated": False, "errors": 0}
         assert await db.wa_messages.count_documents({"provider_msg_id": "W3"}) == 0
         assert await db.wa_messages.count_documents({}) == 2
 
@@ -189,7 +189,7 @@ def test_sync_stops_at_the_day_window_and_the_message_cap(env):
             msg_rec("C3", OTHER_PHONE, "three", now_s - 30),
         ]
         stats2 = await wa_inbox.sync_history(db, inst2, days=90, max_messages=2)
-        assert stats2 == {"chats": 1, "messages": 2, "truncated": True, "errors": 0}
+        assert stats2 == {"chats": 1, "messages": 2, "records_seen": 2, "truncated": True, "errors": 0}
         assert await db.wa_messages.count_documents(
             {"provider_msg_id": {"$in": ["C1", "C2", "C3"]}}) == 2
     _run(go())
@@ -225,7 +225,8 @@ def test_admin_resync_route_clears_and_restarts(env, monkeypatch):
     async def go():
         inst = await seed_instance(db, "rep_parul", owner_email=PARUL, state="connected", phone=PHONE,
                                    history_synced_at="2026-09-01T00:00:00+00:00",
-                                   history_stats={"chats": 0, "messages": 0, "truncated": False, "errors": 0})
+                                   history_stats={"chats": 0, "messages": 0, "records_seen": 0,
+                                                  "truncated": False, "errors": 0})
         env.evo.chats["rep_parul"] = [chat_rec(JID)]
         now_s = int(env.clock["now"].timestamp())
         env.evo.messages[("rep_parul", JID)] = [msg_rec("R1", PHONE, "resynced", now_s - 30)]
@@ -249,4 +250,143 @@ def test_admin_resync_route_clears_and_restarts(env, monkeypatch):
         assert after["history_synced_at"]
         assert after["history_stats"]["messages"] == 1
         assert await db.wa_messages.count_documents({"provider_msg_id": "R1"}) == 1
+    _run(go())
+
+
+# ══ Fix round 1 ══════════════════════════════════════════════════════════════
+
+def _yielding(env, monkeypatch):
+    """Make the fake Evolution yield to the event loop on every call (the real client always
+    does — it goes over the network), so two coroutines gathered together really interleave."""
+    real = env.evo.request
+
+    async def slow(method, path, json=None, token=None):
+        await asyncio.sleep(0)
+        return await real(method, path, json=json, token=token)
+    monkeypatch.setattr(env.evo, "request", slow)
+
+
+def test_a_resync_counts_stored_rows_only_and_reports_records_seen(env):
+    # 2. Every record already held (a webhook delivered them, or an earlier sync did): nothing is
+    #    stored, `messages` stays 0 (so the cap is not eaten by duplicates), `records_seen` says
+    #    what Evolution handed over.
+    db = env.db
+
+    async def go():
+        inst = await seed_instance(db, "rep_parul", owner_email=PARUL, state="connected", phone=PHONE)
+        now_s = int(env.clock["now"].timestamp())
+        env.evo.chats["rep_parul"] = [chat_rec(JID)]
+        env.evo.messages[("rep_parul", JID)] = [
+            msg_rec("D1", PHONE, "one", now_s - 10),
+            msg_rec("D2", PHONE, "two", now_s - 20),
+            msg_rec("D3", PHONE, "three", now_s - 30),
+        ]
+        first = await wa_inbox.sync_history(db, inst, days=90)
+        assert first == {"chats": 1, "messages": 3, "records_seen": 3, "truncated": False, "errors": 0}
+        again = await wa_inbox.sync_history(db, inst, days=90)
+        assert again == {"chats": 1, "messages": 0, "records_seen": 3, "truncated": False, "errors": 0}
+        assert await db.wa_messages.count_documents({}) == 3
+        # ... and a cap of 2 is NOT hit by the three duplicates: nothing new was stored.
+        capped = await wa_inbox.sync_history(db, inst, days=90, max_messages=2)
+        assert capped["messages"] == 0 and capped["truncated"] is False and capped["records_seen"] == 3
+    _run(go())
+
+
+def test_a_bad_page_count_ends_that_chat_only_and_is_counted(env, monkeypatch):
+    # 3. Evolution answers `pages: "n/a"` for chat 1: its first page is still imported, the
+    #    unreadable count is one error, and chat 2 is imported in full.
+    db = env.db
+    real = env.evo.request
+
+    async def with_bad_pages(method, path, json=None, token=None):
+        out = await real(method, path, json=json, token=token)
+        jid = (((json or {}).get("where") or {}).get("key") or {}).get("remoteJid", "")
+        if path.startswith("/chat/findMessages/") and jid == JID:
+            out["messages"]["pages"] = "n/a"
+        return out
+    monkeypatch.setattr(env.evo, "request", with_bad_pages)
+
+    async def go():
+        inst = await seed_instance(db, "rep_parul", owner_email=PARUL, state="connected", phone=PHONE)
+        now_s = int(env.clock["now"].timestamp())
+        # Chat 1 sorts first (newer updatedAt) so it is the one hit before chat 2.
+        env.evo.chats["rep_parul"] = [chat_rec(JID, updated_at="2026-09-24T05:00:00+00:00"),
+                                      chat_rec(OTHER_JID, updated_at="2026-09-23T05:00:00+00:00")]
+        env.evo.messages[("rep_parul", JID)] = [msg_rec("P1", PHONE, "bad pages", now_s - 30)]
+        env.evo.messages[("rep_parul", OTHER_JID)] = [msg_rec("P2", OTHER_PHONE, "fine", now_s - 30),
+                                                      msg_rec("P3", OTHER_PHONE, "fine too", now_s - 60)]
+        stats = await wa_inbox.sync_history(db, inst, days=90)
+        assert stats["errors"] == 1
+        assert stats["chats"] == 2
+        assert await db.wa_messages.count_documents({"provider_msg_id": {"$in": ["P2", "P3"]}}) == 2
+        assert await db.wa_messages.count_documents({"provider_msg_id": "P1"}) == 1   # page 1 still landed
+        assert stats["messages"] == 3
+    _run(go())
+
+
+def test_an_exception_inside_one_chat_does_not_stop_the_others(env, monkeypatch):
+    # 3b. Anything that escapes a chat's body (not only find_messages) is counted and skipped.
+    db = env.db
+    real = wa_inbox._pull_chat_history
+
+    async def explode_on_first(db_, inst, name, jid, **kw):
+        if jid == JID:
+            raise RuntimeError("boom")
+        return await real(db_, inst, name, jid, **kw)
+    monkeypatch.setattr(wa_inbox, "_pull_chat_history", explode_on_first)
+
+    async def go():
+        inst = await seed_instance(db, "rep_parul", owner_email=PARUL, state="connected", phone=PHONE)
+        now_s = int(env.clock["now"].timestamp())
+        env.evo.chats["rep_parul"] = [chat_rec(JID, updated_at="2026-09-24T05:00:00+00:00"),
+                                      chat_rec(OTHER_JID, updated_at="2026-09-23T05:00:00+00:00")]
+        env.evo.messages[("rep_parul", JID)] = [msg_rec("X1", PHONE, "never", now_s - 30)]
+        env.evo.messages[("rep_parul", OTHER_JID)] = [msg_rec("X2", OTHER_PHONE, "lands", now_s - 30)]
+        stats = await wa_inbox.sync_history(db, inst, days=90)
+        assert stats == {"chats": 2, "messages": 1, "records_seen": 1, "truncated": False, "errors": 1}
+        assert await db.wa_messages.count_documents({"provider_msg_id": "X2"}) == 1
+        assert await db.wa_messages.count_documents({"provider_msg_id": "X1"}) == 0
+        assert (await _inst(db, "rep_parul"))["history_synced_at"]
+    _run(go())
+
+
+def test_two_concurrent_syncs_run_only_once(env, monkeypatch):
+    # 4. A flapping connection (two `open`s) or a resync during the first-link sync: the second
+    #    call returns skipped at once, the first one does the work, and the lock is released after.
+    db = env.db
+    _yielding(env, monkeypatch)
+
+    async def go():
+        inst = await seed_instance(db, "rep_parul", owner_email=PARUL, state="connected", phone=PHONE)
+        now_s = int(env.clock["now"].timestamp())
+        env.evo.chats["rep_parul"] = [chat_rec(JID)]
+        env.evo.messages[("rep_parul", JID)] = [msg_rec("K1", PHONE, "once", now_s - 30)]
+        a, b = await asyncio.gather(wa_inbox.sync_history(db, inst, days=90),
+                                    wa_inbox.sync_history(db, inst, days=90))
+        results = sorted([a, b], key=lambda r: "skipped" in r)
+        assert results[0] == {"chats": 1, "messages": 1, "records_seen": 1, "truncated": False, "errors": 0}
+        assert results[1] == {"skipped": "already_running"}
+        find_chats_calls = sum(1 for c in env.evo.calls if c["path"].startswith("/chat/findChats/"))
+        assert find_chats_calls == 1
+        assert "rep_parul" not in wa_inbox._SYNCING          # released
+        # The lock is per instance: another instance is not blocked, and a later call runs again.
+        assert (await wa_inbox.sync_history(db, inst, days=90))["records_seen"] == 1
+    _run(go())
+
+
+def test_admin_resync_route_reports_an_already_running_sync(env, monkeypatch):
+    db = env.db
+
+    async def go():
+        await seed_instance(db, "rep_parul", owner_email=PARUL, state="connected", phone=PHONE,
+                            history_synced_at="2026-09-01T00:00:00+00:00")
+        _as(ADMIN, monkeypatch)
+        wa_inbox._SYNCING.add("rep_parul")
+        try:
+            out = await wr.wa_instance_resync_history("rep_parul", FakeRequest())
+        finally:
+            wa_inbox._SYNCING.discard("rep_parul")
+        assert out == {"ok": True, "started": False, "skipped": "already_running"}
+        assert (await _inst(db, "rep_parul"))["history_synced_at"] == "2026-09-01T00:00:00+00:00"
+        assert not env.tasks                                   # nothing scheduled
     _run(go())

@@ -925,6 +925,10 @@ async def wa_instance_resync_history(name: str, request: Request):
     user = await get_current_user(request)
     _require_admin(user)
     inst = await _instance_or_404(name)
+    if name in wa_inbox._SYNCING:
+        # A sync is still walking this instance's chats (first link, or an earlier resync):
+        # sync_history would refuse a second one anyway — say so, and leave history_synced_at alone.
+        return {"ok": True, "started": False, "skipped": "already_running"}
     await db.wa_instances.update_one({"instance_name": name}, {"$unset": {"history_synced_at": ""}})
     asyncio.create_task(wa_inbox.sync_history(db, inst))
     return {"ok": True, "started": True}

@@ -227,22 +227,47 @@ def _preview(row: dict) -> str:
     return (row.get("text") or "")[:PREVIEW_LEN]
 
 
-def _chat_update(inst: dict, row: dict, existing: dict, *, inbound: bool, match: dict) -> dict:
+def _history_row_is_latest(row: dict, existing: dict) -> bool:
+    """W2 task 5 fix round 1: may a HISTORY row move the chat's `last_message_*`? Only when its
+    `provider_ts` is newer than the chat's current `last_message_at`. History walks newest ->
+    oldest, so without this the oldest row would win, and a live message that raced ahead of the
+    import would be clobbered. A chat with no `last_message_at` yet takes the row (it is the only
+    thing known). A row WITHOUT a provider timestamp (fix 5) is treated as older than anything
+    already on the chat — it can never become the latest message of a chat that has one."""
+    current = existing.get("last_message_at")
+    if not current:
+        return True
+    ts = row.get("provider_ts")
+    if not ts:
+        return False
+    try:
+        return wa_send._parse(ts) > wa_send._parse(current)
+    except (TypeError, ValueError):
+        return False
+
+
+def _chat_update(inst: dict, row: dict, existing: dict, *, inbound: bool, match: dict,
+                 history: bool = False) -> dict:
     """Pure: the update document for one message landing on a chat (`existing` = the chat as it
     is now, {} for a new one). INVARIANT: no field is in both $set and $setOnInsert — real
     MongoDB rejects that (ConflictingUpdateOperators; mongomock does not), and `unread_count`
-    is never in $setOnInsert on an inbound message because $inc creates it as 1 on insert."""
+    is never in $setOnInsert on an inbound message because $inc creates it as 1 on insert.
+    `history` (W2 task 5): a history-import row only moves `last_message_*` / `push_name` when
+    it is newer than what the chat already shows (`_history_row_is_latest`); a live row always
+    does (the webhook delivers in order)."""
     name = inst["instance_name"]
     remote = row["remote_jid"]
     chat_id = row.get("chat_id") or f"{name}:{remote}"
     existing = existing or {}
     match = match or {}
     now_iso = wa_send._iso(wa_send._now())
-    sets = {"last_message_at": row.get("provider_ts") or row.get("created_at") or now_iso,
-            "last_message_preview": _preview(row),
-            "last_direction": row.get("direction") or ("in" if inbound else "out"),
-            "last_message_id": row.get("message_id") or "", "hidden": bool(row.get("hidden")),
-            "updated_at": now_iso}
+    latest = (not history) or _history_row_is_latest(row, existing)
+    sets = {"hidden": bool(row.get("hidden")), "updated_at": now_iso}
+    if latest:
+        sets.update({"last_message_at": row.get("provider_ts") or row.get("created_at") or now_iso,
+                     "last_message_preview": _preview(row),
+                     "last_direction": row.get("direction") or ("in" if inbound else "out"),
+                     "last_message_id": row.get("message_id") or ""})
     if row.get("phone_e164") and not existing.get("phone_e164"):
         sets["phone_e164"] = row["phone_e164"]
     linked = any(existing.get(k) for k in ("contact_id", "lead_id", "school_id"))
@@ -255,7 +280,7 @@ def _chat_update(inst: dict, row: dict, existing: dict, *, inbound: bool, match:
     if not existing.get("display_name") or (not linked and name_now):
         sets["display_name"] = (name_now or existing.get("display_name") or row.get("push_name")
                                 or row.get("phone_e164") or remote)
-    if row.get("push_name"):
+    if row.get("push_name") and latest:
         sets["push_name"] = row["push_name"]
     if inbound and existing.get("status") == "resolved":
         sets["status"] = "open"
@@ -274,15 +299,18 @@ def _chat_update(inst: dict, row: dict, existing: dict, *, inbound: bool, match:
     return update
 
 
-async def upsert_chat(db, inst: dict, row: dict, *, inbound: bool, match: dict, existing: Optional[dict] = None) -> dict:
+async def upsert_chat(db, inst: dict, row: dict, *, inbound: bool, match: dict, existing: Optional[dict] = None,
+                      history: bool = False) -> dict:
     """One wa_chats row per (instance, remote jid). A record link already on the chat is never
     overwritten (a person may have linked it by hand); a resolved chat that receives an inbound
     message goes back to `open`; unread_count grows only on inbound. `existing` is the chat as
-    the caller already read it (saves the read); None reads it here."""
+    the caller already read it (saves the read); None reads it here. `history` (W2 task 5): the
+    row is a history import — it moves `last_message_*` only when newer than the chat's current
+    latest (see `_chat_update`)."""
     chat_id = row.get("chat_id") or f"{inst['instance_name']}:{row['remote_jid']}"
     if existing is None:
         existing = await db.wa_chats.find_one({"chat_id": chat_id}, {"_id": 0}) or {}
-    update = _chat_update(inst, row, existing, inbound=inbound, match=match)
+    update = _chat_update(inst, row, existing, inbound=inbound, match=match, history=history)
     try:
         await db.wa_chats.update_one({"chat_id": chat_id}, update, upsert=True)
     except DuplicateKeyError:
@@ -461,7 +489,7 @@ async def ingest_message(db, inst: dict, data: dict, *, quiet: bool = False, his
     try:
         # A history row is never inbound as far as the chat is concerned (no unread bump) —
         # `_chat_update` still reads the real direction off `row["direction"]` for last_direction.
-        chat = await upsert_chat(db, inst, row, inbound=(inbound and not history), match=match)
+        chat = await upsert_chat(db, inst, row, inbound=(inbound and not history), match=match, history=history)
     except Exception as e:
         log.error("[wa-inbox] chat upsert failed for %s: %s", row["message_id"], str(e)[:160])
     if inbound and not quiet:
@@ -590,11 +618,26 @@ def _history_chat_sort_key(chat: dict) -> datetime:
     return datetime.min.replace(tzinfo=timezone.utc)
 
 
+def _page_count(res: dict, name: str, jid: str, stats: dict) -> int:
+    """Evolution's `pages` as an int >= 1. A value that is not a number (one build answered
+    "n/a") is counted in `errors` and read as 1: this page's records are still imported, the
+    chat just is not paged further, and the sync moves on to the next chat (fix round 1)."""
+    raw = res.get("pages")
+    try:
+        return max(1, int(raw or 1))
+    except (TypeError, ValueError):
+        stats["errors"] += 1
+        log.warning("[wa-inbox] history: unreadable page count %r for %s/%s — reading one page",
+                    raw, name, jid)
+        return 1
+
+
 async def _pull_chat_history(db, inst: dict, name: str, jid: str, *, token, client, cutoff: datetime,
                              max_messages: int, stats: dict) -> None:
     """One chat's messages, newest page first, fed through `ingest_message(quiet=True,
     history=True)`. Stops on the first record older than `cutoff` (records come newest first) or
-    once `stats["messages"]` reaches `max_messages`. A `find_messages` failure on any page is
+    once `stats["messages"]` (rows actually STORED — a duplicate a webhook already delivered is
+    only `records_seen`) reaches `max_messages`. A `find_messages` failure on any page is
     counted and ends this chat only — the caller moves on to the next one."""
     page, pages = 1, 1
     while page <= pages:
@@ -609,19 +652,22 @@ async def _pull_chat_history(db, inst: dict, name: str, jid: str, *, token, clie
         records = res.get("records") or []
         if not records:
             return
-        pages = max(1, int(res.get("pages") or 1))
+        pages = _page_count(res, name, jid, stats)
         for rec in records:
             if not isinstance(rec, dict):
                 continue
             ts = _provider_ts(rec.get("messageTimestamp"))
             if ts and wa_send._parse(ts) < cutoff:
                 return                            # older than the window: nothing past here matters
+            stats["records_seen"] += 1
             try:
-                await ingest_message(db, inst, rec, quiet=True, history=True)
+                out = await ingest_message(db, inst, rec, quiet=True, history=True)
             except Exception as e:
                 stats["errors"] += 1
                 log.warning("[wa-inbox] history: ingest failed for %s/%s: %s", name, jid, str(e)[:160])
                 continue
+            if not (isinstance(out, dict) and out.get("message_id")):
+                continue                          # a duplicate ({"duplicate": True}) or nothing to store (None)
             stats["messages"] += 1
             if stats["messages"] >= max_messages:
                 stats["truncated"] = True
@@ -651,8 +697,20 @@ async def _pull_history(db, inst: dict, name: str, *, days: int, max_chats: int,
         if not jid:
             continue
         stats["chats"] += 1
-        await _pull_chat_history(db, inst, name, jid, token=token, client=client, cutoff=cutoff,
-                                 max_messages=max_messages, stats=stats)
+        try:
+            await _pull_chat_history(db, inst, name, jid, token=token, client=client, cutoff=cutoff,
+                                     max_messages=max_messages, stats=stats)
+        except Exception as e:
+            # Whatever went wrong inside this chat (a malformed page, a record the normaliser
+            # cannot read) ends THIS chat only — the remaining chats still get imported.
+            stats["errors"] += 1
+            log.warning("[wa-inbox] history: chat %s/%s abandoned: %s", name, jid, str(e)[:160])
+
+
+# Instances with a history sync in flight (fix round 1): `_on_open` on a flapping connection, or
+# an admin resync while the first-link sync is still running, must not start a second walk over
+# the same chats. One process — the worker is a single uvicorn process — so a set is enough.
+_SYNCING: set = set()
 
 
 async def sync_history(db, inst: dict, *, days: int = 90, max_chats: int = 200,
@@ -664,14 +722,23 @@ async def sync_history(db, inst: dict, *, days: int = 90, max_chats: int = 200,
     `ingest_message(quiet=True, history=True)`, so a message a webhook already delivered is a
     no-op (idempotent on provider_msg_id), and nobody is notified of history landing.
 
-    Returns {"chats", "messages", "truncated", "errors"} and ALWAYS `$set`s `history_synced_at`
+    Returns {"chats", "messages", "records_seen", "truncated", "errors"} — `messages` counts
+    rows actually stored (the cap applies to those), `records_seen` every record Evolution
+    handed over inside the window, duplicates included — and ALWAYS `$set`s `history_synced_at`
     and `history_stats` on the instance — even when every call to Evolution failed — so
     `_on_open` (which only starts this while `history_synced_at` is unset) does not restart it on
     every reconnect. Never raises: a bad chat, page or record is counted in `errors` and the rest
-    of the sync continues."""
+    of the sync continues. A second call while one is already running for the same instance
+    returns {"skipped": "already_running"} at once and touches nothing."""
     name = str(inst.get("instance_name") or "")
-    stats = {"chats": 0, "messages": 0, "truncated": False, "errors": 0}
-    if name:
+    stats = {"chats": 0, "messages": 0, "records_seen": 0, "truncated": False, "errors": 0}
+    if not name:
+        return stats
+    if name in _SYNCING:
+        log.info("[wa-inbox] history sync for %s already running — not started again", name)
+        return {"skipped": "already_running"}
+    _SYNCING.add(name)
+    try:
         try:
             await _pull_history(db, inst, name, days=days, max_chats=max_chats,
                                 max_messages=max_messages, stats=stats)
@@ -683,4 +750,6 @@ async def sync_history(db, inst: dict, *, days: int = 90, max_chats: int = 200,
                 "history_synced_at": wa_send._iso(wa_send._now()), "history_stats": stats}})
         except Exception as e:
             log.error("[wa-inbox] history: stats not saved for %s: %s", name, str(e)[:160])
+    finally:
+        _SYNCING.discard(name)
     return stats
