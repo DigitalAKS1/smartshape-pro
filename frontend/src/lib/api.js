@@ -656,6 +656,15 @@ export const schoolTypes = {
 };
 
 // Interested-product master (custom/individual entries; packages are the primary options)
+// Generic lookup masters — School Category, Product Category, Package Type, …
+export const lookups = {
+  lists: () => API.get('/lookups'),
+  getAll: (key) => API.get(`/lookups/${key}`),
+  create: (key, data) => API.post(`/lookups/${key}`, data),
+  update: (key, id, data) => API.put(`/lookups/${key}/${id}`, data),
+  remove: (key, id) => API.delete(`/lookups/${key}/${id}`),
+};
+
 export const interestedProducts = {
   getAll: () => API.get('/interested-products'),
   create: (data) => API.post('/interested-products', data),

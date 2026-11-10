@@ -113,6 +113,9 @@ export default function Inventory() {
                     <Layers className="mr-2 h-4 w-4" /> Manage product types
                   </DropdownMenuItem>
                 )}
+                <DropdownMenuItem onClick={() => navigate('/product-masters')} className="cursor-pointer" data-testid="menu-product-masters">
+                  <Layers className="mr-2 h-4 w-4" /> Product Masters (categories, package types)
+                </DropdownMenuItem>
                 {canWrite && (
                   <DropdownMenuItem onClick={() => inv.setImportOpen(true)} className="cursor-pointer">
                     <Upload className="mr-2 h-4 w-4" /> Import CSV

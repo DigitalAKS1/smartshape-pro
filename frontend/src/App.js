@@ -50,6 +50,7 @@ const Inventory = lazyRoute(() => import('./pages/admin/Inventory'));
 const ProductTypes = lazyRoute(() => import('./pages/admin/ProductTypes'));
 const PurchaseAlerts = lazyRoute(() => import('./pages/admin/PurchaseAlerts'));
 const PackageMaster = lazyRoute(() => import('./pages/admin/PackageMaster'));
+const ProductMasters = lazyRoute(() => import('./pages/admin/ProductMasters'));
 const StockManagement = lazyRoute(() => import('./pages/admin/StockManagement'));
 const PhysicalCount = lazyRoute(() => import('./pages/admin/PhysicalCount'));
 const Analytics = lazyRoute(() => import('./pages/admin/Analytics'));
@@ -239,6 +240,7 @@ function AppRouter() {
       <Route path="/product-types" element={<ProtectedRoute><ProductTypes /></ProtectedRoute>} />
       <Route path="/purchase-alerts" element={<ProtectedRoute><PurchaseAlerts /></ProtectedRoute>} />
       <Route path="/package-master" element={<ProtectedRoute><PackageMaster /></ProtectedRoute>} />
+      <Route path="/product-masters" element={<ProtectedRoute><ProductMasters /></ProtectedRoute>} />
       <Route path="/stock-management" element={<ProtectedRoute><StockManagement /></ProtectedRoute>} />
       <Route path="/physical-count" element={<ProtectedRoute><PhysicalCount /></ProtectedRoute>} />
       <Route path="/analytics" element={<ProtectedRoute><Analytics /></ProtectedRoute>} />

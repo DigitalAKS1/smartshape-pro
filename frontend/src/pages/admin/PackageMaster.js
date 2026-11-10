@@ -1,4 +1,5 @@
 import React from 'react';
+import { Link } from 'react-router-dom';
 import AdminLayout from '../../components/layouts/AdminLayout';
 import { useTheme } from '../../contexts/ThemeContext';
 import { Button } from '../../components/ui/button';
@@ -55,6 +56,9 @@ export default function PackageMaster() {
             </p>
           </div>
           <div className="flex items-center gap-2">
+            <Link to="/product-masters" className={`hidden sm:inline text-xs ${textMuted} hover:text-[#e94560]`} data-testid="link-package-types">
+              Manage package types
+            </Link>
             {inactiveCount > 0 && (
               <button
                 onClick={() => setShowInactive(v => !v)}

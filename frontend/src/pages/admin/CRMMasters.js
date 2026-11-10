@@ -10,6 +10,7 @@ import { useCRMMasters, describeBroadcastReach } from '../../hooks/useCRMMasters
 import { pipelineSettings, schoolTypes as schoolTypesApi, interestedProducts as interestedProductsApi } from '../../lib/api';
 import { STAGES } from '../../lib/crmConstants';
 import MasterEntityTable from '../../components/crm/MasterEntityTable';
+import LookupListEditor from '../../components/masters/LookupListEditor';
 import { useAuth } from '../../contexts/AuthContext';
 
 const TABS = [
@@ -21,6 +22,7 @@ const TABS = [
   { id: 'designations', label: 'Designation Master',   icon: Briefcase, desc: 'Job designations for school contacts — CEO, Principal, Vice Principal, Coordinator, ...' },
   { id: 'tags',         label: 'Tag Master',           icon: Tag,       desc: 'Color-coded tags to segment leads and run targeted WhatsApp / email campaigns' },
   { id: 'schooltypes',  label: 'School Types',         icon: Building2, desc: 'Board / type options shown in school forms — CBSE, ICSE, IB, Cambridge, ...' },
+  { id: 'schoolcategory', label: 'School Category',   icon: Building2, desc: 'Kind of school — Pre School, K-12, Franchise, Navodaya, Independent. Shown on school forms and CRM filters.' },
   { id: 'products',     label: 'Interested Products',  icon: Package,   desc: 'Individual / "Other" products captured on lead forms. Packages are the primary options; these accumulate from rep input — prune typos and one-offs here.' },
   { id: 'pipeline',     label: 'Pipeline Settings',    icon: SlidersHorizontal, desc: 'Win probability per stage, idle limits before a lead is "stuck", lost reasons, and the daily digest' },
 ];
@@ -483,6 +485,11 @@ export default function CRMMasters() {
               {stList.length === 0 && <MasterEmpty icon={Building2} title="No school types yet" sub="Add a board or type above (e.g. Cambridge) — it'll appear in every school form's dropdown." />}
             </div>
           </div>
+        )}
+
+        {/* SCHOOL CATEGORY */}
+        {activeTab === 'schoolcategory' && (
+          <LookupListEditor listKey="school_category" title="School Category" placeholder="e.g. Play School" canEdit={canEditMasters} />
         )}
 
         {/* INTERESTED PRODUCTS */}

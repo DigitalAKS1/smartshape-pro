@@ -9,6 +9,7 @@ const ROUTE_MODULE_MAP = {
   '/view-quotation': 'quotations',
   '/edit-quotation': 'quotations',
   '/inventory': 'inventory',
+  '/product-masters': 'inventory',
   '/purchase-alerts': 'purchase_alerts',
   '/package-master': 'package_master',
   '/stock-management': 'stock_management',
