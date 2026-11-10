@@ -23,6 +23,8 @@ none, because people act on it.
 
 from datetime import datetime, timezone
 
+from services.purchase_history import revenue_events
+
 # An order that was cancelled never became a relationship.
 NON_REVENUE_ORDER_STATUSES = {"cancelled"}
 
@@ -56,22 +58,16 @@ async def recompute_school_lifecycle(db, school_id: str,
     if not await db.schools.find_one({"school_id": sid}, {"_id": 0, "school_id": 1}):
         return None
 
-    orders = []
-    async for o in db.orders.find(
-        {"school_id": sid, "is_deleted": {"$ne": True}},
-        {"_id": 0, "grand_total": 1, "status": 1, "created_at": 1},
-    ):
-        if (o.get("status") or "") in NON_REVENUE_ORDER_STATUSES:
-            continue
-        orders.append(o)
+    # Real orders (cancelled excluded) + past purchases entered for this school.
+    events = (await revenue_events(db, [sid])).get(sid, [])
 
     now = datetime.now(timezone.utc)
-    dates = sorted(o.get("created_at") for o in orders if o.get("created_at"))
+    dates = sorted(e["at"] for e in events if e.get("at"))
     first_order_at = dates[0] if dates else None
     last_order_at = dates[-1] if dates else None
     days_since = _days_between(last_order_at, now) if last_order_at else None
 
-    if not orders:
+    if not events:
         status = PROSPECT
     elif days_since is not None and days_since > dormant_after_days:
         status = DORMANT
@@ -80,8 +76,8 @@ async def recompute_school_lifecycle(db, school_id: str,
 
     fields = {
         "account_status": status,
-        "order_count": len(orders),
-        "lifetime_value": round(sum(float(o.get("grand_total", 0) or 0) for o in orders), 2),
+        "order_count": len(events),
+        "lifetime_value": round(sum(e["amount"] for e in events), 2),
         "first_order_at": first_order_at,
         "last_order_at": last_order_at,
         "days_since_last_order": days_since,

@@ -16,6 +16,8 @@ the work. The due list is a report; the pipeline stays the pipeline.
 
 from datetime import datetime, timezone
 
+from services.purchase_history import revenue_events
+
 # A cancelled order never happened, so it must not shape the rhythm either.
 NON_REVENUE_ORDER_STATUSES = {"cancelled"}
 
@@ -58,16 +60,13 @@ async def reorder_candidates(db, *, owner_email: str = None,
         return []
 
     # Orders per school, oldest first.
+    # Real orders (cancelled excluded) + past purchases — one buying history.
     history: dict = {}
-    async for o in db.orders.find(
-        {"school_id": {"$in": list(schools)}, "is_deleted": {"$ne": True}},
-        {"_id": 0, "school_id": 1, "grand_total": 1, "status": 1, "created_at": 1},
-    ):
-        if (o.get("status") or "") in NON_REVENUE_ORDER_STATUSES:
-            continue
-        when = _parse(o.get("created_at"))
-        if when:
-            history.setdefault(o["school_id"], []).append((when, o))
+    for sid, events in (await revenue_events(db, list(schools))).items():
+        for e in events:
+            when = _parse(e["at"])
+            if when:
+                history.setdefault(sid, []).append((when, {"grand_total": e["amount"]}))
 
     # Schools already being worked for a reorder are not "to start".
     busy = {l["school_id"] async for l in db.leads.find(

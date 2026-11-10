@@ -119,3 +119,63 @@ Unique index on `(list_key, value)`.
   admin gate, import canonicalisation, audience filter.
 - Frontend jest for `crmFilter` school_categories facet.
 - Build bundle, deploy, smoke: add a category, set it on a school, filter by it.
+
+---
+
+## Phase 2 — Old orders (past purchases) linked to schools
+
+### Intent
+Owner: "Old Order upload manually, link with School Data… hm purana order as per school chadha de ek baar
+ka kaam ho jayein" — record what each school bought before the app existed (and anything bought outside
+it), once, so phase 3 can warn "this school already has these dies" and reorder drip can target past buyers.
+
+### Goals
+- Add a past purchase to one school by hand: date, reference (bill/invoice no.), notes, optional amount,
+  item lines (die from inventory by code/name, or free text e.g. a machine; qty).
+- Bulk upload from Excel/CSV across many schools, with a dry-run preview showing which rows match a
+  school / a die before anything is written. Re-uploading the same file never duplicates.
+- One **purchase history** per school = past purchases + real (non-cancelled) app orders with their
+  items, shown on School Profile → Sales tab, plus a per-item summary (die, total qty, last bought).
+- Past purchases count as orders for account status (prospect/customer/dormant) and reorder-due.
+
+### Non-goals / anti-goals
+- Past purchases are **not** `db.orders`: no stock movement, no reservation, no production stage, no
+  payments ledger, no Tally, no lead stage change. **[call]** — inserting into orders would trigger all of
+  those (order_routes.create_order_for_quotation side effects) and corrupt stock.
+- No editing of real orders from this screen.
+
+### Design
+- Collection `past_purchases`: `{purchase_id "pp_<hex12>", school_id, school_name, purchase_date
+  "YYYY-MM-DD", reference, notes, amount (float|0), items: [{die_id|None, die_code, name, item_type:
+  "die"|"machine"|"other", qty:int}], source: "manual"|"import", import_batch_id, dedupe_key, created_by,
+  created_at, is_deleted}`. Unique index on `dedupe_key` (partial, string).
+- `dedupe_key` = sha1 of school_id|date|reference|sorted(code-or-name:qty).
+- `services/purchase_history.py`:
+  - `async revenue_events(db, school_ids) -> {sid: [{"at": iso, "amount": float, "source"}]}` — orders
+    not deleted and not cancelled (checks `order_status` AND legacy `status` **[call — fixes existing bug:
+    lifecycle/reorder read `status`, orders store `order_status`]**) + past purchases not deleted
+    (`at` = purchase_date T00:00Z).
+  - `async school_purchase_history(db, school_id) -> {"entries": [...], "items": [...]}`; entries newest
+    first `{kind: "order"|"past", id, number_or_reference, date, amount, status, items}`; items summary
+    `{key, die_id, die_code, name, item_type, total_qty, times, last_date}` keyed by die_id else
+    code/name lower.
+- `account_lifecycle.recompute_school_lifecycle` and `reorder.reorder_candidates` read `revenue_events`.
+- Routes (`backend/routes/past_purchase_routes.py`):
+  - `GET /schools/{school_id}/purchase-history` — anyone who can access the school.
+  - `POST /past-purchases`, `PUT /past-purchases/{id}`, `DELETE /past-purchases/{id}` (soft) — can access
+    the school; delete = admin or creator. Each write recomputes that school's lifecycle.
+  - `GET /past-purchases/template` — CSV header row: `school_id,school_name,city,purchase_date,die_code,
+    item_name,item_type,qty,reference,amount,notes`.
+  - `POST /past-purchases/import?dry_run=true|false` (multipart .csv/.xlsx) — admin or `orders` module
+    read_write. Rows grouped into one purchase per (school, date, reference). School via
+    `import_engine.resolve_school` (create→"not found", needs_review→"ambiguous": both skipped and reported).
+    Die via normalised code; unknown code kept as free-text item. Dates accept YYYY-MM-DD, DD-MM-YYYY,
+    DD/MM/YYYY, Excel serial. Response `{groups, created, duplicates, skipped:[{row, reason}], preview:[...]}`.
+- Frontend: `PurchaseHistorySection` in School Profile Sales tab (summary chips + entries list, "Add old
+  order" dialog with die picker from `dies.getAll()` + free-text line); Import Center gets an
+  "Old Orders" tab: template download, upload → preview table (matched / skipped with reason) → Import.
+
+### Verification
+pytest for service (merge, cancelled excluded both fields, summary), routes (CRUD, access, lifecycle
+recompute, dedupe), import (grouping, date formats, unknown school/die, dry-run writes nothing, re-upload
+0 created); jest none beyond build; deploy + run seed/index repair per [[connect-db-never-called]].
