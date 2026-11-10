@@ -34,6 +34,7 @@ import {
   SchoolSalesSection, SchoolMarketingSection,
   SchoolVisitsSection,
 } from '../../components/school/SchoolOrdersSection';
+import PurchaseHistorySection from '../../components/school/PurchaseHistorySection';
 
 // ── Design tokens ────────────────────────────────────────────────────────────
 function useTk(isDark) {
@@ -408,7 +409,10 @@ export default function SchoolProfile() {
           )}
 
           {sp.activeTab === 'sales' && (
-            <SchoolSalesSection quotations={quotations} orders={orders} invoices={invoices} metrics={metrics} tk={tk} />
+            <div className="space-y-5">
+              <SchoolSalesSection quotations={quotations} orders={orders} invoices={invoices} metrics={metrics} tk={tk} />
+              <PurchaseHistorySection schoolId={school.school_id} tk={tk} />
+            </div>
           )}
 
           {sp.activeTab === 'marketing' && (

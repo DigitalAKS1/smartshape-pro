@@ -656,6 +656,20 @@ export const schoolTypes = {
 };
 
 // Interested-product master (custom/individual entries; packages are the primary options)
+// Past purchases (old orders before / outside the app) + merged purchase history
+export const pastPurchases = {
+  history: (schoolId) => API.get(`/schools/${schoolId}/purchase-history`),
+  create: (data) => API.post('/past-purchases', data),
+  update: (id, data) => API.put(`/past-purchases/${id}`, data),
+  remove: (id) => API.delete(`/past-purchases/${id}`),
+  template: () => API.get('/past-purchases/template', { responseType: 'blob' }),
+  importFile: (file, dryRun) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    return API.post('/past-purchases/import', fd, { params: { dry_run: dryRun } });
+  },
+};
+
 // Generic lookup masters — School Category, Product Category, Package Type, …
 export const lookups = {
   lists: () => API.get('/lookups'),

@@ -5,6 +5,7 @@ import { Button } from '../../components/ui/button';
 import { toast } from 'sonner';
 import { Upload, CheckCircle, XCircle, FileText, Play, Clock, Download } from 'lucide-react';
 import ZoomCrmImport from '../../components/crm/ZoomCrmImport';
+import OldOrdersImport from '../../components/import/OldOrdersImport';
 
 export default function ImportCenter() {
   const [preview, setPreview] = useState(null);
@@ -219,16 +220,17 @@ export default function ImportCenter() {
         <h1 className={`text-3xl sm:text-4xl font-semibold ${textPri} tracking-tight`} data-testid="import-center-title">Import Center</h1>
 
         <div className={`flex gap-1 ${card} border rounded-md p-1`}>
-          {['import', 'zoom', 'logs'].map(tab => (
+          {['import', 'oldorders', 'zoom', 'logs'].map(tab => (
             <button key={tab} onClick={() => { setActiveTab(tab); if (tab === 'logs') loadLogs(); }}
               className={`flex-1 px-4 py-2 rounded text-sm font-medium transition-all capitalize ${activeTab === tab ? 'bg-[#e94560] text-white' : `${textSec} hover:bg-[var(--bg-hover)]`}`}
               data-testid={`import-tab-${tab}`}>
-              {tab === 'import' ? 'Import Data' : tab === 'zoom' ? 'Zoom CRM' : 'Import History'}
+              {tab === 'import' ? 'Import Data' : tab === 'oldorders' ? 'Old Orders' : tab === 'zoom' ? 'Zoom CRM' : 'Import History'}
             </button>
           ))}
         </div>
 
         {activeTab === 'zoom' && <ZoomCrmImport />}
+        {activeTab === 'oldorders' && <OldOrdersImport />}
 
         {activeTab === 'import' && (
           <div className="space-y-4">
