@@ -15,6 +15,7 @@ from auth_utils import get_current_user
 from rbac import get_team, require_teams, require_module
 from audit_backup import snapshot_and_delete
 from media_utils import youtube_id, normalize_images, MAX_DIE_IMAGES
+from routes.lookup_routes import canonical_name, get_values as lookup_values
 
 router = APIRouter()
 
@@ -332,7 +333,8 @@ async def import_dies_csv(file: UploadFile = File(...), request: Request = None)
     existing_dies = await db.dies.find({}, {"die_id": 1, "code": 1, "_id": 0}).to_list(None)
     by_norm = {_norm_code(d.get("code", "")): d["die_id"] for d in existing_dies}
 
-    valid_categories = {"decorative","flowers","leaf","alphabets","numbers","butterfly","borders","giant_flowers","3d_flowers","animals_birds","snowflake","fruits","shapes","other"}
+    # Categories come from the Product Category master (match on slug or label).
+    valid_categories = {v["value"] for v in await lookup_values("product_category", target_db=db)}
     for row in reader:
         try:
             code = re.sub(r"\s+", " ", (row.get("code", "") or "").strip().strip('"').strip())
@@ -343,7 +345,7 @@ async def import_dies_csv(file: UploadFile = File(...), request: Request = None)
             norm = _norm_code(code)
             sv = (row.get("stock_qty", "") or "").strip()
             stock_qty = int(sv) if sv.lstrip("-").isdigit() else 0
-            raw_cat = row.get("category", "decorative").strip().lower().replace(" ", "_")
+            raw_cat = await canonical_name("product_category", row.get("category") or "", target_db=db)
             category = raw_cat if raw_cat in valid_categories else "decorative"
 
             existing_id = by_norm.get(norm)
@@ -451,6 +453,7 @@ async def create_package(request: Request):
         "gst_pct": body.get("gst_pct", 18),
         "items": body.get("items", []),
         "machine_category": body.get("machine_category"),
+        "package_type": await canonical_name("package_type", body.get("package_type", ""), target_db=db),
         "is_active": True,
     }
     await db.packages.insert_one(pkg_doc)
@@ -462,9 +465,11 @@ async def update_package(package_id: str, request: Request):
     await get_current_user(request)
     body = await request.json()
     allowed = {}
-    for key in ("display_name", "base_price", "std_die_qty", "large_die_qty", "machine_qty", "gst_pct", "items", "is_active", "machine_category"):
+    for key in ("display_name", "base_price", "std_die_qty", "large_die_qty", "machine_qty", "gst_pct", "items", "is_active", "machine_category", "package_type"):
         if key in body:
             allowed[key] = body[key]
+    if "package_type" in allowed:
+        allowed["package_type"] = await canonical_name("package_type", allowed["package_type"], target_db=db)
     if allowed:
         await db.packages.update_one({"package_id": package_id}, {"$set": allowed})
     return await db.packages.find_one({"package_id": package_id}, {"_id": 0})
