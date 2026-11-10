@@ -42,6 +42,7 @@ from routes.crm_maintenance_routes import router as crm_maintenance_router
 from routes.quotation_routes import router as quotation_router
 from routes.inventory_routes import router as inventory_router
 from routes.product_type_routes import router as product_type_router
+from routes.lookup_routes import router as lookup_router
 from routes.order_routes import router as order_router
 from routes.invoice_routes import router as invoice_router
 from routes.field_routes import router as field_router
@@ -97,6 +98,7 @@ app.include_router(crm_maintenance_router, prefix="/api")
 app.include_router(quotation_router, prefix="/api")
 app.include_router(inventory_router, prefix="/api")
 app.include_router(product_type_router, prefix="/api")
+app.include_router(lookup_router, prefix="/api")
 app.include_router(order_router, prefix="/api")
 app.include_router(invoice_router, prefix="/api")
 app.include_router(field_router, prefix="/api")

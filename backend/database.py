@@ -152,6 +152,9 @@ async def ensure_wa_indexes(target_db):
     await _i(target_db.wa_instances.create_index("phone_e164", background=True))
     await _i(target_db.wa_number_cache.create_index("phone_e164", unique=True, background=True))
     await _i(target_db.wa_opt_outs.create_index("phone_e164", background=True))
+    # Lookup masters (Phase 1): one row per (list, value) — makes concurrent first-read seeding safe.
+    await _i(target_db.lookup_values.create_index([("list_key", 1), ("value", 1)], unique=True, background=True))
+    await _i(target_db.schools.create_index("school_category", background=True))
     await _i(target_db.wa_events_raw.create_index([("instance_name", 1), ("received_at", -1)], background=True))
     # TTLs need a real datetime field. Raw inbound events are kept 30 days (W2 back-fills from
     # them); a receipt parked for a row still `sending` is useless after a day.
