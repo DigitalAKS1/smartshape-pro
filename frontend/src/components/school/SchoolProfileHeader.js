@@ -39,6 +39,11 @@ export default function SchoolProfileHeader({ school, metrics, tk, rv, tagsList 
                 {school.school_type}
               </span>
             )}
+            {school.school_category && (
+              <span className="text-[11px] font-semibold uppercase tracking-widest px-2.5 py-0.5 rounded-full border border-[#e94560]/40 text-[#e94560]" data-testid="school-category-chip">
+                {school.school_category}
+              </span>
+            )}
             {school.board && (
               <span className={`text-[11px] font-semibold uppercase tracking-widest px-2.5 py-0.5 rounded-full border ${tk.border} ${tk.tm}`}>
                 {school.board}

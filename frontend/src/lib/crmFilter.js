@@ -34,6 +34,7 @@ export function deriveFilterOptions({ contacts = [], leads = [], schools = [], s
     sources: uniqSorted([...(sources || []).map(s => s.name || s), ...contacts.map(c => c.source), ...leads.map(l => l.source)]),
     roles: uniqSorted([...(roles || []).map(r => r.name || r), ...contacts.map(c => c.designation)]),
     school_types: uniqSorted(schools.map(s => s.school_type)),
+    school_categories: uniqSorted(schools.map(s => s.school_category)),
     cities: uniqSorted(schools.map(s => s.city)),
     tags: (tags || []).map(t => ({ id: t.tag_id, name: t.name, color: t.color })),
     owners: deriveOwners(salespersons, [...schools, ...contacts, ...leads]),
@@ -119,7 +120,7 @@ const hasDateRange = (f, key) => f[`${key}_from`] != null || f[`${key}_to`] != n
 export function hasActiveFilters(f) {
   if (!f) return false;
   return nonEmpty(f.sources) || nonEmpty(f.lead_stages) || nonEmpty(f.roles) ||
-    nonEmpty(f.school_types) || nonEmpty(f.cities) || nonEmpty(f.tags) ||
+    nonEmpty(f.school_types) || nonEmpty(f.school_categories) || nonEmpty(f.cities) || nonEmpty(f.tags) ||
     nonEmpty(f.owners) || nonEmpty(f.has) || nonEmpty(f.deal_types) || nonEmpty(f.lead_types) ||
     nonEmpty(f.account_status) ||
     f.min_strength != null || f.max_strength != null ||
@@ -129,7 +130,7 @@ export function hasActiveFilters(f) {
 export function countActive(f) {
   if (!f) return 0;
   let n = 0;
-  ['sources', 'lead_stages', 'roles', 'school_types', 'cities', 'tags', 'owners', 'has',
+  ['sources', 'lead_stages', 'roles', 'school_types', 'school_categories', 'cities', 'tags', 'owners', 'has',
     'deal_types', 'lead_types', 'account_status'].forEach(k => { if (nonEmpty(f[k])) n++; });
   if (f.min_strength != null || f.max_strength != null) n++;
   if (hasDateRange(f, 'import_date')) n++;
@@ -262,6 +263,14 @@ export function matchesCrmFilter(row, filter, ctx) {
     }
   }
 
+  // School category (Pre School / K-12 / Navodaya …) lives on the school; any
+  // other row uses its own value if it carries one, else rolls up to its school.
+  if (nonEmpty(f.school_categories)) {
+    const own = (row.school_category || '').trim();
+    const cat = own || ((schoolsById[row.school_id] || {}).school_category || '').trim();
+    if (!cat || !f.school_categories.includes(cat)) return false;
+  }
+
   const needsSchool = nonEmpty(f.cities) || f.min_strength != null || f.max_strength != null;
   if (needsSchool) {
     const school = schoolsById[row.school_id];
@@ -278,7 +287,7 @@ export function matchesCrmFilter(row, filter, ctx) {
 // "Source: Web" prefix. Only the multi-value facets a chip can represent.
 export const FACET_LABELS = {
   owners: 'Owner', cities: 'City', sources: 'Source',
-  school_types: 'Type', roles: 'Role', lead_stages: 'Stage', tags: 'Tag',
+  school_types: 'Type', school_categories: 'Category', roles: 'Role', lead_stages: 'Stage', tags: 'Tag',
   deal_types: 'Deal Type', lead_types: 'Lead Type', account_status: 'Account',
 };
 
@@ -299,6 +308,7 @@ export function suggestFacets(term, options = {}, { countFor, applied } = {}) {
   (options.cities || []).forEach(c => add('cities', c, c));
   (options.sources || []).forEach(s => add('sources', s, s));
   (options.school_types || []).forEach(s => add('school_types', s, s));
+  (options.school_categories || []).forEach(s => add('school_categories', s, s));
   (options.roles || []).forEach(r => add('roles', r, r));
   (options.stages || []).forEach(s => add('lead_stages', s.id, s.label));
   (options.tags || []).forEach(tg => add('tags', tg.id, tg.name));

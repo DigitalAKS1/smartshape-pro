@@ -82,6 +82,7 @@ export default function MultiFilterBar({ options = {}, value, onChange, resultCo
             </div>
           </div>
           <ChipRow label="School Type" options={options.school_types} values={filt.school_types} onToggle={id => toggle('school_types', id)} />
+          <ChipRow label="School Category" options={options.school_categories} values={filt.school_categories} onToggle={id => toggle('school_categories', id)} />
           <ChipRow label="City" options={options.cities} values={filt.cities} onToggle={id => toggle('cities', id)} />
           <ChipRow label="Tags" options={tagOpts} values={filt.tags} onToggle={id => toggle('tags', id)} />
         </div>

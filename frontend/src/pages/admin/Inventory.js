@@ -13,7 +13,8 @@ import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from '../../components/ui/dropdown-menu';
 
-import useInventory, { CATEGORIES, CAT_LABELS, TYPES, SORT_OPTIONS } from '../../hooks/useInventory';
+import useInventory, { TYPES, SORT_OPTIONS } from '../../hooks/useInventory';
+import useLookup from '../../hooks/useLookup';
 import DieCard from '../../components/inventory/DieCard';
 import { CreateDieDialog, EditDieDialog } from '../../components/inventory/DieFormDialog';
 import StockMovementDialog from '../../components/inventory/StockMovementDialog';
@@ -28,6 +29,9 @@ export default function Inventory() {
   const canWrite = isAdmin || user?.role === 'store';
 
   const inv = useInventory();
+  // Product categories come from Product Masters; labelFor still names a hidden one.
+  const productCats = useLookup('product_category');
+  const catLabel = productCats.labelFor;
 
   const card      = 'bg-[var(--bg-card)] border-[var(--border-color)]';
   const inputCls  = 'bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]';
@@ -272,11 +276,11 @@ export default function Inventory() {
           )}
           {!inv.quickFilter && (
             <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar -mx-4 px-4 sm:mx-0 sm:px-0">
-              {['all', ...CATEGORIES].map(c => (
+              {['all', ...productCats.activeItems.map(i => i.value)].map(c => (
                 <button key={c} onClick={() => inv.setCategoryFilter(c)}
                   className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-medium transition-colors border whitespace-nowrap
                     ${inv.categoryFilter === c ? 'bg-[#e94560] text-white border-[#e94560]' : `${card} border ${textMuted} hover:border-[#e94560]/50`}`}>
-                  {c === 'all' ? 'All' : CAT_LABELS[c] || c}
+                  {c === 'all' ? 'All' : catLabel(c)}
                 </button>
               ))}
             </div>
@@ -318,7 +322,7 @@ export default function Inventory() {
                   <div key={cat}>
                     <div className="flex items-center justify-between mb-3">
                       <div className="flex items-center gap-2">
-                        <h2 className={`text-base sm:text-lg font-semibold ${textPri}`}>{CAT_LABELS[cat] || cat}</h2>
+                        <h2 className={`text-base sm:text-lg font-semibold ${textPri}`}>{catLabel(cat)}</h2>
                         <span className={`text-xs px-2 py-0.5 rounded-full ${card} border ${textMuted} font-mono`}>{catDies.length}</span>
                       </div>
                       <span className={`text-xs ${textMuted} font-mono`}>{catTotal} in stock</span>
@@ -376,7 +380,7 @@ export default function Inventory() {
                         </td>
                         <td className="px-4 py-3 font-mono text-[#e94560] text-xs font-medium">{die.code}</td>
                         <td className={`px-4 py-3 ${textPri} font-medium`}>{die.name}</td>
-                        <td className={`px-4 py-3 ${textSec} text-xs`}>{CAT_LABELS[die.category] || die.category}</td>
+                        <td className={`px-4 py-3 ${textSec} text-xs`}>{catLabel(die.category)}</td>
                         <td className={`px-4 py-3 ${textSec} capitalize text-xs`}>{die.type}</td>
                         <td className="px-4 py-3">
                           <span className={`font-mono font-bold ${die.stock_qty === 0 ? 'text-red-500' : die.stock_qty <= die.min_level ? 'text-yellow-500' : textPri}`}>{die.stock_qty}</span>
@@ -449,7 +453,7 @@ export default function Inventory() {
                     <div className="flex-1 min-w-0">
                       <p className={`text-sm font-semibold ${textPri} truncate`}>{die.name}</p>
                       <p className="text-xs font-mono text-[#e94560]">{die.code}</p>
-                      <p className={`text-xs ${textMuted} capitalize`}>{die.type} · {CAT_LABELS[die.category] || die.category}</p>
+                      <p className={`text-xs ${textMuted} capitalize`}>{die.type} · {catLabel(die.category)}</p>
                     </div>
                     <div className="text-right shrink-0">
                       <p className={`font-mono font-bold text-base ${die.stock_qty === 0 ? 'text-red-500' : die.stock_qty <= die.min_level ? 'text-yellow-500' : textPri}`}>{die.stock_qty}</p>

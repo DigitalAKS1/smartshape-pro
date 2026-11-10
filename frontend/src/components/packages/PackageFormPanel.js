@@ -7,6 +7,7 @@ import {
   ToggleLeft, ToggleRight, IndianRupee, Keyboard,
 } from 'lucide-react';
 import { formatCurrency } from '../../lib/utils';
+import useLookup from '../../hooks/useLookup';
 import { ITEM_TYPES, TYPE_COLORS, calcItemTotal } from '../../hooks/usePackageMaster';
 
 /* ── Item row component ──────────────────────────────────────────────────── */
@@ -109,6 +110,7 @@ export default function PackageFormPanel({
   textPri, textSec, textMuted, borderCls, card, inputCls, bg,
 }) {
   const { subtotal, gst } = summary;
+  const packageTypes = useLookup('package_type');
 
   if (!editPkg && !form.display_name && !form.items?.length) {
     return (
@@ -196,6 +198,21 @@ export default function PackageFormPanel({
               >
                 <option value="">— General —</option>
                 <option value="small_machine">Small Machine</option>
+              </select>
+            </div>
+            <div>
+              <Label className={`${textMuted} text-[10px] uppercase tracking-wider mb-1.5 block`}>Package Type</Label>
+              <select
+                value={form.package_type || ''}
+                onChange={e => setForm(f => ({ ...f, package_type: e.target.value }))}
+                className={`w-full ${inputCls} h-10 px-3 rounded-md text-sm`}
+                data-testid="pkg-package-type-select"
+              >
+                <option value="">—</option>
+                {form.package_type && !packageTypes.activeItems.some(t => t.name === form.package_type) && (
+                  <option value={form.package_type}>{form.package_type}</option>
+                )}
+                {packageTypes.activeItems.map(t => <option key={t.value} value={t.name}>{t.name}</option>)}
               </select>
             </div>
             <div className="flex flex-col justify-end">

@@ -124,6 +124,7 @@ export default function CampaignsTab({ tk, campaigns, setCampaigns, roles, conta
         if (audience_filter.lead_stages?.length) parts.push(audience_filter.lead_stages.join('/'));
         if (audience_filter.roles?.length) parts.push(audience_filter.roles.join('/'));
         if (audience_filter.school_types?.length) parts.push(audience_filter.school_types.join('/'));
+        if (audience_filter.school_categories?.length) parts.push(audience_filter.school_categories.join('/'));
         if (audience_filter.cities?.length) parts.push(audience_filter.cities.join('/'));
         if (audience_filter.tags?.length) parts.push(`${audience_filter.tags.length} tag(s)`);
         if (audience_filter.min_strength) parts.push(`${audience_filter.min_strength}+ students`);

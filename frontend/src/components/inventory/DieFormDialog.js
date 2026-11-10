@@ -4,9 +4,23 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Label } from '../ui/label';
-import { CATEGORIES, CAT_LABELS, TYPES } from '../../hooks/useInventory';
+import { TYPES } from '../../hooks/useInventory';
+import useLookup from '../../hooks/useLookup';
 
 // ── Create Dialog ──────────────────────────────────────────────────────────────
+// Category <option>s from the Product Category master. A die whose category
+// was hidden keeps it as an option, so editing never silently changes it.
+function CategoryOptions({ current }) {
+  const { activeItems, labelFor } = useLookup('product_category');
+  const showCurrent = current && !activeItems.some(c => c.value === current);
+  return (
+    <>
+      {showCurrent && <option value={current}>{labelFor(current)}</option>}
+      {activeItems.map(c => <option key={c.value} value={c.value}>{c.name}</option>)}
+    </>
+  );
+}
+
 export function CreateDieDialog({
   open, onOpenChange,
   newDie, setNewDie,
@@ -75,7 +89,7 @@ export function CreateDieDialog({
               <Label className={`${textSec} text-xs mb-1 block`}>Category</Label>
               <select value={newDie.category} onChange={e => setNewDie({...newDie, category: e.target.value})}
                 className={`w-full h-11 px-3 rounded-md text-sm ${inputCls}`}>
-                {CATEGORIES.map(c => <option key={c} value={c}>{CAT_LABELS[c]}</option>)}
+                <CategoryOptions current={newDie.category} />
               </select>
             </div>
           </div>
@@ -232,7 +246,7 @@ export function EditDieDialog({
               <Label className={`${textSec} text-xs mb-1 block`}>Category</Label>
               <select value={editForm.category} onChange={e => setEditForm({...editForm, category: e.target.value})}
                 className={`w-full h-11 px-3 rounded-md text-sm ${inputCls}`}>
-                {CATEGORIES.map(c => <option key={c} value={c}>{CAT_LABELS[c]}</option>)}
+                <CategoryOptions current={editForm.category} />
               </select>
             </div>
           </div>

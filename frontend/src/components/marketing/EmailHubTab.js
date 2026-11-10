@@ -111,6 +111,7 @@ function EmailCampaignsSubTab({ tk, campaigns, setCampaigns, roles, contacts, te
         if (audience_filter.roles?.length) parts.push(audience_filter.roles.join('/'));
         if (audience_filter.min_strength) parts.push(`${audience_filter.min_strength}+ students`);
         if (audience_filter.school_types?.length) parts.push(audience_filter.school_types.join('/'));
+        if (audience_filter.school_categories?.length) parts.push(audience_filter.school_categories.join('/'));
         if (audience_filter.cities?.length) parts.push(audience_filter.cities.join('/'));
         if (audience_filter.tags?.length) parts.push(`${audience_filter.tags.length} tag(s)`);
         audienceLabel = parts.length ? parts.join(' · ') : 'All Contacts';

@@ -1,4 +1,4 @@
-import { matchesCrmFilter, buildCrmContext, deriveFilterOptions, countActive, hasActiveFilters, suggestFacets } from '../crmFilter';
+import { matchesCrmFilter, buildCrmContext, deriveFilterOptions, countActive, hasActiveFilters, suggestFacets, FACET_LABELS } from '../crmFilter';
 
 const schools = [
   { school_id: 's_big', school_type: 'CBSE', school_strength: 700, city: 'Delhi' },
@@ -288,5 +288,40 @@ describe('matchesCrmFilter — account_status', () => {
   test('account_status counts as an active filter', () => {
     expect(hasActiveFilters({ account_status: ['dormant'] })).toBe(true);
     expect(countActive({ account_status: ['dormant'], cities: ['Delhi'] })).toBe(2);
+  });
+});
+
+// ── school_categories facet (Phase 1 lookup masters) ───────────────────────
+describe('matchesCrmFilter — school_categories', () => {
+  const schoolRows = [
+    { school_id: 's1', school_category: 'Navodaya' },
+    { school_id: 's2', school_category: 'Pre School' },
+  ];
+
+  test('filters schools by school_categories', () => {
+    const ctx = buildCrmContext('school', { schools: schoolRows });
+    expect(matchesCrmFilter(schoolRows[0], { school_categories: ['Navodaya'] }, ctx)).toBe(true);
+    expect(matchesCrmFilter(schoolRows[1], { school_categories: ['Navodaya'] }, ctx)).toBe(false);
+  });
+
+  test('lead rolls up category from its school', () => {
+    const ctx = buildCrmContext('lead', { schools: schoolRows });
+    expect(matchesCrmFilter({ school_id: 's2' }, { school_categories: ['Pre School'] }, ctx)).toBe(true);
+    expect(matchesCrmFilter({ school_id: 's2' }, { school_categories: ['Navodaya'] }, ctx)).toBe(false);
+    expect(matchesCrmFilter({ school_id: 'missing' }, { school_categories: ['Navodaya'] }, ctx)).toBe(false);
+  });
+
+  test('countActive counts school_categories once', () => {
+    expect(hasActiveFilters({ school_categories: ['Navodaya'] })).toBe(true);
+    expect(countActive({ school_categories: ['Navodaya', 'Pre School'], cities: ['Delhi'] })).toBe(2);
+  });
+
+  test('deriveFilterOptions lists distinct sorted categories', () => {
+    const opts = deriveFilterOptions({ schools: [...schoolRows, { school_id: 's3', school_category: 'Navodaya' }, { school_id: 's4' }] });
+    expect(opts.school_categories).toEqual(['Navodaya', 'Pre School']);
+  });
+
+  test('FACET_LABELS has Category', () => {
+    expect(FACET_LABELS.school_categories).toBe('Category');
   });
 });

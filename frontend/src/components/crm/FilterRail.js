@@ -273,6 +273,8 @@ export default function FilterRail({ options = {}, value, onChange, resultCount,
           opts={(options.cities || []).map((c) => ({ id: c, label: c }))} values={filt.cities || []} onToggle={toggle} countFor={countFor} />
         <FacetSection facetKey="school_types" label="Type" Icon={Building2}
           opts={(options.school_types || []).map((t) => ({ id: t, label: t }))} values={filt.school_types || []} onToggle={toggle} countFor={countFor} />
+        <FacetSection facetKey="school_categories" label="Category" Icon={Building2}
+          opts={(options.school_categories || []).map((t) => ({ id: t, label: t }))} values={filt.school_categories || []} onToggle={toggle} countFor={countFor} />
         <FacetSection facetKey="sources" label="Source" Icon={Radio}
           opts={(options.sources || []).map((s) => ({ id: s, label: s }))} values={filt.sources || []} onToggle={toggle} countFor={countFor} />
         <FacetSection facetKey="lead_stages" label="Stage" Icon={GitBranch}

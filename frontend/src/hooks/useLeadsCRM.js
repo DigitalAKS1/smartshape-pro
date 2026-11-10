@@ -381,13 +381,13 @@ export default function useLeadsCRM() {
   // ─────────────────────────────────────────────────────────────────────────────
   const openEditSchool = (sch) => {
     setEditSchool(sch);
-    setEditSchoolForm({ school_name: sch.school_name || '', school_type: sch.school_type || 'CBSE', group_id: sch.group_id || '', phone: sch.phone || '', email: sch.email || '', alternate_contact: sch.alternate_contact || '', city: sch.city || '', state: sch.state || '', address: sch.address || '', pincode: sch.pincode || '', primary_contact_name: sch.primary_contact_name || '', designation: sch.designation || '', school_strength: sch.school_strength || '', number_of_branches: sch.number_of_branches ?? '', annual_budget_range: sch.annual_budget_range || '', existing_vendor: sch.existing_vendor || '', linkedin_url: sch.linkedin_url || '', instagram_url: sch.instagram_url || '', website: sch.website || '', tag_ids: sch.tag_ids || [] });
+    setEditSchoolForm({ school_name: sch.school_name || '', school_type: sch.school_type || 'CBSE', school_category: sch.school_category || '', group_id: sch.group_id || '', phone: sch.phone || '', email: sch.email || '', alternate_contact: sch.alternate_contact || '', city: sch.city || '', state: sch.state || '', address: sch.address || '', pincode: sch.pincode || '', primary_contact_name: sch.primary_contact_name || '', designation: sch.designation || '', school_strength: sch.school_strength || '', number_of_branches: sch.number_of_branches ?? '', annual_budget_range: sch.annual_budget_range || '', existing_vendor: sch.existing_vendor || '', linkedin_url: sch.linkedin_url || '', instagram_url: sch.instagram_url || '', website: sch.website || '', tag_ids: sch.tag_ids || [] });
     setSchoolDialogOpen(true);
   };
 
   const openCreateSchool = () => {
     setEditSchool(null);
-    setEditSchoolForm({ school_name: '', school_type: 'CBSE', group_id: '', phone: '', email: '', alternate_contact: '', city: '', state: '', address: '', pincode: '', primary_contact_name: '', designation: '', school_strength: '', number_of_branches: '', annual_budget_range: '', existing_vendor: '', linkedin_url: '', instagram_url: '', website: '', tag_ids: [] });
+    setEditSchoolForm({ school_name: '', school_type: 'CBSE', school_category: '', group_id: '', phone: '', email: '', alternate_contact: '', city: '', state: '', address: '', pincode: '', primary_contact_name: '', designation: '', school_strength: '', number_of_branches: '', annual_budget_range: '', existing_vendor: '', linkedin_url: '', instagram_url: '', website: '', tag_ids: [] });
     setSchoolDialogOpen(true);
   };
 

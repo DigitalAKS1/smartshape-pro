@@ -33,6 +33,7 @@ export default function PackageCard({ pkg, isSelected, onSelect, onDuplicate, on
             <div className="min-w-0">
               <div className="flex items-center gap-1.5">
                 <p className={`font-semibold text-sm ${isSelected ? 'text-[#e94560]' : textPri} truncate`}>{pkg.display_name}</p>
+                {pkg.package_type && <span className="text-[9px] px-1.5 py-0.5 rounded bg-[#e94560]/10 text-[#e94560] flex-shrink-0" data-testid="pkg-type-badge">{pkg.package_type}</span>}
                 {inactive && (
                   <span className="text-[9px] px-1.5 py-0.5 rounded bg-gray-500/20 text-gray-400 flex-shrink-0">Archived</span>
                 )}

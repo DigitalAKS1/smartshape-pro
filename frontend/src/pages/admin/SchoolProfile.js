@@ -220,6 +220,7 @@ export default function SchoolProfile() {
   const openEditSchool = () => {
     setEditForm({
       school_name: school.school_name || '', school_type: school.school_type || 'CBSE',
+      school_category: school.school_category || '',
       group_id: school.group_id || '', phone: school.phone || '', email: school.email || '',
       alternate_contact: school.alternate_contact || '', city: school.city || '', state: school.state || '',
       address: school.address || '', pincode: school.pincode || '',

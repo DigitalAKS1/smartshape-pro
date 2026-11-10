@@ -7,6 +7,7 @@ import { useTheme } from '../../contexts/ThemeContext';
 import { toast } from 'sonner';
 import { BUDGET_RANGES } from '../../lib/crmConstants';
 import useSchoolTypes from '../../hooks/useSchoolTypes';
+import useLookup from '../../hooks/useLookup';
 import AddressFields from './AddressFields';
 import OwnerDeleteButton from '../common/OwnerDeleteButton';
 
@@ -21,6 +22,7 @@ export default function SchoolFormDialog({
 }) {
   const { isDark } = useTheme();
   const schoolTypeOptions = useSchoolTypes();
+  const schoolCategories = useLookup('school_category');
   const inputCls = 'bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-primary)]';
   const textPri = 'text-[var(--text-primary)]';
   const textSec = 'text-[var(--text-secondary)]';
@@ -72,6 +74,20 @@ export default function SchoolFormDialog({
                 {schoolTypeOptions.map(t => <option key={t} value={t}>{t}</option>)}
               </select>
             </div>
+            <div>
+              <Label className={`${textSec} text-xs`}>Category</Label>
+              <select value={editSchoolForm.school_category || ''} onChange={e => setEditSchoolForm({...editSchoolForm, school_category: e.target.value})} className={`w-full h-10 px-3 rounded-md text-sm ${inputCls}`} data-testid="school-category-select">
+                <option value="">—</option>
+                {/* Keep a value that is no longer in the active list selectable, so editing never silently blanks it. */}
+                {editSchoolForm.school_category && !schoolCategories.activeItems.some(c => c.name === editSchoolForm.school_category) && (
+                  <option value={editSchoolForm.school_category}>{editSchoolForm.school_category}</option>
+                )}
+                {schoolCategories.activeItems.map(c => <option key={c.value} value={c.name}>{c.name}</option>)}
+              </select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <Label className={`${textSec} text-xs`}>Phone</Label>
               <Input value={editSchoolForm.phone || ''} onChange={e => setEditSchoolForm({...editSchoolForm, phone: e.target.value})} placeholder="10-digit number" className={inputCls} />

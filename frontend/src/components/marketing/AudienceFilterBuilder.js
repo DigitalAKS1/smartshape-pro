@@ -26,7 +26,7 @@ function ChipRow({ label, options, values, onToggle }) {
 }
 
 export default function AudienceFilterBuilder({ value, onChange }) {
-  const [opts, setOpts] = useState({ sources: [], roles: [], school_types: [], cities: [], tags: [], stages: [] });
+  const [opts, setOpts] = useState({ sources: [], roles: [], school_types: [], school_categories: [], cities: [], tags: [], stages: [] });
   const [count, setCount] = useState(null);
   const [counting, setCounting] = useState(false);
   const debounce = useRef(null);
@@ -95,6 +95,7 @@ export default function AudienceFilterBuilder({ value, onChange }) {
       </div>
 
       <ChipRow label="School Type" options={opts.school_types} values={filt.school_types} onToggle={id => toggle('school_types', id)} />
+      <ChipRow label="School Category" options={opts.school_categories} values={filt.school_categories} onToggle={id => toggle('school_categories', id)} />
       <ChipRow label="City" options={opts.cities} values={filt.cities} onToggle={id => toggle('cities', id)} />
       <ChipRow label="Tags" options={tagOpts} values={filt.tags} onToggle={id => toggle('tags', id)} />
     </div>
