@@ -279,6 +279,7 @@ async def _resolve_audience(audience_filter: dict) -> list:
     tags         = audience_filter.get("tags") or []
     lead_stages  = audience_filter.get("lead_stages") or []
     school_types = audience_filter.get("school_types") or []
+    school_categories = audience_filter.get("school_categories") or []
     cities       = audience_filter.get("cities") or audience_filter.get("school_cities") or []
     min_strength = audience_filter.get("min_strength")
     max_strength = audience_filter.get("max_strength")
@@ -287,10 +288,13 @@ async def _resolve_audience(audience_filter: dict) -> list:
 
     # School-level facets → intersect into one school_id set
     school_id_sets = []
-    if school_types or cities or min_strength is not None or max_strength is not None:
+    if (school_types or school_categories or cities
+            or min_strength is not None or max_strength is not None):
         sch_q: dict = {}
         if school_types:
             sch_q["school_type"] = {"$in": school_types}
+        if school_categories:
+            sch_q["school_category"] = {"$in": school_categories}
         if cities:
             sch_q["city"] = {"$in": cities}
         if min_strength is not None or max_strength is not None:

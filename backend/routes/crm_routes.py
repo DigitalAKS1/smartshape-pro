@@ -28,6 +28,13 @@ import services.account_lifecycle as al
 import services.reorder as ro
 import services.fit as fit
 
+
+async def canonical_lookup(list_key: str, raw) -> str:
+    """Snap a typed value to its lookup-master spelling, using THIS module's db
+    (tests monkeypatch crm.db, so the lookup must read the same handle)."""
+    from routes.lookup_routes import canonical_name
+    return await canonical_name(list_key, raw, target_db=db)
+
 try:
     from cache import get_cached, set_cached, invalidate
 except Exception as _cache_exc:   # redis lib/env missing — never take the app down
@@ -5137,6 +5144,7 @@ async def create_school(request: Request):
         "assigned_to": owner,
         "assigned_name": owner_name,
         "school_type": body.get("school_type", "CBSE"),
+        "school_category": await canonical_lookup("school_category", body.get("school_category", "")),
         "board": body.get("board", ""),
         "group_id": body.get("group_id", ""),
         "website": body.get("website", ""),
@@ -5344,7 +5352,7 @@ async def update_school(school_id: str, request: Request):
                     f"This school is assigned to {owner} — ask an admin to reassign it to you before editing."))
     body = await request.json()
     allowed = {}
-    for k in ("school_name", "school_type", "board", "group_id", "website", "email", "phone",
+    for k in ("school_name", "school_type", "school_category", "board", "group_id", "website", "email", "phone",
               "city", "state", "pincode", "address", "primary_contact_name", "designation",
               "alternate_contact", "school_strength", "number_of_branches",
               "annual_budget_range", "existing_vendor", "gstin", "social_profiles",
@@ -5352,6 +5360,8 @@ async def update_school(school_id: str, request: Request):
               "wa_consent", "wa_consent_source"):
         if k in body:
             allowed[k] = body[k]
+    if "school_category" in allowed:
+        allowed["school_category"] = await canonical_lookup("school_category", allowed["school_category"])
     incoming_tags = body.get("tag_ids", body.get("tags"))
     if incoming_tags is not None:
         allowed["tag_ids"] = await _resolve_tags(incoming_tags, user["email"])

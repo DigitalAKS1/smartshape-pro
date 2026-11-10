@@ -72,14 +72,15 @@ def _stored(spec: dict, doc: dict) -> str:
     return doc["value"] if spec["stores"] == "value" else doc["name"]
 
 
-async def _ensure_seeded(list_key: str):
+async def _ensure_seeded(list_key: str, target_db=None):
+    d = target_db if target_db is not None else db
     spec = _spec(list_key)
-    if await db.lookup_values.count_documents({"list_key": list_key}, limit=1):
+    if await d.lookup_values.count_documents({"list_key": list_key}, limit=1):
         return
     now = datetime.now(timezone.utc).isoformat()
     for i, (value, name) in enumerate(spec["seed"]):
         # Upsert per row: two concurrent first reads can never duplicate.
-        await db.lookup_values.update_one(
+        await d.lookup_values.update_one(
             {"list_key": list_key, "value": value},
             {"$setOnInsert": {
                 "lookup_id": f"lk_{uuid.uuid4().hex[:8]}", "list_key": list_key,
@@ -90,22 +91,23 @@ async def _ensure_seeded(list_key: str):
         )
 
 
-async def get_values(list_key: str, include_inactive: bool = True) -> list:
-    await _ensure_seeded(list_key)
+async def get_values(list_key: str, include_inactive: bool = True, target_db=None) -> list:
+    d = target_db if target_db is not None else db
+    await _ensure_seeded(list_key, d)
     q = {"list_key": list_key}
     if not include_inactive:
         q["is_active"] = {"$ne": False}
-    return await db.lookup_values.find(q, {"_id": 0}).sort([("sort_order", 1), ("name", 1)]).to_list(1000)
+    return await d.lookup_values.find(q, {"_id": 0}).sort([("sort_order", 1), ("name", 1)]).to_list(1000)
 
 
-async def canonical_name(list_key: str, raw) -> str:
+async def canonical_name(list_key: str, raw, target_db=None) -> str:
     """Case-insensitive match on name or value → the stored form; unknown → raw stripped."""
     text = (raw or "").strip() if isinstance(raw, str) else ("" if raw is None else str(raw).strip())
     if not text:
         return ""
     spec = _spec(list_key)
     low, slug = text.lower(), slugify(text)
-    for doc in await get_values(list_key):
+    for doc in await get_values(list_key, target_db=target_db):
         if doc["name"].lower() == low or doc["value"] == slug:
             return _stored(spec, doc)
     return text

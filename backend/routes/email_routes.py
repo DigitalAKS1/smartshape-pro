@@ -452,6 +452,7 @@ async def _resolve_audience(audience_filter: dict, user: dict = None) -> list:
     tags         = audience_filter.get("tags") or []
     lead_stages  = audience_filter.get("lead_stages") or []
     school_types = audience_filter.get("school_types") or []
+    school_categories = audience_filter.get("school_categories") or []
     cities       = audience_filter.get("cities") or audience_filter.get("school_cities") or []
     min_strength = audience_filter.get("min_strength")
     max_strength = audience_filter.get("max_strength")
@@ -460,10 +461,13 @@ async def _resolve_audience(audience_filter: dict, user: dict = None) -> list:
 
     # School-level facets → intersect into one school_id set
     school_id_sets = []
-    if school_types or cities or min_strength is not None or max_strength is not None:
+    if (school_types or school_categories or cities
+            or min_strength is not None or max_strength is not None):
         sch_q: dict = {}
         if school_types:
             sch_q["school_type"] = {"$in": school_types}
+        if school_categories:
+            sch_q["school_category"] = {"$in": school_categories}
         if cities:
             sch_q["city"] = {"$in": cities}
         if min_strength is not None or max_strength is not None:
@@ -564,8 +568,13 @@ async def email_audience_options(request: Request):
                      for s in await db.schools.find(
                          {"is_deleted": {"$ne": True}}, {"_id": 0, "city": 1}).to_list(None)
                      if (s.get("city") or "").strip()})
+    school_categories = sorted({(s.get("school_category") or "").strip()
+                                for s in await db.schools.find(
+                                    {"is_deleted": {"$ne": True}}, {"_id": 0, "school_category": 1}).to_list(None)
+                                if (s.get("school_category") or "").strip()})
     tags = await db.tags.find({}, {"_id": 0, "tag_id": 1, "name": 1, "color": 1}).to_list(None)
     return {"sources": sources, "roles": roles, "school_types": school_types,
+            "school_categories": school_categories,
             "cities": cities, "tags": tags, "stages": E_STAGES}
 
 

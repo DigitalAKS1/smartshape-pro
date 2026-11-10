@@ -537,6 +537,13 @@ async def commit_row(db, row_keyed: dict, user: dict, create_leads: bool,
 
     parts = split_values(row_keyed)
 
+    # School Category: snap "k-12 school" to the master's "K-12 School" so the
+    # CRM filter never shows two buckets for one category.
+    if parts["school"].get("school_category"):
+        from routes.lookup_routes import canonical_name
+        parts["school"]["school_category"] = await canonical_name(
+            "school_category", parts["school"]["school_category"], target_db=db)
+
     # --- P2.3 owner name→email (never store a name in assigned_to) ---
     raw_owner = str(parts["lead"].get("assigned_to") or "").strip()
     owner_email, owner_name = await _resolve_import_owner(db, raw_owner)
