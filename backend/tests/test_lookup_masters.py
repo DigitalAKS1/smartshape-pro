@@ -167,3 +167,60 @@ def test_lists_metadata(db, monkeypatch):
     lists = _run(lk.list_lookups(FakeRequest()))
     keys = {l["key"]: l["group"] for l in lists}
     assert keys == {"school_category": "crm", "product_category": "product", "package_type": "product"}
+
+
+# ── Final-review fixes ────────────────────────────────────────────────────────
+
+def test_rename_cascades_into_saved_campaign_audiences(db, monkeypatch):
+    _as(ADMIN, monkeypatch)
+    items = _run(lk.get_lookup("school_category", FakeRequest()))
+    fr = next(i for i in items if i["name"] == "Franchise")
+    _run(db.email_campaigns.insert_one({"campaign_id": "e1", "audience_filter": {"school_categories": ["Franchise", "Navodaya"]}}))
+    _run(db.whatsapp_campaigns.insert_one({"campaign_id": "w1", "audience_filter": {"school_categories": ["Franchise"]}}))
+    _run(db.email_campaigns.insert_one({"campaign_id": "e2", "audience_filter": {"cities": ["Delhi"]}}))
+    _run(lk.update_lookup("school_category", fr["lookup_id"], FakeRequest({"name": "Franchisee"})))
+    e1 = _run(db.email_campaigns.find_one({"campaign_id": "e1"}))
+    w1 = _run(db.whatsapp_campaigns.find_one({"campaign_id": "w1"}))
+    e2 = _run(db.email_campaigns.find_one({"campaign_id": "e2"}))
+    assert e1["audience_filter"]["school_categories"] == ["Franchisee", "Navodaya"]
+    assert w1["audience_filter"]["school_categories"] == ["Franchisee"]
+    assert e2["audience_filter"] == {"cities": ["Delhi"]}
+
+
+def test_unknown_value_snaps_to_existing_record_spelling(db, monkeypatch):
+    _run(db.schools.insert_one({"school_id": "m1", "school_category": "Montessori"}))
+    assert _run(lk.canonical_name("school_category", "montessori")) == "Montessori"
+    # value-stored lists never borrow from records
+    assert _run(lk.canonical_name("product_category", "zzz")) == "zzz"
+
+
+def test_exact_name_beats_slug_match(db, monkeypatch):
+    _as(ADMIN, monkeypatch)
+    items = _run(lk.get_lookup("school_category", FakeRequest()))
+    pre = next(i for i in items if i["name"] == "Pre School")
+    _run(lk.update_lookup("school_category", pre["lookup_id"], FakeRequest({"name": "Playgroup"})))
+    # "Pre School" is now a new value, not the renamed Playgroup row
+    got = _run(lk.create_lookup("school_category", FakeRequest({"name": "Pre School"})))
+    assert got["name"] == "Pre School"
+    assert got["lookup_id"] != pre["lookup_id"]
+    assert _run(lk.canonical_name("school_category", "pre school")) == "Pre School"
+    assert _run(lk.canonical_name("school_category", "playgroup")) == "Playgroup"
+
+
+def test_rename_rejects_slug_clash(db, monkeypatch):
+    _as(ADMIN, monkeypatch)
+    items = _run(lk.get_lookup("school_category", FakeRequest()))
+    ind = next(i for i in items if i["name"] == "Independent")
+    with pytest.raises(HTTPException) as e:
+        _run(lk.update_lookup("school_category", ind["lookup_id"], FakeRequest({"name": "Navodaya!"})))
+    assert e.value.status_code == 409
+
+
+def test_delete_counts_soft_deleted_records(db, monkeypatch):
+    _as(ADMIN, monkeypatch)
+    items = _run(lk.get_lookup("school_category", FakeRequest()))
+    nv = next(i for i in items if i["name"] == "Navodaya")
+    _run(db.schools.insert_one({"school_id": "d1", "school_category": "Navodaya", "is_deleted": True}))
+    with pytest.raises(HTTPException) as e:
+        _run(lk.delete_lookup("school_category", nv["lookup_id"], FakeRequest()))
+    assert e.value.status_code == 409

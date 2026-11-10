@@ -35,6 +35,7 @@ LOOKUP_LISTS = {
     "school_category": {
         "label": "School Category", "group": "crm",
         "collection": "schools", "field": "school_category", "stores": "name",
+        "audience_key": "school_categories",
         "seed": _seed("Pre School", "K-12 School", "Franchise", "Navodaya", "Independent"),
     },
     "product_category": {
@@ -106,11 +107,27 @@ async def canonical_name(list_key: str, raw, target_db=None) -> str:
     if not text:
         return ""
     spec = _spec(list_key)
-    low, slug = text.lower(), slugify(text)
-    for doc in await get_values(list_key, target_db=target_db):
-        if doc["name"].lower() == low or doc["value"] == slug:
-            return _stored(spec, doc)
+    hit = _match(await get_values(list_key, target_db=target_db), text)
+    if hit:
+        return _stored(spec, hit)
+    if spec["stores"] == "name":
+        # Not in the master yet: reuse a spelling records already carry, so
+        # "montessori" and "Montessori" never become two filter buckets.
+        d = target_db if target_db is not None else db
+        rec = await d[spec["collection"]].find_one(
+            {spec["field"]: {"$regex": f"^{re.escape(text)}$", "$options": "i"}},
+            {"_id": 0, spec["field"]: 1})
+        if rec and rec.get(spec["field"]):
+            return rec[spec["field"]]
     return text
+
+
+def _match(rows: list, text: str):
+    """Exact (case-insensitive) name first, then slug — so a renamed row's old
+    slug can never capture a value that has its own row."""
+    low, slug = text.lower(), slugify(text)
+    return (next((r for r in rows if r["name"].lower() == low), None)
+            or next((r for r in rows if r["value"] == slug), None))
 
 
 async def _usage(spec: dict, stored: str) -> int:
@@ -145,9 +162,17 @@ async def create_lookup(list_key: str, request: Request):
     value = slugify(name)
     if not value:
         raise HTTPException(status_code=400, detail="name must contain letters or numbers")
-    for doc in await get_values(list_key):
-        if doc["name"].lower() == name.lower() or doc["value"] == value:
-            return doc
+    rows = await get_values(list_key)
+    same_name = next((r for r in rows if r["name"].lower() == name.lower()), None)
+    if same_name:
+        return same_name
+    if any(r["value"] == value for r in rows):
+        # The slug belongs to a renamed row (e.g. "Pre School" → "Playgroup");
+        # give the new value its own distinct slug.
+        n = 2
+        while any(r["value"] == f"{value}_{n}" for r in rows):
+            n += 1
+        value = f"{value}_{n}"
     last = await db.lookup_values.find({"list_key": list_key}).sort("sort_order", -1).to_list(1)
     doc = {
         "lookup_id": f"lk_{uuid.uuid4().hex[:8]}", "list_key": list_key,
@@ -176,14 +201,28 @@ async def update_lookup(list_key: str, lookup_id: str, request: Request):
         clash = await db.lookup_values.find_one({
             "list_key": list_key, "lookup_id": {"$ne": lookup_id},
             "name": {"$regex": f"^{re.escape(allowed['name'])}$", "$options": "i"}})
+        if not clash:
+            clash = await db.lookup_values.find_one({
+                "list_key": list_key, "lookup_id": {"$ne": lookup_id},
+                "value": slugify(allowed["name"])})
         if clash:
-            raise HTTPException(status_code=409, detail=f"'{allowed['name']}' already exists")
+            raise HTTPException(status_code=409,
+                                detail=f"'{allowed['name']}' is too close to existing '{clash['name']}'")
     if not allowed:
         return current
     await db.lookup_values.update_one({"lookup_id": lookup_id}, {"$set": allowed})
     if spec["stores"] == "name" and "name" in allowed and allowed["name"] != current["name"]:
-        await db[spec["collection"]].update_many(
-            {spec["field"]: current["name"]}, {"$set": {spec["field"]: allowed["name"]}})
+        old, new = current["name"], allowed["name"]
+        await db[spec["collection"]].update_many({spec["field"]: old}, {"$set": {spec["field"]: new}})
+        # Saved campaign audiences filter by name too — keep them pointing at the renamed value.
+        fkey = spec.get("audience_key")
+        if fkey:
+            path = f"audience_filter.{fkey}"
+            for coll in ("email_campaigns", "whatsapp_campaigns"):
+                async for camp in db[coll].find({path: old}, {"_id": 1, path: 1}):
+                    vals = (camp.get("audience_filter") or {}).get(fkey) or []
+                    await db[coll].update_one({"_id": camp["_id"]},
+                                              {"$set": {path: [new if v == old else v for v in vals]}})
     return await db.lookup_values.find_one({"lookup_id": lookup_id}, {"_id": 0})
 
 
@@ -195,7 +234,9 @@ async def delete_lookup(list_key: str, lookup_id: str, request: Request):
     current = await db.lookup_values.find_one({"list_key": list_key, "lookup_id": lookup_id}, {"_id": 0})
     if not current:
         raise HTTPException(status_code=404, detail="Value not found")
-    n = await _usage(spec, _stored(spec, current))
+    # Count soft-deleted records too: restoring one must never bring back a value
+    # the master no longer has.
+    n = await db[spec["collection"]].count_documents({spec["field"]: _stored(spec, current)})
     if n:
         raise HTTPException(status_code=409,
                             detail=f"'{current['name']}' is used by {n} record(s) — deactivate it instead")
