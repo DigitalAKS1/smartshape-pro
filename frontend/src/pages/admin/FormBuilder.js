@@ -31,6 +31,8 @@ export default function FormBuilder() {
   const [form, setForm] = useState(null);
   const [tab, setTab] = useState('fields'); // fields | messages | share
   const [saving, setSaving] = useState(false);
+  const [creatingZoom, setCreatingZoom] = useState(false);
+  const [zoomRegister, setZoomRegister] = useState(true);
   const [newCollab, setNewCollab] = useState('');
   const [slugDraft, setSlugDraft] = useState('');
   const qrRef = useRef(null);
@@ -59,6 +61,18 @@ export default function FormBuilder() {
   const set = (patch) => setForm({ ...form, ...patch });
   const setEvent = (patch) => set({ event: { ...(form.event || {}), ...patch } });
   const setMsg = (patch) => set({ messages: { ...(form.messages || {}), ...patch } });
+
+  // Save first (so the date/time/duration on screen are what Zoom gets), then create.
+  const createZoom = async () => {
+    setCreatingZoom(true);
+    try {
+      await formsApi.update(form.form_id, { title: form.title, event: form.event });
+      const r = await formsApi.createZoomMeeting(form.form_id, zoomRegister);
+      setForm(f => ({ ...f, event: r.data }));
+      toast.success('Zoom meeting created — its link is now on the form');
+    } catch (e) { toast.error(e.response?.data?.detail || 'Could not create the Zoom meeting'); }
+    finally { setCreatingZoom(false); }
+  };
 
   const save = async () => {
     setSaving(true);
@@ -192,6 +206,24 @@ export default function FormBuilder() {
                   <Input placeholder="Zoom link (paste from your Zoom account)"
                          value={form.event?.meeting_link || ''}
                          onChange={e => setEvent({ meeting_link: e.target.value })} className={inputCls} />
+                  {form.event?.zoom_meeting_id ? (
+                    <p className="text-xs text-emerald-500" data-testid="zoom-linked">
+                      Zoom meeting {form.event.zoom_meeting_id} linked{form.event.zoom_password ? ` · passcode ${form.event.zoom_password}` : ''}
+                      {form.event.zoom_registration ? ' · each registrant gets a personal Zoom link' : ''}
+                    </p>
+                  ) : (
+                    <div className="rounded-md border border-[var(--border-color)] p-3 space-y-2" data-testid="zoom-create-box">
+                      <p className={`text-xs ${textMuted}`}>Or let the app create the meeting on your Zoom account (Settings → Zoom) from the title, date, time and duration above.</p>
+                      <label className={`flex items-center gap-2 text-xs ${textPri}`}>
+                        <input type="checkbox" checked={!!zoomRegister} onChange={e => setZoomRegister(e.target.checked)} />
+                        Register each person on Zoom when they fill this form (personal join link + attendance by name)
+                      </label>
+                      <Button size="sm" variant="outline" disabled={creatingZoom || !form.event?.date || !form.event?.time}
+                        onClick={createZoom} data-testid="zoom-create-btn">
+                        {creatingZoom ? 'Creating…' : 'Create Zoom meeting'}
+                      </Button>
+                    </div>
+                  )}
                 </div>
               )}
 

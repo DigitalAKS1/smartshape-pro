@@ -1572,6 +1572,7 @@ export const forms = {
   setStatus: (id, status) => API.post(`/forms/${id}/status`, { status }),
   responses: (id) => API.get(`/forms/${id}/responses`),
   schoolSuggestions: (id) => API.get(`/forms/${id}/school-suggestions`),
+  createZoomMeeting: (id, registration) => API.post(`/forms/${id}/zoom-meeting`, { registration }),
   linkSchools: (id, links) => API.post(`/forms/${id}/responses/link-school`, { links }),
   remind: (id) => API.post(`/forms/${id}/remind`),
   shareResponses: (id, recipients, note) =>
