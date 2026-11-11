@@ -889,3 +889,85 @@ async def share_responses(form_id: str, request: Request):
     await db.forms.update_one({"form_id": form_id}, {"$push": {"shared_reports": {
         "at": _now(), "by": user.get("email", ""), "to": recipients, "count": len(rows)}}})
     return {"sent_to": recipients, "count": len(rows)}
+
+
+# ── Form responses → School data (manual sync, point 8) ───────────────────────
+# A public form stores whatever school name people type. The auto-link at submit
+# time only catches an exact name; these let the form's owner match the rest to
+# the right CRM school (with a fuzzy suggestion) and sync — never automatically.
+
+def _typed_school(form: dict, response: dict) -> str:
+    return (_mapped(form, response.get("answers") or {}).get("school") or "").strip()
+
+
+@router.get("/forms/{form_id}/school-suggestions")
+async def form_school_suggestions(form_id: str, request: Request):
+    """{response_id: {school_id, school_name, score, typed} | None} for responses
+    not yet linked to a school."""
+    user = await get_current_user(request)
+    form = await _get_form_or_404(form_id)
+    if not _can_manage(user, form):
+        raise HTTPException(403, "Not your form")
+    from crm_zoom import match_school
+    schools = await db.schools.find({"is_deleted": {"$ne": True}},
+                                    {"_id": 0, "school_id": 1, "school_name": 1}).to_list(None)
+    out = {}
+    async for r in db.form_responses.find({"form_id": form_id, "school_id": None},
+                                          {"_id": 0, "response_id": 1, "answers": 1}):
+        typed = _typed_school(form, r)
+        m = match_school(typed, schools) if typed else None
+        out[r["response_id"]] = {**m, "typed": typed} if m else None
+    return out
+
+
+@router.post("/forms/{form_id}/responses/link-school")
+async def link_responses_to_schools(form_id: str, request: Request):
+    """Body {links: [{response_id, school_id|null}]}. Links each response (and its
+    CRM contact) to the chosen school and fills the school's BLANK fields from the
+    answers (city). school_id null unlinks. Existing school data is never overwritten."""
+    user = await get_current_user(request)
+    form = await _get_form_or_404(form_id)
+    if not _can_manage(user, form):
+        raise HTTPException(403, "Not your form")
+    body = await request.json()
+    links = body.get("links") if isinstance(body, dict) else None
+    if not isinstance(links, list):
+        raise HTTPException(400, "links must be a list")
+    import routes.crm_routes as crm
+    linked = unlinked = 0
+    skipped = []
+    now = _now()
+    for ln in links[:500]:
+        if not isinstance(ln, dict):
+            continue
+        rid = str(ln.get("response_id") or "")
+        resp = await db.form_responses.find_one({"form_id": form_id, "response_id": rid}, {"_id": 0})
+        if not resp:
+            skipped.append({"response_id": rid, "reason": "response not found"})
+            continue
+        sid = ln.get("school_id")
+        if not sid:
+            await db.form_responses.update_one({"response_id": rid}, {"$set": {
+                "school_id": None, "school_linked_by": user["email"], "school_linked_at": now}})
+            unlinked += 1
+            continue
+        school = await db.schools.find_one({"school_id": str(sid), "is_deleted": {"$ne": True}}, {"_id": 0})
+        if not school or not await crm._user_can_access_school(user, school):
+            skipped.append({"response_id": rid, "reason": "school not found"})
+            continue
+        await db.form_responses.update_one({"response_id": rid}, {"$set": {
+            "school_id": school["school_id"], "school_linked_by": user["email"], "school_linked_at": now}})
+        if resp.get("contact_id"):
+            await db.contacts.update_one({"contact_id": resp["contact_id"]}, {"$set": {
+                "school_id": school["school_id"], "school_name": school.get("school_name", ""),
+                "company": school.get("school_name", ""), "updated_at": now}})
+        mapped = _mapped(form, resp.get("answers") or {})
+        fill = {}
+        city = (mapped.get("city") or "").strip()
+        if city and not (school.get("city") or "").strip():
+            fill["city"] = city
+        if fill:
+            fill["updated_at"] = now
+            await db.schools.update_one({"school_id": school["school_id"]}, {"$set": fill})
+        linked += 1
+    return {"linked": linked, "unlinked": unlinked, "skipped": skipped}
