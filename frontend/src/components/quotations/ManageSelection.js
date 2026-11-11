@@ -38,6 +38,11 @@ export default function ManageSelection({ state }) {
             <span className="text-xs text-[var(--text-secondary)]">
               — {selItems.filter(i => i.status !== 'removed_by_admin').length} items selected by customer
             </span>
+            {selItems.some(i => i.selection_kind === 'optional' && i.status !== 'removed_by_admin') && (
+              <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium border border-amber-500/30 bg-amber-500/10 text-amber-500" data-testid="sel-optional-count">
+                {selItems.filter(i => i.selection_kind !== 'optional' && i.status !== 'removed_by_admin').length} main · {selItems.filter(i => i.selection_kind === 'optional' && i.status !== 'removed_by_admin').length} optional extras — quote the extras separately
+              </span>
+            )}
             {changeStatus === 'pending_customer_approval' && (
               <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium border border-amber-500/30 bg-amber-500/10 text-amber-400">
                 <Clock className="h-3 w-3" /> Awaiting customer approval
@@ -105,7 +110,7 @@ export default function ManageSelection({ state }) {
                 </button>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-72 overflow-y-auto pr-1">
-                {selItems.map((item, i) => {
+                {[...selItems].sort((a, b) => (a.selection_kind === 'optional') - (b.selection_kind === 'optional')).map((item, i) => {
                   const isRemoved = item.status === 'removed_by_admin';
                   const isAdded   = item.status === 'added_by_admin';
                   const inQueue   = replacements.some(r => r.old_die_id === item.die_id);
@@ -124,7 +129,10 @@ export default function ManageSelection({ state }) {
                       <div className="flex-1 min-w-0">
                         <p className="font-mono text-[10px] text-[#e94560]">{item.die_code}</p>
                         <p className="text-[var(--text-primary)] font-medium leading-tight truncate">{item.die_name}</p>
-                        <p className="text-[var(--text-secondary)] capitalize">{item.die_type}</p>
+                        <p className="text-[var(--text-secondary)] capitalize">{item.die_type} · ×{item.quantity || 1}</p>
+                        {item.selection_kind === 'optional'
+                          ? <span className="inline-block mt-0.5 text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-500 font-semibold">Optional extra</span>
+                          : <span className="inline-block mt-0.5 text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-500 font-semibold">Main</span>}
                         {isRemoved && <span className="text-red-400 font-medium">Removed</span>}
                         {isAdded && <span className="text-yellow-400 font-medium">Added by admin</span>}
                         {item.admin_note && <p className="text-yellow-400 italic truncate">Note: {item.admin_note}</p>}

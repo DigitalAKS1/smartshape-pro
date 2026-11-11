@@ -400,9 +400,9 @@ async def create_order_for_quotation(quotation_id: str, *, created_by: str,
     selection = await db.catalogue_selections.find_one({"quotation_id": quotation_id}, {"_id": 0})
     sel_items = []
     if selection:
-        sel_items = await db.catalogue_selection_items.find(
+        sel_items = order_lines_from_selection(await db.catalogue_selection_items.find(
             {"catalogue_selection_id": selection["selection_id"]}, {"_id": 0}
-        ).to_list(1000)
+        ).to_list(1000))
 
     eff_lead_id = lead_id or quot.get("lead_id") or ""
     note_text = notes or (
@@ -963,6 +963,14 @@ async def _log_order_change(order_id: str, order: dict, by: str, source: str, ch
         "status": order.get("order_status", "pending"),
         "note": f"{heading}:\n• " + "\n• ".join(lines),
         "updated_by": by, "timestamp": now_iso})
+
+
+def order_lines_from_selection(items: list) -> list:
+    """The catalogue lines that belong on the ORDER: the school's MAIN picks (as per
+    the quotation). OPTIONAL extras are outside the quoted price, so they stay on the
+    selection for the rep to quote separately; admin-removed lines are gone."""
+    return [i for i in (items or [])
+            if (i.get("selection_kind") or "main") != "optional" and i.get("status") != "removed_by_admin"]
 
 
 async def reconcile_order_to_selection(order_id: str, desired: dict, *, actor: str = "system"):

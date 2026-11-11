@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import { catalogue } from '../lib/api';
 import { Button } from '../components/ui/button';
-import { Check } from 'lucide-react';
+import { Check, Info } from 'lucide-react';
 import { toast } from 'sonner';
 import VideoModal from '../components/media/VideoModal';
 import DieSelectionGrid from '../components/catalogue/DieSelectionGrid';
@@ -18,7 +18,12 @@ export default function CataloguePage() {
   const [videoDie, setVideoDie] = useState(null);
   const backendUrl = process.env.REACT_APP_BACKEND_URL;
 
+  // Two steps: MAIN = what the quotation covers; OPTIONAL = extras on top (quoted separately).
+  const [step, setStep] = useState('main');
+  const [optQty, setOptQty] = useState({});
   const selectedDies = Object.keys(qtyByDie);
+  const activeMap = step === 'main' ? qtyByDie : optQty;
+  const setActiveMap = step === 'main' ? setQtyByDie : setOptQty;
 
   useEffect(() => {
     const fetchData = async () => {
@@ -30,7 +35,7 @@ export default function CataloguePage() {
   }, [token]);
 
   const handleToggleDie = (dieId) => {
-    setQtyByDie(prev => {
+    setActiveMap(prev => {
       const next = { ...prev };
       if (next[dieId] != null) { delete next[dieId]; } else { next[dieId] = 1; }
       return next;
@@ -39,11 +44,14 @@ export default function CataloguePage() {
 
   const setDieQty = (dieId, qty) => {
     const clamped = Math.max(1, parseInt(qty, 10) || 1);
-    setQtyByDie(prev => ({ ...prev, [dieId]: clamped }));
+    setActiveMap(prev => ({ ...prev, [dieId]: clamped }));
   };
 
   const handleSubmit = async () => {
-    const selections = Object.entries(qtyByDie).map(([die_id, quantity]) => ({ die_id, quantity }));
+    const selections = [
+      ...Object.entries(qtyByDie).map(([die_id, quantity]) => ({ die_id, quantity, kind: 'main' })),
+      ...Object.entries(optQty).map(([die_id, quantity]) => ({ die_id, quantity, kind: 'optional' })),
+    ];
     try { await catalogue.submit(token, selections); setSubmitted(true); toast.success('Selection submitted!'); }
     catch { toast.error('Failed to submit'); }
   };
@@ -102,6 +110,7 @@ export default function CataloguePage() {
   const stdSelected = sumQtyByType('standard');
   const largeSelected = sumQtyByType('large');
   const totalUnits = selectedDies.reduce((sum, id) => sum + (qtyByDie[id] || 0), 0);
+  const optUnits = Object.values(optQty).reduce((sum, q) => sum + (q || 0), 0);
 
   return (
     <div className="min-h-screen bg-[#0a0a12]">
@@ -129,24 +138,75 @@ export default function CataloguePage() {
         </div>
       </div>
 
-      {/* Package Info Bar */}
+      {/* Step bar: 1 Main (as per quotation) → 2 Optional extras */}
       <div className="sticky top-0 z-30 bg-[#1a1a2e]/95 backdrop-blur border-b border-[#2d2d44]">
-        <div className="max-w-6xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-2">
-          <div className="flex gap-4 text-sm">
-            {stdLimit > 0 && <span className="text-[#a0a0b0]">Standard: <strong className={`${stdSelected >= stdLimit ? 'text-green-400' : 'text-white'}`}>{stdSelected}/{stdLimit}</strong></span>}
-            {largeLimit > 0 && <span className="text-[#a0a0b0]">Large: <strong className={`${largeSelected >= largeLimit ? 'text-green-400' : 'text-white'}`}>{largeSelected}/{largeLimit}</strong></span>}
-            {!pkg && <span className="text-[#a0a0b0]">Selected: <strong className="text-white">{totalUnits}</strong></span>}
+        <div className="max-w-6xl mx-auto px-4 py-3 space-y-2">
+          <div className="flex gap-2 text-xs font-semibold" data-testid="catalogue-steps">
+            <button onClick={() => setStep('main')} className={`px-3 py-1 rounded-full ${step === 'main' ? 'bg-[#e94560] text-white' : 'bg-[#0f0f1a] text-[#a0a0b0] border border-[#2d2d44]'}`}>
+              1 · Main selection
+            </button>
+            <button onClick={() => selectedDies.length && setStep('optional')} disabled={!selectedDies.length}
+              className={`px-3 py-1 rounded-full disabled:opacity-40 ${step === 'optional' ? 'bg-amber-500 text-white' : 'bg-[#0f0f1a] text-[#a0a0b0] border border-[#2d2d44]'}`}>
+              2 · Optional extras
+            </button>
           </div>
-          <Button onClick={handleSubmit} disabled={selectedDies.length === 0} className="bg-[#e94560] hover:bg-[#f05c75] text-white" data-testid="catalogue-submit-button">
-            Submit Selection ({totalUnits})
-          </Button>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap gap-4 text-sm">
+              {step === 'main' ? (
+                <>
+                  {stdLimit > 0 && <span className="text-[#a0a0b0]">Standard: <strong className={`${stdSelected >= stdLimit ? 'text-green-400' : 'text-white'}`}>{stdSelected}/{stdLimit}</strong></span>}
+                  {largeLimit > 0 && <span className="text-[#a0a0b0]">Large: <strong className={`${largeSelected >= largeLimit ? 'text-green-400' : 'text-white'}`}>{largeSelected}/{largeLimit}</strong></span>}
+                  {!(stdLimit || largeLimit) && <span className="text-[#a0a0b0]">Main: <strong className="text-white">{totalUnits}</strong></span>}
+                </>
+              ) : (
+                <span className="text-[#a0a0b0]">Main: <strong className="text-white">{totalUnits}</strong> · Optional extras: <strong className="text-amber-400">{optUnits}</strong></span>
+              )}
+            </div>
+            <div className="flex gap-2">
+              {step === 'main' ? (
+                <Button onClick={() => setStep('optional')} disabled={selectedDies.length === 0} className="bg-[#e94560] hover:bg-[#f05c75] text-white" data-testid="catalogue-next-optional">
+                  Next: optional extras →
+                </Button>
+              ) : (
+                <>
+                  <Button variant="outline" onClick={() => setStep('main')} className="border-[#2d2d44] text-[#a0a0b0] bg-transparent">← Main</Button>
+                  <Button onClick={handleSubmit} className="bg-[#e94560] hover:bg-[#f05c75] text-white" data-testid="catalogue-submit-button">
+                    Submit selection ({totalUnits + optUnits})
+                  </Button>
+                </>
+              )}
+            </div>
+          </div>
         </div>
       </div>
 
-      <div className="max-w-6xl mx-auto px-4 py-8">
+      <div className="max-w-6xl mx-auto px-4 py-8 space-y-6">
+        <div className={`rounded-lg border p-4 text-sm ${step === 'main' ? 'border-[#2d2d44] bg-[#1a1a2e] text-[#a0a0b0]' : 'border-amber-500/40 bg-amber-500/5 text-[#d0c8b0]'}`} data-testid="catalogue-guide">
+          {step === 'main' ? (
+            <>
+              <p className="flex items-center gap-2 text-white font-medium mb-2"><Info className="h-4 w-4 text-[#e94560]" /> Step 1 — choose your main dies (as per your quotation)</p>
+              <ol className="list-decimal pl-5 space-y-1">
+                <li>Tap a die to select it; use <b className="text-white">+ / −</b> to set the quantity.</li>
+                {(stdLimit > 0 || largeLimit > 0) && <li>Your quotation covers {[stdLimit > 0 && `${stdLimit} standard`, largeLimit > 0 && `${largeLimit} large`].filter(Boolean).join(' and ')} dies — the counter turns green when you reach it.</li>}
+                {Object.keys(owned || {}).length > 0 && <li>Dies marked <span className="px-1 rounded bg-amber-500 text-white text-[11px] font-semibold">Already ordered</span> are ones you already have.</li>}
+                <li>Press <b className="text-white">Next: optional extras</b>.</li>
+              </ol>
+            </>
+          ) : (
+            <>
+              <p className="flex items-center gap-2 text-white font-medium mb-2"><Info className="h-4 w-4 text-amber-400" /> Step 2 — optional extras (not in your quotation)</p>
+              <ol className="list-decimal pl-5 space-y-1">
+                <li>Want more dies than your quotation covers? Pick them here — they are marked <b className="text-amber-400">optional</b>.</li>
+                <li>Optional extras are not ordered automatically; we'll send you a separate price for them.</li>
+                <li>No extras? Just press <b className="text-white">Submit selection</b>.</li>
+              </ol>
+            </>
+          )}
+        </div>
+
         <DieSelectionGrid
           dies={dies}
-          qtyByDie={qtyByDie}
+          qtyByDie={activeMap}
           onToggle={handleToggleDie}
           onQtyChange={setDieQty}
           backendUrl={backendUrl}
@@ -162,9 +222,15 @@ export default function CataloguePage() {
       {/* Floating Submit */}
       {selectedDies.length > 0 && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40">
-          <Button onClick={handleSubmit} className="bg-[#e94560] hover:bg-[#f05c75] text-white text-lg px-8 py-5 rounded-full shadow-2xl shadow-[#e94560]/30" data-testid="catalogue-floating-submit">
-            <Check className="mr-2 h-5 w-5" /> Submit {totalUnits} {totalUnits === 1 ? 'Unit' : 'Units'}
-          </Button>
+          {step === 'main' ? (
+            <Button onClick={() => { setStep('optional'); window.scrollTo(0, 0); }} className="bg-[#e94560] hover:bg-[#f05c75] text-white text-lg px-8 py-5 rounded-full shadow-2xl shadow-[#e94560]/30" data-testid="catalogue-floating-next">
+              Next: optional extras →
+            </Button>
+          ) : (
+            <Button onClick={handleSubmit} className="bg-[#e94560] hover:bg-[#f05c75] text-white text-lg px-8 py-5 rounded-full shadow-2xl shadow-[#e94560]/30" data-testid="catalogue-floating-submit">
+              <Check className="mr-2 h-5 w-5" /> Submit {totalUnits + optUnits} {totalUnits + optUnits === 1 ? 'Unit' : 'Units'}
+            </Button>
+          )}
         </div>
       )}
     </div>

@@ -14,6 +14,7 @@ from rbac import get_team, require_teams, require_module, sees_all
 from routes.drip_routes import _auto_enroll_quotation_sent
 from media_utils import gate_die_for_customer
 from services.purchase_history import owned_by_die
+from notify import notify_user
 
 router = APIRouter()
 
@@ -1650,7 +1651,8 @@ async def submit_catalogue_selection(token: str, request: Request):
     if raw_selections is None:
         raw_selections = [{"die_id": d, "quantity": 1} for d in body.get("selected_dies", [])]
 
-    # Normalize + collapse duplicate die_ids into a single line with summed quantity.
+    # Normalize + collapse duplicates into one line per (die, kind) with summed qty.
+    # kind: "main" = picked as per the quotation; "optional" = extras on top.
     qty_by_die = {}
     for sel in raw_selections:
         die_id = sel.get("die_id") if isinstance(sel, dict) else sel
@@ -1658,7 +1660,8 @@ async def submit_catalogue_selection(token: str, request: Request):
             continue
         qty = int(sel.get("quantity", 1) or 1) if isinstance(sel, dict) else 1
         qty = max(1, qty)
-        qty_by_die[die_id] = qty_by_die.get(die_id, 0) + qty
+        kind = "optional" if isinstance(sel, dict) and sel.get("kind") == "optional" else "main"
+        qty_by_die[(die_id, kind)] = qty_by_die.get((die_id, kind), 0) + qty
 
     quot = await db.quotations.find_one({"catalogue_token": token}, {"_id": 0})
     if not quot:
@@ -1675,7 +1678,8 @@ async def submit_catalogue_selection(token: str, request: Request):
     }
     await db.catalogue_selections.insert_one(selection_doc)
 
-    for die_id, qty in qty_by_die.items():
+    optional_lines = 0
+    for (die_id, kind), qty in qty_by_die.items():
         die = await db.dies.find_one({"die_id": die_id}, {"_id": 0})
         if die:
             await db.catalogue_selection_items.insert_one({
@@ -1686,7 +1690,10 @@ async def submit_catalogue_selection(token: str, request: Request):
                 "die_type": die["type"],
                 "die_image_url": die.get("image_url"),
                 "quantity": qty,
+                "selection_kind": kind,
             })
+            if kind == "optional":
+                optional_lines += 1
             # Reservation now happens at POST /orders/{id}/confirm (Task 4), not
             # here — an awaiting-confirmation selection must not commit stock
             # before Sales/Store reviews it.
@@ -1697,8 +1704,18 @@ async def submit_catalogue_selection(token: str, request: Request):
             "catalogue_status": "submitted",
             "catalogue_submitted_at": datetime.now(timezone.utc).isoformat(),
             "quotation_status": "pending",
+            "catalogue_optional_count": optional_lines,
         }},
     )
+    # Optional extras are outside the quoted price: tell the rep to quote them.
+    if optional_lines and quot.get("sales_person_email"):
+        try:
+            await notify_user(quot["sales_person_email"], type="catalogue_optional",
+                              title=f"{quot.get('school_name') or 'A school'} picked {optional_lines} optional extra(s)",
+                              body=f"On {quot.get('quote_number') or 'their quotation'} — send an add-on quotation for the extras.",
+                              ref_type="quotation", ref_id=quot["quotation_id"])
+        except Exception as e:
+            logging.warning(f"Optional-extras bell failed: {e}")
 
     # Send confirmation email to customer (non-blocking)
     try:

@@ -404,9 +404,10 @@ async def approve_selection_changes(token: str):
         # Commit point: make the approved selection real on the order. The order is
         # the single owner of reservation, so this is the ONLY place stock moves for
         # these changes (the edit path deliberately leaves reservation untouched).
-        active = await db.catalogue_selection_items.find(
+        from routes.order_routes import order_lines_from_selection
+        active = order_lines_from_selection(await db.catalogue_selection_items.find(
             {"catalogue_selection_id": selection["selection_id"], "status": {"$ne": "removed_by_admin"}},
-            {"_id": 0, "die_id": 1, "quantity": 1}).to_list(1000)
+            {"_id": 0, "die_id": 1, "quantity": 1, "selection_kind": 1}).to_list(1000))
         desired = {it["die_id"]: int(it.get("quantity", 1) or 1) for it in active if it.get("die_id")}
         order = await db.orders.find_one({"quotation_id": quot["quotation_id"]}, {"_id": 0})
         if order and desired:
@@ -477,7 +478,8 @@ async def send_submission_confirmation(quotation_id: str, token: str):
     other_items = [i for i in items if i.get("die_type") not in ("standard", "large")]
 
     def item_lines(lst):
-        return "\n".join(f"  • {i.get('die_name')} ({i.get('die_code')})" for i in lst)
+        return "\n".join(f"  • {i.get('die_name')} ({i.get('die_code')})"
+                         + (" — optional extra" if i.get("selection_kind") == "optional" else "") for i in lst)
 
     sections = ""
     if std_items:

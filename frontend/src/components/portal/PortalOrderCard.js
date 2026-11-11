@@ -27,6 +27,7 @@ export function DieCard({ item }) {
         <p className="font-mono text-[9px] text-[#e94560]">{item.die_code}</p>
         <p className="text-xs font-medium text-white leading-tight mt-0.5 line-clamp-2">{item.die_name}</p>
         <p className="text-[9px] text-[#6b6b80] mt-0.5 capitalize">{item.die_type}</p>
+        {item.selection_kind === 'optional' && <p className="text-[9px] text-amber-400 font-semibold mt-0.5">Optional extra — priced separately</p>}
         {item.admin_note && <p className="text-[9px] text-yellow-400 mt-0.5 italic line-clamp-1">{item.admin_note}</p>}
       </div>
     </div>
