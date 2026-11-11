@@ -412,6 +412,7 @@ async def create_sequence(request: Request):
         "description": body.get("description", "").strip(),
         "trigger": body.get("trigger", "manual"),
         "filter_designation": (body.get("filter_designation") or "").strip() or None,
+        "deal_type": (body.get("deal_type") or "").strip(),
         "steps": steps,
         "is_active": bool(body.get("is_active", True)),
         "created_by": user["email"],
@@ -431,7 +432,7 @@ async def update_sequence(sequence_id: str, request: Request):
         raise HTTPException(404, "Sequence not found")
     body = await request.json()
     updates = {"updated_at": datetime.now(timezone.utc).isoformat()}
-    for field in ("name", "description", "trigger", "filter_designation", "is_active"):
+    for field in ("name", "description", "trigger", "filter_designation", "is_active", "deal_type"):
         if field in body:
             updates[field] = body[field]
     if "name" in body:
@@ -455,7 +456,7 @@ async def update_sequence(sequence_id: str, request: Request):
     # Editing the CONTENT makes this sequence the owner's, so the default seed stops
     # rewriting it on the next page load. Pausing/resuming is not a content edit —
     # a paused stock sequence should still receive improved default copy.
-    if any(f in body for f in ("name", "description", "trigger", "filter_designation", "steps")):
+    if any(f in body for f in ("name", "description", "trigger", "filter_designation", "steps", "deal_type")):
         updates["customised"] = True
     await db.drip_sequences.update_one({"sequence_id": sequence_id}, {"$set": updates})
     doc = await db.drip_sequences.find_one({"sequence_id": sequence_id}, {"_id": 0})
@@ -757,6 +758,16 @@ async def enroll_schools(request: Request):
         visible = {s["school_id"] async for s in db.schools.find(vq, {"_id": 0, "school_id": 1})}
         skipped_not_visible = sum(1 for s in school_ids if s not in visible)
         school_ids = [s for s in school_ids if s in visible]
+    out = await enroll_schools_core(seq, school_ids, actor_email=user["email"])
+    return {**out, "matched_by_tag": matched_by_tag, "total": len(school_ids),
+            "skipped_not_visible": skipped_not_visible}
+
+
+async def enroll_schools_core(seq: dict, school_ids: list, *, actor_email: str) -> dict:
+    """Enrol each school's lead into `seq` (see enroll_schools). Shared by the
+    hand-picked/tag enrolment above and the daily reorder_due job."""
+    from routes.crm_routes import OPEN_STAGES, _upsert_direct_mail_lead
+    sequence_id = seq["sequence_id"]
     now = datetime.now(timezone.utc)
     now_iso = now.isoformat()
     first_delay = seq["steps"][0].get("delay_days", 0)
@@ -776,7 +787,7 @@ async def enroll_schools(request: Request):
             lead = await db.leads.find_one(base, {"_id": 0, "lead_id": 1})
         if not lead:
             sch = await db.schools.find_one({"school_id": sid}, {"_id": 0, "assigned_to": 1})
-            owner_email = (sch or {}).get("assigned_to") or user["email"]  # the school's sales agent
+            owner_email = (sch or {}).get("assigned_to") or actor_email  # the school's sales agent
             lead_id = await _upsert_direct_mail_lead(sid, seq.get("deal_type", ""), owner_email, now_iso)
             leads_created += 1
         else:
@@ -795,7 +806,7 @@ async def enroll_schools(request: Request):
             "current_step": 0, "status": "active", "enrolled_at": now_iso,
             "next_step_at": (now + timedelta(days=first_delay)).isoformat(),
             "last_step_at": None, "completed_at": None,
-            "enrolled_by": user["email"],
+            "enrolled_by": actor_email,
         })
         enrolled += 1
 
@@ -816,9 +827,19 @@ async def enroll_schools(request: Request):
 
     return {"sequence_id": sequence_id, "sequence_name": seq.get("name", ""),
             "enrolled": enrolled, "skipped": skipped, "leads_created": leads_created,
-            "matched_by_tag": matched_by_tag, "total": len(school_ids),
-            "skipped_not_visible": skipped_not_visible,
             "starting_now": starting_now}
+
+
+@router.post("/drip/reorder/run")
+async def reorder_drip_run(request: Request):
+    """Admin: preview (dry_run) or run the reorder_due enrolment now instead of
+    waiting for the daily job."""
+    user = await get_current_user(request)
+    if get_team(user) != "admin" and user.get("role") != "admin":
+        raise HTTPException(403, "Only an admin can run the reorder drip")
+    body = await request.json() if hasattr(request, "json") else {}
+    from services.reorder_drip import run_reorder_drip
+    return await run_reorder_drip(db, dry_run=bool((body or {}).get("dry_run")))
 
 
 @router.get("/drip/enrollments")

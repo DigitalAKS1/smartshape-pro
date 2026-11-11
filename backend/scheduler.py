@@ -917,6 +917,26 @@ async def wa_health_loop():
             log.error(f"[wa-health] {exc}")
 
 
+async def reorder_drip_loop():
+    """Daily 10:30 IST: enrol schools due to reorder into active "reorder_due"
+    sequences (services/reorder_drip.py). Does nothing until such a sequence exists."""
+    log.info("[scheduler] reorder drip started (daily 10:30 IST)")
+    from services.reorder_drip import run_reorder_drip
+    while True:
+        try:
+            now_ist = datetime.now(IST)
+            target = now_ist.replace(hour=10, minute=30, second=0, microsecond=0)
+            if now_ist >= target:
+                target = target + timedelta(days=1)
+            await asyncio.sleep(max(60, (target - now_ist).total_seconds()))
+            out = await run_reorder_drip(db)
+            if out.get("enrolled"):
+                log.info(f"[reorder-drip] {out}")
+        except Exception as exc:
+            log.error(f"[reorder-drip] {exc}")
+            await asyncio.sleep(3600)
+
+
 async def greeting_loop():
     log.info("[scheduler] greeting loop started (fires daily at 9am IST)")
     while True:
@@ -2117,6 +2137,7 @@ async def start_scheduler():
     asyncio.create_task(wa_health_loop())
     asyncio.create_task(drip_executor_loop())
     asyncio.create_task(greeting_loop())
+    asyncio.create_task(reorder_drip_loop())
     asyncio.create_task(fms_sla_loop())
     asyncio.create_task(crm_digest_loop())
     asyncio.create_task(cert_loop())

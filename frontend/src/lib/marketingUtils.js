@@ -107,7 +107,7 @@ export const CAT_META = {
 export function catMeta(cat) { return CAT_META[cat] || CAT_META.Festival; }
 
 // ── API → display shape mapper ────────────────────────────────────────────────
-export const TRIGGER_LABELS = { lead_created: 'Lead Created', quotation_sent: 'Quotation Sent', manual: 'Manual' };
+export const TRIGGER_LABELS = { lead_created: 'Lead Created', quotation_sent: 'Quotation Sent', reorder_due: 'Reorder Due', manual: 'Manual' };
 
 export function mapSeq(s) {
   const tLabel = TRIGGER_LABELS[s.trigger] || s.trigger;
@@ -120,6 +120,7 @@ export function mapSeq(s) {
     filter_designation: s.filter_designation || '',
     sequence_id: s.sequence_id,
     trigger_raw: s.trigger,
+    deal_type: s.deal_type || '',
     steps: (s.steps || []).map(st => {
       const plain = st.message_template
         ? st.message_template.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()

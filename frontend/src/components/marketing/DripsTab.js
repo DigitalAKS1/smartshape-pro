@@ -15,7 +15,7 @@ import { useNavigate } from 'react-router-dom';
 import { mapSeq } from '../../lib/marketingUtils';
 import useMailMaterials from '../../hooks/useMailMaterials';
 
-const BLANK_FORM = { name: '', description: '', trigger: 'lead_created', filter_designation: '', steps: [{ message_type: 'whatsapp', message_template: '', delay_days: 0, attachment_id: null, material_type: '' }] };
+const BLANK_FORM = { name: '', description: '', trigger: 'lead_created', filter_designation: '', deal_type: '', steps: [{ message_type: 'whatsapp', message_template: '', delay_days: 0, attachment_id: null, material_type: '' }] };
 // ^ `material_type` starts blank and is filled from the shared catalogue when a
 //   step becomes a post step (the Type select) — never a hardcoded 'brochure'.
 
@@ -121,6 +121,7 @@ export default function DripsTab({ tk, drips, setDrips }) {
       description: d.description || '',
       trigger: d.trigger_raw || 'lead_created',
       filter_designation: d.filter_designation || '',
+      deal_type: d.deal_type || '',
       steps: d.steps.map(s => ({
         message_type: s.message_type || 'whatsapp',
         message_template: s.message_template || '',
@@ -210,6 +211,7 @@ export default function DripsTab({ tk, drips, setDrips }) {
         description: form.description.trim(),
         trigger: form.trigger,
         filter_designation: form.filter_designation.trim() || null,
+        deal_type: form.trigger === 'reorder_due' ? (form.deal_type || 'Reorder Dies') : (form.deal_type || ''),
         is_active: editingSeq ? editingSeq.active : true,
         steps: form.steps.map((s, i) => {
           const isPhysical = s.message_type === 'physical_material';
@@ -274,6 +276,7 @@ export default function DripsTab({ tk, drips, setDrips }) {
     { k: 'lead_created',    l: 'Lead Created',     d: 'Auto-enroll every new lead' },
     { k: 'quotation_sent',  l: 'Quotation Sent',   d: 'Follow up after sending a quote' },
     { k: 'brochure_opened', l: 'Brochure Opened',  d: 'Start when a prospect opens a tracked brochure' },
+    { k: 'reorder_due',     l: 'Reorder Due',      d: 'Daily: schools that bought before and are due to buy again (old orders count)' },
     { k: 'manual',          l: 'Manual Only',      d: 'Enroll contacts manually' },
   ];
 
@@ -517,6 +520,17 @@ export default function DripsTab({ tk, drips, setDrips }) {
                 ))}
               </div>
             </div>
+            {form.trigger === 'reorder_due' && (
+              <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 space-y-2" data-testid="reorder-due-help">
+                <p className={`text-xs ${tk.t1}`}>Every day at 10:30 AM, schools whose usual time between orders has passed are added to this sequence — at most once every 6 months per school, and never while a reorder deal is already open. Nothing is sent until you activate it.</p>
+                <Label className={`${tk.t2} text-xs block`}>Deal type for the leads it opens</Label>
+                <select value={form.deal_type || 'Reorder Dies'} onChange={e => setForm(p => ({ ...p, deal_type: e.target.value }))}
+                  className={`h-9 px-2 rounded-md text-sm border ${tk.inp}`}>
+                  <option value="Reorder Dies">Reorder Dies</option>
+                  <option value="New Dies">New Dies</option>
+                </select>
+              </div>
+            )}
             {form.trigger === 'lead_created' && (
               <div>
                 <Label className={`${tk.t2} text-xs mb-1.5 block`}>Filter by Designation <span className={`${tk.tm} font-normal`}>(optional)</span></Label>
