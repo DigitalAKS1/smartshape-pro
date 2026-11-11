@@ -245,3 +245,40 @@ def test_request_list_hides_share_token(env, monkeypatch):
     rows = _run(qreq.list_quote_requests(FakeRequest(), status=None))
     assert rows and "share_token" not in rows[0]
     assert "share_token" not in _run(qreq.get_quote_request(rows[0]["request_id"], FakeRequest()))
+
+
+# ── Link-only shares (manual WhatsApp / email / broadcast) ───────────────────
+
+def test_link_mode_for_school_sends_no_mail(env):
+    c = _cat(env, categories=["flowers"])
+    out = _run(cm.send_catalogue(c["catalogue_id"], FakeRequest({"mode": "link", "school_id": "s1"})))
+    assert out["link"].endswith(f"/c/{out['token']}") and env["sent"] == []
+    share = _run(env["db"].catalogue_shares.find_one({"token": out["token"]}))
+    assert share["school_id"] == "s1" and share["channel"] == "link" and share["multi_use"] is False
+    assert out["school_phone"] == ""
+
+
+def test_generic_link_is_multi_use_and_asks_for_contact(env):
+    c = _cat(env, categories=["flowers"])
+    out = _run(cm.send_catalogue(c["catalogue_id"], FakeRequest({"mode": "link"})))
+    page = _run(cm.public_catalogue_share(out["token"]))
+    assert page["needs_contact"] is True and page["owned"] == {}
+    with pytest.raises(HTTPException) as e:          # contact required on a generic link
+        _run(cm.submit_catalogue_share(out["token"], FakeRequest({"selections": [{"die_id": "d1", "quantity": 1}]})))
+    assert e.value.status_code == 400
+    body = {"selections": [{"die_id": "d1", "quantity": 2}], "email": "p@beta.in", "school_name": "Alpha School",
+            "city": "Delhi", "name": "Ms B"}
+    r1 = _run(cm.submit_catalogue_share(out["token"], FakeRequest(body)))
+    r2 = _run(cm.submit_catalogue_share(out["token"], FakeRequest({**body, "email": "q@gamma.in",
+                                                                    "school_name": "Gamma", "city": ""}, ip="7.7.7.7")))
+    a = _run(env["db"].quotation_requests.find_one({"request_id": r1["request_id"]}))
+    b = _run(env["db"].quotation_requests.find_one({"request_id": r2["request_id"]}))
+    assert a["school_id"] == "s1" and a["email"] == "p@beta.in"     # matched by name + city
+    assert b["school_id"] is None and b["school_name"] == "Gamma"
+    assert _run(env["db"].catalogue_shares.find_one({"token": out["token"]}))["status"] != "submitted"
+
+
+def test_school_link_does_not_ask_for_contact(env):
+    c = _cat(env)
+    out = _run(cm.send_catalogue(c["catalogue_id"], FakeRequest({"mode": "link", "school_id": "s1"})))
+    assert _run(cm.public_catalogue_share(out["token"]))["needs_contact"] is False

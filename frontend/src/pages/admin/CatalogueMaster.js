@@ -90,9 +90,12 @@ function SendDialog({ open, onOpenChange, catalogue, onSent }) {
   const [school, setSchool] = useState(null);
   const [emails, setEmails] = useState('');
   const [sending, setSending] = useState(false);
+  const [mode, setMode] = useState('email');            // email | whatsapp | link
+  const [phone, setPhone] = useState('');
+  const [made, setMade] = useState(null);               // {link, ...} once a link share exists
   useEffect(() => {
     if (!open) return;
-    setQ(''); setSchool(null); setEmails('');
+    setQ(''); setSchool(null); setEmails(''); setMode('email'); setPhone(''); setMade(null);
     schoolsApi.getAll().then(r => setSchools(Array.isArray(r.data) ? r.data : (r.data?.items || []))).catch(() => {});
   }, [open]);
   const matches = useMemo(() => {
@@ -101,7 +104,26 @@ function SendDialog({ open, onOpenChange, catalogue, onSent }) {
     return schools.filter(s => (s.school_name || '').toLowerCase().includes(t)).slice(0, 8);
   }, [q, schools]);
 
-  const pick = (s) => { setSchool(s); setQ(s.school_name); setEmails(s.email || ''); };
+  const pick = (s) => { setSchool(s); setQ(s.school_name); setEmails(s.email || ''); setPhone(s.phone || ''); setMade(null); };
+
+  const message = (link) => `Namaste${school?.school_name ? ` ${school.school_name}` : ''}! Here is our "${catalogue?.name}" catalogue — tap the dies you like and send your selection, we'll reply with a quotation:\n${link}`;
+  const waNumber = (p) => {
+    const d = String(p || '').replace(/\D/g, '');
+    return d.length === 10 ? `91${d}` : d;
+  };
+  const makeLink = async () => {
+    setSending(true);
+    try {
+      const r = await catApi.send(catalogue.catalogue_id, { mode: 'link', channel: mode, school_id: school?.school_id || null });
+      setMade(r.data);
+      if (!phone && r.data.school_phone) setPhone(r.data.school_phone);
+      onSent();
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Could not create link'); } finally { setSending(false); }
+  };
+  const copy = async (text, what) => {
+    try { await navigator.clipboard.writeText(text); toast.success(`${what} copied`); } catch { toast.error('Copy failed — select and copy manually'); }
+  };
+
   const send = async () => {
     setSending(true);
     try {
@@ -118,7 +140,13 @@ function SendDialog({ open, onOpenChange, catalogue, onSent }) {
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className={dlgCls}>
         <DialogHeader><DialogTitle>Send "{catalogue?.name}"</DialogTitle></DialogHeader>
-        <p className="text-xs text-[var(--text-muted)] -mt-1">The school gets a personal link. What they choose arrives in Quotation Requests — no quotation needed first.</p>
+        <p className="text-xs text-[var(--text-muted)] -mt-1">What the school chooses arrives in Quotation Requests — no quotation needed first.</p>
+        <div className="grid grid-cols-3 gap-1 p-1 rounded-md border border-[var(--border-color)]">
+          {[['email', 'Email'], ['whatsapp', 'WhatsApp'], ['link', 'Copy link']].map(([k, l]) => (
+            <button key={k} type="button" onClick={() => { setMode(k); setMade(null); }} data-testid={`cat-mode-${k}`}
+              className={`py-1.5 rounded text-sm font-medium ${mode === k ? 'bg-[#e94560] text-white' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]'}`}>{l}</button>
+          ))}
+        </div>
         <div className="space-y-3 py-1">
           <div className="relative">
             <Label className="text-xs text-[var(--text-secondary)]">School (optional — links the request and shows what they already own)</Label>
@@ -134,14 +162,44 @@ function SendDialog({ open, onOpenChange, catalogue, onSent }) {
               </div>
             )}
           </div>
-          <div><Label className="text-xs text-[var(--text-secondary)]">Email ID(s) *</Label>
-            <Input value={emails} onChange={e => setEmails(e.target.value)} className={inputCls} placeholder="principal@school.in, office@school.in" data-testid="cat-send-emails" /></div>
+          {mode === 'email' && (
+            <div><Label className="text-xs text-[var(--text-secondary)]">Email ID(s) *</Label>
+              <Input value={emails} onChange={e => setEmails(e.target.value)} className={inputCls} placeholder="principal@school.in, office@school.in" data-testid="cat-send-emails" /></div>
+          )}
+          {mode === 'whatsapp' && (
+            <div><Label className="text-xs text-[var(--text-secondary)]">WhatsApp number {school ? '' : '(optional — leave blank to choose the chat in WhatsApp)'}</Label>
+              <Input value={phone} onChange={e => setPhone(e.target.value)} className={inputCls} placeholder="98xxxxxxxx" data-testid="cat-send-phone" /></div>
+          )}
+          {mode !== 'email' && !school && (
+            <p className="text-[11px] text-amber-500">No school picked → a <b>common link</b> for broadcasts / WhatsApp marketing. Each school that opens it gives its own name and email.</p>
+          )}
+          {made && (
+            <div className="rounded-md border border-[var(--border-color)] bg-[var(--bg-primary)] p-3 space-y-2" data-testid="cat-made-link">
+              <p className="text-xs break-all font-mono text-[var(--text-primary)]">{made.link}</p>
+              <div className="flex flex-wrap gap-2">
+                <Button size="sm" variant="outline" className="h-8 border-[var(--border-color)] text-[var(--text-secondary)]" onClick={() => copy(made.link, 'Link')}>Copy link</Button>
+                <Button size="sm" variant="outline" className="h-8 border-[var(--border-color)] text-[var(--text-secondary)]" onClick={() => copy(message(made.link), 'Message')}>Copy message</Button>
+                {mode === 'whatsapp' && (
+                  <a href={`https://wa.me/${waNumber(phone)}?text=${encodeURIComponent(message(made.link))}`} target="_blank" rel="noreferrer"
+                    className="inline-flex items-center h-8 px-3 rounded-md text-sm font-medium bg-green-600 hover:bg-green-700 text-white" data-testid="cat-open-wa">
+                    Open WhatsApp
+                  </a>
+                )}
+              </div>
+            </div>
+          )}
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} className="border-[var(--border-color)] text-[var(--text-secondary)]">Cancel</Button>
-          <Button onClick={send} disabled={sending || !emails.trim()} className="bg-[#e94560] hover:bg-[#f05c75] text-white" data-testid="cat-send-btn">
-            <Send className="h-3.5 w-3.5 mr-1" /> {sending ? 'Sending…' : 'Send'}
-          </Button>
+          <Button variant="outline" onClick={() => onOpenChange(false)} className="border-[var(--border-color)] text-[var(--text-secondary)]">{made ? 'Done' : 'Cancel'}</Button>
+          {mode === 'email' ? (
+            <Button onClick={send} disabled={sending || !emails.trim()} className="bg-[#e94560] hover:bg-[#f05c75] text-white" data-testid="cat-send-btn">
+              <Send className="h-3.5 w-3.5 mr-1" /> {sending ? 'Sending…' : 'Send'}
+            </Button>
+          ) : !made && (
+            <Button onClick={makeLink} disabled={sending} className="bg-[#e94560] hover:bg-[#f05c75] text-white" data-testid="cat-make-link">
+              {sending ? 'Creating…' : mode === 'whatsapp' ? 'Create link for WhatsApp' : 'Create link'}
+            </Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

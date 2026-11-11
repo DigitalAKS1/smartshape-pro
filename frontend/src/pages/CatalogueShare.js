@@ -18,7 +18,7 @@ export default function CatalogueShare() {
   const [qtyByDie, setQtyByDie] = useState({});
   const [typeTab, setTypeTab] = useState('all');
   const [videoDie, setVideoDie] = useState(null);
-  const [contact, setContact] = useState({ name: '', phone: '', message: '' });
+  const [contact, setContact] = useState({ name: '', phone: '', message: '', email: '', school_name: '', city: '' });
   const [sending, setSending] = useState(false);
   const [done, setDone] = useState(false);
 
@@ -43,6 +43,8 @@ export default function CatalogueShare() {
 
   const submit = async () => {
     if (!picked) { toast.error('Choose at least one die'); return; }
+    if (data.needs_contact && !contact.email.trim()) { toast.error('Enter your email so we can send the quotation'); return; }
+    if (data.needs_contact && !data.school_name && !contact.school_name.trim()) { toast.error('Enter your school name'); return; }
     setSending(true);
     try {
       await catalogues.publicSubmit(token, {
@@ -103,6 +105,13 @@ export default function CatalogueShare() {
           ownedByDie={data.owned || {}} />
 
         <div className="rounded-lg border border-[#2d2d44] bg-[#1a1a2e] p-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
+          {data.needs_contact && (
+            <>
+              <input className={inputCls} placeholder="Your email *" type="email" value={contact.email} onChange={e => setContact({ ...contact, email: e.target.value })} data-testid="cs-email" />
+              {!data.school_name && <input className={inputCls} placeholder="School name *" value={contact.school_name} onChange={e => setContact({ ...contact, school_name: e.target.value })} data-testid="cs-school" />}
+              {!data.school_name && <input className={inputCls} placeholder="City" value={contact.city} onChange={e => setContact({ ...contact, city: e.target.value })} />}
+            </>
+          )}
           <input className={inputCls} placeholder="Your name (optional)" value={contact.name} onChange={e => setContact({ ...contact, name: e.target.value })} />
           <input className={inputCls} placeholder="Phone (optional)" value={contact.phone} onChange={e => setContact({ ...contact, phone: e.target.value })} />
           <input className={inputCls} placeholder="Note for us (optional)" value={contact.message} onChange={e => setContact({ ...contact, message: e.target.value })} />
