@@ -730,6 +730,7 @@ export const tasks = {
 // Stock
 export const stock = {
   createMovement: (data) => API.post('/stock/movement', data),
+  quickAdjust: (data) => API.post('/stock/quick-adjust', data),
   getMovements: () => API.get('/stock/movements'),
   deleteMovement: (id) => API.delete(`/stock/movements/${id}`),
 };

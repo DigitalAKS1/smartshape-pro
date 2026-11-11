@@ -7,6 +7,7 @@ import { formatDate } from '../../lib/utils';
 import { Package, AlertTriangle, ArrowDownCircle, ArrowUpCircle, Warehouse, PackageX, RefreshCw } from 'lucide-react';
 import ShortfallDetailModal, { ProductThumb } from '../../components/inventory/ShortfallDetailModal';
 import { signedQtyLabel, STOCK_INCREASE_TYPES } from '../../lib/stockMath';
+import StockStepper from '../../components/inventory/StockStepper';
 
 // Store table sort options (item code is the natural default for a stock sheet).
 const SORT_OPTIONS = [
@@ -25,6 +26,15 @@ const firstImage = (d) => d.image_url
 export default function Store() {
   const { user } = useAuth();
   const canRecompute = ['admin', 'accounts'].includes(user?.role);
+  // Inline +/- needs Store or Stock Management edit rights (the server checks too).
+  const lvl = (m) => user?.module_permissions?.[m]?.level || '';
+  const canAdjust = user?.role === 'admin' || user?.team === 'admin' || (user?.roles || []).includes('admin')
+    || ['read_write', 'read_write_delete', 'full'].includes(lvl('store'))
+    || ['read_write', 'read_write_delete', 'full'].includes(lvl('stock_management'));
+  const applyAdjust = (dieId) => (res) => {
+    setDiesList(prev => prev.map(d => (d.die_id === dieId ? { ...d, stock_qty: res.stock_qty, reserved_qty: res.reserved_qty } : d)));
+    stock.getMovements().then(r => setMovements(r.data)).catch(() => {});
+  };
   const [diesList, setDiesList] = useState([]);
   const [movements, setMovements] = useState([]);
   const [alertsList, setAlertsList] = useState([]);
@@ -106,7 +116,7 @@ export default function Store() {
         <div className="flex items-start justify-between gap-3 flex-wrap">
           <div>
             <h1 className="text-4xl font-semibold text-[var(--text-primary)] tracking-tight" data-testid="store-title">Store</h1>
-            <p className="text-[var(--text-secondary)] mt-1">Warehouse overview — stock, movements, and alerts</p>
+            <p className="text-[var(--text-secondary)] mt-1">Warehouse overview — stock, movements, and alerts{canAdjust ? '. Use + / − on any row to change stock; every change is logged in Recent Movements.' : ''}</p>
           </div>
           {canRecompute && (
             <button onClick={handleRecompute} disabled={recomputing}
@@ -195,6 +205,7 @@ export default function Store() {
                   <th className="text-right text-xs uppercase tracking-wide text-[var(--text-secondary)] py-3">Available</th>
                   <th className="text-right text-xs uppercase tracking-wide text-[var(--text-secondary)] py-3">Required</th>
                   <th className="text-right text-xs uppercase tracking-wide text-[var(--text-secondary)] py-3">Shortfall</th>
+                  {canAdjust && <th className="text-right text-xs uppercase tracking-wide text-[var(--text-secondary)] py-3 pl-4">Adjust stock</th>}
                 </tr>
               </thead>
               <tbody>
@@ -222,6 +233,9 @@ export default function Store() {
                           </button>
                         ) : <span className="font-mono text-[var(--text-muted)]">0</span>}
                       </td>
+                      {canAdjust && (
+                        <td className="py-2 pl-4"><StockStepper die={d} onChanged={applyAdjust(d.die_id)} /></td>
+                      )}
                     </tr>
                   );
                 })}

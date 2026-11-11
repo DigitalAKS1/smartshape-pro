@@ -12,7 +12,7 @@ import mimetypes
 
 from database import db
 from auth_utils import get_current_user
-from rbac import get_team, require_teams, require_module
+from rbac import get_team, require_teams, require_module, has_module
 from audit_backup import snapshot_and_delete
 from media_utils import youtube_id, normalize_images, MAX_DIE_IMAGES
 from routes.lookup_routes import canonical_name, get_values as lookup_values
@@ -558,6 +558,58 @@ async def create_stock_movement(movement_input: StockMovementCreate, request: Re
 
     await db.stock_movements.insert_one(movement_doc)
     return await db.stock_movements.find_one({"movement_id": movement_id}, {"_id": 0})
+
+
+QUICK_ADJUST_MAX = 1000
+
+
+@router.post("/stock/quick-adjust")
+async def quick_adjust_stock(request: Request):
+    """Store page +/- : change one item's stock by `delta` in one tap.
+
+    Recorded as an ordinary stock_in / stock_out movement (same history as the
+    Inventory Stock In/Out dialog). A decrease needs a reason and can never take
+    stock below zero — checked inside the update itself, so two quick taps from
+    two people can't both pass."""
+    user = await get_current_user(request)
+    if not (has_module(user, "store", "read_write") or has_module(user, "stock_management", "read_write")):
+        raise HTTPException(status_code=403, detail="You don't have edit access to the Store")
+    body = await request.json()
+    try:
+        delta = int(body.get("delta"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="delta must be a whole number")
+    if delta == 0 or abs(delta) > QUICK_ADJUST_MAX:
+        raise HTTPException(status_code=400, detail=f"Change must be between 1 and {QUICK_ADJUST_MAX}")
+    reason = str(body.get("reason") or "").strip()[:200]
+    if delta < 0 and not reason:
+        raise HTTPException(status_code=400, detail="Give a reason for reducing stock")
+    die_id = str(body.get("die_id") or "")
+    die = await db.dies.find_one({"die_id": die_id}, {"_id": 0})
+    if not die:
+        raise HTTPException(status_code=404, detail="Item not found")
+
+    q = {"die_id": die_id}
+    if delta < 0:
+        q["stock_qty"] = {"$gte": -delta}
+    res = await db.dies.update_one(q, {"$inc": {"stock_qty": delta}})
+    if not res.modified_count:
+        raise HTTPException(status_code=409, detail=f"Only {int(die.get('stock_qty') or 0)} in stock — can't remove {-delta}")
+
+    now = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()
+    await db.stock_movements.insert_one({
+        "movement_id": f"mov_{uuid.uuid4().hex[:12]}", "die_id": die_id,
+        "die_code": die.get("code"), "die_name": die.get("name"),
+        "movement_type": "stock_in" if delta > 0 else "stock_out", "quantity": abs(delta),
+        "sales_person_id": None, "sales_person_name": None,
+        "notes": f"Quick adjust (Store){': ' + reason if reason else ''}",
+        "movement_date": now, "reference_number": None,
+        "created_by": user["email"], "created_by_name": user.get("name", ""),
+    })
+    after = await db.dies.find_one({"die_id": die_id}, {"_id": 0, "stock_qty": 1, "reserved_qty": 1})
+    stock_qty = int(after.get("stock_qty") or 0)
+    return {"die_id": die_id, "stock_qty": stock_qty, "reserved_qty": int(after.get("reserved_qty") or 0),
+            "below_reserved": stock_qty < int(after.get("reserved_qty") or 0)}
 
 
 @router.get("/stock/movements")
