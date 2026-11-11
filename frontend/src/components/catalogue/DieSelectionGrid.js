@@ -15,9 +15,16 @@ import MediaGallery from '../media/MediaGallery';
  * light/dark ThemeContext (e.g. the School Portal), so headings and cards
  * use theme tokens instead of white-on-white / hard-coded dark tiles.
  */
+// "2024-03-05" → "Mar 2024" for the already-ordered badge.
+const fmtMonth = (d) => {
+  const x = new Date(`${String(d).slice(0, 10)}T00:00:00`);
+  return Number.isNaN(x.getTime()) ? '' : x.toLocaleDateString('en-IN', { month: 'short', year: 'numeric' });
+};
+
 export default function DieSelectionGrid({
   dies = [], qtyByDie = {}, onToggle, onQtyChange, backendUrl = '',
   typeTab = 'all', onTypeTabChange, onVideoPreview, dark = true,
+  ownedByDie = {},
 }) {
   const selectedDies = Object.keys(qtyByDie);
 
@@ -86,6 +93,13 @@ export default function DieSelectionGrid({
                     data-testid={`die-card-${die.code}`}>
                     {isSelected && (
                       <div className="absolute top-2 right-2 z-10 bg-[#e94560] text-white rounded-full w-6 h-6 flex items-center justify-center"><Check className="h-4 w-4" /></div>
+                    )}
+                    {ownedByDie[die.die_id] && (
+                      <div className="absolute top-2 left-2 z-10 px-1.5 py-0.5 rounded bg-amber-500 text-white text-[10px] font-semibold shadow"
+                        title={`Ordered ${ownedByDie[die.die_id].qty} before`} data-testid={`die-owned-${die.code}`}>
+                        Already ordered ×{ownedByDie[die.die_id].qty}
+                        {ownedByDie[die.die_id].last_date ? ` · ${fmtMonth(ownedByDie[die.die_id].last_date)}` : ''}
+                      </div>
                     )}
                     <div className={`relative aspect-square ${imgWrapCls}`} onClick={(e) => e.stopPropagation()}>
                       <MediaGallery images={die.images} alt={die.name} backendUrl={backendUrl} />

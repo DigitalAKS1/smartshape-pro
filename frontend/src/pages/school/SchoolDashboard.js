@@ -45,6 +45,7 @@ export default function SchoolDashboard() {
   const [newContact, setNewContact] = useState({ name: '', phone: '', designation: '' });
   const [reorderMsg, setReorderMsg] = useState('');
   const [catalogueDies, setCatalogueDies] = useState([]);
+  const [ownedByDie, setOwnedByDie] = useState({});
   const [catalogueOpen, setCatalogueOpen] = useState(false);
   const [qtyByDie, setQtyByDie] = useState({});
   const [catalogueSubmitting, setCatalogueSubmitting] = useState(false);
@@ -129,6 +130,7 @@ export default function SchoolDashboard() {
     try {
       const res = await schoolAuth.browseCatalogue();
       setCatalogueDies(res.data.dies || []);
+      setOwnedByDie(res.data.owned || {});
     } catch { toast.error('Could not load the catalogue'); }
   };
 
@@ -492,6 +494,7 @@ export default function SchoolDashboard() {
                     onQtyChange={setCatalogueQty}
                     backendUrl={process.env.REACT_APP_BACKEND_URL}
                     dark={false}
+                    ownedByDie={ownedByDie}
                   />
                   <div className="flex items-center gap-2">
                     <Button onClick={submitCatalogueSelection} disabled={catalogueSubmitting || Object.keys(qtyByDie).length === 0}

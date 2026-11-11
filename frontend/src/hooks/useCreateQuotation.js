@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
-import { packages, salesPersons, quotations, companySettings, contacts as contactsApi, schools as schoolsApi, schoolPortalSettings, dealTypes } from '../lib/api';
+import { packages, salesPersons, quotations, companySettings, contacts as contactsApi, schools as schoolsApi, schoolPortalSettings, dealTypes, pastPurchases } from '../lib/api';
 
 export default function useCreateQuotation() {
   const navigate = useNavigate();
@@ -432,9 +432,35 @@ export default function useCreateQuotation() {
     }
   };
 
+  // "This school has bought before" — once per school picked, show what it already
+  // owns (app orders + old orders) so the quote offers new dies, not repeats.
+  const [alreadyBought, setAlreadyBought] = useState(null);
+  const shownForSchool = useRef(null);
+  useEffect(() => {
+    const sid = formData.school_id;
+    if (!sid || shownForSchool.current === sid) return;
+    shownForSchool.current = sid;
+    let alive = true;
+    pastPurchases.history(sid)
+      .then(r => {
+        const h = r.data || {};
+        if (!alive || !(h.items || []).length) return;
+        setAlreadyBought({
+          schoolName: formData.school_name || 'This school',
+          items: h.items,
+          orderCount: (h.entries || []).length,
+          lastDate: (h.entries || [])[0]?.date || '',
+        });
+      })
+      .catch(() => { /* no access / no history: no popup */ });
+    return () => { alive = false; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [formData.school_id]);
+
   return {
     // Step
     step, setStep,
+    alreadyBought, dismissAlreadyBought: () => setAlreadyBought(null),
     // Remote data
     packagesList, salesPersonsList, company, dealTypesList,
     // Step 1

@@ -61,7 +61,7 @@ export default function CataloguePage() {
     </div>
   );
 
-  const { quotation, package: pkg, dies: diesRaw, logo_url: logoUrl } = data;
+  const { quotation, package: pkg, dies: diesRaw, logo_url: logoUrl, owned = {} } = data;
   const dies = diesRaw || [];
 
   // A valid catalogue always carries its quotation. If a transient/partial response
@@ -153,6 +153,7 @@ export default function CataloguePage() {
           typeTab={typeTab}
           onTypeTabChange={setTypeTab}
           onVideoPreview={setVideoDie}
+          ownedByDie={owned || {}}
         />
       </div>
 

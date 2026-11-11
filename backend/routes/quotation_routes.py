@@ -13,6 +13,7 @@ from auth_utils import get_current_user
 from rbac import get_team, require_teams, require_module, sees_all
 from routes.drip_routes import _auto_enroll_quotation_sent
 from media_utils import gate_die_for_customer
+from services.purchase_history import owned_by_die
 
 router = APIRouter()
 
@@ -1627,7 +1628,10 @@ async def get_catalogue(token: str):
     fe_url = os.environ.get("FRONTEND_URL", "").rstrip("/")
     logo_url = (fe_url + logo_raw) if logo_raw.startswith("/") else logo_raw
 
-    return {"quotation": quot, "package": package, "dies": dies, "logo_url": logo_url}
+    # Dies this school already ordered (app orders + old orders), so the page can
+    # badge them and the school doesn't re-order a design it has by mistake.
+    owned = await owned_by_die(db, quot.get("school_id") or "")
+    return {"quotation": quot, "package": package, "dies": dies, "logo_url": logo_url, "owned": owned}
 
 
 @router.post("/catalogue/{token}/submit")

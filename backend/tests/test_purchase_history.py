@@ -126,3 +126,15 @@ def test_order_without_created_at_still_counts(db):
     out = _run(al.recompute_school_lifecycle(db, "s1"))
     assert out["account_status"] == "customer"
     assert out["order_count"] == 1 and out["lifetime_value"] == 700
+
+
+def test_owned_by_die_only_inventory_items(db):
+    _run(_order(db, "o1", days_ago=5, order_status="delivered"))
+    _run(db.order_items.insert_one({"order_id": "o1", "die_id": "d1", "die_code": "SS-1",
+                                    "die_name": "Rose", "die_type": "standard", "quantity": 3}))
+    _run(_past(db, "p1", days_ago=400))
+    _run(_past(db, "p2", days_ago=300, items=[{"die_id": None, "die_code": "", "name": "Big Machine",
+                                               "item_type": "machine", "qty": 1}]))
+    owned = _run(ph.owned_by_die(db, "s1"))
+    assert owned == {"d1": {"qty": 5, "last_date": _date_ago(5), "times": 2}}
+    assert _run(ph.owned_by_die(db, "")) == {}

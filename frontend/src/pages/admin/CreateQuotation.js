@@ -1,4 +1,5 @@
 import React from 'react';
+import AlreadyBoughtDialog from '../../components/quotations/AlreadyBoughtDialog';
 import AdminLayout from '../../components/layouts/AdminLayout';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../../components/ui/dialog';
 import { Button } from '../../components/ui/button';
@@ -175,6 +176,8 @@ export default function CreateQuotation() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AlreadyBoughtDialog data={hook.alreadyBought} onClose={hook.dismissAlreadyBought} />
     </AdminLayout>
   );
 }

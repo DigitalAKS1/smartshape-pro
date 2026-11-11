@@ -110,3 +110,14 @@ async def school_purchase_history(db, school_id: str) -> dict:
                 row["last_date"] = e["date"]
     items = sorted(summary.values(), key=lambda r: (r["last_date"], r["total_qty"]), reverse=True)
     return {"entries": entries, "items": items}
+
+
+async def owned_by_die(db, school_id: str) -> dict:
+    """{die_id: {"qty", "last_date", "times"}} for inventory dies this school already
+    bought — what the catalogue pages badge as "Already ordered". Free-text items
+    (no die_id) can't be matched to a catalogue card, so they are left out."""
+    if not school_id:
+        return {}
+    hist = await school_purchase_history(db, school_id)
+    return {i["die_id"]: {"qty": i["total_qty"], "last_date": i["last_date"], "times": i["times"]}
+            for i in hist["items"] if i.get("die_id")}
