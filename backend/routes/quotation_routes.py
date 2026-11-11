@@ -588,6 +588,13 @@ async def create_quotation(request: Request):
     from routes.crm_routes import notify_school_owner   # lazy: avoid import cycle
     await notify_school_owner(
         (saved or {}).get("school_id", ""), user, "a quotation", ref_type="quotation")
+    # Made from a Quotation Request → mark that request answered.
+    if body.get("quotation_request_id"):
+        try:
+            from routes.quotation_request_routes import mark_request_quoted
+            await mark_request_quoted(db, str(body["quotation_request_id"]), saved or {})
+        except Exception as _e:
+            logging.warning(f"Linking quotation to request failed: {_e}")
     return saved
 
 
