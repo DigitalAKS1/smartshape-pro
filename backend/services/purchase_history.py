@@ -14,6 +14,8 @@ purchase history a rep sees on the school profile.
 # A cancelled order never became a relationship. Orders store `order_status`;
 # a few legacy/test rows use `status` — honour both.
 NON_REVENUE_ORDER_STATUSES = {"cancelled"}
+# order_items lines that were never really part of the order (same set order_routes skips).
+DEAD_ITEM_STATUSES = ("removed", "cancelled", "released")
 
 
 def is_cancelled(order: dict) -> bool:
@@ -34,10 +36,12 @@ async def revenue_events(db, school_ids: list) -> dict:
     async for o in db.orders.find(
             {"school_id": {"$in": ids}, "is_deleted": {"$ne": True}},
             {"_id": 0, "school_id": 1, "grand_total": 1, "status": 1, "order_status": 1, "created_at": 1}):
-        if is_cancelled(o) or not o.get("created_at"):
+        if is_cancelled(o):
             continue
+        # An order with no created_at still counts as a purchase; it just has no date
+        # (`at` = "") so it can't set first/last date or reorder cadence.
         out.setdefault(o["school_id"], []).append(
-            {"at": o["created_at"], "amount": float(o.get("grand_total") or 0), "source": "order"})
+            {"at": o.get("created_at") or "", "amount": float(o.get("grand_total") or 0), "source": "order"})
     async for p in db.past_purchases.find(
             {"school_id": {"$in": ids}, "is_deleted": {"$ne": True}},
             {"_id": 0, "school_id": 1, "purchase_date": 1, "amount": 1}):
@@ -65,7 +69,10 @@ async def school_purchase_history(db, school_id: str) -> dict:
     live = [o for o in orders if not is_cancelled(o)]
     items_by_order: dict = {}
     if live:
-        async for it in db.order_items.find({"order_id": {"$in": [o["order_id"] for o in live]}}, {"_id": 0}):
+        # Lines edited out of an order, cancelled or released were never owned.
+        async for it in db.order_items.find(
+                {"order_id": {"$in": [o["order_id"] for o in live]},
+                 "status": {"$nin": list(DEAD_ITEM_STATUSES)}}, {"_id": 0}):
             items_by_order.setdefault(it["order_id"], []).append({
                 "die_id": it.get("die_id"), "die_code": it.get("die_code") or "",
                 "name": it.get("die_name") or it.get("die_code") or "",

@@ -227,3 +227,61 @@ def test_import_requires_admin_or_orders(db, monkeypatch):
     assert e.value.status_code == 403
     _as({**STRANGER, "module_permissions": {"orders": {"level": "read_write"}}}, monkeypatch)
     assert _import(True)["groups"] == 3
+
+
+# ── Final-review fixes ────────────────────────────────────────────────────────
+
+READ_ONLY = {"email": "acc@smartshape.in", "name": "Acc", "role": "accounts",
+             "module_permissions": {"leads": {"level": "read", "scope": "all"}}}
+
+
+def test_read_only_crm_user_cannot_write(db, monkeypatch):
+    _as(READ_ONLY, monkeypatch)
+    assert _run(pp.get_purchase_history("s1", FakeRequest()))["entries"] == []
+    with pytest.raises(HTTPException) as e:
+        _run(pp.create_past_purchase(FakeRequest(BODY)))
+    assert e.value.status_code == 403
+
+
+def test_concurrent_duplicate_insert_returns_409(db, monkeypatch):
+    from pymongo.errors import DuplicateKeyError
+    _as(ADMIN, monkeypatch)
+    _run(pp.create_past_purchase(FakeRequest(BODY)))
+
+    async def _never(_key):
+        return False
+    monkeypatch.setattr(pp, "_dup_exists", _never)        # simulate the race: pre-check missed it
+    _run(db.past_purchases.create_index("dedupe_key", unique=True))
+    with pytest.raises(HTTPException) as e:
+        _run(pp.create_past_purchase(FakeRequest(BODY)))
+    assert e.value.status_code == 409
+
+
+def test_reimport_recomputes_schools_left_stale(db, monkeypatch):
+    _as(ADMIN, monkeypatch)
+    _import(False)
+    # simulate an import that inserted but died before recomputing
+    _run(db.schools.update_many({}, {"$set": {"account_status": "prospect", "order_count": 0}}))
+    _import(False)
+    s = _run(db.schools.find_one({"school_id": "s1"}))
+    assert s["account_status"] == "dormant" and s["order_count"] == 1
+
+
+def test_template_examples_cannot_match_a_real_school(db, monkeypatch):
+    _as(ADMIN, monkeypatch)
+    body = _run(pp.past_purchase_template(FakeRequest())).body.decode()
+    assert "Delhi Public School" not in body
+    assert "EXAMPLE" in body
+
+
+def test_typed_exact_die_code_links_to_inventory(db, monkeypatch):
+    _as(ADMIN, monkeypatch)
+    out = _run(pp.create_past_purchase(FakeRequest({**BODY, "items": [{"name": "ss-101", "qty": 2}]})))
+    assert out["items"][0]["die_id"] == "d1"
+
+
+def test_future_date_rejected(db, monkeypatch):
+    _as(ADMIN, monkeypatch)
+    with pytest.raises(HTTPException) as e:
+        _run(pp.create_past_purchase(FakeRequest({**BODY, "purchase_date": "2099-01-01"})))
+    assert e.value.status_code == 400

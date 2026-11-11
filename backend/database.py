@@ -157,7 +157,11 @@ async def ensure_wa_indexes(target_db):
     await _i(target_db.schools.create_index("school_category", background=True))
     # Past purchases (Phase 2): per-school history + re-upload dedupe.
     await _i(target_db.past_purchases.create_index([("school_id", 1), ("purchase_date", -1)], background=True))
-    await _i(target_db.past_purchases.create_index("dedupe_key", background=True))
+    # Unique among live records, so two simultaneous saves/imports can't double an
+    # order, while a soft-deleted one can still be re-added.
+    await _i(target_db.past_purchases.create_index(
+        "dedupe_key", unique=True, name="dedupe_key_live_unique",
+        partialFilterExpression={"is_deleted": False}, background=True))
     await _i(target_db.wa_events_raw.create_index([("instance_name", 1), ("received_at", -1)], background=True))
     # TTLs need a real datetime field. Raw inbound events are kept 30 days (W2 back-fills from
     # them); a receipt parked for a row still `sending` is useless after a day.

@@ -20,7 +20,7 @@ const fmtMoney = (n) => (n ? `₹${Number(n).toLocaleString('en-IN', { maximumFr
  */
 export default function PurchaseHistorySection({ schoolId, tk, onChanged }) {
   const { user } = useAuth();
-  const isAdmin = user?.role === 'admin' || user?.team === 'admin';
+  const isAdmin = user?.role === 'admin' || user?.team === 'admin' || (user?.roles || []).includes('admin');
   const [data, setData] = useState({ entries: [], items: [] });
   const [loading, setLoading] = useState(true);
   const [dialog, setDialog] = useState({ open: false, existing: null });

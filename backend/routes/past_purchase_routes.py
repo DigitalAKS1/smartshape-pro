@@ -8,12 +8,14 @@ buying events for account status and reorder-due (services/purchase_history.py).
 import csv
 import hashlib
 import io
+import logging
 import re
 import uuid
 from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import Response
+from pymongo.errors import DuplicateKeyError
 
 from auth_utils import get_current_user
 from database import db
@@ -28,6 +30,7 @@ router = APIRouter()
 TEMPLATE_HEADER = ["school_id", "school_name", "city", "purchase_date", "die_code", "item_name",
                    "item_type", "qty", "reference", "amount", "notes"]
 ITEM_TYPES = ("die", "machine", "other")
+DUP_MSG = "This old order is already recorded for this school"
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -118,7 +121,9 @@ async def _normalise_items(raw_items) -> list:
             out.append(_die_item(die, qty))
             continue
         code = str(it.get("die_code") or "").strip()
-        die = by_code.get(_code_key(code)) if code else None
+        typed = str(it.get("name") or "").strip()
+        # A die code typed into the name box (not picked from the list) still links.
+        die = (by_code.get(_code_key(code)) if code else None) or (by_code.get(_code_key(typed)) if typed else None)
         if die:
             out.append(_die_item(die, qty))
             continue
@@ -137,16 +142,37 @@ async def _school_or_404(school_id: str) -> dict:
     return school
 
 
-async def _require_school_access(user: dict, school: dict):
+async def _require_school_access(user: dict, school: dict, write: bool = False):
     if not await crm._user_can_access_school(user, school):
         raise HTTPException(status_code=403, detail="You don't have access to this school")
+    # Recording history flips account status and reorder-due, so it needs CRM
+    # WRITE access: read-only CRM users can look, not record.
+    if write and not crm.has_team(user, "admin") and not crm._crm_write(user):
+        raise HTTPException(status_code=403, detail="You need CRM edit access to record old orders")
+
+
+def _latest_allowed() -> str:
+    return (datetime.now(timezone.utc) + timedelta(days=1)).date().isoformat()
+
+
+def _valid_date_or_400(raw) -> str:
+    pdate = parse_date(raw)
+    if not pdate:
+        raise HTTPException(status_code=400, detail="Enter a valid purchase date")
+    if pdate > _latest_allowed():
+        raise HTTPException(status_code=400, detail="Purchase date can't be in the future")
+    return pdate
+
+
+async def _dup_exists(key: str) -> bool:
+    return bool(await db.past_purchases.find_one({"dedupe_key": key, "is_deleted": {"$ne": True}}, {"_id": 1}))
 
 
 async def _recompute(school_id: str):
     try:
         await al.recompute_school_lifecycle(db, school_id)
-    except Exception:            # history must save even if the roll-up hiccups
-        pass
+    except Exception as e:       # history must save even if the roll-up hiccups
+        logging.warning("past purchases: lifecycle recompute failed for %s: %s", school_id, e)
 
 
 # ── history ───────────────────────────────────────────────────────────────────
@@ -165,16 +191,14 @@ async def get_purchase_history(school_id: str, request: Request):
 async def create_past_purchase(request: Request):
     user = await get_current_user(request)
     body = await request.json()
-    school = await _school_or_404((body.get("school_id") or "").strip())
-    await _require_school_access(user, school)
-    pdate = parse_date(body.get("purchase_date"))
-    if not pdate:
-        raise HTTPException(status_code=400, detail="Enter a valid purchase date")
+    school = await _school_or_404(str(body.get("school_id") or "").strip())
+    await _require_school_access(user, school, write=True)
+    pdate = _valid_date_or_400(body.get("purchase_date"))
     items = await _normalise_items(body.get("items"))
     reference = str(body.get("reference") or "").strip()
     key = dedupe_key(school["school_id"], pdate, reference, items)
-    if await db.past_purchases.find_one({"dedupe_key": key, "is_deleted": {"$ne": True}}, {"_id": 1}):
-        raise HTTPException(status_code=409, detail="This old order is already recorded for this school")
+    if await _dup_exists(key):
+        raise HTTPException(status_code=409, detail=DUP_MSG)
     doc = {
         "purchase_id": f"pp_{uuid.uuid4().hex[:12]}",
         "school_id": school["school_id"], "school_name": school.get("school_name", ""),
@@ -184,7 +208,10 @@ async def create_past_purchase(request: Request):
         "created_by": user["email"], "created_at": datetime.now(timezone.utc).isoformat(),
         "is_deleted": False,
     }
-    await db.past_purchases.insert_one(dict(doc))
+    try:
+        await db.past_purchases.insert_one(dict(doc))
+    except DuplicateKeyError:          # a parallel save won the race
+        raise HTTPException(status_code=409, detail=DUP_MSG)
     await _recompute(school["school_id"])
     return doc
 
@@ -194,7 +221,7 @@ async def _owned_purchase(purchase_id: str, user: dict) -> dict:
     if not doc:
         raise HTTPException(status_code=404, detail="Old order not found")
     school = await _school_or_404(doc["school_id"])
-    await _require_school_access(user, school)
+    await _require_school_access(user, school, write=True)
     return doc
 
 
@@ -205,10 +232,7 @@ async def update_past_purchase(purchase_id: str, request: Request):
     body = await request.json()
     patch = {}
     if "purchase_date" in body:
-        pdate = parse_date(body.get("purchase_date"))
-        if not pdate:
-            raise HTTPException(status_code=400, detail="Enter a valid purchase date")
-        patch["purchase_date"] = pdate
+        patch["purchase_date"] = _valid_date_or_400(body.get("purchase_date"))
     if "items" in body:
         patch["items"] = await _normalise_items(body.get("items"))
     for k in ("reference", "notes"):
@@ -222,7 +246,10 @@ async def update_past_purchase(purchase_id: str, request: Request):
                                          merged.get("reference", ""), merged["items"])
         patch["updated_by"] = user["email"]
         patch["updated_at"] = datetime.now(timezone.utc).isoformat()
-        await db.past_purchases.update_one({"purchase_id": purchase_id}, {"$set": patch})
+        try:
+            await db.past_purchases.update_one({"purchase_id": purchase_id}, {"$set": patch})
+        except DuplicateKeyError:
+            raise HTTPException(status_code=409, detail=DUP_MSG)
         await _recompute(doc["school_id"])
     return await db.past_purchases.find_one({"purchase_id": purchase_id}, {"_id": 0})
 
@@ -249,8 +276,9 @@ async def past_purchase_template(request: Request):
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(TEMPLATE_HEADER)
-    w.writerow(["", "Delhi Public School", "Delhi", "15-03-2023", "SS-101", "", "", "4", "BILL-123", "15000", "Example — delete this row"])
-    w.writerow(["", "Delhi Public School", "Delhi", "15-03-2023", "", "Die Cutting Machine", "machine", "1", "BILL-123", "", ""])
+    # Example rows use a name no real school has, so leaving them in imports nothing.
+    w.writerow(["", "EXAMPLE SCHOOL - DELETE THIS ROW", "", "15-03-2023", "SS-101", "", "", "4", "BILL-123", "15000", "one row per item"])
+    w.writerow(["", "EXAMPLE SCHOOL - DELETE THIS ROW", "", "15-03-2023", "", "Die Cutting Machine", "machine", "1", "BILL-123", "", "same bill no = same order"])
     return Response(content=buf.getvalue(), media_type="text/csv",
                     headers={"Content-Disposition": 'attachment; filename="old-orders-template.csv"'})
 
@@ -289,6 +317,9 @@ async def import_past_purchases(request: Request, file: UploadFile = File(...), 
         pdate = parse_date(_cell(row, "purchase_date", "date", "order_date"))
         if not pdate:
             skipped.append({"row": line, "reason": "Invalid or missing purchase date"})
+            continue
+        if pdate > _latest_allowed():
+            skipped.append({"row": line, "reason": f"Date {pdate} is in the future"})
             continue
         qty = _int(_cell(row, "qty", "quantity")) or 0
         if qty < 1:
@@ -335,24 +366,34 @@ async def import_past_purchases(request: Request, file: UploadFile = File(...), 
     touched = set()
     for g in groups.values():
         key = dedupe_key(g["school_id"], g["purchase_date"], g["reference"], g["items"])
-        exists = bool(await db.past_purchases.find_one({"dedupe_key": key, "is_deleted": {"$ne": True}}, {"_id": 1}))
+        exists = await _dup_exists(key)
         preview.append({"school_id": g["school_id"], "school_name": names.get(g["school_id"], ""),
                         "purchase_date": g["purchase_date"], "reference": g["reference"], "amount": g["amount"],
                         "items": g["items"], "rows": g["rows"], "duplicate": exists})
         if exists:
             duplicates += 1
+            if not dry_run:
+                touched.add(g["school_id"])   # heal a school left stale by an interrupted import
             continue
         if dry_run:
             continue
-        await db.past_purchases.insert_one({
-            "purchase_id": f"pp_{uuid.uuid4().hex[:12]}", "school_id": g["school_id"],
-            "school_name": names.get(g["school_id"], ""), "purchase_date": g["purchase_date"],
-            "reference": g["reference"], "notes": "; ".join(g["notes"]), "amount": g["amount"],
-            "items": g["items"], "source": "import", "import_batch_id": batch_id, "dedupe_key": key,
-            "created_by": user["email"], "created_at": now, "is_deleted": False,
-        })
+        try:
+            await db.past_purchases.insert_one({
+                "purchase_id": f"pp_{uuid.uuid4().hex[:12]}", "school_id": g["school_id"],
+                "school_name": names.get(g["school_id"], ""), "purchase_date": g["purchase_date"],
+                "reference": g["reference"], "notes": "; ".join(g["notes"]), "amount": g["amount"],
+                "items": g["items"], "source": "import", "import_batch_id": batch_id, "dedupe_key": key,
+                "created_by": user["email"], "created_at": now, "is_deleted": False,
+            })
+        except DuplicateKeyError:          # a parallel import got there first
+            duplicates += 1
+            preview[-1]["duplicate"] = True
+            touched.add(g["school_id"])
+            continue
         created += 1
-        touched.add(g["school_id"])
+        # Recompute per group, so an import cut off mid-file leaves no stale school.
+        await _recompute(g["school_id"])
+        touched.discard(g["school_id"])
     for sid in touched:
         await _recompute(sid)
     return {"dry_run": dry_run, "groups": len(groups), "created": created, "duplicates": duplicates,

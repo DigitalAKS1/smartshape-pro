@@ -76,10 +76,11 @@ export default function PastPurchaseDialog({ open, onOpenChange, schoolId, exist
 
   useEffect(() => {
     if (!open) return;
-    diesApi.getAll().then(r => setAllDies(Array.isArray(r.data) ? r.data : [])).catch(() => {});
+    // Include archived dies: old orders are exactly where retired designs show up.
+    diesApi.getAll(true).then(r => setAllDies(Array.isArray(r.data) ? r.data : [])).catch(() => {});
     if (existing) {
       setForm({ purchase_date: existing.date || today(), reference: existing.number || '', amount: existing.amount || '', notes: existing.notes || '' });
-      setLines((existing.items || []).map(i => ({ die_id: i.die_id || '', name: i.die_id ? '' : i.name, search: i.die_id ? '' : i.name, item_type: i.item_type || 'die', qty: i.qty || 1 })));
+      setLines((existing.items || []).map(i => ({ die_id: i.die_id || '', die_code: i.die_id ? '' : (i.die_code || ''), name: i.die_id ? '' : i.name, search: i.die_id ? '' : i.name, item_type: i.item_type || 'die', qty: i.qty || 1 })));
     } else {
       setForm({ purchase_date: today(), reference: '', amount: '', notes: '' });
       setLines([blankLine()]);
@@ -89,7 +90,9 @@ export default function PastPurchaseDialog({ open, onOpenChange, schoolId, exist
   const save = async () => {
     const items = lines
       .filter(l => l.die_id || (l.name || '').trim())
-      .map(l => (l.die_id ? { die_id: l.die_id, qty: Number(l.qty) } : { name: l.name.trim(), item_type: l.item_type, qty: Number(l.qty) }));
+      .map(l => (l.die_id
+        ? { die_id: l.die_id, qty: Number(l.qty) }
+        : { name: l.name.trim(), die_code: l.die_code || '', item_type: l.item_type, qty: Number(l.qty) }));
     if (!items.length) { toast.error('Add at least one item'); return; }
     if (items.some(i => !(i.qty >= 1))) { toast.error('Quantity must be 1 or more'); return; }
     setSaving(true);

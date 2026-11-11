@@ -108,3 +108,21 @@ def test_reorder_includes_past_purchase_only_school(db):
     rows = _run(ro.reorder_candidates(db))
     assert [r["school_id"] for r in rows] == ["s1"]
     assert rows[0]["order_count"] == 2 and rows[0]["confidence"] == "measured"
+
+
+def test_removed_order_items_not_owned(db):
+    _run(_order(db, "o1", days_ago=5, order_status="delivered"))
+    _run(db.order_items.insert_many([
+        {"order_id": "o1", "die_id": "dA", "die_code": "A", "die_name": "Old A", "quantity": 2, "status": "removed"},
+        {"order_id": "o1", "die_id": "dB", "die_code": "B", "die_name": "New B", "quantity": 2, "status": "dispatched"},
+    ]))
+    names = [i["name"] for i in _run(ph.school_purchase_history(db, "s1"))["items"]]
+    assert names == ["New B"]
+
+
+def test_order_without_created_at_still_counts(db):
+    _run(db.orders.insert_one({"order_id": "o9", "school_id": "s1", "grand_total": 700,
+                               "order_status": "delivered", "is_deleted": False}))
+    out = _run(al.recompute_school_lifecycle(db, "s1"))
+    assert out["account_status"] == "customer"
+    assert out["order_count"] == 1 and out["lifetime_value"] == 700

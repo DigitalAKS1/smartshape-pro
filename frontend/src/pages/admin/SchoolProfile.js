@@ -411,7 +411,7 @@ export default function SchoolProfile() {
           {sp.activeTab === 'sales' && (
             <div className="space-y-5">
               <SchoolSalesSection quotations={quotations} orders={orders} invoices={invoices} metrics={metrics} tk={tk} />
-              <PurchaseHistorySection schoolId={school.school_id} tk={tk} />
+              <PurchaseHistorySection schoolId={school.school_id} tk={tk} onChanged={sp.reload} />
             </div>
           )}
 
