@@ -7,6 +7,7 @@ const ROUTE_MODULE_MAP = {
   '/create-quotation': 'quotations',
   '/quotations': 'quotations',
   '/quotation-requests': 'quotations',
+  '/catalogue-master': 'quotations',
   '/view-quotation': 'quotations',
   '/edit-quotation': 'quotations',
   '/inventory': 'inventory',

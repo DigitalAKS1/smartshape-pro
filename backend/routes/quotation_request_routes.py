@@ -35,6 +35,8 @@ import import_engine as ie
 router = APIRouter()
 
 STATUSES = ("new", "quoted", "closed")
+# Never returned to the team UI: a catalogue link token is the school's own key.
+HIDDEN = {"_id": 0, "share_token": 0}
 RATE_LIMIT, RATE_WINDOW = 5, 600
 # Whole-site ceiling on public submissions per UTC day: every submit mails the
 # team from the company Gmail, so a flood must never burn its daily send quota.
@@ -270,7 +272,7 @@ def _scope(user: dict) -> dict:
 async def _visible_request(user: dict, request_id: str):
     q = {"request_id": request_id}
     scope = _scope(user)
-    return await db.quotation_requests.find_one({"$and": [q, scope]} if scope else q, {"_id": 0})
+    return await db.quotation_requests.find_one({"$and": [q, scope]} if scope else q, HIDDEN)
 
 
 @router.get("/quotation-requests")
@@ -281,7 +283,7 @@ async def list_quote_requests(request: Request, status: str = None):
     scope = _scope(user)
     if scope:
         q = {"$and": [q, scope]} if q else scope
-    rows = await db.quotation_requests.find(q, {"_id": 0}).sort("created_at", -1).to_list(500)
+    rows = await db.quotation_requests.find(q, HIDDEN).sort("created_at", -1).to_list(500)
     sids = list({r["school_id"] for r in rows if r.get("school_id")})
     bought = set()
     if sids:

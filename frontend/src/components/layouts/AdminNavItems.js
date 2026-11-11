@@ -19,6 +19,7 @@ export const MODULE_ROUTE_MAP = {
     { path: '/create-quotation', icon: FileText, label: 'Create Quotation' },
     { path: '/quotations', icon: FileText, label: 'Quotations' },
     { path: '/quotation-requests', icon: Inbox, label: 'Quotation Requests' },
+    { path: '/catalogue-master', icon: Layers, label: 'Catalogue Master' },
     { path: '/orders', icon: ShoppingCart, label: 'Orders & Holds' },
   ],
   inventory: { path: '/inventory', icon: Package, label: 'Inventory' },

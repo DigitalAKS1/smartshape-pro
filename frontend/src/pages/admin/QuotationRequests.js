@@ -74,6 +74,9 @@ export default function QuotationRequests() {
                       <History className="h-3 w-3" /> Bought before
                     </span>
                   )}
+                  {r.source === 'catalogue' && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded font-semibold bg-indigo-500/15 text-indigo-400">From catalogue: {r.catalogue_name}</span>
+                  )}
                   {r.school_id ? <span className="text-[10px] text-[var(--text-muted)]">· in CRM</span> : <span className="text-[10px] text-[var(--text-muted)]">· new school</span>}
                   <span className="ml-auto text-xs text-[var(--text-muted)]">{fmt(r.created_at)}</span>
                 </div>

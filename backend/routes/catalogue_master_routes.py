@@ -22,6 +22,7 @@ from fastapi import APIRouter, HTTPException, Request
 from auth_utils import get_current_user
 from database import db
 from rbac import require_module
+import routes.crm_routes as crm
 from routes.quotation_request_routes import (_EMAIL_RE, _clean, _clean_multiline, _client_ip, _send_email,
                                              _visible_dies, create_request)
 from services.purchase_history import owned_by_die
@@ -30,6 +31,10 @@ router = APIRouter()
 
 RATE_LIMIT, RATE_WINDOW = 10, 600
 _RATE: dict = {}
+# Every send is a mail from the company Gmail, which the public form and the
+# quotation mails also depend on — keep one rep from burning the daily quota.
+SEND_PER_CALL = 20
+SEND_DAILY_CAP = 100
 
 
 def _rate_ok(ip: str) -> bool:
@@ -167,7 +172,8 @@ async def send_catalogue(catalogue_id: str, request: Request):
     school = None
     if body.get("school_id"):
         school = await db.schools.find_one({"school_id": str(body["school_id"]), "is_deleted": {"$ne": True}}, {"_id": 0})
-        if not school:
+        # A rep may only send to (and so reveal the purchase history of) a school they can see.
+        if not school or not await crm._user_can_access_school(user, school):
             raise HTTPException(status_code=404, detail="School not found")
     raw = body.get("emails") or ""
     if isinstance(raw, list):
@@ -181,11 +187,17 @@ async def send_catalogue(catalogue_id: str, request: Request):
         raise HTTPException(status_code=400, detail="Add an email address (the school has none saved)" if school
                             else "Add at least one valid email address")
 
+    day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    used = await db.catalogue_shares.count_documents({"sent_by": user["email"], "sent_at": {"$gte": day}})
+    batch = valid[:SEND_PER_CALL]
+    if used + len(batch) > SEND_DAILY_CAP:
+        raise HTTPException(status_code=429, detail=f"Daily limit reached ({SEND_DAILY_CAP} catalogue emails per person) — try tomorrow")
+
     fe = os.environ.get("FRONTEND_URL", "").rstrip("/")
-    school_name = (school or {}).get("school_name") or _clean(body.get("school_name"), 200)
+    school_name = _clean((school or {}).get("school_name") or body.get("school_name"), 200)
     now = datetime.now(timezone.utc).isoformat()
     shares, sent = [], []
-    for to in valid[:50]:
+    for to in batch:
         token = uuid.uuid4().hex
         await db.catalogue_shares.insert_one({
             "token": token, "catalogue_id": catalogue_id, "catalogue_name": cat["name"],
@@ -198,7 +210,8 @@ async def send_catalogue(catalogue_id: str, request: Request):
         shares.append(token)
         if ok:
             sent.append(to)
-    return {"sent": sent, "failed": [x for x in valid[:50] if x not in sent], "invalid": invalid, "shares": shares}
+    return {"sent": sent, "failed": [x for x in batch if x not in sent], "invalid": invalid, "shares": shares,
+            "skipped_over_limit": valid[SEND_PER_CALL:]}
 
 
 # ── public (the school) ───────────────────────────────────────────────────────
@@ -243,7 +256,7 @@ async def submit_catalogue_share(token: str, request: Request):
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="Invalid request")
     share, cat = await _live_share(token)
-    if share.get("status") == "submitted":
+    if share.get("status") in ("submitted", "submitting"):
         raise HTTPException(status_code=409, detail="This selection was already sent — we'll be in touch soon")
 
     by_id = {d["die_id"]: d for d in await _catalogue_dies(cat)}
@@ -262,6 +275,14 @@ async def submit_catalogue_share(token: str, request: Request):
     if not items:
         raise HTTPException(status_code=400, detail="Choose at least one die")
 
+    # Claim the link atomically BEFORE the slow part (team mail), so a double tap
+    # or a retry can never file two requests.
+    claimed = await db.catalogue_shares.find_one_and_update(
+        {"token": share["token"], "status": {"$nin": ["submitted", "submitting"]}},
+        {"$set": {"status": "submitting"}})
+    if not claimed:
+        raise HTTPException(status_code=409, detail="This selection was already sent — we'll be in touch soon")
+
     school = None
     if share.get("school_id"):
         school = await db.schools.find_one({"school_id": share["school_id"]}, {"_id": 0})
@@ -270,13 +291,17 @@ async def submit_catalogue_share(token: str, request: Request):
         "name": _clean(body.get("name"), 120),
         "phone": _clean(body.get("phone"), 40),
         "message": _clean_multiline(body.get("message")),
-        "school_name": share.get("school_name") or (school or {}).get("school_name") or share["email"],
-        "address": (school or {}).get("address") or "",
-        "city": (school or {}).get("city") or "",
-        "principal_name": (school or {}).get("primary_contact_name") or "",
+        "school_name": _clean(share.get("school_name") or (school or {}).get("school_name") or share["email"], 200),
+        "address": _clean((school or {}).get("address"), 500),
+        "city": _clean((school or {}).get("city"), 120),
+        "principal_name": _clean((school or {}).get("primary_contact_name"), 120),
     }
-    request_id = await create_request(doc, items, school, source="catalogue", extra={
-        "catalogue_id": cat["catalogue_id"], "catalogue_name": cat["name"], "share_token": share["token"]})
+    try:
+        request_id = await create_request(doc, items, school, source="catalogue", extra={
+            "catalogue_id": cat["catalogue_id"], "catalogue_name": cat["name"], "share_token": share["token"]})
+    except Exception:
+        await db.catalogue_shares.update_one({"token": share["token"]}, {"$set": {"status": claimed.get("status", "opened")}})
+        raise
     await db.catalogue_shares.update_one({"token": share["token"]}, {"$set": {
         "status": "submitted", "submitted_at": datetime.now(timezone.utc).isoformat(), "request_id": request_id}})
     return {"ok": True, "request_id": request_id}

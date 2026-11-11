@@ -656,6 +656,18 @@ export const schoolTypes = {
 };
 
 // Interested-product master (custom/individual entries; packages are the primary options)
+// Catalogue Master — saved catalogues emailed without a quotation
+export const catalogues = {
+  list: () => API.get('/catalogues'),
+  create: (data) => API.post('/catalogues', data),
+  update: (id, data) => API.put(`/catalogues/${id}`, data),
+  remove: (id) => API.delete(`/catalogues/${id}`),
+  preview: (id) => API.get(`/catalogues/${id}/preview`),
+  send: (id, data) => API.post(`/catalogues/${id}/send`, data),
+  publicGet: (token) => API.get(`/public/catalogue-share/${token}`),
+  publicSubmit: (token, data) => API.post(`/public/catalogue-share/${token}/submit`, data),
+};
+
 // Quotation Requests — public form + team list
 export const quoteRequests = {
   publicCatalogue: () => API.get('/public/quote-request/catalogue'),

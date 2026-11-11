@@ -195,3 +195,53 @@ def test_deleted_catalogue_link_stops_working(env):
     with pytest.raises(HTTPException) as e:
         _run(cm.public_catalogue_share(share["token"]))
     assert e.value.status_code == 404
+
+
+# ── Review fixes ─────────────────────────────────────────────────────────────
+
+REP = {"email": "rep2@smartshape.in", "name": "Rep2", "role": "sales",
+       "module_permissions": {"quotations": {"level": "read_write", "scope": "own"},
+                              "leads": {"level": "read_write", "scope": "own"}}}
+
+
+def test_submit_while_another_submit_in_flight_is_409(env):
+    share = _share(env)
+    _run(env["db"].catalogue_shares.update_one({"token": share["token"]}, {"$set": {"status": "submitting"}}))
+    with pytest.raises(HTTPException) as e:
+        _run(cm.submit_catalogue_share(share["token"], FakeRequest({"selections": [{"die_id": "d1", "quantity": 1}]})))
+    assert e.value.status_code == 409
+    assert _run(env["db"].quotation_requests.count_documents({})) == 0
+
+
+def test_rep_cannot_send_to_a_school_they_cannot_see(env, monkeypatch):
+    c = _cat(env)
+
+    async def _rep(_r):
+        return REP
+    monkeypatch.setattr(cm, "get_current_user", _rep)
+    with pytest.raises(HTTPException) as e:
+        _run(cm.send_catalogue(c["catalogue_id"], FakeRequest({"school_id": "s1", "emails": "me@x.in"})))
+    assert e.value.status_code == 404
+
+
+def test_send_caps_per_call_and_per_day(env, monkeypatch):
+    c = _cat(env)
+    many = ",".join(f"u{i}@x.in" for i in range(30))
+    out = _run(cm.send_catalogue(c["catalogue_id"], FakeRequest({"emails": many})))
+    assert len(out["shares"]) == cm.SEND_PER_CALL == 20
+    monkeypatch.setattr(cm, "SEND_DAILY_CAP", 21)
+    with pytest.raises(HTTPException) as e:
+        _run(cm.send_catalogue(c["catalogue_id"], FakeRequest({"emails": "a@x.in, b@x.in"})))
+    assert e.value.status_code == 429
+
+
+def test_request_list_hides_share_token(env, monkeypatch):
+    share = _share(env)
+    _run(cm.submit_catalogue_share(share["token"], FakeRequest({"selections": [{"die_id": "d1", "quantity": 1}]})))
+
+    async def _admin(_r):
+        return ADMIN
+    monkeypatch.setattr(qreq, "get_current_user", _admin)
+    rows = _run(qreq.list_quote_requests(FakeRequest(), status=None))
+    assert rows and "share_token" not in rows[0]
+    assert "share_token" not in _run(qreq.get_quote_request(rows[0]["request_id"], FakeRequest()))
