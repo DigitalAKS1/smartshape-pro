@@ -152,6 +152,7 @@ def _team_email_html(doc: dict, link: str, bought_before: bool) -> str:
               "and offer new dies.</p>") if bought_before else ""
     return (f"<div style='font-family:Arial,sans-serif;font-size:14px'>"
             f"<h2 style='color:#e94560'>New quotation request</h2>{repeat}"
+            f"{('<p><b>From catalogue:</b> ' + e(doc['catalogue_name']) + '</p>') if doc.get('catalogue_name') else ''}"
             f"<p><b>School:</b> {e(doc['school_name'])}{(', ' + e(doc['city'])) if doc['city'] else ''}<br>"
             f"<b>Address:</b> {e(doc['address'])}<br>"
             f"<b>Contact:</b> {e(doc['name'])} — {e(doc['email'])}{(' · ' + e(doc['phone'])) if doc['phone'] else ''}<br>"
@@ -215,13 +216,25 @@ async def submit_quote_request(request: Request):
     if match["action"] == "update" and match.get("school_id"):
         school = await db.schools.find_one({"school_id": match["school_id"]}, {"_id": 0})
 
+    request_id = await create_request(doc, items, school, source="public_form")
+    return {"ok": True, "request_id": request_id}
+
+
+async def create_request(doc: dict, items: list, school, *, source: str, extra: dict = None) -> str:
+    """Store one quotation request and tell the team (mail + owner's bell).
+
+    `doc` carries the contact fields (email, name, school_name, address, city,
+    principal_name, phone, message). Shared by the public form and catalogue
+    shares, so both land in the same inbox the same way."""
     now = datetime.now(timezone.utc).isoformat()
+    doc = {**{k: "" for k in ("email", "name", "school_name", "address", "city", "principal_name",
+                              "phone", "message")}, **doc}
     doc.update({
-        "request_id": f"qr_{uuid.uuid4().hex[:12]}", "source": "public_form", "status": "new",
+        "request_id": f"qr_{uuid.uuid4().hex[:12]}", "source": source, "status": "new",
         "items": items, "school_id": school["school_id"] if school else None,
         "assigned_to": (school or {}).get("assigned_to") or "",
         "quotation_id": None, "quote_number": "", "notes": "",
-        "created_at": now, "updated_at": now,
+        "created_at": now, "updated_at": now, **(extra or {}),
     })
     await db.quotation_requests.insert_one(dict(doc))
 
@@ -239,9 +252,9 @@ async def submit_quote_request(request: Request):
         await _send_email(to, subject, html_team)
     if doc["assigned_to"]:
         await notify_user(doc["assigned_to"], type="quotation_request", title=f"Quotation request from {doc['school_name']}",
-                          body=f"{doc['name']} ({doc['email']}) asked for a quotation.", ref_type="quotation_request",
-                          ref_id=doc["request_id"], from_name=doc["name"])
-    return {"ok": True, "request_id": doc["request_id"]}
+                          body=f"{doc['name'] or doc['school_name']} ({doc['email']}) asked for a quotation.",
+                          ref_type="quotation_request", ref_id=doc["request_id"], from_name=doc["name"])
+    return doc["request_id"]
 
 
 # ── team side ─────────────────────────────────────────────────────────────────

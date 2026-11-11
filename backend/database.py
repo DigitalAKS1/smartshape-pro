@@ -155,6 +155,9 @@ async def ensure_wa_indexes(target_db):
     # Lookup masters (Phase 1): one row per (list, value) — makes concurrent first-read seeding safe.
     await _i(target_db.lookup_values.create_index([("list_key", 1), ("value", 1)], unique=True, background=True))
     await _i(target_db.schools.create_index("school_category", background=True))
+    # Catalogue Master (Phase 3-3): share links + per-catalogue counts.
+    await _i(target_db.catalogue_shares.create_index("token", unique=True, background=True))
+    await _i(target_db.catalogue_shares.create_index("catalogue_id", background=True))
     # Quotation requests (Phase 3-2): newest first per status.
     await _i(target_db.quotation_requests.create_index([("status", 1), ("created_at", -1)], background=True))
     await _i(target_db.quotation_requests.create_index("request_id", unique=True, background=True))
