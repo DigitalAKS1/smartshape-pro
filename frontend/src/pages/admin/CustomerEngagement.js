@@ -91,8 +91,7 @@ const offerWhatsApp = (p) => [
   p.description, p.details,
   p.valid_until ? `Valid till ${p.valid_until}.` : '',
   `Choose your dies and ask for a quotation: ${window.location.origin}/request-quote`,
-].filter(Boolean).join('
-');
+].filter(Boolean).join('\n');
 
 export default function CustomerEngagement() {
   const hook = useCustomerEngagement();
