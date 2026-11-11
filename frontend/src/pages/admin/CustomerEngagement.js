@@ -9,6 +9,9 @@ import {
 } from 'lucide-react';
 import { useCustomerEngagement } from '../../hooks/useCustomerEngagement';
 import EmailComposerDialog from '../../components/email/EmailComposerDialog';
+import useLookup from '../../hooks/useLookup';
+import { packages as packagesApi } from '../../lib/api';
+import { toast } from 'sonner';
 
 const VIDEO_CATEGORIES = [
   { value: 'product_training', label: 'Product Training' },
@@ -43,6 +46,53 @@ const TABS = [
   { id: 'promotions',    label: 'Offers & Promos',   icon: Tag },
   { id: 'announcements', label: 'Announcements',     icon: Megaphone },
 ];
+
+// Which products an offer covers: whole range, or chosen categories / packages.
+function OfferScope({ form, setForm, textSec }) {
+  const cats = useLookup('product_category');
+  const [pkgs, setPkgs] = React.useState([]);
+  React.useEffect(() => { packagesApi.getAll().then(r => setPkgs(Array.isArray(r.data) ? r.data : [])).catch(() => {}); }, []);
+  const tog = (k, id) => setForm(p => ({ ...p, [k]: (p[k] || []).includes(id) ? p[k].filter(x => x !== id) : [...(p[k] || []), id] }));
+  const chip = (on) => `text-xs px-2 py-0.5 rounded-full border ${on ? 'bg-emerald-600 border-emerald-600 text-white' : 'border-[var(--border-color)] text-[var(--text-secondary)]'}`;
+  return (
+    <div className="rounded-md border border-[var(--border-color)] p-3 space-y-2" data-testid="offer-scope">
+      <div className="flex items-center gap-3">
+        <label className={`text-xs font-medium ${textSec}`}>Discount %</label>
+        <input type="number" min="0" max="90" step="0.5" value={form.discount_pct}
+          onChange={e => setForm(p => ({ ...p, discount_pct: e.target.value }))}
+          className="h-8 w-24 px-2 rounded-md text-sm bg-[var(--bg-primary)] border border-[var(--border-color)] text-[var(--text-primary)]" data-testid="offer-discount" />
+        <span className="text-[11px] text-[var(--text-muted)]">0 = information only (no badge, no price)</span>
+      </div>
+      <label className={`flex items-center gap-2 text-xs ${textSec}`}>
+        <input type="checkbox" checked={!!form.applies_to_all} onChange={e => setForm(p => ({ ...p, applies_to_all: e.target.checked }))} />
+        Applies to every product
+      </label>
+      {!form.applies_to_all && (
+        <>
+          <p className={`text-[11px] ${textSec}`}>Product categories (badge shown on these dies in catalogues)</p>
+          <div className="flex flex-wrap gap-1.5">
+            {cats.activeItems.map(c => <button key={c.value} type="button" className={chip((form.categories || []).includes(c.value))} onClick={() => tog('categories', c.value)}>{c.name}</button>)}
+          </div>
+          {pkgs.length > 0 && <>
+            <p className={`text-[11px] ${textSec}`}>Packages (offered with one tap when quoting this package)</p>
+            <div className="flex flex-wrap gap-1.5">
+              {pkgs.filter(p => p.is_active !== false).map(p => <button key={p.package_id} type="button" className={chip((form.package_ids || []).includes(p.package_id))} onClick={() => tog('package_ids', p.package_id)}>{p.display_name || p.name}</button>)}
+            </div>
+          </>}
+        </>
+      )}
+    </div>
+  );
+}
+
+// WhatsApp-ready text for an offer, with the public Request-a-Quote link.
+const offerWhatsApp = (p) => [
+  `*${p.title}*${p.discount_pct ? ` — ${p.discount_pct}% off` : ''}`,
+  p.description, p.details,
+  p.valid_until ? `Valid till ${p.valid_until}.` : '',
+  `Choose your dies and ask for a quotation: ${window.location.origin}/request-quote`,
+].filter(Boolean).join('
+');
 
 export default function CustomerEngagement() {
   const hook = useCustomerEngagement();
@@ -296,6 +346,7 @@ export default function CustomerEngagement() {
                         <span className={`text-base font-semibold ${textPri}`}>{p.title}</span>
                         <span className={`text-[10px] px-2 py-0.5 rounded font-medium capitalize ${p.is_active ? 'bg-green-500/20 text-green-400' : 'bg-[var(--bg-primary)] text-[var(--text-muted)]'}`}>{p.is_active ? 'Active' : 'Inactive'}</span>
                         <span className="text-[10px] px-2 py-0.5 rounded bg-blue-500/20 text-blue-400 font-medium capitalize">{p.promo_type}</span>
+                        {p.discount_pct > 0 && <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-600 text-white font-semibold">🏷 {p.discount_pct}% off · {p.applies_to_all ? 'all products' : `${(p.categories || []).length} categories · ${(p.package_ids || []).length} packages`}</span>}
                       </div>
                       <p className={`text-sm ${textSec} mt-0.5`}>{p.description}</p>
                       {(p.valid_from || p.valid_until) && <p className={`text-xs ${textMuted} mt-1`}>Valid: {p.valid_from} → {p.valid_until}</p>}
@@ -303,6 +354,10 @@ export default function CustomerEngagement() {
                     <div className="flex gap-1.5 flex-shrink-0">
                       <Button size="sm" variant="outline" onClick={() => hook.openComposerForPromo(p)} className="border-blue-500/40 text-blue-400 hover:bg-blue-500/10 text-xs h-8">
                         <Send className="mr-1 h-3 w-3" />Notify
+                      </Button>
+                      <Button size="sm" variant="outline" className="border-green-500/40 text-green-500 hover:bg-green-500/10 text-xs h-8" data-testid={`offer-wa-${p.promo_id}`}
+                        onClick={() => { navigator.clipboard?.writeText(offerWhatsApp(p)).then(() => toast.success('WhatsApp message copied — paste it in any chat or broadcast')).catch(() => toast.error('Copy failed')); }}>
+                        Copy WhatsApp
                       </Button>
                       <Button size="sm" variant="ghost" onClick={() => hook.openEditPromo(p)} className={`${textSec} h-8 w-8 p-0`}><Edit2 className="h-3.5 w-3.5" /></Button>
                       <Button size="sm" variant="ghost" onClick={() => hook.deletePromo(p.promo_id)} className="text-red-400 h-8 w-8 p-0"><Trash2 className="h-3.5 w-3.5" /></Button>
@@ -331,6 +386,7 @@ export default function CustomerEngagement() {
                     <div><label className={`block text-xs font-medium ${textSec} mb-1`}>Valid From</label><input type="date" className={inp} value={hook.promoForm.valid_from} onChange={e => hook.setPromoForm(p => ({ ...p, valid_from: e.target.value }))} /></div>
                     <div><label className={`block text-xs font-medium ${textSec} mb-1`}>Valid Until</label><input type="date" className={inp} value={hook.promoForm.valid_until} onChange={e => hook.setPromoForm(p => ({ ...p, valid_until: e.target.value }))} /></div>
                   </div>
+                  <OfferScope form={hook.promoForm} setForm={hook.setPromoForm} textSec={textSec} />
                   <label className="flex items-center gap-2 cursor-pointer">
                     <input type="checkbox" checked={hook.promoForm.is_active} onChange={e => hook.setPromoForm(p => ({ ...p, is_active: e.target.checked }))} className="rounded" />
                     <span className={`text-sm ${textSec}`}>Active (visible to customers)</span>

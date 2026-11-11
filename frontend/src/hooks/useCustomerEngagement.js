@@ -33,7 +33,7 @@ export function useCustomerEngagement() {
   const [editPromo, setEditPromo] = useState(null);
   const [promoForm, setPromoForm] = useState({
     title: '', description: '', promo_type: 'discount', details: '',
-    valid_from: '', valid_until: '', cta_text: '', cta_url: '', is_active: true,
+    valid_from: '', valid_until: '', cta_text: '', cta_url: '', is_active: true, discount_pct: 0, applies_to_all: false, categories: [], package_ids: [], die_ids: [],
   });
 
   // ── Announcements ─────────────────────────────────────────────────────────
@@ -162,12 +162,12 @@ export function useCustomerEngagement() {
   // ── Promotions CRUD ───────────────────────────────────────────────────────
   const openNewPromo = () => {
     setEditPromo(null);
-    setPromoForm({ title: '', description: '', promo_type: 'discount', details: '', valid_from: '', valid_until: '', cta_text: '', cta_url: '', is_active: true });
+    setPromoForm({ title: '', description: '', promo_type: 'discount', details: '', valid_from: '', valid_until: '', cta_text: '', cta_url: '', is_active: true, discount_pct: 0, applies_to_all: false, categories: [], package_ids: [], die_ids: [] });
     setPromoDialog(true);
   };
   const openEditPromo = (p) => {
     setEditPromo(p);
-    setPromoForm({ title: p.title, description: p.description || '', promo_type: p.promo_type || 'discount', details: p.details || '', valid_from: p.valid_from || '', valid_until: p.valid_until || '', cta_text: p.cta_text || '', cta_url: p.cta_url || '', is_active: p.is_active });
+    setPromoForm({ title: p.title, description: p.description || '', promo_type: p.promo_type || 'discount', details: p.details || '', valid_from: p.valid_from || '', valid_until: p.valid_until || '', cta_text: p.cta_text || '', cta_url: p.cta_url || '', is_active: p.is_active, discount_pct: p.discount_pct || 0, applies_to_all: !!p.applies_to_all, categories: p.categories || [], package_ids: p.package_ids || [], die_ids: p.die_ids || [] });
     setPromoDialog(true);
   };
   const savePromo = async () => {
@@ -177,7 +177,7 @@ export function useCustomerEngagement() {
       if (editPromo) { await API.put(`/promotions/${editPromo.promo_id}`, promoForm); toast.success('Promotion updated'); }
       else { await API.post('/promotions', promoForm); toast.success('Promotion created'); }
       setPromoDialog(false); fetchPromos();
-    } catch { toast.error('Failed to save promotion'); } finally { setSaving(false); }
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Failed to save promotion'); } finally { setSaving(false); }
   };
   const deletePromo = async (id) => {
     if (!window.confirm('Delete this promotion?')) return;

@@ -121,7 +121,8 @@ export default function RequestQuote() {
             {showCatalogue && (
               <div className="p-4 border-t border-[#2d2d44]">
                 <DieSelectionGrid dies={cat.dies} qtyByDie={qtyByDie} onToggle={toggle} onQtyChange={setQty}
-                  backendUrl={backendUrl} typeTab={typeTab} onTypeTabChange={setTypeTab} onVideoPreview={setVideoDie} />
+                  backendUrl={backendUrl} typeTab={typeTab} onTypeTabChange={setTypeTab} onVideoPreview={setVideoDie}
+                  offerByDie={cat.offers || {}} />
               </div>
             )}
           </div>

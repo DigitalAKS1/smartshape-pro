@@ -656,6 +656,11 @@ export const schoolTypes = {
 };
 
 // Interested-product master (custom/individual entries; packages are the primary options)
+// Product offers (promotions with a discount %) a quote for this package can apply
+export const offersApi = {
+  forPackage: (packageId) => API.get(`/offers/package/${packageId}`),
+};
+
 // Catalogue Master — saved catalogues emailed without a quotation
 export const catalogues = {
   list: () => API.get('/catalogues'),

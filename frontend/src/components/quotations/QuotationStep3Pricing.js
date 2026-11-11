@@ -1,4 +1,5 @@
 import React from 'react';
+import { offersApi } from '../../lib/api';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Label } from '../ui/label';
@@ -19,6 +20,29 @@ const CURRENCIES = [
   { code: 'AED', sym: 'د.إ', label: 'AED' },
   { code: 'GBP', sym: '£', label: '£ GBP' },
 ];
+
+// Live product offers for the chosen package — one tap applies the discount.
+function PackageOffers({ packageId, current, onApply }) {
+  const [offers, setOffers] = React.useState([]);
+  React.useEffect(() => {
+    if (!packageId) { setOffers([]); return; }
+    offersApi.forPackage(packageId).then(r => setOffers(Array.isArray(r.data) ? r.data : [])).catch(() => setOffers([]));
+  }, [packageId]);
+  if (!offers.length) return null;
+  return (
+    <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3 space-y-1.5" data-testid="package-offers">
+      <p className="text-xs font-semibold text-emerald-500">Offer available on this package</p>
+      {offers.map(o => (
+        <div key={o.promo_id} className="flex items-center justify-between gap-2 text-xs">
+          <span className="text-[var(--text-primary)]">{o.title} — <b>{o.discount_pct}% off</b>{o.valid_until ? ` · till ${o.valid_until}` : ''}</span>
+          {Number(current) === Number(o.discount_pct)
+            ? <span className="text-emerald-500 font-semibold">Applied</span>
+            : <button type="button" onClick={() => onApply(o.discount_pct)} className="px-2 py-0.5 rounded bg-emerald-600 text-white font-semibold">Apply {o.discount_pct}%</button>}
+        </div>
+      ))}
+    </div>
+  );
+}
 
 export default function QuotationStep3Pricing({
   formData, setFormData,
@@ -372,6 +396,8 @@ export default function QuotationStep3Pricing({
       {/* Discounts & Freight */}
       <div className={`${card} p-4 space-y-3`}>
         <h3 className={`font-semibold text-sm ${tPri}`}>Discounts & Freight</h3>
+        <PackageOffers packageId={formData.package_id} current={formData.discount1_pct}
+          onApply={pct => setFormData(p => ({ ...p, discount1_pct: pct }))} />
         <div className="grid grid-cols-2 gap-3">
           <div>
             <Label className={`text-xs ${tMut} mb-1`}>Primary Discount (%)</Label>

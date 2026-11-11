@@ -24,7 +24,7 @@ const fmtMonth = (d) => {
 export default function DieSelectionGrid({
   dies = [], qtyByDie = {}, onToggle, onQtyChange, backendUrl = '',
   typeTab = 'all', onTypeTabChange, onVideoPreview, dark = true,
-  ownedByDie = {},
+  ownedByDie = {}, offerByDie = {},
 }) {
   const selectedDies = Object.keys(qtyByDie);
 
@@ -111,6 +111,12 @@ export default function DieSelectionGrid({
                       )}
                     </div>
                     <div className="p-3">
+                      {offerByDie[die.die_id] && (
+                        <p className="inline-block mb-1 px-1.5 py-0.5 rounded bg-emerald-600 text-white text-[10px] font-semibold"
+                          title={offerByDie[die.die_id].title} data-testid={`die-offer-${die.code}`}>
+                          🏷 {offerByDie[die.die_id].discount_pct}% off{offerByDie[die.die_id].valid_until ? ` · till ${offerByDie[die.die_id].valid_until}` : ''}
+                        </p>
+                      )}
                       <p className="font-mono text-[10px] text-[#e94560]">{die.code}</p>
                       <h3 className={`text-sm font-medium ${nameCls} leading-tight mt-0.5 line-clamp-1`}>{die.name}</h3>
                       <p className={`text-[10px] ${typeCls} mt-1 capitalize`}>{die.type} die</p>

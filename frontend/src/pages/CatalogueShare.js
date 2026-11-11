@@ -102,7 +102,7 @@ export default function CatalogueShare() {
 
         <DieSelectionGrid dies={data.dies || []} qtyByDie={qtyByDie} onToggle={toggle} onQtyChange={setQty}
           backendUrl={backendUrl} typeTab={typeTab} onTypeTabChange={setTypeTab} onVideoPreview={setVideoDie}
-          ownedByDie={data.owned || {}} />
+          ownedByDie={data.owned || {}} offerByDie={data.offers || {}} />
 
         <div className="rounded-lg border border-[#2d2d44] bg-[#1a1a2e] p-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
           {data.needs_contact && (
