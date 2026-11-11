@@ -108,6 +108,8 @@ const NotFound = lazyRoute(() => import('./pages/NotFound'));
 
 // Public page
 const CataloguePage = lazyRoute(() => import('./pages/CataloguePage'));
+const RequestQuote = lazyRoute(() => import('./pages/RequestQuote'));
+const QuotationRequests = lazyRoute(() => import('./pages/admin/QuotationRequests'));
 const PublicForm = lazyRoute(() => import('./pages/PublicForm'));
 const CustomerPortal = lazyRoute(() => import('./pages/CustomerPortal'));
 const CustomerLogin = lazyRoute(() => import('./pages/CustomerLogin'));
@@ -208,6 +210,7 @@ function AppRouter() {
       <Route path="/login" element={<Login />} />
       <Route path="/register" element={<Register />} />
       <Route path="/catalogue/:token" element={<CataloguePage />} />
+      <Route path="/request-quote" element={<RequestQuote />} />
       <Route path="/f/:token" element={<PublicForm />} />
       <Route path="/my-quote/:token" element={<CustomerPortal />} />
       <Route path="/customer-login" element={<CustomerLogin />} />
@@ -264,6 +267,7 @@ function AppRouter() {
       <Route path="/edit-quotation/:id" element={<ProtectedRoute><EditQuotation /></ProtectedRoute>} />
       <Route path="/conversion" element={<ProtectedRoute><ConversionTracking /></ProtectedRoute>} />
       <Route path="/view-quotation/:id" element={<ProtectedRoute><ViewQuotation /></ProtectedRoute>} />
+      <Route path="/quotation-requests" element={<ProtectedRoute><QuotationRequests /></ProtectedRoute>} />
       <Route path="/leave-management" element={<ProtectedRoute><LeaveManagement /></ProtectedRoute>} />
       <Route path="/visit-planning" element={<ProtectedRoute><VisitPlanning /></ProtectedRoute>} />
       <Route path="/visit-calendar" element={<ProtectedRoute><VisitCalendar /></ProtectedRoute>} />

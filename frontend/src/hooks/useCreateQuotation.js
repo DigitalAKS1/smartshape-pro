@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
-import { packages, salesPersons, quotations, companySettings, contacts as contactsApi, schools as schoolsApi, schoolPortalSettings, dealTypes, pastPurchases } from '../lib/api';
+import { packages, salesPersons, quotations, companySettings, contacts as contactsApi, schools as schoolsApi, schoolPortalSettings, dealTypes, pastPurchases, quoteRequests } from '../lib/api';
 
 export default function useCreateQuotation() {
   const navigate = useNavigate();
@@ -431,6 +431,33 @@ export default function useCreateQuotation() {
       setSubmitting(false); // only re-enable on failure so the user can retry
     }
   };
+
+  // Prefill from a Quotation Request (?request_id=) and remember the link, so saving
+  // the quote marks that request "quoted".
+  const requestPrefilled = useRef(false);
+  useEffect(() => {
+    const rid = searchParams.get('request_id');
+    if (!rid || requestPrefilled.current) return;
+    requestPrefilled.current = true;
+    quoteRequests.get(rid).then(r => {
+      const q = r.data || {};
+      setFormData(prev => ({
+        ...prev,
+        quotation_request_id: rid,
+        school_id: prev.school_id || q.school_id || '',
+        school_name: prev.school_name || q.school_name || '',
+        principal_name: prev.principal_name || q.principal_name || q.name || '',
+        address: prev.address || q.address || '',
+        city: prev.city || q.city || '',
+        customer_email: prev.customer_email || q.email || '',
+        customer_phone: prev.customer_phone || q.phone || '',
+      }));
+      if ((q.items || []).length) {
+        toast.info(`Requested: ${q.items.map(i => `${i.die_code} ×${i.quantity}`).join(', ')}`, { duration: 10000 });
+      }
+    }).catch(() => toast.error('Could not load the quotation request'));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   // "This school has bought before" — once per school picked, show what it already
   // owns (app orders + old orders) so the quote offers new dies, not repeats.

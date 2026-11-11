@@ -6,6 +6,7 @@ const ROUTE_MODULE_MAP = {
   '/dashboard': 'dashboard',
   '/create-quotation': 'quotations',
   '/quotations': 'quotations',
+  '/quotation-requests': 'quotations',
   '/view-quotation': 'quotations',
   '/edit-quotation': 'quotations',
   '/inventory': 'inventory',

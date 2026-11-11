@@ -656,6 +656,15 @@ export const schoolTypes = {
 };
 
 // Interested-product master (custom/individual entries; packages are the primary options)
+// Quotation Requests — public form + team list
+export const quoteRequests = {
+  publicCatalogue: () => API.get('/public/quote-request/catalogue'),
+  submit: (data) => API.post('/public/quote-request', data),
+  list: (status) => API.get('/quotation-requests', { params: status ? { status } : {} }),
+  get: (id) => API.get(`/quotation-requests/${id}`),
+  update: (id, data) => API.put(`/quotation-requests/${id}`, data),
+};
+
 // Past purchases (old orders before / outside the app) + merged purchase history
 export const pastPurchases = {
   history: (schoolId) => API.get(`/schools/${schoolId}/purchase-history`),

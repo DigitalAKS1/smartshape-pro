@@ -82,7 +82,7 @@ def test_submit_creates_request_and_mails_team(env):
     assert doc["items"] == [{"die_id": "d1", "die_code": "SS-1", "name": "Rose", "quantity": 3}]
     to = {m["to"] for m in env["sent"]}
     assert "company@smartshape.in" in to                    # fallback recipient
-    assert "principal@alpha.edu" in to                      # confirmation to requester
+    assert "principal@alpha.edu" not in to                  # never mail a stranger-supplied address
     team_mail = next(m for m in env["sent"] if m["to"] == "company@smartshape.in")
     assert "Alpha Public School" in team_mail["subject"] and "SS-1" in team_mail["html"]
     assert any(b["email"] == "rep@smartshape.in" for b in env["bells"])   # school owner's bell
@@ -168,3 +168,106 @@ def test_mark_quoted_links_quotation(env):
     _run(qreq.mark_request_quoted(env["db"], out["request_id"], {"quotation_id": "q1", "quote_number": "QT-1"}))
     doc = _run(env["db"].quotation_requests.find_one({"request_id": out["request_id"]}))
     assert doc["status"] == "quoted" and doc["quotation_id"] == "q1" and doc["quote_number"] == "QT-1"
+
+
+# ── Security review fixes ────────────────────────────────────────────────────
+
+SCOPED = {"email": "rep@smartshape.in", "name": "Rep", "role": "sales",
+          "module_permissions": {"quotations": {"level": "read_write", "scope": "own"}}}
+
+
+def test_public_catalogue_hides_stock(env):
+    _run(env["db"].dies.update_one({"die_id": "d1"}, {"$set": {"stock_qty": 7, "reserved_qty": 2, "min_level": 5,
+                                                                "cost_price": 99}}))
+    die = _run(qreq.public_quote_catalogue())["dies"][0]
+    for k in ("stock_qty", "reserved_qty", "min_level", "cost_price"):
+        assert k not in die
+    assert die["code"] == "SS-1" and die["name"] == "Rose"
+
+
+def test_daily_public_cap(env, monkeypatch):
+    monkeypatch.setattr(qreq, "DAILY_PUBLIC_CAP", 2)
+    for ip in ("1.1.1.1", "2.2.2.2"):
+        _run(qreq.submit_quote_request(FakeRequest(GOOD, ip=ip)))
+    with pytest.raises(HTTPException) as e:
+        _run(qreq.submit_quote_request(FakeRequest(GOOD, ip="3.3.3.3")))
+    assert e.value.status_code == 429
+
+
+def test_newlines_stripped_from_single_line_fields(env):
+    evil = "Alpha" + chr(13) + chr(10) + "Bcc: x@evil.com"
+    out = _run(qreq.submit_quote_request(FakeRequest({**GOOD, "school_name": evil})))
+    doc = _run(env["db"].quotation_requests.find_one({"request_id": out["request_id"]}))
+    assert chr(10) not in doc["school_name"] and chr(13) not in doc["school_name"]
+    assert all(chr(10) not in m["subject"] and chr(13) not in m["subject"] for m in env["sent"])
+
+
+def test_bad_bodies_are_400_not_500(env):
+    class ListBody(FakeRequest):
+        async def json(self):
+            return ["x"]
+    with pytest.raises(HTTPException) as e:
+        _run(qreq.submit_quote_request(ListBody()))
+    assert e.value.status_code == 400
+    out = _run(qreq.submit_quote_request(FakeRequest({**GOOD, "selections": "abc"})))
+    assert out["ok"] is True
+    out = _run(qreq.submit_quote_request(FakeRequest({**GOOD, "selections": ["abc", 5]})))
+    assert out["ok"] is True
+
+
+def test_recipients_setting_as_list_still_works(env):
+    _run(env["db"].settings.insert_one({"type": "notifications", "quotation_request_recipients": ["a@x.in"]}))
+    _run(qreq.submit_quote_request(FakeRequest(GOOD)))
+    assert any(m["to"] == "a@x.in" for m in env["sent"])
+
+
+def test_scoped_rep_sees_own_and_unassigned_only(env, monkeypatch):
+    _run(qreq.submit_quote_request(FakeRequest(GOOD)))                                   # assigned to rep (school owner)
+    _run(qreq.submit_quote_request(FakeRequest({**GOOD, "school_name": "Nobody School", "city": ""}, ip="5.5.5.5")))
+    other = _run(qreq.submit_quote_request(FakeRequest({**GOOD, "school_name": "Other School"}, ip="6.6.6.6")))
+    _run(env["db"].quotation_requests.update_one({"request_id": other["request_id"]},
+                                                 {"$set": {"assigned_to": "someone@else.in"}}))
+    _as(SCOPED, monkeypatch)
+    names = {r["school_name"] for r in _run(qreq.list_quote_requests(FakeRequest(), status=None))}
+    assert names == {"Alpha Public School", "Nobody School"}
+    with pytest.raises(HTTPException) as e:
+        _run(qreq.get_quote_request(other["request_id"], FakeRequest()))
+    assert e.value.status_code == 404
+
+
+def test_mark_quoted_does_not_overwrite_an_answered_request(env):
+    out = _run(qreq.submit_quote_request(FakeRequest(GOOD)))
+    _run(qreq.mark_request_quoted(env["db"], out["request_id"], {"quotation_id": "q1", "quote_number": "QT-1"}))
+    _run(qreq.mark_request_quoted(env["db"], out["request_id"], {"quotation_id": "q2", "quote_number": "QT-2"}))
+    doc = _run(env["db"].quotation_requests.find_one({"request_id": out["request_id"]}))
+    assert doc["quotation_id"] == "q1"
+
+
+def test_real_send_path_reads_settings_and_uses_thread(monkeypatch):
+    """_send_email reads mail settings on the app loop, then SMTP runs in a thread."""
+    import importlib
+    mod = importlib.reload(qreq)          # un-patched _send_email
+    d = AsyncMongoMockClient()["smartshape_test"]
+    monkeypatch.setattr(mod, "db", d)
+    sent = []
+
+    class FakeSMTP:
+        def __init__(self, host, port, timeout=None):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def login(self, u, p):
+            sent.append(("login", u))
+
+        def sendmail(self, frm, to, msg):
+            sent.append(("send", tuple(to)))
+    monkeypatch.setattr(mod.smtplib, "SMTP_SSL", FakeSMTP)
+    assert _run(mod._send_email("a@x.in", "S", "<p>h</p>")) is False      # not configured
+    _run(d.settings.insert_one({"type": "email", "sender_email": "co@x.in", "gmail_app_password": "pw"}))
+    assert _run(mod._send_email("a@x.in", "S", "<p>h</p>")) is True
+    assert sent == [("login", "co@x.in"), ("send", ("a@x.in",))]

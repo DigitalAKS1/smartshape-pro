@@ -45,6 +45,20 @@ export default function NotificationsSection({ prefs, setPrefs, save }) {
           </div>
         ))}
       </div>
+      <h2 className="text-xl font-medium text-[var(--text-primary)] pt-2">Quotation Requests</h2>
+      <div className="p-4 bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-md space-y-2">
+        <p className="text-[var(--text-primary)] font-medium">Send new quotation requests to</p>
+        <p className="text-sm text-[var(--text-muted)]">
+          Email IDs (comma-separated) that get a mail when a school fills the public "Request a Quotation" form.
+          Leave blank to use the company sender email. Public form link: <span className="font-mono">{window.location.origin}/request-quote</span>
+        </p>
+        <input type="text" value={prefs.quotation_request_recipients || ''}
+          onChange={e => setPrefs({ ...prefs, quotation_request_recipients: e.target.value })}
+          placeholder="sales@smartshape.in, owner@smartshape.in"
+          className="w-full h-10 px-3 rounded-md text-sm bg-[var(--bg-card)] border border-[var(--border-color)] text-[var(--text-primary)]"
+          data-testid="quote-request-recipients" />
+      </div>
+
       <Button onClick={save} className="bg-[#e94560] hover:bg-[#f05c75]">
         <Save className="mr-2 h-4 w-4" /> Save Notification Settings
       </Button>

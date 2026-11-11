@@ -11,8 +11,13 @@ The CRM records are created when a rep turns the request into a quotation
 (POST /quotations already registers school + contact + lead), and that
 quotation links back via `mark_request_quoted`.
 """
+import asyncio
 import html as _html
+import logging
 import os
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 import re
 import time
 import uuid
@@ -24,16 +29,52 @@ from auth_utils import get_current_user
 from database import db
 from media_utils import gate_die_for_customer
 from notify import notify_user
-from rbac import require_module
+from rbac import require_module, sees_all
 import import_engine as ie
-from services.school_auth import _send_email
 
 router = APIRouter()
 
 STATUSES = ("new", "quoted", "closed")
 RATE_LIMIT, RATE_WINDOW = 5, 600
+# Whole-site ceiling on public submissions per UTC day: every submit mails the
+# team from the company Gmail, so a flood must never burn its daily send quota.
+DAILY_PUBLIC_CAP = 150
 _RATE: dict = {}
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+# Only these die fields leave the building on the PUBLIC catalogue — never stock,
+# reservations, costs or reorder levels.
+PUBLIC_DIE_FIELDS = ("die_id", "code", "name", "type", "category", "product_type", "product_type_id",
+                     "images", "image_url", "video_url", "description", "show_video", "show_description")
+
+
+async def _send_email(to: str, subject: str, html: str) -> bool:
+    """Read the mail settings here (Motor is bound to this loop), then do the
+    blocking SMTP work in a thread so a public form never freezes the backend
+    while Gmail answers. Never raises."""
+    cfg = await db.settings.find_one({"type": "email"}, {"_id": 0}) or {}
+    sender = (cfg.get("sender_email") or "").strip()
+    pwd = (cfg.get("gmail_app_password") or "").strip()
+    if not (sender and pwd):
+        logging.warning("quotation requests: email not configured; skipping send to %s", to)
+        return False
+    return await asyncio.to_thread(_smtp_send, sender, pwd, cfg.get("sender_name") or "SmartShape Pro",
+                                   to, subject, html)
+
+
+def _smtp_send(sender: str, pwd: str, sender_name: str, to: str, subject: str, html: str) -> bool:
+    try:
+        msg = MIMEMultipart()
+        msg["From"] = f"{sender_name} <{sender}>"
+        msg["To"] = to
+        msg["Subject"] = subject
+        msg.attach(MIMEText(html, "html"))
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=20) as server:
+            server.login(sender, pwd)
+            server.sendmail(sender, [to], msg.as_string())
+        return True
+    except Exception as e:
+        logging.warning("quotation requests: send to %s failed: %s", to, e)
+        return False
 
 
 def _client_ip(request) -> str:
@@ -55,7 +96,23 @@ def _rate_ok(ip: str) -> bool:
 
 
 def _clean(v, limit=500) -> str:
-    return str(v or "").strip()[:limit]
+    """Single-line text: CR/LF collapsed so nothing can break an email header."""
+    return re.sub(r"[\r\n]+", " ", str(v or "")).strip()[:limit]
+
+
+def _clean_multiline(v, limit=2000) -> str:
+    return str(v or "").replace("\r\n", "\n").strip()[:limit]
+
+
+async def _daily_cap_ok() -> bool:
+    day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    n = await db.quotation_requests.count_documents({"source": "public_form", "created_at": {"$gte": day}})
+    return n < DAILY_PUBLIC_CAP
+
+
+def _public_die(d: dict) -> dict:
+    g = gate_die_for_customer(d)
+    return {k: g[k] for k in PUBLIC_DIE_FIELDS if k in g}
 
 
 async def _visible_dies() -> list:
@@ -65,12 +122,15 @@ async def _visible_dies() -> list:
     visible = {t["product_type_id"] async for t in db.product_types.find(
         {"visible_to_schools": True, "is_active": {"$ne": False}}, {"product_type_id": 1, "_id": 0})}
     visible.add("ptype_dies")
-    return [gate_die_for_customer(d) for d in dies if d.get("product_type_id", "ptype_dies") in visible]
+    return [_public_die(d) for d in dies if d.get("product_type_id", "ptype_dies") in visible]
 
 
 async def _recipients() -> list:
     s = await db.settings.find_one({"type": "notifications"}, {"_id": 0}) or {}
     raw = s.get("quotation_request_recipients") or ""
+    if isinstance(raw, (list, tuple)):
+        raw = ",".join(str(x) for x in raw)
+    raw = str(raw)
     emails = [e.strip() for e in re.split(r"[,;\s]+", raw) if _EMAIL_RE.match(e.strip())]
     if emails:
         return list(dict.fromkeys(emails))
@@ -100,13 +160,6 @@ def _team_email_html(doc: dict, link: str, bought_before: bool) -> str:
             f"{items}<p><a href='{link}' style='color:#e94560'>Open in SmartShape → Quotation Requests</a></p></div>")
 
 
-def _confirm_email_html(doc: dict) -> str:
-    e = _html.escape
-    return (f"<div style='font-family:Arial,sans-serif;font-size:14px'><p>Dear {e(doc['name'])},</p>"
-            f"<p>Thank you — we have received your quotation request for <b>{e(doc['school_name'])}</b>. "
-            f"Our team will send you a quotation shortly.</p><p>— SmartShape</p></div>")
-
-
 # ── public ────────────────────────────────────────────────────────────────────
 
 @router.get("/public/quote-request/catalogue")
@@ -121,15 +174,22 @@ async def public_quote_catalogue():
 
 @router.post("/public/quote-request")
 async def submit_quote_request(request: Request):
-    body = await request.json()
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Invalid request")
     if _clean(body.get("website")):                     # honeypot: bots fill every field
         return {"ok": True, "request_id": "qr_ignored"}
     if not _rate_ok(_client_ip(request)):
         raise HTTPException(status_code=429, detail="Too many requests — please try again in a few minutes")
+    if not await _daily_cap_ok():
+        raise HTTPException(status_code=429, detail="We're receiving a lot of requests — please email us directly today")
 
     doc = {k: _clean(body.get(k)) for k in ("email", "name", "school_name", "address", "city",
                                              "principal_name", "phone")}
-    doc["message"] = _clean(body.get("message"), 2000)
+    doc["message"] = _clean_multiline(body.get("message"))
     for k, label in (("email", "Email"), ("name", "Your name"), ("school_name", "School name"), ("address", "Address")):
         if not doc[k]:
             raise HTTPException(status_code=400, detail=f"{label} is required")
@@ -138,10 +198,13 @@ async def submit_quote_request(request: Request):
 
     by_id = {d["die_id"]: d for d in await _visible_dies()}
     items = []
-    for sel in (body.get("selections") or [])[:300]:
-        d = by_id.get((sel or {}).get("die_id"))
+    selections = body.get("selections")
+    for sel in (selections if isinstance(selections, list) else [])[:300]:
+        if not isinstance(sel, dict):
+            continue
+        d = by_id.get(sel.get("die_id"))
         try:
-            qty = int(float((sel or {}).get("quantity") or 0))
+            qty = int(float(sel.get("quantity") or 0))
         except (TypeError, ValueError):
             qty = 0
         if d and 1 <= qty <= 1000:
@@ -170,9 +233,10 @@ async def submit_quote_request(request: Request):
     link = f"{os.environ.get('FRONTEND_URL', '').rstrip('/')}/quotation-requests"
     subject = f"Quotation request: {doc['school_name']}" + (" (repeat customer)" if bought_before else "")
     html_team = _team_email_html(doc, link, bought_before)
+    # Team only. No confirmation mail to the requester: the address is whatever a
+    # stranger typed, and the success screen already confirms the request.
     for to in await _recipients():
         await _send_email(to, subject, html_team)
-    await _send_email(doc["email"], "We received your quotation request", _confirm_email_html(doc))
     if doc["assigned_to"]:
         await notify_user(doc["assigned_to"], type="quotation_request", title=f"Quotation request from {doc['school_name']}",
                           body=f"{doc['name']} ({doc['email']}) asked for a quotation.", ref_type="quotation_request",
@@ -182,11 +246,28 @@ async def submit_quote_request(request: Request):
 
 # ── team side ─────────────────────────────────────────────────────────────────
 
+def _scope(user: dict) -> dict:
+    """A rep limited to their own quotations sees requests for their schools plus
+    unclaimed ones (new schools) — never another rep's."""
+    if sees_all(user, "quotations"):
+        return {}
+    return {"$or": [{"assigned_to": user.get("email", "")}, {"assigned_to": ""}, {"assigned_to": None}]}
+
+
+async def _visible_request(user: dict, request_id: str):
+    q = {"request_id": request_id}
+    scope = _scope(user)
+    return await db.quotation_requests.find_one({"$and": [q, scope]} if scope else q, {"_id": 0})
+
+
 @router.get("/quotation-requests")
 async def list_quote_requests(request: Request, status: str = None):
     user = await get_current_user(request)
     require_module(user, "quotations", "read")
     q = {"status": status} if status in STATUSES else {}
+    scope = _scope(user)
+    if scope:
+        q = {"$and": [q, scope]} if q else scope
     rows = await db.quotation_requests.find(q, {"_id": 0}).sort("created_at", -1).to_list(500)
     sids = list({r["school_id"] for r in rows if r.get("school_id")})
     bought = set()
@@ -204,7 +285,7 @@ async def list_quote_requests(request: Request, status: str = None):
 async def get_quote_request(request_id: str, request: Request):
     user = await get_current_user(request)
     require_module(user, "quotations", "read")
-    doc = await db.quotation_requests.find_one({"request_id": request_id}, {"_id": 0})
+    doc = await _visible_request(user, request_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Request not found")
     return doc
@@ -224,7 +305,7 @@ async def update_quote_request(request_id: str, request: Request):
         patch["notes"] = _clean(body.get("notes"), 2000)
     if "assigned_to" in body:
         patch["assigned_to"] = _clean(body.get("assigned_to"), 200)
-    if not await db.quotation_requests.find_one({"request_id": request_id}, {"_id": 1}):
+    if not await _visible_request(user, request_id):
         raise HTTPException(status_code=404, detail="Request not found")
     if patch:
         patch["updated_at"] = datetime.now(timezone.utc).isoformat()
@@ -237,8 +318,10 @@ async def mark_request_quoted(target_db, request_id: str, quotation: dict):
     """Called by POST /quotations when a quote was made from a request."""
     if not request_id:
         return
+    # Only an unanswered request links: an old URL or the back button must never
+    # re-point a request that already has its quotation.
     await target_db.quotation_requests.update_one(
-        {"request_id": request_id},
+        {"request_id": request_id, "status": {"$ne": "quoted"}},
         {"$set": {"status": "quoted", "quotation_id": quotation.get("quotation_id"),
                   "quote_number": quotation.get("quote_number") or "",
                   "updated_at": datetime.now(timezone.utc).isoformat()}})
