@@ -49,3 +49,17 @@ def test_school_portal_catalogue_returns_owned(db, monkeypatch):
     monkeypatch.setattr(sr, "get_current_school", _school)
     out = _run(sr.school_catalogue(object()))
     assert out["owned"]["d1"]["qty"] == 4
+
+
+def test_catalogue_pages_carry_offer_badges(db, monkeypatch):
+    _run(db.dies.update_one({"die_id": "d1"}, {"$set": {"category": "flowers"}}))
+    _run(db.promotions.insert_one({"promo_id": "p", "title": "Spring", "discount_pct": 10, "is_active": True,
+                                   "categories": ["flowers"]}))
+    _run(db.quotations.insert_one({"quotation_id": "q3", "school_id": "s1", "catalogue_token": "t3",
+                                   "catalogue_status": "sent"}))
+    assert _run(qr.get_catalogue("t3"))["offers"]["d1"]["discount_pct"] == 10
+
+    async def _school(_req):
+        return {"school_id": "s1", "school_name": "Alpha"}
+    monkeypatch.setattr(sr, "get_current_school", _school)
+    assert _run(sr.school_catalogue(object()))["offers"]["d1"]["title"] == "Spring"

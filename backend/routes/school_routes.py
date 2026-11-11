@@ -209,7 +209,9 @@ async def school_catalogue(request: Request):
     logo_url = (fe_url + logo_raw) if logo_raw.startswith("/") else logo_raw
     from services.purchase_history import owned_by_die
     owned = await owned_by_die(db, school.get("school_id") or "")
-    return {"dies": dies, "logo_url": logo_url, "school_name": school.get("school_name", ""), "owned": owned}
+    from services.offers import offers_by_die
+    return {"dies": dies, "logo_url": logo_url, "school_name": school.get("school_name", ""), "owned": owned,
+            "offers": await offers_by_die(db, dies)}
 
 
 @router.post("/school/catalogue/submit")

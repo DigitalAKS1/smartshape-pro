@@ -27,6 +27,7 @@ import import_engine as ie
 from routes.quotation_request_routes import (_EMAIL_RE, _clean, _clean_multiline, _client_ip, _send_email,
                                              _visible_dies, create_request)
 from services.purchase_history import owned_by_die
+from services.offers import offers_by_die
 
 router = APIRouter()
 
@@ -269,7 +270,8 @@ async def public_catalogue_share(token: str):
         "submitted": share.get("status") == "submitted" and not share.get("multi_use"),
         # A common (broadcast) link doesn't know who is opening it — ask.
         "needs_contact": bool(share.get("multi_use")) or not (share.get("email") or "").strip(),
-        "dies": await _catalogue_dies(cat),
+        "dies": (cdies := await _catalogue_dies(cat)),
+        "offers": await offers_by_die(db, cdies),
         "owned": await owned_by_die(db, share.get("school_id") or ""),
         "logo_url": (fe_url + logo_raw) if logo_raw.startswith("/") else logo_raw,
     }

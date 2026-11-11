@@ -6,6 +6,8 @@ from email.mime.multipart import MIMEMultipart
 
 from database import db
 from auth_utils import get_current_user
+from rbac import has_module, get_team
+import services.offers as offers_svc
 
 router = APIRouter()
 
@@ -55,6 +57,33 @@ async def _blast_customers(subject: str, body_fn):
 
 # ── Promotions ────────────────────────────────────────────────────────────────
 
+def _require_offer_editor(user: dict):
+    # Offers change what schools are shown and quoted — CRM edit access only.
+    if get_team(user) != "admin" and not has_module(user, "leads", "read_write"):
+        raise HTTPException(status_code=403, detail="You need CRM edit access to manage offers")
+
+
+def _str_list(v) -> list:
+    return list(dict.fromkeys(str(x).strip() for x in v if str(x or "").strip()))[:500] if isinstance(v, list) else []
+
+
+def _offer_fields(body: dict) -> dict:
+    out = {}
+    if "discount_pct" in body:
+        try:
+            pct = round(float(body.get("discount_pct") or 0), 2)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Discount must be a number")
+        if not 0 <= pct <= 90:
+            raise HTTPException(status_code=400, detail="Discount must be between 0 and 90%")
+        out["discount_pct"] = pct
+    for k in ("categories", "die_ids", "package_ids"):
+        if k in body:
+            out[k] = _str_list(body.get(k))
+    if "applies_to_all" in body:
+        out["applies_to_all"] = bool(body.get("applies_to_all"))
+    return out
+
 @router.get("/promotions")
 async def list_promotions():
     promos = await db.promotions.find({}, {"_id": 0}).sort("created_at", -1).to_list(200)
@@ -64,6 +93,7 @@ async def list_promotions():
 @router.post("/promotions")
 async def create_promotion(request: Request):
     user = await get_current_user(request)
+    _require_offer_editor(user)
     body = await request.json()
     promo_id = f"promo_{uuid.uuid4().hex[:12]}"
     doc = {
@@ -79,6 +109,8 @@ async def create_promotion(request: Request):
         "cta_url": body.get("cta_url", ""),
         "is_active": body.get("is_active", True),
         "target": body.get("target", "all"),               # all / new / existing
+        "discount_pct": 0.0, "categories": [], "die_ids": [], "package_ids": [], "applies_to_all": False,
+        **_offer_fields(body),
         "created_at": _now(),
         "created_by": user["email"],
     }
@@ -88,12 +120,14 @@ async def create_promotion(request: Request):
 
 @router.put("/promotions/{promo_id}")
 async def update_promotion(promo_id: str, request: Request):
-    await get_current_user(request)
+    user = await get_current_user(request)
+    _require_offer_editor(user)
     body = await request.json()
     allowed = ["title", "description", "promo_type", "details",
                "valid_from", "valid_until", "image_url", "cta_text", "cta_url",
                "is_active", "target"]
     updates = {k: body[k] for k in allowed if k in body}
+    updates.update(_offer_fields(body))
     updates["updated_at"] = _now()
     await db.promotions.update_one({"promo_id": promo_id}, {"$set": updates})
     return {"ok": True}
@@ -101,9 +135,17 @@ async def update_promotion(promo_id: str, request: Request):
 
 @router.delete("/promotions/{promo_id}")
 async def delete_promotion(promo_id: str, request: Request):
-    await get_current_user(request)
+    user = await get_current_user(request)
+    _require_offer_editor(user)
     await db.promotions.delete_one({"promo_id": promo_id})
     return {"ok": True}
+
+
+@router.get("/offers/package/{package_id}")
+async def offers_for_package(package_id: str, request: Request):
+    """Live offers a quotation for this package can apply (best first)."""
+    await get_current_user(request)
+    return await offers_svc.offers_for_package(db, package_id)
 
 
 # ── Announcements ─────────────────────────────────────────────────────────────

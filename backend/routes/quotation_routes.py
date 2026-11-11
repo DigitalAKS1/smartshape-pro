@@ -1639,7 +1639,10 @@ async def get_catalogue(token: str):
     # Dies this school already ordered (app orders + old orders), so the page can
     # badge them and the school doesn't re-order a design it has by mistake.
     owned = await owned_by_die(db, quot.get("school_id") or "")
-    return {"quotation": quot, "package": package, "dies": dies, "logo_url": logo_url, "owned": owned}
+    from services.offers import offers_by_die
+    offers = await offers_by_die(db, dies)
+    return {"quotation": quot, "package": package, "dies": dies, "logo_url": logo_url, "owned": owned,
+            "offers": offers}
 
 
 @router.post("/catalogue/{token}/submit")

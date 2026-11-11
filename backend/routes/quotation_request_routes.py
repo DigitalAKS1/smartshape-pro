@@ -170,7 +170,9 @@ async def public_quote_catalogue():
     company = await db.settings.find_one({"type": "company"}, {"_id": 0}) or {}
     logo_raw = company.get("logo_url", "")
     fe_url = os.environ.get("FRONTEND_URL", "").rstrip("/")
-    return {"dies": await _visible_dies(),
+    dies = await _visible_dies()
+    from services.offers import offers_by_die
+    return {"dies": dies, "offers": await offers_by_die(db, dies),
             "logo_url": (fe_url + logo_raw) if logo_raw.startswith("/") else logo_raw,
             "company_name": company.get("company_name") or company.get("name") or "SmartShape"}
 
