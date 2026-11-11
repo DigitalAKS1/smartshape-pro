@@ -117,7 +117,9 @@ def _clean_event(raw: dict) -> dict:
         out["max_participants"] = max(0, int(ev.get("max_participants") or 0))
     except (TypeError, ValueError):
         out["max_participants"] = 0
-    out["zoom_meeting_id"] = str(ev.get("zoom_meeting_id") or "")[:60]  # reserved for v2 auto-create
+    out["zoom_meeting_id"] = str(ev.get("zoom_meeting_id") or "")[:60]
+    out["zoom_registration"] = bool(ev.get("zoom_registration"))
+    out["zoom_password"] = str(ev.get("zoom_password") or "")[:40]
     return out
 
 
@@ -512,6 +514,10 @@ async def public_submit(token: str, request: Request):
                 await db.session_registrations.insert_one(reg)
                 reg.pop("_id", None)
             updates["registration_id"] = reg["reg_id"]
+            personal = await _zoom_register(form, reg)
+            if personal:
+                reg["zoom_join_url"] = personal
+                updates["zoom_join_url"] = personal
             # Confirmation email: custom template if set, else engine stage
             from routes.training_routes import _enqueue_webinar_stage
             custom = await _enqueue_custom_confirm_email(form, session, reg)
@@ -535,7 +541,10 @@ async def public_submit(token: str, request: Request):
     if updates:
         await db.form_responses.update_one(
             {"response_id": response["response_id"]}, {"$set": updates})
-    return {"ok": True, "thank_you": _thank_you(form)}
+    thanks = _thank_you(form)
+    if updates.get("zoom_join_url") and "zoom_link" in thanks:
+        thanks["zoom_link"] = updates["zoom_join_url"]          # their own link
+    return {"ok": True, "thank_you": thanks}
 
 
 # ── Confirmation / reminder messaging ─────────────────────────────────────────
@@ -554,8 +563,31 @@ def _msg_ctx(form: dict, reg: dict) -> dict:
             "school_name": reg.get("school_name") or "your school",
             "title": form.get("title", ""), "theme": ev.get("theme", ""),
             "date": ev.get("date", ""), "time": ev.get("time", ""),
-            "zoom_link": ev.get("meeting_link", ""),
+            "zoom_link": reg.get("zoom_join_url") or ev.get("meeting_link", ""),
             "calendar_link": gcal_url(form)}
+
+
+async def _zoom_register(form: dict, reg: dict) -> str:
+    """If the form's Zoom meeting takes registrations, register this person on Zoom
+    and keep their personal join link on the registration. Never raises: a Zoom
+    hiccup must not lose the registration (the common link still works)."""
+    ev = form.get("event") or {}
+    if reg.get("zoom_join_url"):
+        return reg["zoom_join_url"]
+    email = (reg.get("email") or "").strip()
+    if not (ev.get("zoom_registration") and ev.get("zoom_meeting_id") and "@" in email):
+        return ""
+    try:
+        import zoom_service as zs
+        out = await zs.add_registrant(ev["zoom_meeting_id"], email, reg.get("name") or "")
+    except Exception as e:
+        log.warning(f"Zoom registrant add failed for {email}: {e}")
+        return ""
+    link = out.get("join_url") or ""
+    if link and reg.get("reg_id"):
+        await db.session_registrations.update_one({"reg_id": reg["reg_id"]}, {"$set": {
+            "zoom_join_url": link, "zoom_registrant_id": out.get("registrant_id", "")}})
+    return link
 
 
 async def _enqueue_wa(phone: str, message: str, campaign_id: str) -> bool:
@@ -971,3 +1003,45 @@ async def link_responses_to_schools(form_id: str, request: Request):
             await db.schools.update_one({"school_id": school["school_id"]}, {"$set": fill})
         linked += 1
     return {"linked": linked, "unlinked": unlinked, "skipped": skipped}
+
+
+# ── Zoom meeting from an event form (point 7) ────────────────────────────────
+
+@router.post("/forms/{form_id}/zoom-meeting")
+async def create_form_zoom_meeting(form_id: str, request: Request):
+    """Create the event's Zoom meeting on the company Zoom account (Settings → Zoom)
+    from the form's title / date / time / duration, and store its link on the form —
+    so every confirmation and reminder carries it. Body {registration: bool}: when
+    on, each person who fills the form is registered on Zoom with a personal link."""
+    user = await get_current_user(request)
+    form = await _get_form_or_404(form_id)
+    if not _can_manage(user, form):
+        raise HTTPException(403, "Not your form")
+    if form.get("type") != "event":
+        raise HTTPException(400, "Only event forms can have a Zoom meeting")
+    ev = form.get("event") or {}
+    if ev.get("zoom_meeting_id"):
+        raise HTTPException(409, "This form already has a Zoom meeting")
+    if not (ev.get("date") and ev.get("time")):
+        raise HTTPException(400, "Set the event date and time first")
+    import zoom_service as zs
+    if not await zs.is_configured():
+        raise HTTPException(400, "Connect Zoom first: Settings → Zoom (Account ID, Client ID, Client Secret)")
+    body = await request.json()
+    registration = bool((body or {}).get("registration"))
+    start = f"{ev['date']}T{ev['time'][:5]}:00"
+    try:
+        m = await zs.create_meeting(form.get("title") or "SmartShape session", start,
+                                    duration=int(ev.get("duration_min") or 60),
+                                    agenda=ev.get("theme") or "", registration=registration)
+    except Exception as e:
+        raise HTTPException(502, f"Zoom could not create the meeting: {str(e)[:160]}")
+    ev.update({"zoom_meeting_id": m["meeting_id"], "meeting_link": m["join_url"],
+               "zoom_password": m.get("password", ""), "zoom_registration": registration, "platform": "zoom"})
+    form["event"] = ev
+    try:   # keep the webinar session (reminder emails) on the new link
+        ev["session_id"] = await _sync_event_session(form, form.get("owner_email") or user["email"])
+    except Exception as e:
+        log.warning(f"Session sync after Zoom create failed: {e}")
+    await db.forms.update_one({"form_id": form_id}, {"$set": {"event": ev, "updated_at": _now()}})
+    return ev

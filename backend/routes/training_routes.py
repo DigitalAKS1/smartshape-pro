@@ -39,6 +39,15 @@ def _session_tokens(session: dict) -> dict:
     }
 
 
+def _stage_tokens(session: dict, reg: dict) -> dict:
+    """Session tokens, with the registrant's own Zoom link (registration-enabled
+    meetings) in place of the common one."""
+    tokens = _session_tokens(session)
+    if (reg or {}).get("zoom_join_url"):
+        tokens["join_url"] = reg["zoom_join_url"]
+    return tokens
+
+
 async def _enqueue_webinar_stage(session: dict, reg: dict, stage: str) -> bool:
     """Shared enqueuer for webinar-lifecycle stage emails. Reused by the
     register endpoint (stage "confirm") and the scheduler (Task 6, later
@@ -72,7 +81,7 @@ async def _enqueue_webinar_stage(session: dict, reg: dict, stage: str) -> bool:
     from email_utils import sanitize_html, personalize, personalize_html, plain_from_html, wrap_email_shell
     from webinar_templates_html import render_stage
 
-    tokens = _session_tokens(session)
+    tokens = _stage_tokens(session, reg)
     subject_final, html_inner = render_stage(stage, tokens)
     html_tmpl = wrap_email_shell(sanitize_html(html_inner))
 

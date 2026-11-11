@@ -59,9 +59,30 @@ async def _get_access_token(force: bool = False) -> str:
     return _token_cache["token"]
 
 
+async def add_registrant(meeting_id: str, email: str, name: str = "") -> Dict[str, Any]:
+    """Register one person on a registration-enabled meeting. Zoom answers with that
+    person's own join_url (so attendance is tracked per name). Needs meeting:write."""
+    parts = (name or "").strip().split(" ", 1)
+    payload = {"email": email, "first_name": parts[0] or email.split("@")[0],
+               "last_name": parts[1] if len(parts) > 1 else ""}
+    token = await _get_access_token()
+    mid = _norm_meeting_id(meeting_id)
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as c:
+        r = await c.post(f"{_API_BASE}/meetings/{mid}/registrants",
+                         headers={"Authorization": f"Bearer {token}"}, json=payload)
+        if r.status_code == 401:
+            token = await _get_access_token(force=True)
+            r = await c.post(f"{_API_BASE}/meetings/{mid}/registrants",
+                             headers={"Authorization": f"Bearer {token}"}, json=payload)
+        if r.status_code not in (200, 201):
+            raise RuntimeError(f"Zoom add-registrant failed ({r.status_code}): {r.text[:200]}")
+        d = r.json()
+    return {"join_url": d.get("join_url", ""), "registrant_id": str(d.get("registrant_id", ""))}
+
+
 async def create_meeting(topic: str, start_time: str, duration: int = 60,
                          timezone_str: str = "Asia/Kolkata",
-                         agenda: str = "") -> Dict[str, Any]:
+                         agenda: str = "", registration: bool = False) -> Dict[str, Any]:
     """Create a scheduled Zoom meeting on the account's default user (me).
     Requires the S2S app to have the `meeting:write:admin` scope.
     Returns {meeting_id, join_url, start_url, password, start_time, topic}.
@@ -78,6 +99,10 @@ async def create_meeting(topic: str, start_time: str, duration: int = 60,
         "agenda": agenda or "",
         "settings": {"join_before_host": True, "waiting_room": False, "approval_type": 2},
     }
+    if registration:
+        # Registration on, auto-approved: every form registrant can be added and
+        # gets a personal link (registration_type 1 = register once, attend once).
+        payload["settings"].update({"approval_type": 0, "registration_type": 1})
     async with httpx.AsyncClient(timeout=_TIMEOUT) as c:
         r = await c.post(f"{_API_BASE}/users/me/meetings",
                          headers={"Authorization": f"Bearer {token}"}, json=payload)
