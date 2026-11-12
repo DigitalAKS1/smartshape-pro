@@ -6,7 +6,7 @@ from email.mime.multipart import MIMEMultipart
 
 from database import db
 from auth_utils import get_current_user
-from rbac import has_module, get_team
+from rbac import has_module, get_team, sees_all
 import services.offers as offers_svc
 
 router = APIRouter()
@@ -58,9 +58,13 @@ async def _blast_customers(subject: str, body_fn):
 # ── Promotions ────────────────────────────────────────────────────────────────
 
 def _require_offer_editor(user: dict):
-    # Offers change what schools are shown and quoted — CRM edit access only.
-    if get_team(user) != "admin" and not has_module(user, "leads", "read_write"):
-        raise HTTPException(status_code=403, detail="You need CRM edit access to manage offers")
+    # An offer shows at once on every public catalogue and quote link, so only an
+    # admin or a CRM manager (edit access across ALL records) may publish one —
+    # not every rep (reps get own-scope CRM edit by default).
+    if get_team(user) == "admin":
+        return
+    if not (has_module(user, "leads", "read_write") and sees_all(user, "leads")):
+        raise HTTPException(status_code=403, detail="Only an admin or a CRM manager can manage offers")
 
 
 def _str_list(v) -> list:

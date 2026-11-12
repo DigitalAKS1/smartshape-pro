@@ -8,7 +8,7 @@ are added by this module (Tasks 4-5).
 """
 from fastapi import APIRouter, HTTPException, Request
 from datetime import datetime, timezone
-import re, uuid, logging
+import asyncio, re, uuid, logging
 
 from database import db
 from auth_utils import get_current_user
@@ -121,6 +121,20 @@ def _clean_event(raw: dict) -> dict:
     out["zoom_registration"] = bool(ev.get("zoom_registration"))
     out["zoom_password"] = str(ev.get("zoom_password") or "")[:40]
     return out
+
+
+ZOOM_FIELDS = ("zoom_meeting_id", "zoom_registration", "zoom_password")
+
+
+def _keep_zoom_fields(new_ev: dict, stored_ev: dict) -> dict:
+    """A form save must never undo the Zoom link-up: once the app created the
+    meeting, its id / registration flag / passcode / join link only change through
+    POST /forms/{id}/zoom-meeting — a stale tab or a partial body can't erase them."""
+    if stored_ev.get("zoom_meeting_id"):
+        for k in ZOOM_FIELDS:
+            new_ev[k] = stored_ev.get(k)
+        new_ev["meeting_link"] = stored_ev.get("meeting_link") or new_ev.get("meeting_link", "")
+    return new_ev
 
 
 async def _sync_event_session(form: dict, user_email: str) -> str:
@@ -260,7 +274,7 @@ async def update_form(form_id: str, request: Request):
                 msgs[k] = str(body["messages"].get(k) or "")[:cap]
         updates["messages"] = msgs
     if form.get("type") == "event" and "event" in body:
-        ev = _clean_event(body.get("event"))
+        ev = _keep_zoom_fields(_clean_event(body.get("event")), form.get("event") or {})
         ev["session_id"] = (form.get("event") or {}).get("session_id")
         merged = {**form, "event": ev,
                   "title": updates.get("title", form.get("title", ""))}
@@ -567,6 +581,9 @@ def _msg_ctx(form: dict, reg: dict) -> dict:
             "calendar_link": gcal_url(form)}
 
 
+ZOOM_REGISTER_TIMEOUT = 5          # seconds
+
+
 async def _zoom_register(form: dict, reg: dict) -> str:
     """If the form's Zoom meeting takes registrations, register this person on Zoom
     and keep their personal join link on the registration. Never raises: a Zoom
@@ -579,9 +596,11 @@ async def _zoom_register(form: dict, reg: dict) -> str:
         return ""
     try:
         import zoom_service as zs
-        out = await zs.add_registrant(ev["zoom_meeting_id"], email, reg.get("name") or "")
+        # Bounded: a slow Zoom must never hold up (or time out) the public submit.
+        out = await asyncio.wait_for(
+            zs.add_registrant(ev["zoom_meeting_id"], email, reg.get("name") or ""), ZOOM_REGISTER_TIMEOUT)
     except Exception as e:
-        log.warning(f"Zoom registrant add failed for {email}: {e}")
+        log.warning(f"Zoom registrant add failed for {email}: {e!r}")
         return ""
     link = out.get("join_url") or ""
     if link and reg.get("reg_id"):
@@ -968,6 +987,7 @@ async def link_responses_to_schools(form_id: str, request: Request):
     import routes.crm_routes as crm
     linked = unlinked = 0
     skipped = []
+    contacts_kept = []
     now = _now()
     for ln in links[:500]:
         if not isinstance(ln, dict):
@@ -990,9 +1010,16 @@ async def link_responses_to_schools(form_id: str, request: Request):
         await db.form_responses.update_one({"response_id": rid}, {"$set": {
             "school_id": school["school_id"], "school_linked_by": user["email"], "school_linked_at": now}})
         if resp.get("contact_id"):
-            await db.contacts.update_one({"contact_id": resp["contact_id"]}, {"$set": {
-                "school_id": school["school_id"], "school_name": school.get("school_name", ""),
-                "company": school.get("school_name", ""), "updated_at": now}})
+            # Fill-blanks rule (same as the submit-time upsert): never move a contact
+            # that already belongs to another school — report it instead.
+            contact = await db.contacts.find_one({"contact_id": resp["contact_id"]},
+                                                 {"_id": 0, "school_id": 1, "school_name": 1})
+            if contact and contact.get("school_id") and contact["school_id"] != school["school_id"]:
+                contacts_kept.append({"response_id": rid, "contact_school": contact.get("school_name") or contact["school_id"]})
+            elif contact:
+                await db.contacts.update_one({"contact_id": resp["contact_id"]}, {"$set": {
+                    "school_id": school["school_id"], "school_name": school.get("school_name", ""),
+                    "company": school.get("school_name", ""), "updated_at": now}})
         mapped = _mapped(form, resp.get("answers") or {})
         fill = {}
         city = (mapped.get("city") or "").strip()
@@ -1002,7 +1029,7 @@ async def link_responses_to_schools(form_id: str, request: Request):
             fill["updated_at"] = now
             await db.schools.update_one({"school_id": school["school_id"]}, {"$set": fill})
         linked += 1
-    return {"linked": linked, "unlinked": unlinked, "skipped": skipped}
+    return {"linked": linked, "unlinked": unlinked, "skipped": skipped, "contacts_kept": contacts_kept}
 
 
 # ── Zoom meeting from an event form (point 7) ────────────────────────────────
@@ -1020,13 +1047,20 @@ async def create_form_zoom_meeting(form_id: str, request: Request):
     if form.get("type") != "event":
         raise HTTPException(400, "Only event forms can have a Zoom meeting")
     ev = form.get("event") or {}
-    if ev.get("zoom_meeting_id"):
+    if ev.get("zoom_meeting_id") or ev.get("zoom_creating"):
         raise HTTPException(409, "This form already has a Zoom meeting")
     if not (ev.get("date") and ev.get("time")):
         raise HTTPException(400, "Set the event date and time first")
     import zoom_service as zs
     if not await zs.is_configured():
         raise HTTPException(400, "Connect Zoom first: Settings → Zoom (Account ID, Client ID, Client Secret)")
+    # Claim the form before calling Zoom, so a double click can't create two meetings.
+    claim = await db.forms.update_one(
+        {"form_id": form_id, "event.zoom_creating": {"$ne": True},
+         "$or": [{"event.zoom_meeting_id": {"$exists": False}}, {"event.zoom_meeting_id": {"$in": ["", None]}}]},
+        {"$set": {"event.zoom_creating": True}})
+    if not claim.modified_count:
+        raise HTTPException(409, "This form already has a Zoom meeting")
     body = await request.json()
     registration = bool((body or {}).get("registration"))
     start = f"{ev['date']}T{ev['time'][:5]}:00"
@@ -1035,7 +1069,9 @@ async def create_form_zoom_meeting(form_id: str, request: Request):
                                     duration=int(ev.get("duration_min") or 60),
                                     agenda=ev.get("theme") or "", registration=registration)
     except Exception as e:
+        await db.forms.update_one({"form_id": form_id}, {"$unset": {"event.zoom_creating": ""}})
         raise HTTPException(502, f"Zoom could not create the meeting: {str(e)[:160]}")
+    ev.pop("zoom_creating", None)
     ev.update({"zoom_meeting_id": m["meeting_id"], "meeting_link": m["join_url"],
                "zoom_password": m.get("password", ""), "zoom_registration": registration, "platform": "zoom"})
     form["event"] = ev

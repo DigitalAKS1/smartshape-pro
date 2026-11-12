@@ -107,3 +107,12 @@ def test_only_form_managers(db, monkeypatch):
     with pytest.raises(HTTPException) as e:
         _run(fr.link_responses_to_schools("f1", FakeRequest({"links": []})))
     assert e.value.status_code == 403
+
+
+def test_link_does_not_steal_a_contact_from_another_school(db):
+    _run(db.contacts.update_one({"contact_id": "c1"}, {"$set": {"school_id": "s2", "school_name": "St Marys Convent"}}))
+    out = _run(fr.link_responses_to_schools("f1", FakeRequest({"links": [{"response_id": "r1", "school_id": "s1"}]})))
+    assert out["linked"] == 1
+    assert out["contacts_kept"] == [{"response_id": "r1", "contact_school": "St Marys Convent"}]
+    assert _run(db.contacts.find_one({"contact_id": "c1"}))["school_id"] == "s2"
+    assert _run(db.form_responses.find_one({"response_id": "r1"}))["school_id"] == "s1"

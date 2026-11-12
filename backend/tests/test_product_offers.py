@@ -105,3 +105,19 @@ def test_package_offers_endpoint(db):
     _promo(db, title="Other pkg", discount_pct=20, package_ids=["pkg2"])
     out = _run(pr.offers_for_package("pkg1", FakeRequest()))
     assert [o["title"] for o in out] == ["Pkg", "All"]       # best first
+
+
+def test_own_scope_rep_cannot_publish_offers(db, monkeypatch):
+    rep = {"email": "r@x.in", "name": "R", "role": "sales",
+           "module_permissions": {"leads": {"level": "read_write", "scope": "own"}}}
+    async def _rep(_r):
+        return rep
+    monkeypatch.setattr(pr, "get_current_user", _rep)
+    with pytest.raises(HTTPException) as e:
+        _promo(db)
+    assert e.value.status_code == 403
+    manager = {**rep, "module_permissions": {"leads": {"level": "read_write", "scope": "all"}}}
+    async def _mgr(_r):
+        return manager
+    monkeypatch.setattr(pr, "get_current_user", _mgr)
+    assert _promo(db)["title"] == "Diwali"

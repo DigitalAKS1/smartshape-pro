@@ -122,3 +122,31 @@ def test_webinar_stage_emails_use_personal_link():
     session = {"session_id": "s", "title": "T", "meeting_link": "https://zoom.us/j/999"}
     assert tr._stage_tokens(session, {})["join_url"] == "https://zoom.us/j/999"
     assert tr._stage_tokens(session, {"zoom_join_url": "https://zoom.us/w/me"})["join_url"] == "https://zoom.us/w/me"
+
+
+def test_slow_zoom_never_holds_up_the_submit(env, monkeypatch):
+    async def _slow(*a):
+        await asyncio.sleep(30)
+    monkeypatch.setattr(zs, "add_registrant", _slow)
+    monkeypatch.setattr(fr, "ZOOM_REGISTER_TIMEOUT", 0.2)
+    form = {"event": {"zoom_meeting_id": "999", "zoom_registration": True}}
+    import time
+    t = time.time()
+    assert _run(fr._zoom_register(form, {"reg_id": "g", "email": "a@x.in", "name": "A"})) == ""
+    assert time.time() - t < 3
+
+
+def test_form_save_keeps_zoom_link_up(env):
+    _run(fr.create_form_zoom_meeting("f1", FakeRequest({"registration": True})))
+    stored = _run(env["db"].forms.find_one({"form_id": "f1"}))["event"]
+    kept = fr._keep_zoom_fields({"date": "2026-12-21", "time": "11:00"}, stored)
+    assert kept["zoom_meeting_id"] == "999" and kept["zoom_registration"] is True and kept["meeting_link"] == "https://zoom.us/j/999"
+    assert kept["date"] == "2026-12-21"
+
+
+def test_double_click_creates_one_meeting(env):
+    _run(env["db"].forms.update_one({"form_id": "f1"}, {"$set": {"event.zoom_creating": True}}))
+    with pytest.raises(HTTPException) as e:
+        _run(fr.create_form_zoom_meeting("f1", FakeRequest({})))
+    assert e.value.status_code == 409
+    assert env["calls"]["create"] == []

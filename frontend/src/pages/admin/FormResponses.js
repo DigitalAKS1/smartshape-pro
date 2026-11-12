@@ -99,6 +99,9 @@ export default function FormResponses() {
       const { linked, skipped } = r.data;
       if (linked) toast.success(`${linked} response${linked === 1 ? '' : 's'} synced to school data`);
       if (skipped?.length) toast.error(`${skipped.length} skipped: ${skipped[0].reason}`);
+      if (r.data.contacts_kept?.length) {
+        toast.info(`${r.data.contacts_kept.length} contact(s) already belong to another school (e.g. ${r.data.contacts_kept[0].contact_school}) — kept there; only the response was linked.`, { duration: 8000 });
+      }
       const ids = new Map(links.map(l => [l.response_id, l.school_id]));
       setData(d => ({ ...d, responses: d.responses.map(x => (ids.has(x.response_id) && !skipped.some(s => s.response_id === x.response_id)
         ? { ...x, school_id: ids.get(x.response_id) } : x)) }));
