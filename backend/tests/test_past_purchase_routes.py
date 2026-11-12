@@ -334,11 +334,34 @@ def test_adjust_stock_needs_store_access(db, monkeypatch):
     assert _run(pp.create_past_purchase(FakeRequest({**BODY, "adjust_stock": True})))["stock_adjusted"] is True
 
 
-def test_stock_adjusted_purchase_items_locked(db, monkeypatch):
+def test_edit_deducted_order_moves_only_the_difference(db, monkeypatch):
     _run(db.dies.update_one({"die_id": "d1"}, {"$set": {"stock_qty": 10}}))
     _as(ADMIN, monkeypatch)
-    out = _run(pp.create_past_purchase(FakeRequest({**BODY, "adjust_stock": True})))
+    out = _run(pp.create_past_purchase(FakeRequest({**BODY, "adjust_stock": True})))      # d1 x4 → 6
+    _run(pp.update_past_purchase(out["purchase_id"], FakeRequest({"items": [{"die_id": "d1", "qty": 6}]})))
+    assert _stock(db) == 4                                                                # 2 more taken
+    _run(pp.update_past_purchase(out["purchase_id"], FakeRequest({"items": [{"die_id": "d1", "qty": 1}]})))
+    assert _stock(db) == 9                                                                # 5 back
+    with pytest.raises(HTTPException) as e:                                               # needs 20 more, only 9
+        _run(pp.update_past_purchase(out["purchase_id"], FakeRequest({"items": [{"die_id": "d1", "qty": 21}]})))
+    assert e.value.status_code == 409 and _stock(db) == 9
+    assert _run(db.past_purchases.find_one({"purchase_id": out["purchase_id"]}))["items"][0]["qty"] == 1
+
+
+def test_deduct_later_and_undo_from_edit(db, monkeypatch):
+    _run(db.dies.update_one({"die_id": "d1"}, {"$set": {"stock_qty": 10}}))
+    _as(ADMIN, monkeypatch)
+    out = _run(pp.create_past_purchase(FakeRequest(BODY)))                                # history only
+    r = _run(pp.update_past_purchase(out["purchase_id"], FakeRequest({"adjust_stock": True})))
+    assert r["stock_adjusted"] is True and _stock(db) == 6
+    r = _run(pp.update_past_purchase(out["purchase_id"], FakeRequest({"adjust_stock": False})))
+    assert r["stock_adjusted"] is False and _stock(db) == 10
+
+
+def test_stock_change_on_edit_needs_store_access(db, monkeypatch):
+    _run(db.dies.update_one({"die_id": "d1"}, {"$set": {"stock_qty": 10}}))
+    _as(REP, monkeypatch)
+    out = _run(pp.create_past_purchase(FakeRequest(BODY)))
     with pytest.raises(HTTPException) as e:
-        _run(pp.update_past_purchase(out["purchase_id"], FakeRequest({"items": [{"die_id": "d1", "qty": 1}]})))
-    assert e.value.status_code == 400
-    assert _run(pp.update_past_purchase(out["purchase_id"], FakeRequest({"reference": "X"})))["reference"] == "X"
+        _run(pp.update_past_purchase(out["purchase_id"], FakeRequest({"adjust_stock": True})))
+    assert e.value.status_code == 403

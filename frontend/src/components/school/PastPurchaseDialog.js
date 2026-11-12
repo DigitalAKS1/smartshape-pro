@@ -81,6 +81,7 @@ export default function PastPurchaseDialog({ open, onOpenChange, schoolId, exist
     diesApi.getAll(true).then(r => setAllDies(Array.isArray(r.data) ? r.data : [])).catch(() => {});
     if (existing) {
       setForm({ purchase_date: existing.date || today(), reference: existing.number || '', amount: existing.amount || '', notes: existing.notes || '' });
+      setAdjustStock(!!existing.stock_adjusted);
       setLines((existing.items || []).map(i => ({ die_id: i.die_id || '', die_code: i.die_id ? '' : (i.die_code || ''), name: i.die_id ? '' : i.name, search: i.die_id ? '' : i.name, item_type: i.item_type || 'die', qty: i.qty || 1 })));
     } else {
       setForm({ purchase_date: today(), reference: '', amount: '', notes: '' });
@@ -100,7 +101,7 @@ export default function PastPurchaseDialog({ open, onOpenChange, schoolId, exist
     setSaving(true);
     try {
       const payload = { ...form, amount: form.amount === '' ? 0 : Number(form.amount), items };
-      if (existing) await pastPurchases.update(existing.id, payload);
+      if (existing) await pastPurchases.update(existing.id, { ...payload, adjust_stock: adjustStock });
       else await pastPurchases.create({ ...payload, school_id: schoolId, adjust_stock: adjustStock });
       toast.success(existing ? 'Old order updated' : 'Old order added');
       onOpenChange(false);
@@ -141,11 +142,13 @@ export default function PastPurchaseDialog({ open, onOpenChange, schoolId, exist
               <Plus className="h-3.5 w-3.5 mr-1" /> Add item
             </Button>
           </div>
-          {!existing && (
+          {(
             <label className="flex items-start gap-2 text-xs rounded-md border border-[var(--border-color)] p-2.5" data-testid="pp-adjust-stock">
               <input type="checkbox" className="mt-0.5" checked={adjustStock} onChange={e => setAdjustStock(e.target.checked)} />
-              <span><b className="text-[var(--text-primary)]">Also deduct these dies from current stock</b>
-                <span className={`block ${textMuted}`}>Only if the goods actually left your store now. Off = history only. Deleting the old order later puts the stock back.</span></span>
+              <span><b className="text-[var(--text-primary)]">{existing ? 'Deducted from current stock' : 'Also deduct these dies from current stock'}</b>
+                <span className={`block ${textMuted}`}>{existing
+                  ? 'Tick to take these dies out of stock now; untick to put them back. Changing items or quantities moves only the difference.'
+                  : 'Only if the goods actually left your store now. Off = history only. Deleting the old order later puts the stock back.'}</span></span>
             </label>
           )}
           <div><Label className={`${textSec} text-xs`}>Notes</Label>

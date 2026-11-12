@@ -202,6 +202,25 @@ async def _move_stock(items: list, direction: int, note: str, user: dict):
         })
 
 
+def _stock_delta(old_items: list, new_items: list):
+    """(to_take, to_give_back) item lists that turn the old stock effect into the new one."""
+    def per_die(items):
+        out = {}
+        for i in items:
+            if i.get("die_id"):
+                out[i["die_id"]] = out.get(i["die_id"], 0) + int(i.get("qty") or 0)
+        return out
+    old, new = per_die(old_items), per_die(new_items)
+    take, give = [], []
+    for die_id in set(old) | set(new):
+        d = new.get(die_id, 0) - old.get(die_id, 0)
+        if d > 0:
+            take.append({"die_id": die_id, "qty": d})
+        elif d < 0:
+            give.append({"die_id": die_id, "qty": -d})
+    return take, give
+
+
 async def _recompute(school_id: str):
     try:
         await al.recompute_school_lifecycle(db, school_id)
@@ -277,14 +296,28 @@ async def update_past_purchase(purchase_id: str, request: Request):
     if "purchase_date" in body:
         patch["purchase_date"] = _valid_date_or_400(body.get("purchase_date"))
     if "items" in body:
-        if doc.get("stock_adjusted"):
-            raise HTTPException(status_code=400, detail="This old order took items out of stock — delete it and add it again to change the items")
         patch["items"] = await _normalise_items(body.get("items"))
     for k in ("reference", "notes"):
         if k in body:
             patch[k] = str(body.get(k) or "").strip()
     if "amount" in body:
         patch["amount"] = _float(body.get("amount"))
+
+    # Stock follows the order: deduct later, undo, or move only the difference.
+    was = bool(doc.get("stock_adjusted"))
+    want = bool(body["adjust_stock"]) if "adjust_stock" in body else was
+    old_items = doc.get("items") or []
+    new_items = patch.get("items", old_items)
+    take, give = _stock_delta(old_items if was else [], new_items if want else [])
+    if take or give:
+        if not _can_adjust_stock(user):
+            raise HTTPException(status_code=403, detail="You need Store edit access to change stock")
+        label = f"Old order edited: {doc.get('reference') or doc.get('purchase_date')} — {doc.get('school_name', '')}"
+        await _move_stock(take, -1, label, user)          # may 409 — nothing changed yet
+        await _move_stock(give, +1, label, user)
+    if want != was:
+        patch["stock_adjusted"] = want
+
     if patch:
         merged = {**doc, **patch}
         patch["dedupe_key"] = dedupe_key(merged["school_id"], merged["purchase_date"],
