@@ -59,6 +59,22 @@ async def _get_access_token(force: bool = False) -> str:
     return _token_cache["token"]
 
 
+async def update_meeting(meeting_id: str, *, topic: str, start_time: str, duration: int,
+                         timezone_str: str = "Asia/Kolkata") -> bool:
+    """Move/rename an existing meeting (PATCH). Zoom answers 204 on success."""
+    token = await _get_access_token()
+    mid = _norm_meeting_id(meeting_id)
+    payload = {"topic": topic, "start_time": start_time, "duration": int(duration or 60), "timezone": timezone_str}
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as c:
+        r = await c.patch(f"{_API_BASE}/meetings/{mid}", headers={"Authorization": f"Bearer {token}"}, json=payload)
+        if r.status_code == 401:
+            token = await _get_access_token(force=True)
+            r = await c.patch(f"{_API_BASE}/meetings/{mid}", headers={"Authorization": f"Bearer {token}"}, json=payload)
+        if r.status_code not in (200, 204):
+            raise RuntimeError(f"Zoom update-meeting failed ({r.status_code}): {r.text[:200]}")
+    return True
+
+
 async def add_registrant(meeting_id: str, email: str, name: str = "") -> Dict[str, Any]:
     """Register one person on a registration-enabled meeting. Zoom answers with that
     person's own join_url (so attendance is tracked per name). Needs meeting:write."""

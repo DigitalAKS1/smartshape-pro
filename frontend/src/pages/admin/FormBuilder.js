@@ -85,6 +85,7 @@ export default function FormBuilder() {
       });
       setForm(r.data);
       toast.success('Saved');
+      if (r.data.zoom_warning) toast.warning(r.data.zoom_warning, { duration: 10000 });
     } catch (e) { toast.error(e.response?.data?.detail || 'Save failed'); }
     finally { setSaving(false); }
   };

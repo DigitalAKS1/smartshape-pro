@@ -124,6 +124,29 @@ def _clean_event(raw: dict) -> dict:
 
 
 ZOOM_FIELDS = ("zoom_meeting_id", "zoom_registration", "zoom_password")
+ZOOM_SCHEDULE_KEYS = ("date", "time", "duration_min")
+
+
+async def _sync_zoom_schedule(title: str, stored_ev: dict, new_ev: dict, old_title: str = None) -> str:
+    """Keep the app-created Zoom meeting on the form's date/time/duration/title.
+    Returns "" when nothing to do or it worked, else a short warning for the UI.
+    Never raises — the form save must succeed even if Zoom doesn't answer."""
+    mid = stored_ev.get("zoom_meeting_id")
+    if not mid or not (new_ev.get("date") and new_ev.get("time")):
+        return ""
+    changed = any(str(stored_ev.get(k) or "") != str(new_ev.get(k) or "") for k in ZOOM_SCHEDULE_KEYS)
+    if not changed and (old_title is None or old_title == title):
+        return ""
+    try:
+        import zoom_service as zs
+        await asyncio.wait_for(zs.update_meeting(
+            mid, topic=title or "SmartShape session",
+            start_time=f"{new_ev['date']}T{str(new_ev['time'])[:5]}:00",
+            duration=int(new_ev.get("duration_min") or 60)), ZOOM_REGISTER_TIMEOUT)
+        return ""
+    except Exception as e:
+        log.warning(f"Zoom meeting {mid} not updated: {e!r}")
+        return "Saved, but Zoom didn't accept the new time — update the meeting in Zoom too."
 
 
 def _keep_zoom_fields(new_ev: dict, stored_ev: dict) -> dict:
@@ -280,9 +303,16 @@ async def update_form(form_id: str, request: Request):
                   "title": updates.get("title", form.get("title", ""))}
         ev["session_id"] = await _sync_event_session(merged, (user.get("email") or "").lower())
         updates["event"] = ev
+        zoom_warning = await _sync_zoom_schedule(merged["title"], form.get("event") or {}, ev,
+                                                 old_title=form.get("title", ""))
+    else:
+        zoom_warning = ""
     updates["updated_at"] = _now()
     await db.forms.update_one({"form_id": form_id}, {"$set": updates})
-    return await _get_form_or_404(form_id)
+    out = await _get_form_or_404(form_id)
+    if zoom_warning:
+        out["zoom_warning"] = zoom_warning
+    return out
 
 
 @router.post("/forms/{form_id}/status")

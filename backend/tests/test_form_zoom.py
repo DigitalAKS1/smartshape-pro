@@ -150,3 +150,29 @@ def test_double_click_creates_one_meeting(env):
         _run(fr.create_form_zoom_meeting("f1", FakeRequest({})))
     assert e.value.status_code == 409
     assert env["calls"]["create"] == []
+
+
+def test_editing_date_time_updates_the_zoom_meeting(env, monkeypatch):
+    calls = []
+
+    async def _upd(meeting_id, **kw):
+        calls.append({"meeting_id": meeting_id, **kw})
+        return True
+    monkeypatch.setattr(zs, "update_meeting", _upd)
+    stored = {"zoom_meeting_id": "999", "date": "2026-12-20", "time": "16:30", "duration_min": 45}
+    new = {**stored, "time": "17:00"}
+    msg = _run(fr._sync_zoom_schedule("Art Webinar", stored, new))
+    assert msg == "" and calls == [{"meeting_id": "999", "topic": "Art Webinar",
+                                     "start_time": "2026-12-20T17:00:00", "duration": 45}]
+    calls.clear()
+    assert _run(fr._sync_zoom_schedule("Art Webinar", stored, dict(stored))) == "" and calls == []   # nothing changed
+    assert _run(fr._sync_zoom_schedule("Art Webinar", {}, new)) == "" and calls == []                # no meeting yet
+
+
+def test_zoom_update_failure_is_reported_not_raised(env, monkeypatch):
+    async def _boom(*a, **k):
+        raise RuntimeError("zoom down")
+    monkeypatch.setattr(zs, "update_meeting", _boom)
+    stored = {"zoom_meeting_id": "999", "date": "2026-12-20", "time": "16:30"}
+    msg = _run(fr._sync_zoom_schedule("T", stored, {**stored, "date": "2026-12-21"}))
+    assert "Zoom" in msg
