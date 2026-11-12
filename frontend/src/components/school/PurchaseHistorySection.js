@@ -88,6 +88,7 @@ export default function PurchaseHistorySection({ schoolId, tk, onChanged }) {
                   </span>
                   <span className={`text-xs ${tk.tm}`}>{fmtDate(e.date)}</span>
                   {e.amount > 0 && <span className="text-xs font-semibold text-[#e94560]">{fmtMoney(e.amount)}</span>}
+                  {e.stock_adjusted && <span className="text-[10px] px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-500 font-semibold">Stock deducted</span>}
                   {e.kind === 'past' && (
                     <span className="ml-auto flex gap-1">
                       <Button size="sm" variant="ghost" className={`h-7 px-1.5 ${tk.tm}`} title="Edit" onClick={() => setDialog({ open: true, existing: e })}><Edit2 className="h-3 w-3" /></Button>

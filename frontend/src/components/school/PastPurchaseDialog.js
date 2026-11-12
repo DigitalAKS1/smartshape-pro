@@ -73,6 +73,7 @@ export default function PastPurchaseDialog({ open, onOpenChange, schoolId, exist
   const [form, setForm] = useState({ purchase_date: today(), reference: '', amount: '', notes: '' });
   const [lines, setLines] = useState([blankLine()]);
   const [saving, setSaving] = useState(false);
+  const [adjustStock, setAdjustStock] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -84,6 +85,7 @@ export default function PastPurchaseDialog({ open, onOpenChange, schoolId, exist
     } else {
       setForm({ purchase_date: today(), reference: '', amount: '', notes: '' });
       setLines([blankLine()]);
+      setAdjustStock(false);
     }
   }, [open, existing]);
 
@@ -99,7 +101,7 @@ export default function PastPurchaseDialog({ open, onOpenChange, schoolId, exist
     try {
       const payload = { ...form, amount: form.amount === '' ? 0 : Number(form.amount), items };
       if (existing) await pastPurchases.update(existing.id, payload);
-      else await pastPurchases.create({ ...payload, school_id: schoolId });
+      else await pastPurchases.create({ ...payload, school_id: schoolId, adjust_stock: adjustStock });
       toast.success(existing ? 'Old order updated' : 'Old order added');
       onOpenChange(false);
       onSaved && onSaved();
@@ -112,7 +114,7 @@ export default function PastPurchaseDialog({ open, onOpenChange, schoolId, exist
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="bg-[var(--bg-card)] border-[var(--border-color)] text-[var(--text-primary)] w-[calc(100vw-1rem)] sm:max-w-xl max-h-[88dvh] overflow-y-auto">
         <DialogHeader><DialogTitle>{existing ? 'Edit old order' : 'Add old order'}</DialogTitle></DialogHeader>
-        <p className={`text-xs ${textMuted} -mt-1`}>For orders placed before the app, or outside it. This is history only — it doesn't touch stock, production or payments.</p>
+        <p className={`text-xs ${textMuted} -mt-1`}>For orders placed before the app, or outside it. History only — no production or payments; stock changes only if you tick the box below.</p>
         <div className="space-y-3 py-1">
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div><Label className={`${textSec} text-xs`}>Date *</Label>
@@ -139,6 +141,13 @@ export default function PastPurchaseDialog({ open, onOpenChange, schoolId, exist
               <Plus className="h-3.5 w-3.5 mr-1" /> Add item
             </Button>
           </div>
+          {!existing && (
+            <label className="flex items-start gap-2 text-xs rounded-md border border-[var(--border-color)] p-2.5" data-testid="pp-adjust-stock">
+              <input type="checkbox" className="mt-0.5" checked={adjustStock} onChange={e => setAdjustStock(e.target.checked)} />
+              <span><b className="text-[var(--text-primary)]">Also deduct these dies from current stock</b>
+                <span className={`block ${textMuted}`}>Only if the goods actually left your store now. Off = history only. Deleting the old order later puts the stock back.</span></span>
+            </label>
+          )}
           <div><Label className={`${textSec} text-xs`}>Notes</Label>
             <Input value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} className={inputCls} placeholder="optional" /></div>
         </div>

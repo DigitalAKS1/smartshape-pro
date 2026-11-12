@@ -285,3 +285,60 @@ def test_future_date_rejected(db, monkeypatch):
     with pytest.raises(HTTPException) as e:
         _run(pp.create_past_purchase(FakeRequest({**BODY, "purchase_date": "2099-01-01"})))
     assert e.value.status_code == 400
+
+
+# ── Optional stock adjustment ────────────────────────────────────────────────
+
+STOREKEEPER = {**REP, "module_permissions": {**REP["module_permissions"], "store": {"level": "read_write"}}}
+
+
+def _stock(db):
+    return _run(db.dies.find_one({"die_id": "d1"}))["stock_qty"]
+
+
+def test_default_does_not_touch_stock(db, monkeypatch):
+    _run(db.dies.update_one({"die_id": "d1"}, {"$set": {"stock_qty": 10}}))
+    _as(ADMIN, monkeypatch)
+    _run(pp.create_past_purchase(FakeRequest(BODY)))
+    assert _stock(db) == 10 and _run(db.stock_movements.count_documents({})) == 0
+
+
+def test_adjust_stock_deducts_logs_and_restores_on_delete(db, monkeypatch):
+    _run(db.dies.update_one({"die_id": "d1"}, {"$set": {"stock_qty": 10}}))
+    _as(ADMIN, monkeypatch)
+    out = _run(pp.create_past_purchase(FakeRequest({**BODY, "adjust_stock": True})))
+    assert out["stock_adjusted"] is True and _stock(db) == 6
+    mv = _run(db.stock_movements.find_one({"die_id": "d1"}))
+    assert mv["movement_type"] == "stock_out" and mv["quantity"] == 4 and "Old order" in mv["notes"]
+    _run(pp.delete_past_purchase(out["purchase_id"], FakeRequest()))
+    assert _stock(db) == 10
+    assert _run(db.stock_movements.count_documents({"movement_type": "stock_in"})) == 1
+
+
+def test_adjust_stock_all_or_nothing_when_short(db, monkeypatch):
+    _run(db.dies.update_one({"die_id": "d1"}, {"$set": {"stock_qty": 2}}))
+    _as(ADMIN, monkeypatch)
+    with pytest.raises(HTTPException) as e:
+        _run(pp.create_past_purchase(FakeRequest({**BODY, "adjust_stock": True})))
+    assert e.value.status_code == 409
+    assert _stock(db) == 2 and _run(db.past_purchases.count_documents({})) == 0
+
+
+def test_adjust_stock_needs_store_access(db, monkeypatch):
+    _run(db.dies.update_one({"die_id": "d1"}, {"$set": {"stock_qty": 10}}))
+    _as(REP, monkeypatch)
+    with pytest.raises(HTTPException) as e:
+        _run(pp.create_past_purchase(FakeRequest({**BODY, "adjust_stock": True})))
+    assert e.value.status_code == 403
+    _as(STOREKEEPER, monkeypatch)
+    assert _run(pp.create_past_purchase(FakeRequest({**BODY, "adjust_stock": True})))["stock_adjusted"] is True
+
+
+def test_stock_adjusted_purchase_items_locked(db, monkeypatch):
+    _run(db.dies.update_one({"die_id": "d1"}, {"$set": {"stock_qty": 10}}))
+    _as(ADMIN, monkeypatch)
+    out = _run(pp.create_past_purchase(FakeRequest({**BODY, "adjust_stock": True})))
+    with pytest.raises(HTTPException) as e:
+        _run(pp.update_past_purchase(out["purchase_id"], FakeRequest({"items": [{"die_id": "d1", "qty": 1}]})))
+    assert e.value.status_code == 400
+    assert _run(pp.update_past_purchase(out["purchase_id"], FakeRequest({"reference": "X"})))["reference"] == "X"

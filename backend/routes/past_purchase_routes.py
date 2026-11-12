@@ -168,6 +168,40 @@ async def _dup_exists(key: str) -> bool:
     return bool(await db.past_purchases.find_one({"dedupe_key": key, "is_deleted": {"$ne": True}}, {"_id": 1}))
 
 
+def _can_adjust_stock(user: dict) -> bool:
+    return get_team(user) == "admin" or has_module(user, "store", "read_write") \
+        or has_module(user, "stock_management", "read_write")
+
+
+async def _move_stock(items: list, direction: int, note: str, user: dict):
+    """direction -1 = take these dies out of stock, +1 = put them back. All or
+    nothing: never below zero; a shortfall rolls back what was already taken."""
+    lines = [(i["die_id"], int(i.get("qty") or 0)) for i in items if i.get("die_id") and int(i.get("qty") or 0) > 0]
+    done = []
+    for die_id, qty in lines:
+        q = {"die_id": die_id}
+        if direction < 0:
+            q["stock_qty"] = {"$gte": qty}
+        res = await db.dies.update_one(q, {"$inc": {"stock_qty": direction * qty}})
+        if not res.modified_count:
+            for d_id, d_qty in done:                       # undo the partial take
+                await db.dies.update_one({"die_id": d_id}, {"$inc": {"stock_qty": -direction * d_qty}})
+            die = await db.dies.find_one({"die_id": die_id}, {"_id": 0, "code": 1, "stock_qty": 1}) or {}
+            raise HTTPException(status_code=409, detail=f"Only {int(die.get('stock_qty') or 0)} of {die.get('code', die_id)} in stock — can't take {qty}")
+        done.append((die_id, qty))
+    now = datetime.now(timezone.utc).isoformat()
+    for die_id, qty in done:
+        die = await db.dies.find_one({"die_id": die_id}, {"_id": 0, "code": 1, "name": 1}) or {}
+        await db.stock_movements.insert_one({
+            "movement_id": f"mov_{uuid.uuid4().hex[:12]}", "die_id": die_id,
+            "die_code": die.get("code"), "die_name": die.get("name"),
+            "movement_type": "stock_out" if direction < 0 else "stock_in", "quantity": qty,
+            "sales_person_id": None, "sales_person_name": None, "notes": note,
+            "movement_date": now, "reference_number": None,
+            "created_by": user["email"], "created_by_name": user.get("name", ""),
+        })
+
+
 async def _recompute(school_id: str):
     try:
         await al.recompute_school_lifecycle(db, school_id)
@@ -199,18 +233,27 @@ async def create_past_purchase(request: Request):
     key = dedupe_key(school["school_id"], pdate, reference, items)
     if await _dup_exists(key):
         raise HTTPException(status_code=409, detail=DUP_MSG)
+    # Optional: the old order also leaves current stock (default: history only).
+    adjust = bool(body.get("adjust_stock"))
+    if adjust and not _can_adjust_stock(user):
+        raise HTTPException(status_code=403, detail="You need Store edit access to deduct stock")
+    if adjust:
+        await _move_stock(items, -1, f"Old order {reference or pdate} — {school.get('school_name', '')}", user)
     doc = {
         "purchase_id": f"pp_{uuid.uuid4().hex[:12]}",
         "school_id": school["school_id"], "school_name": school.get("school_name", ""),
         "purchase_date": pdate, "reference": reference,
         "notes": str(body.get("notes") or "").strip(), "amount": _float(body.get("amount")),
         "items": items, "source": "manual", "import_batch_id": None, "dedupe_key": key,
+        "stock_adjusted": adjust,
         "created_by": user["email"], "created_at": datetime.now(timezone.utc).isoformat(),
         "is_deleted": False,
     }
     try:
         await db.past_purchases.insert_one(dict(doc))
     except DuplicateKeyError:          # a parallel save won the race
+        if adjust:
+            await _move_stock(items, +1, "Undo: duplicate old order not saved", user)
         raise HTTPException(status_code=409, detail=DUP_MSG)
     await _recompute(school["school_id"])
     return doc
@@ -234,6 +277,8 @@ async def update_past_purchase(purchase_id: str, request: Request):
     if "purchase_date" in body:
         patch["purchase_date"] = _valid_date_or_400(body.get("purchase_date"))
     if "items" in body:
+        if doc.get("stock_adjusted"):
+            raise HTTPException(status_code=400, detail="This old order took items out of stock — delete it and add it again to change the items")
         patch["items"] = await _normalise_items(body.get("items"))
     for k in ("reference", "notes"):
         if k in body:
@@ -264,6 +309,9 @@ async def delete_past_purchase(purchase_id: str, request: Request):
         {"purchase_id": purchase_id},
         {"$set": {"is_deleted": True, "deleted_by": user["email"],
                   "deleted_at": datetime.now(timezone.utc).isoformat()}})
+    if doc.get("stock_adjusted"):      # it took stock out — put it back
+        await _move_stock(doc.get("items") or [], +1,
+                          f"Old order deleted: {doc.get('reference') or doc.get('purchase_date')} — {doc.get('school_name', '')}", user)
     await _recompute(doc["school_id"])
     return {"message": "deleted"}
 

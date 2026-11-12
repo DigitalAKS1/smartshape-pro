@@ -92,6 +92,7 @@ async def school_purchase_history(db, school_id: str) -> dict:
             "date": p.get("purchase_date") or "", "amount": float(p.get("amount") or 0),
             "status": "", "notes": p.get("notes") or "", "source": p.get("source") or "manual",
             "created_by": p.get("created_by") or "", "items": p.get("items") or [],
+            "stock_adjusted": bool(p.get("stock_adjusted")),
         })
     entries.sort(key=lambda e: e["date"], reverse=True)
 
