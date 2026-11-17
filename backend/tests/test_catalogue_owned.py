@@ -63,3 +63,18 @@ def test_catalogue_pages_carry_offer_badges(db, monkeypatch):
         return {"school_id": "s1", "school_name": "Alpha"}
     monkeypatch.setattr(sr, "get_current_school", _school)
     assert _run(sr.school_catalogue(object()))["offers"]["d1"]["title"] == "Spring"
+
+
+def test_big_machine_catalogue_hides_small_machine_dies(db):
+    _run(db.dies.insert_one({"die_id": "sm1", "code": "SM-1", "name": "Mini", "is_active": True,
+                             "stock_qty": 5, "machine_category": "small_machine"}))
+    _run(db.packages.insert_many([
+        {"package_id": "big", "display_name": "Big machine kit"},                       # no machine_category
+        {"package_id": "small", "display_name": "Lite kit", "machine_category": "small_machine"}]))
+    _run(db.quotations.insert_many([
+        {"quotation_id": "qb", "package_id": "big", "catalogue_token": "tb", "catalogue_status": "sent"},
+        {"quotation_id": "qs", "package_id": "small", "catalogue_token": "ts", "catalogue_status": "sent"}]))
+    big = {d["die_id"] for d in _run(qr.get_catalogue("tb"))["dies"]}
+    small = {d["die_id"] for d in _run(qr.get_catalogue("ts"))["dies"]}
+    assert "sm1" not in big and {"d1", "d2"} <= big
+    assert small == {"sm1"}

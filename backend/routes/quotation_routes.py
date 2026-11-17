@@ -1621,6 +1621,10 @@ async def get_catalogue(token: str):
         # check there, not by this filter.
         die_filter["$expr"] = {"$gt": [
             {"$subtract": ["$stock_qty", {"$ifNull": ["$reserved_qty", 0]}]}, 0]}
+    else:
+        # A general (big-machine) package must not offer dies that only fit a
+        # specific machine (e.g. small/lite machine dies).
+        die_filter["machine_category"] = {"$in": [None, "", "general"]}
     dies = await db.dies.find(die_filter, {"_id": 0}).to_list(1000)
     # Only show products whose product type is published to schools. Legacy products
     # with no product_type_id are treated as the built-in (visible) "Dies" type.
