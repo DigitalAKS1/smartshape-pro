@@ -34,7 +34,29 @@ export default function CataloguePage() {
     fetchData();
   }, [token]);
 
+  // Room left in MAIN for this die's type under the quotation's limit
+  // (Infinity when the quote sets none). Limits are computed later in render;
+  // handlers only run after render, so they are defined by then.
+  const mainRoom = (dieId, excludeSelf = false) => {
+    const all = data?.dies || [];
+    const t = all.find(d => d.die_id === dieId)?.type;
+    const limit = t === 'standard' ? stdLimit : t === 'large' ? largeLimit : 0;
+    if (!limit) return Infinity;
+    const used = Object.entries(qtyByDie).reduce((s, [id, q]) => {
+      if (excludeSelf && id === dieId) return s;
+      return all.find(x => x.die_id === id)?.type === t ? s + (q || 0) : s;
+    }, 0);
+    return limit - used;
+  };
+
   const handleToggleDie = (dieId) => {
+    // Quotation quota full → this pick goes to OPTIONAL extras, never over-fills MAIN.
+    if (step === 'main' && qtyByDie[dieId] == null && mainRoom(dieId) <= 0) {
+      setOptQty(prev => ({ ...prev, [dieId]: prev[dieId] || 1 }));
+      const t = (data?.dies || []).find(d => d.die_id === dieId)?.type;
+      toast.info(`${t === 'large' ? 'Large' : 'Standard'} dies as per your quotation are complete — added to Optional extras`);
+      return;
+    }
     setActiveMap(prev => {
       const next = { ...prev };
       if (next[dieId] != null) { delete next[dieId]; } else { next[dieId] = 1; }
@@ -43,7 +65,14 @@ export default function CataloguePage() {
   };
 
   const setDieQty = (dieId, qty) => {
-    const clamped = Math.max(1, parseInt(qty, 10) || 1);
+    let clamped = Math.max(1, parseInt(qty, 10) || 1);
+    if (step === 'main') {
+      const room = mainRoom(dieId, true);
+      if (clamped > room) {
+        clamped = Math.max(1, room);
+        toast.info('That is your quotation limit — pick more in Optional extras');
+      }
+    }
     setActiveMap(prev => ({ ...prev, [dieId]: clamped }));
   };
 
@@ -157,6 +186,7 @@ export default function CataloguePage() {
                   {stdLimit > 0 && <span className="text-[#a0a0b0]">Standard: <strong className={`${stdSelected >= stdLimit ? 'text-green-400' : 'text-white'}`}>{stdSelected}/{stdLimit}</strong></span>}
                   {largeLimit > 0 && <span className="text-[#a0a0b0]">Large: <strong className={`${largeSelected >= largeLimit ? 'text-green-400' : 'text-white'}`}>{largeSelected}/{largeLimit}</strong></span>}
                   {!(stdLimit || largeLimit) && <span className="text-[#a0a0b0]">Main: <strong className="text-white">{totalUnits}</strong></span>}
+                  {optUnits > 0 && <span className="text-[#a0a0b0]">Optional extras: <strong className="text-amber-400">{optUnits}</strong></span>}
                 </>
               ) : (
                 <span className="text-[#a0a0b0]">Main: <strong className="text-white">{totalUnits}</strong> · Optional extras: <strong className="text-amber-400">{optUnits}</strong></span>
