@@ -230,6 +230,11 @@ export const packages = {
 };
 
 // Company Settings
+export const currencyRates = {
+  get: () => API.get('/settings/currency-rates'),
+  upsert: (data) => API.post('/settings/currency-rates', data),
+};
+
 export const companySettings = {
   get: () => API.get('/settings/company'),
   save: (data) => API.post('/settings/company', data),

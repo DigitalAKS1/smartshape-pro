@@ -1,4 +1,5 @@
 import React from 'react';
+import CurrencyPicker from '../../components/quotations/CurrencyPicker';
 import AdminLayout from '../../components/layouts/AdminLayout';
 import { formatCurrency } from '../../lib/utils';
 import { Button } from '../../components/ui/button';
@@ -149,18 +150,8 @@ export default function EditQuotation() {
             </div>
             <div>
               <Label className="text-[var(--text-muted)] text-xs">Currency</Label>
-              <div className="flex gap-2 flex-wrap mt-1">
-                {CURRENCIES.map(cur => (
-                  <button key={cur.code} type="button" onClick={() => setQuot({...quot, currency: cur.code, currency_symbol: cur.sym})}
-                    data-testid={`edit-currency-${cur.code}`}
-                    className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition-all ${(quot.currency || 'INR') === cur.code ? 'bg-[#e94560] text-white border-[#e94560]' : 'bg-[var(--bg-primary)] border-[var(--border-color)] text-[var(--text-secondary)] hover:border-[#e94560]/40'}`}>
-                    {cur.label}
-                  </button>
-                ))}
-              </div>
-              {(quot.currency || 'INR') !== 'INR' && (
-                <p className="text-[11px] text-amber-500 mt-1.5">Foreign currency — <b>no GST</b> (export sale).</p>
-              )}
+              <div className="mt-1"><CurrencyPicker quote={quot} testPrefix="edit-currency"
+                onChange={patch => setQuot(q => ({ ...q, ...patch }))} /></div>
             </div>
           </div>
 

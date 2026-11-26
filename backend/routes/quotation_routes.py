@@ -481,6 +481,16 @@ async def _crm_hook_quotation(quot_doc: dict):
             logging.warning(f"Drip enroll for quotation_sent failed on {lead['lead_id']}: {e}")
 
 
+def _fx(raw, currency: str) -> float:
+    if str(currency or "INR").upper() == "INR":
+        return 1.0
+    try:
+        v = float(raw)
+        return round(v, 4) if v > 0 else 1.0
+    except (TypeError, ValueError):
+        return 1.0
+
+
 @router.post("/quotations")
 async def create_quotation(request: Request):
     user = await get_current_user(request)
@@ -547,6 +557,8 @@ async def create_quotation(request: Request):
         "sales_person_email": sp["email"],
         "currency": currency,
         "currency_symbol": body.get("currency_symbol") or CURRENCY_SYMBOLS.get(currency, "₹"),
+        # ₹ for 1 unit of `currency` used for this quote (1 for INR) — kept for records/PDF.
+        "exchange_rate": _fx(body.get("exchange_rate"), currency),
         "discount1_pct": d1,
         "discount2_pct": d2,
         "freight_amount": fr,
@@ -632,13 +644,15 @@ async def edit_quotation(quotation_id: str, request: Request):
     allowed = {}
     for key in ("principal_name", "school_name", "address", "customer_email", "customer_phone",
                 "customer_gst", "sales_person_id", "discount1_pct", "discount2_pct",
-                "freight_amount", "lines", "quotation_status", "currency", "currency_symbol",
+                "freight_amount", "lines", "quotation_status", "currency", "currency_symbol", "exchange_rate",
                 "font_size_mode", "bank_details_override", "terms_override",
                 "valid_until", "city", "state", "pincode"):
         if key in body:
             allowed[key] = body[key]
 
     # Recompute totals when lines OR the currency change (currency toggles GST).
+    if "exchange_rate" in allowed:
+        allowed["exchange_rate"] = _fx(allowed["exchange_rate"], (allowed.get("currency") or existing.get("currency") or "INR").upper())
     if "lines" in allowed or "currency" in allowed:
         lines = allowed.get("lines", existing.get("lines", []))
         d1 = allowed.get("discount1_pct", existing.get("discount1_pct", 0))

@@ -1064,3 +1064,72 @@ async def send_email_via_gmail(request: Request):
         return {"success": True, "message": f"Email sent to {to_email}", "cc": cc_list}
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+# ==================== CURRENCY RATES (quotation currency system) ====================
+# One list of currencies a quotation can be made in, each with the INR value of
+# 1 unit. Any currency can be added (QAR, RUB, …) right from the quotation form;
+# rates are typed by hand (no live feed), and a quote may still override its own.
+
+DEFAULT_CURRENCIES = [
+    {"code": "USD", "symbol": "$", "name": "US Dollar", "rate": 84.0},
+    {"code": "EUR", "symbol": "€", "name": "Euro", "rate": 90.0},
+    {"code": "GBP", "symbol": "£", "name": "British Pound", "rate": 106.0},
+    {"code": "AED", "symbol": "د.إ", "name": "UAE Dirham", "rate": 23.0},
+    {"code": "SGD", "symbol": "S$", "name": "Singapore Dollar", "rate": 62.0},
+    {"code": "AUD", "symbol": "A$", "name": "Australian Dollar", "rate": 55.0},
+]
+
+
+async def _currency_doc() -> dict:
+    doc = await db.settings.find_one({"type": "currency_rates"}, {"_id": 0})
+    if not doc or not doc.get("currencies"):
+        doc = {"type": "currency_rates", "currencies": [dict(c) for c in DEFAULT_CURRENCIES],
+               "updated_at": None, "updated_by": None}
+    return doc
+
+
+@router.get("/settings/currency-rates")
+async def get_currency_rates(request: Request):
+    await get_current_user(request)
+    doc = await _currency_doc()
+    doc.pop("type", None)
+    return doc
+
+
+@router.post("/settings/currency-rates")
+async def upsert_currency(request: Request):
+    """Add a currency or update its rate/symbol/name. Body {code, rate, symbol?, name?}."""
+    user = await get_current_user(request)
+    from rbac import has_module
+    if get_team(user) != "admin" and not has_module(user, "quotations", "read_write"):
+        raise HTTPException(status_code=403, detail="You need quotation edit access to change currency rates")
+    body = await request.json()
+    code = str(body.get("code") or "").strip().upper()
+    if not (len(code) == 3 and code.isalpha()) or code == "INR":
+        raise HTTPException(status_code=400, detail="Use a 3-letter currency code like USD, QAR, RUB (not INR)")
+    try:
+        rate = round(float(body.get("rate")), 4)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Rate must be a number (₹ for 1 unit)")
+    if not 0 < rate < 100000:
+        raise HTTPException(status_code=400, detail="Rate must be more than 0")
+    doc = await _currency_doc()
+    cur = next((c for c in doc["currencies"] if c["code"] == code), None)
+    symbol = str(body.get("symbol") or "").strip()[:6]
+    name = str(body.get("name") or "").strip()[:40]
+    if cur is None:
+        if not symbol:
+            raise HTTPException(status_code=400, detail="Give the new currency a symbol (e.g. ر.ق, ₽)")
+        cur = {"code": code, "symbol": symbol, "name": name or code, "rate": rate}
+        doc["currencies"].append(cur)
+    else:
+        cur["rate"] = rate
+        if symbol:
+            cur["symbol"] = symbol
+        if name:
+            cur["name"] = name
+    now = datetime.now(timezone.utc).isoformat()
+    await db.settings.update_one({"type": "currency_rates"}, {"$set": {
+        "currencies": doc["currencies"], "updated_at": now, "updated_by": user["email"]}}, upsert=True)
+    return {"currencies": doc["currencies"], "updated_at": now, "updated_by": user["email"]}

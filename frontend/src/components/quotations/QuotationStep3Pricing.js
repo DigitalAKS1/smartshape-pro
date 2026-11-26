@@ -1,5 +1,6 @@
 import React from 'react';
 import { offersApi } from '../../lib/api';
+import CurrencyPicker from './CurrencyPicker';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Label } from '../ui/label';
@@ -436,26 +437,8 @@ export default function QuotationStep3Pricing({
         </div>
         <div>
           <Label className={`text-xs ${tMut} mb-1`}>Currency</Label>
-          <div className="flex gap-2 flex-wrap">
-            {CURRENCIES.map(cur => (
-              <button
-                key={cur.code}
-                type="button"
-                onClick={() => setFormData(p => ({ ...p, currency: cur.code, currency_symbol: cur.sym }))}
-                data-testid={`currency-${cur.code}`}
-                className={`px-3 py-2 rounded-lg text-sm font-medium border transition-all ${
-                  (formData.currency || 'INR') === cur.code
-                    ? 'bg-[#e94560] text-white border-[#e94560]'
-                    : `bg-[var(--bg-primary)] border-[var(--border-color)] ${tSec} hover:border-[#e94560]/40`
-                }`}
-              >
-                {cur.label}
-              </button>
-            ))}
-          </div>
-          {(formData.currency || 'INR') !== 'INR' && (
-            <p className="text-[11px] text-amber-500 mt-1.5">Foreign currency — <b>no GST</b> is applied (export sale outside India).</p>
-          )}
+          <CurrencyPicker quote={formData}
+            onChange={patch => setFormData(p => ({ ...p, ...patch }))} />
         </div>
       </div>
 
